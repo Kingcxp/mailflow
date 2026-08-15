@@ -21,6 +21,7 @@ from mailflow.config import ProcessorConfig
 from mailflow.contracts import LLMRouter, ProcessingContext, ProcessorResult
 from mailflow.domain import (
     ActionItem,
+    ComponentKind,
     MailAnalysis,
     MailMessage,
     Urgency,
@@ -198,6 +199,7 @@ PLUGIN_INFO = PluginInfo(
     name="LLM Importance Processor",
     version="0.1.0",
     description="Classifies mail urgency and extracts timed actions via chat completions",
+    kinds=[ComponentKind.MAIL_PROCESSOR],
 )
 
 

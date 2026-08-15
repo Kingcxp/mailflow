@@ -15,6 +15,7 @@ from typing import Any, cast
 import httpx
 from mailflow.config import LLMConfig
 from mailflow.contracts import LLMCompletion, MessageDict
+from mailflow.domain import ComponentKind
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -150,6 +151,7 @@ PLUGIN_INFO = PluginInfo(
     name="OpenAI-Compatible Backend",
     version="0.1.0",
     description="Chat completions over any OpenAI-compatible HTTP endpoint",
+    kinds=[ComponentKind.LLM_BACKEND],
 )
 
 

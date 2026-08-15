@@ -13,7 +13,7 @@ from typing import Any
 
 from mailflow.config import ProcessorConfig
 from mailflow.contracts import LLMRouter, ProcessingContext, ProcessorResult
-from mailflow.domain import MailAnalysis, MailMessage, Urgency
+from mailflow.domain import ComponentKind, MailAnalysis, MailMessage, Urgency
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -75,6 +75,7 @@ PLUGIN_INFO = PluginInfo(
     name="Rules Processor",
     version="0.1.0",
     description="Deterministic ad/sender pre-filter before any LLM work",
+    kinds=[ComponentKind.MAIL_PROCESSOR],
 )
 
 

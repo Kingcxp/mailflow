@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from mailflow.config import MailAccountConfig
-from mailflow.domain import MailAddress, MailMessage
+from mailflow.domain import ComponentKind, MailAddress, MailMessage
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 from mailflow_testkit.fakes import FakeMailSource
@@ -24,6 +24,7 @@ PLUGIN_INFO = PluginInfo(
     name="Fake Mail Source",
     version="0.1.0",
     description="Deterministic local mail source for development and demos",
+    kinds=[ComponentKind.MAIL_SOURCE],
 )
 
 

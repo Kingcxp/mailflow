@@ -131,7 +131,7 @@ class LLMConfig(BaseModel):
 
     llm_id: str
     name: str = ""
-    provider: str = "mailflow-llm-openai-compatible"
+    provider: str = "openai-compatible"
     base_url: str = "https://api.openai.com/v1"
     api_key: str = ""
     api_key_env: str | None = None
@@ -186,7 +186,7 @@ class NotifierConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
-    provider: str = "mailflow-storage-sqlite"
+    provider: str = "sqlite"
     path: str = "data/mailflow.db"
     options: dict[str, Any] = Field(default_factory=lambda: {})
 

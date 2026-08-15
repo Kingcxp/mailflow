@@ -40,11 +40,13 @@ class PluginInfo:
         name: str = "",
         version: str = "",
         description: str = "",
+        kinds: list[ComponentKind] | None = None,
     ) -> None:
         self.plugin_id = plugin_id
         self.name = name or plugin_id
         self.version = version
         self.description = description
+        self.kinds = list(kinds or [])
 
     def to_snapshot(self, components: list[str]) -> PluginSnapshot:
         return PluginSnapshot(
@@ -52,6 +54,7 @@ class PluginInfo:
             name=self.name,
             version=self.version,
             description=self.description,
+            kinds=self.kinds,
             components=components,
         )
 

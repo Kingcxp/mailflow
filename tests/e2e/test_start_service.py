@@ -215,9 +215,7 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         assert binding.plugin_id == "mailflow-processor-llm-importance"
         assert binding.llm_id == "primary"
         assert binding.fallback_llm_ids == ["backup"]
-        llm_snapshot = next(
-            item for item in snapshot.llms if item.llm_id == "primary"
-        )
+        llm_snapshot = next(item for item in snapshot.llms if item.llm_id == "primary")
         assert llm_snapshot.backend == "test-llm"
 
         # -- manual urgency override and reset restores automatic ----------------

@@ -19,7 +19,8 @@
         "intro": "在下方输入命令。<尖括号>为必填项，[方括号]为可选项。",
         "topic_missing": "没有关于 '{topic}' 的帮助。试试：help",
         "topic_title": "帮助：{topic}",
-        "topic_hint": "运行 'help <主题>' 可查看任意命令组的详细信息。"
+        "topic_hint": "运行 'help <主题>' 可查看任意命令组的详细信息。",
+        "available": "可用命令："
       },
       "lang": {
         "current": "当前语言：{language}（{name}）",
@@ -222,6 +223,12 @@
       "shell_prompt": "mailflow> ",
       "shell_goodbye": "再见。",
       "shell_welcome": "MailFlow 命令行。输入 'help' 查看命令，'exit' 退出。"
+    },
+    "lang": {
+      "usage": "lang <get|set <代码>>"
+    },
+    "trash": {
+      "usage": "trash <list|restore <id>>"
     }
   }
 }

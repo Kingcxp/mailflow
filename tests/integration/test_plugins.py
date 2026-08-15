@@ -323,3 +323,40 @@ class TestOpenAICompatibleBackend:
             asyncio.run(backend.chat([{"role": "user", "content": "hi"}]))
         assert "topsecret" not in str(excinfo.value)
         assert "401" in str(excinfo.value)
+
+
+class TestBundledRegistration:
+    """The composition package registers every official component."""
+
+    def test_all_builtin_plugins_registered(self) -> None:
+        from mailflow.config import MailFlowConfig
+        from mailflow.domain import ComponentKind
+        from mailflow_bundled import create_plugin_manager
+
+        manager = create_plugin_manager(MailFlowConfig(), discover_external=False)
+        registry = manager.build_registry()
+        assert set(manager.plugin_ids) == {
+            "mailflow-mail-fake",
+            "mailflow-storage-sqlite",
+            "mailflow-llm-openai-compatible",
+            "mailflow-processor-rules",
+            "mailflow-processor-llm-importance",
+            "mailflow-notify-console",
+        }
+        assert registry.has(ComponentKind.MAIL_SOURCE, "fake")
+        assert registry.has(ComponentKind.STORAGE, "sqlite")
+        assert registry.has(ComponentKind.LLM_BACKEND, "openai-compatible")
+        assert registry.has(ComponentKind.MAIL_PROCESSOR, "rules")
+        assert registry.has(ComponentKind.MAIL_PROCESSOR, "llm-importance")
+        assert registry.has(ComponentKind.NOTIFIER, "console")
+        # ownership is stamped at registration
+        assert registry.plugin_for("fake") == "mailflow-mail-fake"
+        assert registry.plugin_for("sqlite") == "mailflow-storage-sqlite"
+
+    def test_discovery_deduplicates_bundled_plugins(self) -> None:
+        from mailflow.config import MailFlowConfig
+        from mailflow_bundled import create_plugin_manager
+
+        manager = create_plugin_manager(MailFlowConfig(), discover_external=True)
+        # entry points resolve to the same singletons; no double registration
+        assert manager.plugin_ids.count("mailflow-storage-sqlite") == 1

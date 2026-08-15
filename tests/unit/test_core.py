@@ -167,7 +167,7 @@ class TestConfigDefaults:
 
     def test_storage_defaults(self) -> None:
         config = MailFlowConfig()
-        assert config.storage.provider == "mailflow-storage-sqlite"
+        assert config.storage.provider == "sqlite"
         assert config.storage.path == "data/mailflow.db"
 
 

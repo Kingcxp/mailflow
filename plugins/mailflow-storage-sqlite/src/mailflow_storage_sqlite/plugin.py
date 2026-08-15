@@ -22,6 +22,7 @@ from typing import Any
 
 from mailflow.config import StorageConfig
 from mailflow.domain import (
+    ComponentKind,
     MailRecord,
     ReplyDraft,
     TrashRecord,
@@ -291,6 +292,7 @@ PLUGIN_INFO = PluginInfo(
     name="SQLite Storage",
     version="0.1.0",
     description="Durable sqlite persistence with a seven-day recovery trash",
+    kinds=[ComponentKind.STORAGE],
 )
 
 

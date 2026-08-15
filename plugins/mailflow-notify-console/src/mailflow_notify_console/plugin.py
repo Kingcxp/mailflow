@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from mailflow.domain import MailRecord
+from mailflow.domain import ComponentKind, MailRecord
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -19,6 +19,7 @@ PLUGIN_INFO = PluginInfo(
     name="Console Notifier",
     version="0.1.0",
     description="Delivers processed mail alerts to the MailFlow logs",
+    kinds=[ComponentKind.NOTIFIER],
 )
 
 

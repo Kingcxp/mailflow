@@ -20,6 +20,7 @@ import logging.handlers
 import queue as queue_module
 import sys
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 from typing import TextIO
 
 from rich.console import Console
@@ -205,6 +206,7 @@ def configure_logging(
     if config.file:
         path = config.file_path
         if path:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
             file_handler = logging.handlers.RotatingFileHandler(
                 path,
                 maxBytes=config.file_max_bytes,
@@ -221,6 +223,7 @@ def configure_logging(
             sinks.append(file_handler)
 
     if config.jsonl:
+        Path(config.jsonl_path).parent.mkdir(parents=True, exist_ok=True)
         jsonl_stream = open(config.jsonl_path, "a", encoding="utf-8")  # noqa: SIM115 — lifetime stream owned by runtime
         opened_files.append(jsonl_stream)
         jsonl_handler = JsonlHandler(jsonl_stream)

@@ -19,7 +19,8 @@
         "intro": "Type a command below. Items in <angle brackets> are required, [square brackets] optional.",
         "topic_missing": "No help for topic '{topic}'. Try: help",
         "topic_title": "help: {topic}",
-        "topic_hint": "Run 'help <topic>' for details on any command group."
+        "topic_hint": "Run 'help <topic>' for details on any command group.",
+        "available": "Available commands:"
       },
       "lang": {
         "current": "Current language: {language} ({name})",
@@ -222,6 +223,12 @@
       "shell_prompt": "mailflow> ",
       "shell_goodbye": "Goodbye.",
       "shell_welcome": "MailFlow shell. Type 'help' for commands, 'exit' to leave."
+    },
+    "lang": {
+      "usage": "lang <get|set <code>>"
+    },
+    "trash": {
+      "usage": "trash <list|restore <id>>"
     }
   }
 }
