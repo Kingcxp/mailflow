@@ -11,6 +11,8 @@ members = [
     "mailflow-core",
     "mailflow-llm-openai-compatible",
     "mailflow-mail-fake",
+    "mailflow-processor-llm-importance",
+    "mailflow-processor-rules",
     "mailflow-storage-sqlite",
     "mailflow-testkit",
     "mailflow-workspace",
@@ -453,6 +455,28 @@ requires-dist = [
     { name = "mailflow-core", editable = "packages/mailflow-core" },
     { name = "mailflow-testkit", editable = "packages/mailflow-testkit" },
 ]
+
+[[package]]
+name = "mailflow-processor-llm-importance"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-processor-llm-importance" }
+dependencies = [
+    { name = "mailflow-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }]
+
+[[package]]
+name = "mailflow-processor-rules"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-processor-rules" }
+dependencies = [
+    { name = "mailflow-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }]
 
 [[package]]
 name = "mailflow-storage-sqlite"
