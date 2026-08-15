@@ -10,8 +10,9 @@ without importing plugin packages.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
@@ -19,7 +20,7 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 
-class Urgency(str, Enum):
+class Urgency(StrEnum):
     """Four-level mail importance contract.
 
     Colors are part of the public contract and are reused by the CLI, TUI and
@@ -144,7 +145,7 @@ class MailMessage(BaseModel):
             (
                 f"{self.sender.address}|{self.subject}|{self.date.isoformat()}"
                 f"|{self.account_id}"
-            ).encode("utf-8")
+            ).encode()
         ).hexdigest()[:24]
         return digest
 
@@ -214,7 +215,7 @@ class MailRecord(BaseModel):
     manual_urgency: Urgency | None = None
     analysis: MailAnalysis | None = None
     processor_notes: list[ProcessorNote] = Field(default_factory=list)
-    received_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def effective_urgency(self) -> Urgency:
@@ -263,7 +264,7 @@ class TrashRecord(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ReplyState(str, Enum):
+class ReplyState(StrEnum):
     DRAFT = "draft"
     PREPARED = "prepared"
     SENT = "sent"
@@ -280,8 +281,8 @@ class ReplyDraft(BaseModel):
     subject: str
     body: str
     state: ReplyState = ReplyState.DRAFT
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     token: str | None = None
     token_expires_at: datetime | None = None
 
@@ -290,7 +291,7 @@ class ReplyDraft(BaseModel):
             return False
         if token != self.token:
             return False
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         return now <= self.token_expires_at
 
 
@@ -299,7 +300,7 @@ class ReplyDraft(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ComponentKind(str, Enum):
+class ComponentKind(StrEnum):
     MAIL_SOURCE = "mail_source"
     MAIL_PROCESSOR = "mail_processor"
     LLM_BACKEND = "llm_backend"
@@ -352,7 +353,7 @@ class RuntimeSnapshot(BaseModel):
     version: str = ""
     language: str = "en"
     timezone: str = "UTC"
-    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     plugins: list[PluginSnapshot] = Field(default_factory=list)
     components: list[ComponentSnapshot] = Field(default_factory=list)
     accounts: list[AccountSnapshot] = Field(default_factory=list)
@@ -399,14 +400,14 @@ class CommandResponse(BaseModel):
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def to_utc(value: datetime) -> datetime:
     """Normalize any aware/naive datetime to UTC-aware; naive assumed UTC."""
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 __all__ = [
