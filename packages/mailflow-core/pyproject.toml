@@ -1,0 +1,17 @@
+[project]
+name = "mailflow-core"
+version = "0.1.0"
+description = "MailFlow core: provider-independent domain, plugin pipeline, service facade"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.7",
+  "pluggy>=1.5",
+  "rich>=13.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mailflow"]

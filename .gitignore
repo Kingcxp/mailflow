@@ -30,6 +30,7 @@ logs/
 .env
 .env.*
 configs/local/
+configs/local.toml
 configs/*.local.toml
 
 # Reference/demo material not part of the deliverable
