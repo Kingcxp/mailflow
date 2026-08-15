@@ -1,0 +1,36 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.coverage
+htmlcov/
+.coverage.*
+*.coverage
+
+# Local runtime data
+*.db
+*.sqlite
+*.sqlite3
+data/
+logs/
+*.log
+
+# Secrets and local-only config
+.env
+.env.*
+configs/local/
+configs/*.local.toml
+
+# Reference/demo material not part of the deliverable
+mailflow-generated/

@@ -1,0 +1,47 @@
+[project]
+name = "mailflow-workspace"
+version = "0.1.0"
+description = "MailFlow: unified multi-account mail inbox with plugin pipeline, LLM analysis and rich TUI"
+requires-python = ">=3.11"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*", "plugins/*"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "coverage>=7.6",
+  "ruff>=0.12",
+  "mypy>=1.17",
+  "pyright>=1.1.400",
+  "nuitka>=2.7",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["packages", "plugins", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+include = ["packages", "plugins", "tests", "tools"]
+exclude = [".venv", "dist", "build", "mailflow-generated"]
