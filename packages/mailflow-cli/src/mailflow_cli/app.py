@@ -84,7 +84,11 @@ def command(
         config = _load_config(config_path)
         manager = create_plugin_manager(config, discover_external=False)
         service = await start_service(
-            config, plugin_manager=manager, discover_plugins=False, enable_logging=False
+            config,
+            plugin_manager=manager,
+            discover_plugins=False,
+            enable_logging=False,
+            config_path=config_path,
         )
         router = CommandRouter(service)
         try:

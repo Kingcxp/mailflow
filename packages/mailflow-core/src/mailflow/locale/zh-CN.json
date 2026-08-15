@@ -207,7 +207,8 @@
       "empty": "这里还没有内容",
       "loading": "加载中...",
       "reply.label": "回复",
-      "reply.subject_prefix": "回复："
+      "reply.subject_prefix": "回复：",
+      "settings_config_title": "配置项"
     },
     "cli": {
       "started": "MailFlow 已启动。按 Ctrl+C 停止。",
@@ -231,6 +232,18 @@
     },
     "trash": {
       "usage": "trash <list|restore <id>>"
+    },
+    "config": {
+      "usage": "config <list [组]|get <键>|set <键> <值>>",
+      "title": "配置项（{count}）",
+      "legend": "* 表示机密字段，输出中已隐藏。带 [] 的是列表项（显示第一项）；列表请在 TOML 文件中编辑。",
+      "set_ok": "已设置 {option} = {value}",
+      "restart_note": "已保存；多数选项下次启动生效",
+      "option": "选项",
+      "type": "类型",
+      "required": "必需",
+      "value": "值",
+      "description": "说明"
     }
   }
 }

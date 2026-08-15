@@ -50,6 +50,7 @@ _TOPICS = (
     "lang",
     "trash",
     "runtime",
+    "config",
 )
 
 
@@ -71,6 +72,7 @@ class CommandRouter:
             "lang": self._cmd_lang,
             "trash": self._cmd_trash,
             "runtime": self._cmd_runtime,
+            "config": self._cmd_config,
         }
 
     # -- helpers ----------------------------------------------------------------------
@@ -579,6 +581,71 @@ class CommandRouter:
                 return self._err(self._t("mail.trash_not_found", mail_id=args[1]))
             return self._ok(self._t("mail.restored", mail_id=args[1]))
         return self._err(self._t("mail.trash_usage"))
+
+    # -- configuration ------------------------------------------------------------------
+
+    async def _cmd_config(self, args: list[str]) -> CommandResponse:
+        if not args or args[0] == "list":
+            group = args[1] if len(args) > 1 else ""
+            options = self.service.list_config_options()
+            if group:
+                options = [o for o in options if o.group == group]
+            spans: list[StyleSpan] = [
+                StyleSpan(text=self._t("config.title", count=len(options)), style=_STYLE_TITLE),
+                StyleSpan(
+                    text=f"\n{'OPTION':<32} {'TYPE':<18} {'REQ':<5} {'VALUE':<22} {'DESCRIPTION'}\n",
+                    style=_STYLE_HEADER,
+                ),
+            ]
+            for option in options:
+                key = option.key + ("*" if option.is_secret() else "")
+                value = option.value
+                if isinstance(value, list) or isinstance(value, dict):
+                    value_text = f"{len(value)} items"  # pyright: ignore[reportUnknownArgumentType]
+                elif value is None or isinstance(value, (str, int, float, bool)):
+                    value_text = "-" if value is None else str(value)[:20]
+                elif isinstance(value, bool):
+                    value_text = "true" if value else "false"
+                else:
+                    value_text = "..."  # nested model
+                required = self._t("common.yes") if option.required else ""
+                spans.append(StyleSpan(text=f"{key:<32} "))
+                spans.append(StyleSpan(text=f"{option.type_name:<18} ", style=_STYLE_MUTED))
+                spans.append(
+                    StyleSpan(
+                        text=f"{required:<5} ", style=_STYLE_ACCENT if option.required else ""
+                    )
+                )
+                spans.append(StyleSpan(text=f"{value_text:<22} "))
+                spans.append(StyleSpan(text=f"{option.description}\n"))
+            spans.append(
+                StyleSpan(
+                    text=f"\n{self._t('config.legend')}",
+                    style=_STYLE_MUTED,
+                )
+            )
+            return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        if args[0] == "get" and len(args) == 2:
+            try:
+                option = self.service.get_config_option(args[1])
+            except KeyError as exc:
+                return self._err(str(exc))
+            secret_marker = " (secret)" if option.is_secret() else ""
+            return self._ok(f"{option.key}{secret_marker} = {option.value}")
+        if args[0] == "set" and len(args) == 3:
+            try:
+                option = await self.service.set_config_value(args[1], args[2])
+            except (KeyError, ValueError) as exc:
+                return self._err(str(exc))
+            return self._ok(
+                self._t(
+                    "config.set_ok",
+                    option=option.key,
+                    value="***" if option.is_secret() else option.value,
+                )
+                + f" ({self._t('config.restart_note')})"
+            )
+        return self._err(self._t("config.usage"))
 
     # -- runtime --------------------------------------------------------------------------------------------
 

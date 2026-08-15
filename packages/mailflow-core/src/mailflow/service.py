@@ -76,6 +76,7 @@ class MailFlowService:
         logging_runtime: LoggingRuntime | None = None,
     ) -> None:
         self.config = config
+        self.config_path: Path | None = None
         self.registry = registry
         self.plugin_manager = plugin_manager
         self.storage = storage
@@ -253,6 +254,35 @@ class MailFlowService:
     def t(self, key: str, **params: Any) -> str:
         return self.i18n.t(key, **params)
 
+    # -- configuration inspection and mutation ------------------------------------
+
+    def list_config_options(self) -> list[Any]:
+        from mailflow.config import inspect_config
+
+        return inspect_config(self.config)
+
+    def get_config_option(self, key: str) -> Any:
+        from mailflow.config import find_option
+
+        option = find_option(self.config, key)
+        if option is None:
+            raise KeyError(f"unknown config option {key!r}")
+        return option
+
+    async def set_config_value(self, key: str, raw_value: str) -> Any:
+        """Coerce, validate and persist one scalar config option."""
+        from mailflow.config import patch_config_value, set_option_value, write_config
+
+        if self.config_path is None:
+            raise ValueError("no config file loaded; start with --config to persist changes")
+        updated = set_option_value(self.config, key, raw_value)
+        patched = patch_config_value(self.config_path, key, _config_value_of(updated, key))
+        if not patched:
+            write_config(updated, self.config_path)
+        self.config = updated
+        await self.events.emit("config.changed", key=key)
+        return self.get_config_option(key)
+
     # -- reply workflow ---------------------------------------------------------------------
 
     async def create_reply(self, mail_id: str) -> ReplyDraft:
@@ -384,6 +414,14 @@ def _build_processors(
     return PipelineEngine(bindings, router=router)
 
 
+def _config_value_of(config: MailFlowConfig, key: str) -> Any:
+    """Current value at a dotted key path (for comment-preserving patches)."""
+    node: Any = config
+    for part in key.split("."):
+        node = getattr(node, part)
+    return node
+
+
 def _collect_secrets(config: MailFlowConfig) -> list[str]:
     """API keys plus header values that look like tokens (defense in depth)."""
     secrets: list[str] = []
@@ -463,6 +501,8 @@ async def start_service(
             i18n=i18n,
             logging_runtime=logging_runtime,
         )
+        if config_path is not None:
+            service.config_path = Path(config_path)
         await service.start()
         return service
     except Exception:

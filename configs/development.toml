@@ -12,6 +12,10 @@ mail_retention_days = 30
 trash_retention_days = 7
 cleanup_hour = 4
 cleanup_minute = 0
+reminder_days_before = 2        # days before a timed action's due date for the early reminder
+reminder_hour = 8
+reminder_minute = 0
+reminder_interval_seconds = 60  # scheduler wake interval; a reminder also fires at 00:00 on the due date
 queue_size = 500
 workers = 2
 

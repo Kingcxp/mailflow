@@ -120,7 +120,14 @@ def build_config(db_path: Path) -> MailFlowConfig:
             "accounts": [
                 {"account_id": "acct-1", "provider": "test-source", "email": "me@example.com"}
             ],
-            "llms": [{"llm_id": "llm1", "provider": "test-llm", "model": "m1"}],
+            "llms": [
+                {
+                    "llm_id": "llm1",
+                    "provider": "test-llm",
+                    "model": "m1",
+                    "api_key": "sk-tui-secret",
+                }
+            ],
             "processors": [
                 {"processor_id": "rules", "provider": "rules", "priority": 10},
                 {
@@ -208,6 +215,21 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             lang_select.value = "zh-CN"
             await pilot.pause(0.2)
             assert await service.get_language() == "zh-CN"
+
+            # settings tab lists every config option; secrets are redacted
+            from mailflow_tui.app import SettingsPane
+
+            settings = app.query_one(SettingsPane)
+            await settings.refresh_config()
+            config_table = cast(DataTable[Any], app.query_one("#config-table", DataTable))
+            assert config_table.row_count > 30
+            all_rows = "\n".join(
+                " ".join(str(cell) for cell in config_table.get_row_at(i))
+                for i in range(config_table.row_count)
+            )
+            assert "general.reminder_hour" in all_rows
+            assert "sk-tui-secret" not in all_rows
+            assert "llms[].api_key*" in all_rows
 
             # reply modal: confirm is disabled until prepared
             pane._selected_id = "m-id"  # pyright: ignore[reportPrivateUsage]

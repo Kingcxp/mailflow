@@ -207,7 +207,8 @@
       "empty": "Nothing here yet",
       "loading": "Loading...",
       "reply.label": "Reply",
-      "reply.subject_prefix": "Re:"
+      "reply.subject_prefix": "Re:",
+      "settings_config_title": "Configuration"
     },
     "cli": {
       "started": "MailFlow started. Press Ctrl+C to stop.",
@@ -231,6 +232,18 @@
     },
     "trash": {
       "usage": "trash <list|restore <id>>"
+    },
+    "config": {
+      "usage": "config <list [group]|get <key>|set <key> <value>>",
+      "title": "Configuration options ({count})",
+      "legend": "* marks secret fields, redacted from output. Entries with [] are list items (first configured entry shown); edit lists in the TOML file.",
+      "set_ok": "Set {option} = {value}",
+      "restart_note": "persisted; most options apply on next start",
+      "option": "OPTION",
+      "type": "TYPE",
+      "required": "REQ",
+      "value": "VALUE",
+      "description": "DESCRIPTION"
     }
   }
 }

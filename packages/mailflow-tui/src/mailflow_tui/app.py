@@ -435,9 +435,13 @@ class SettingsPane(Vertical):
         yield Label(self._service.t("tui.settings_language"), id="settings-label")
         yield Select([], id="language-select")
         yield Static(self._service.t("tui.settings_language_help"), id="settings-help")
+        yield Static(self._service.t("tui.settings_config_title"), id="settings-config-title")
+        with ScrollableContainer(id="settings-config-scroll"):
+            yield DataTable(id="config-table")
 
     async def on_mount(self) -> None:
         await self.refresh_languages()
+        await self.refresh_config()
 
     async def refresh_languages(self) -> None:
         options = [
@@ -448,9 +452,37 @@ class SettingsPane(Vertical):
         select.set_options(options)  # pyright: ignore[reportUnknownMemberType]
         select.value = self._service.i18n.language
 
+    def _config_table(self) -> DataTable[Any]:
+        return self.query_one("#config-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+
+    async def refresh_config(self) -> None:
+        """List every configurable option (required/optional, default, value)."""
+        table = self._config_table()
+        if not table.columns:
+            table.add_column(self._service.t("config.option"), key="option")
+            table.add_column(self._service.t("config.type"), key="type")
+            table.add_column(self._service.t("config.required"), key="required")
+            table.add_column(self._service.t("config.value"), key="value")
+            table.add_column(self._service.t("config.description"), key="description")
+        table.clear()
+        for option in self._service.list_config_options():
+            value = option.value
+            if isinstance(value, list) or isinstance(value, dict):
+                value_text = f"{len(value)} items"  # pyright: ignore[reportUnknownArgumentType]
+            elif isinstance(value, bool):
+                value_text = "true" if value else "false"
+            elif value is None:
+                value_text = "-"
+            else:
+                value_text = str(value)[:24]
+            key = option.key + ("*" if option.is_secret() else "")
+            required = self._service.t("common.yes") if option.required else ""
+            table.add_row(key, option.type_name, required, value_text, option.description[:60])
+
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "language-select" and event.value:
             await self._service.set_language(str(event.value))
+            await self.refresh_config()
 
 
 class MailFlowApp(App[None]):

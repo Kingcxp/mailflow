@@ -7,13 +7,16 @@ placeholders are expanded; ``prefix-${VAR}-suffix`` is left literal.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, model_validator
+from pydantic.fields import FieldInfo
 
 from mailflow.domain import Urgency
 
@@ -116,21 +119,24 @@ class GeneralConfig(BaseModel):
 class LoggingConfig(BaseModel):
     """Console/file/jsonl sinks; levels and redirect targets are all configurable."""
 
-    level: str = "INFO"
-    console: bool = True
-    console_level: str = "INFO"
-    # Optional path: when set, console output is also mirrored to this file.
-    console_redirect: str | None = None
-    file: bool = True
-    file_path: str = "logs/mailflow.log"
-    file_level: str = "INFO"
-    file_max_bytes: int = 10 * 1024 * 1024
-    file_backup_count: int = 5
-    jsonl: bool = False
-    jsonl_path: str = "logs/mailflow.jsonl"
-    jsonl_level: str = "INFO"
-    # Optional per-logger overrides: {"mailflow.runtime": "DEBUG"}
-    logger_levels: dict[str, str] = Field(default_factory=lambda: {})
+    level: str = Field(default="INFO", description="Default level for the mailflow logger tree")
+    console: bool = Field(default=True, description="Emit rich console output")
+    console_level: str = Field(default="INFO", description="Console sink level")
+    console_redirect: str | None = Field(
+        default=None, description="Optional path: mirror console output to this file as well"
+    )
+    file: bool = Field(default=True, description="Write a rotating text log file")
+    file_path: str = Field(default="logs/mailflow.log", description="Text log file path")
+    file_level: str = Field(default="INFO", description="File sink level")
+    file_max_bytes: int = Field(default=10 * 1024 * 1024, description="Rotating file max bytes")
+    file_backup_count: int = Field(default=5, description="Rotating file backup count")
+    jsonl: bool = Field(default=False, description="Write a JSON-lines log file")
+    jsonl_path: str = Field(default="logs/mailflow.jsonl", description="JSONL log file path")
+    jsonl_level: str = Field(default="INFO", description="JSONL sink level")
+    logger_levels: dict[str, str] = Field(
+        default_factory=lambda: {},
+        description="Per-logger level overrides, e.g. mailflow.runtime = DEBUG",
+    )
 
     @model_validator(mode="after")
     def validate_levels(self) -> LoggingConfig:
@@ -147,8 +153,13 @@ class LoggingConfig(BaseModel):
 
 
 class PluginConfig(BaseModel):
-    enabled: list[str] = Field(default_factory=lambda: [])  # non-empty = allowlist
-    disabled: list[str] = Field(default_factory=lambda: [])
+    enabled: list[str] = Field(
+        default_factory=lambda: [],
+        description="Plugin id allowlist; non-empty means only these load",
+    )
+    disabled: list[str] = Field(
+        default_factory=lambda: [], description="Plugin ids that are never loaded"
+    )
 
     @model_validator(mode="after")
     def no_overlap(self) -> PluginConfig:
@@ -159,31 +170,60 @@ class PluginConfig(BaseModel):
 
 
 class MailAccountConfig(BaseModel):
-    account_id: str
-    provider: str  # mail source plugin id
-    email: str = ""
-    enabled: bool = True
-    options: dict[str, Any] = Field(default_factory=lambda: {})
+    account_id: str = Field(description="Unique account identifier")
+    provider: str = Field(description="Mail source adapter component id (e.g. fake)")
+    email: str = Field(default="", description="Account email address")
+    enabled: bool = Field(default=True, description="Whether this account is polled")
+    options: dict[str, Any] = Field(
+        default_factory=lambda: {},
+        description="Provider-specific settings (e.g. fake mail definitions)",
+    )
 
 
 class LLMConfig(BaseModel):
     """One named, OpenAI-compatible LLM. ``provider`` selects the backend plugin."""
 
-    llm_id: str
-    name: str = ""
-    provider: str = "openai-compatible"
-    base_url: str = "https://api.openai.com/v1"
-    api_key: str = ""
-    api_key_env: str | None = None
-    model: str = "gpt-4o-mini"
-    headers: dict[str, str] = Field(default_factory=lambda: {})
-    query: dict[str, str] = Field(default_factory=lambda: {})
-    extra_body: dict[str, Any] = Field(default_factory=lambda: {})
-    timeout_seconds: float = Field(default=60.0, ge=1.0)
-    max_retries: int = Field(default=2, ge=0, le=20)
-    default: bool = False
-    fallback: list[str] = Field(default_factory=lambda: [])
-    options: dict[str, Any] = Field(default_factory=lambda: {})
+    llm_id: str = Field(description="Unique name processors reference")
+    name: str = Field(default="", description="Human-readable display name")
+    provider: str = Field(
+        default="openai-compatible", description="LLM backend adapter component id"
+    )
+    base_url: str = Field(
+        default="https://api.openai.com/v1",
+        description="Remote OpenAI-compatible base URL (the chat path is appended)",
+    )
+    api_key: str = Field(
+        default="", description="API token (secret; prefer api_key_env or ${ENV_VAR})"
+    )
+    api_key_env: str | None = Field(
+        default=None, description="Environment variable holding the API token"
+    )
+    model: str = Field(default="gpt-4o-mini", description="Model identifier sent in the request")
+    headers: dict[str, str] = Field(
+        default_factory=lambda: {},
+        description="Extra HTTP headers (secret values are redacted from output)",
+    )
+    query: dict[str, str] = Field(
+        default_factory=lambda: {}, description="Extra query-string parameters"
+    )
+    extra_body: dict[str, Any] = Field(
+        default_factory=lambda: {}, description="Extra JSON body fields merged into every request"
+    )
+    timeout_seconds: float = Field(
+        default=60.0, ge=1.0, description="Per-request timeout in seconds"
+    )
+    max_retries: int = Field(default=2, ge=0, le=20, description="Bounded transport retries")
+    default: bool = Field(
+        default=False,
+        description="Mark this LLM as the default for processors without an explicit one",
+    )
+    fallback: list[str] = Field(
+        default_factory=lambda: [], description="Named LLMs tried in order when this one fails"
+    )
+    options: dict[str, Any] = Field(
+        default_factory=lambda: {},
+        description="Backend-specific options (e.g. path = chat/completions)",
+    )
 
     @model_validator(mode="after")
     def resolve_key(self) -> LLMConfig:
@@ -197,16 +237,31 @@ class LLMConfig(BaseModel):
 
 
 class ProcessorConfig(BaseModel):
-    processor_id: str
-    provider: str  # processor plugin id
-    enabled: bool = True
-    priority: int = Field(default=100, ge=0)
-    llm: str | None = None  # named LLM id; None = rule-based processor
-    fallback_llms: list[str] = Field(default_factory=lambda: [])
-    failure_policy: str = "continue"
-    retries: int = Field(default=1, ge=0, le=5)
-    timeout_seconds: float = Field(default=30.0, ge=1.0)
-    options: dict[str, Any] = Field(default_factory=lambda: {})
+    processor_id: str = Field(description="Unique processor instance name")
+    provider: str = Field(description="Processor plugin component id (e.g. rules, llm-importance)")
+    enabled: bool = Field(default=True, description="Whether this processor runs in the chain")
+    priority: int = Field(
+        default=100, ge=0, description="Ascending execution order in the pipeline"
+    )
+    llm: str | None = Field(
+        default=None, description="Named LLM id; None for rule-based processors"
+    )
+    fallback_llms: list[str] = Field(
+        default_factory=lambda: [], description="Ordered fallback named LLMs"
+    )
+    failure_policy: str = Field(
+        default="continue",
+        description="continue runs the next processor after failure; stop halts the chain",
+    )
+    retries: int = Field(
+        default=1, ge=0, le=5, description="Extra attempts after the initial processor run"
+    )
+    timeout_seconds: float = Field(
+        default=30.0, ge=1.0, description="Per-processor timeout in seconds"
+    )
+    options: dict[str, Any] = Field(
+        default_factory=lambda: {}, description="Processor-specific options"
+    )
 
     @model_validator(mode="after")
     def validate_failure_policy(self) -> ProcessorConfig:
@@ -218,34 +273,62 @@ class ProcessorConfig(BaseModel):
 
 
 class NotifierConfig(BaseModel):
-    notifier_id: str
-    provider: str
-    enabled: bool = True
-    minimum_urgency: Urgency = Urgency.IMPORTANT
-    options: dict[str, Any] = Field(default_factory=lambda: {})
+    notifier_id: str = Field(description="Unique notifier instance name")
+    provider: str = Field(description="Notifier plugin component id (e.g. console)")
+    enabled: bool = Field(default=True, description="Whether this notifier is active")
+    minimum_urgency: Urgency = Field(
+        default=Urgency.IMPORTANT, description="Only mail at or above this urgency is delivered"
+    )
+    options: dict[str, Any] = Field(
+        default_factory=lambda: {}, description="Notifier-specific options"
+    )
 
 
 class StorageConfig(BaseModel):
-    provider: str = "sqlite"
-    path: str = "data/mailflow.db"
-    options: dict[str, Any] = Field(default_factory=lambda: {})
+    provider: str = Field(default="sqlite", description="Storage backend component id")
+    path: str = Field(default="data/mailflow.db", description="Database file path")
+    options: dict[str, Any] = Field(
+        default_factory=lambda: {}, description="Backend-specific options"
+    )
 
 
 class I18nConfig(BaseModel):
-    language: str = "en"
-    extra_dirs: list[str] = Field(default_factory=lambda: [])
+    language: str = Field(default="en", description="Display language code")
+    extra_dirs: list[str] = Field(
+        default_factory=lambda: [],
+        description="Directories containing data-only JSON language packs",
+    )
 
 
 class MailFlowConfig(BaseModel):
-    general: GeneralConfig = Field(default_factory=GeneralConfig)
-    logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    plugins: PluginConfig = Field(default_factory=PluginConfig)
-    accounts: list[MailAccountConfig] = Field(default_factory=lambda: [])
-    llms: list[LLMConfig] = Field(default_factory=lambda: [])
-    processors: list[ProcessorConfig] = Field(default_factory=lambda: [])
-    notifiers: list[NotifierConfig] = Field(default_factory=lambda: [])
-    storage: StorageConfig = Field(default_factory=StorageConfig)
-    i18n: I18nConfig = Field(default_factory=I18nConfig)
+    general: GeneralConfig = Field(
+        default_factory=GeneralConfig,
+        description="Runtime-wide behavior: language, timezone, retention, reminders",
+    )
+    logging: LoggingConfig = Field(
+        default_factory=LoggingConfig, description="Console/file/jsonl log sinks and levels"
+    )
+    plugins: PluginConfig = Field(
+        default_factory=PluginConfig, description="Plugin allowlist/denylist"
+    )
+    accounts: list[MailAccountConfig] = Field(
+        default_factory=lambda: [], description="Mail accounts to poll"
+    )
+    llms: list[LLMConfig] = Field(
+        default_factory=lambda: [], description="Named LLMs and their request configuration"
+    )
+    processors: list[ProcessorConfig] = Field(
+        default_factory=lambda: [], description="The ordered processing chain"
+    )
+    notifiers: list[NotifierConfig] = Field(
+        default_factory=lambda: [], description="Notification channels with urgency thresholds"
+    )
+    storage: StorageConfig = Field(
+        default_factory=StorageConfig, description="Durable storage backend"
+    )
+    i18n: I18nConfig = Field(
+        default_factory=I18nConfig, description="Language and external language-pack directories"
+    )
 
     # -- cross-reference validation ------------------------------------------
 
@@ -308,3 +391,210 @@ def load_config(path: str | Path | None = None) -> MailFlowConfig:
             raw = tomllib.load(handle)
     interpolated = _interpolate(raw, str(path) if path else "<memory>")
     return MailFlowConfig.model_validate(interpolated)
+
+
+# ---------------------------------------------------------------------------
+# Config inspection and mutation (used by the `config` command and the TUI)
+# ---------------------------------------------------------------------------
+
+_SECRET_MARKERS = ("api_key", "token", "password", "secret", "authorization")
+
+
+def is_secret_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(marker in lowered for marker in _SECRET_MARKERS)
+
+
+def redact_value(key: str, value: Any) -> Any:
+    """Mask secret values before they reach command/TUI output."""
+    if value is None or value == "":
+        return value
+    if is_secret_key(key):
+        return "***"
+    if isinstance(value, dict):
+        mapping = cast(dict[str, Any], value)
+        return {k: redact_value(k, v) for k, v in mapping.items()}
+    return value
+
+
+@dataclass(frozen=True)
+class OptionInfo:
+    """One configurable option, as shown by `config list`."""
+
+    key: str  # dotted path, e.g. general.reminder_hour or accounts[].provider
+    group: str
+    type_name: str
+    required: bool
+    default: Any
+    description: str
+    value: Any  # current effective value (already redacted by the caller)
+
+    def is_secret(self) -> bool:
+        return is_secret_key(self.key)
+
+
+def _field_info(field: FieldInfo) -> tuple[str, bool, Any]:
+    annotation = field.annotation
+    type_name = getattr(annotation, "__name__", str(annotation))
+    return (type_name, field.is_required(), field.get_default(call_default_factory=False))
+
+
+def _walk_group(prefix: str, model: BaseModel) -> list[OptionInfo]:
+    options: list[OptionInfo] = []
+    for name, field in type(model).__pydantic_fields__.items():
+        key = f"{prefix}.{name}" if prefix else name
+        type_name, required, default = _field_info(field)
+        description = field.description or ""
+        value = redact_value(name, getattr(model, name))
+        options.append(
+            OptionInfo(
+                key=key,
+                group=prefix,
+                type_name=type_name,
+                required=required,
+                default=default,
+                description=description,
+                value=value,
+            )
+        )
+    return options
+
+
+def inspect_config(config: MailFlowConfig) -> list[OptionInfo]:
+    """Flatten the config into per-option rows for commands and the TUI."""
+    options: list[OptionInfo] = []
+    for group_name, field in type(config).__pydantic_fields__.items():
+        type_name, required, default = _field_info(field)
+        options.append(
+            OptionInfo(
+                key=group_name,
+                group="",
+                type_name=type_name,
+                required=required,
+                default=default,
+                description=field.description or "",
+                value=redact_value(group_name, getattr(config, group_name)),
+            )
+        )
+        child = getattr(config, group_name)
+        if isinstance(child, BaseModel):
+            options.extend(_walk_group(group_name, child))
+        elif isinstance(child, list) and child:
+            first = cast(Any, child)[0]
+            if isinstance(first, BaseModel):
+                options.extend(_walk_group(f"{group_name}[]", first))
+    return options
+
+
+def find_option(config: MailFlowConfig, key: str) -> OptionInfo | None:
+    for option in inspect_config(config):
+        if option.key == key:
+            return option
+    return None
+
+
+def set_option_value(config: MailFlowConfig, key: str, raw_value: str) -> MailFlowConfig:
+    """Return a new validated config with ``key`` set to the coerced value."""
+    parts = key.split(".")
+    if len(parts) < 2 or parts[0] not in type(config).__pydantic_fields__:
+        raise KeyError(f"unknown config option {key!r}")
+    group = parts[0]
+    if group in ("accounts", "llms", "processors", "notifiers"):
+        raise KeyError(f"{group!r} entries are lists; edit them in the TOML file")
+    data = config.model_dump()
+    target: Any = data[group]
+    for part in parts[1:]:
+        if not isinstance(target, dict) or part not in target:
+            raise KeyError(f"unknown config option {key!r}")
+        target = cast(dict[str, Any], target)[part]
+    if isinstance(target, (dict, list)):
+        raise KeyError(f"{key!r} is a structured option; edit the TOML file instead")
+    if isinstance(target, bool):
+        parsed: Any = raw_value.strip().lower() in ("1", "true", "yes", "on")
+    elif isinstance(target, int):
+        parsed = int(raw_value)
+    elif isinstance(target, float):
+        parsed = float(raw_value)
+    else:
+        parsed = raw_value
+    # walk the dump again to place the parsed value at the right node
+    node: dict[str, Any] = data
+    for part in parts[:-1]:
+        node = cast(dict[str, Any], node[part])
+    node[parts[-1]] = parsed
+    return MailFlowConfig.model_validate(data)
+
+
+def write_config(config: MailFlowConfig, path: str | Path) -> None:
+    """Persist the current config to a TOML file (tomli-w)."""
+    import tomli_w
+
+    def strip_none(value: Any) -> Any:
+        if isinstance(value, dict):
+            mapping = cast(dict[str, Any], value)
+            return {
+                k: strip_none(v)
+                for k, v in mapping.items()
+                if v is not None  # pyright: ignore[reportUnknownVariableType]
+            }
+        if isinstance(value, list):
+            return [strip_none(v) for v in value]  # pyright: ignore[reportUnknownVariableType]
+        return value
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as handle:
+        tomli_w.dump(strip_none(config.model_dump(mode="python")), handle)
+
+
+def patch_config_value(path: str | Path, key: str, value: Any) -> bool:
+    """Rewrite one ``key = value`` line in place, preserving comments.
+
+    Returns True when the line existed and was patched; False when the key
+    was absent (caller should fall back to a full rewrite).
+    """
+    path = Path(path)
+    if not path.is_file():
+        return False
+    raw = path.read_text(encoding="utf-8")
+    if isinstance(value, bool):
+        value_repr = "true" if value else "false"
+    elif isinstance(value, (int, float)):
+        value_repr = str(value)
+    else:
+        value_repr = json.dumps(str(value))
+    group, _, leaf = key.partition(".")
+    patched = _patch_section_line(raw, group, leaf, value_repr)
+    if patched is None:
+        return False
+    path.write_text(patched, encoding="utf-8")
+    return True
+
+
+def _patch_section_line(raw: str, group: str, leaf: str, value_repr: str) -> str | None:
+    """Replace ``leaf = ...`` inside the ``[group]`` section; None if absent."""
+    lines = raw.splitlines(keepends=True)
+    start = -1
+    end = len(lines)
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1].strip()
+            if section == group and start == -1:
+                start = index
+            elif start != -1:
+                end = index
+                break
+    if start == -1:
+        # no matching section header (e.g. group-less file): search the whole file
+        start, end = 0, len(lines)
+    for index in range(start, end):
+        stripped = lines[index].strip()
+        if re.match(rf"{re.escape(leaf)}\s*=", stripped):
+            lines[index] = re.sub(
+                rf"^(\s*{re.escape(leaf)}\s*=\s*).*$",
+                rf"\g<1>{value_repr}",
+                lines[index],
+            )
+            return "".join(lines)
+    return None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -24,6 +25,28 @@ from mailflow.registry import ComponentRegistry
 from mailflow.service import MailFlowService
 
 ADDRESS = MailAddress(name="Sender", address="sender@example.com")
+
+
+def commands_service(
+    config: MailFlowConfig | None = None, config_path: str | None = None
+) -> MailFlowService:
+    """Build a service with the given config (used by config-set tests)."""
+    service = MailFlowService(
+        config=config or MailFlowConfig(),
+        registry=ComponentRegistry(),
+        plugin_manager=cast(Any, FakePluginManager()),
+        storage=cast(Any, MemoryStorage()),
+        sources={},
+        router=cast(LLMRouter, None),
+        pipeline=PipelineEngine([]),
+        notifiers=[],
+        notifier_configs=[],
+        events=EventBus(),
+        i18n=I18n(),
+    )
+    if config_path:
+        service.config_path = Path(config_path)
+    return service
 
 
 class MemoryStorage:
@@ -330,3 +353,57 @@ class TestCommandRouter:
         assert storage.preferences["language"] == "zh-CN"
         response = await commands.execute("lang set klingon")
         assert not response.ok
+
+    async def test_config_list_shows_options_and_secrets_redacted(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, _ = router
+        # give the service an llm with a secret so redaction is exercised
+        from mailflow.config import MailFlowConfig
+
+        service = commands.service
+        service.config = MailFlowConfig.model_validate(
+            {"llms": [{"llm_id": "l1", "base_url": "https://x", "api_key": "sk-topsecret"}]}
+        )
+        response = await commands.execute("config list")
+        assert response.ok
+        assert "general.reminder_hour" in response.text
+        assert "required" in response.text.lower() or "yes" in response.text
+        assert "sk-topsecret" not in response.text
+        assert "llms[].api_key*" in response.text  # secret marker
+
+    async def test_config_get(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
+        commands, _ = router
+        response = await commands.execute("config get general.reminder_hour")
+        assert response.ok
+        assert "8" in response.text
+        response = await commands.execute("config get no.such.key")
+        assert not response.ok
+
+    async def test_config_set_persists_to_file(self, tmp_path: Path) -> None:
+        from mailflow.config import MailFlowConfig
+
+        config = MailFlowConfig()
+        path = tmp_path / "config.toml"
+        config_path = str(path)
+        service = commands_service(config, config_path)
+        commands = CommandRouter(service)
+        response = await commands.execute("config set general.reminder_hour 9")
+        assert response.ok
+        assert "9" in response.text
+        from mailflow.config import load_config
+
+        reloaded = load_config(path)
+        assert reloaded.general.reminder_hour == 9
+        # invalid value is rejected and the file is untouched
+        response = await commands.execute("config set general.reminder_hour oops")
+        assert not response.ok
+        assert load_config(path).general.reminder_hour == 9
+
+    async def test_config_set_requires_config_file(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, _ = router
+        response = await commands.execute("config set general.reminder_hour 9")
+        assert not response.ok
+        assert "config file" in response.text

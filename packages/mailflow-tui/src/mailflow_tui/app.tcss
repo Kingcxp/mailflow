@@ -77,6 +77,21 @@ Screen {
     color: $text-muted;
 }
 
+#settings-config-title {
+    margin: 1 1 0 1;
+    text-style: bold;
+}
+
+#settings-config-scroll {
+    height: 45%;
+    margin: 0 1;
+    border: round $primary;
+}
+
+#config-table {
+    height: auto;
+}
+
 #reply-title, #action-title {
     text-style: bold;
     margin: 1;
