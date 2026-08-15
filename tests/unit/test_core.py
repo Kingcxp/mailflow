@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
+from mailflow.config import MailFlowConfig, load_config
 from mailflow.domain import (
     MailAnalysis,
     MailMessage,
@@ -12,7 +11,7 @@ from mailflow.domain import (
     Urgency,
     parse_urgency,
 )
-from mailflow.config import MailFlowConfig, load_config
+from pydantic import ValidationError
 
 ADDRESS = {
     "name": "Sender",
