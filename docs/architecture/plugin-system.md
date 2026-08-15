@@ -25,12 +25,14 @@ PLUGIN_INFO = PluginInfo(
     kinds=[ComponentKind.MAIL_SOURCE],
 )
 
+
 class FakeMailPlugin:
     def mailflow_plugin_info(self) -> PluginInfo:
         return PLUGIN_INFO
 
     def mailflow_register(self, registrar, config) -> None:
         registrar.add_source("fake", build_source)
+
 
 plugin = FakeMailPlugin()
 ```

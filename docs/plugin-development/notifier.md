@@ -20,6 +20,7 @@ before calling you — a notifier only sees records at or above its threshold.
 def build_notifier(config: NotifierConfig) -> MyNotifier:
     return MyNotifier(config.options)
 
+
 registrar.add_notifier("my-channel", build_notifier)
 ```
 

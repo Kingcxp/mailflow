@@ -21,6 +21,7 @@ See `mailflow/contracts.py` — `StorageBackend` (async methods):
 def build_storage(config: StorageConfig) -> MyStorage:
     return MyStorage(config.path, config.options)
 
+
 registrar.add_storage("my-storage", build_storage)
 ```
 

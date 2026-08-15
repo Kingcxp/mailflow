@@ -8,8 +8,10 @@ A mail source merges one provider into the MailFlow stream.
 class MailSource(Protocol):
     async def run(self, emit: MailEmitter, stop_event: asyncio.Event) -> None:
         """Stream normalized mails into `emit` until `stop_event` is set."""
+
     async def send_reply(self, mail_id: str, draft: ReplyDraft) -> None:
         """Send a confirmed reply for this provider."""
+
     async def close(self) -> None:
         """Release provider resources."""
 ```
@@ -23,6 +25,7 @@ normalized message into the bounded runtime queue.
 def build_source(account: MailAccountConfig) -> MySource:
     # account.options carries provider-specific settings
     return MySource(account)
+
 
 registrar.add_source("my-provider", build_source)
 ```

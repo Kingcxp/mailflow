@@ -8,6 +8,7 @@ returns a partial analysis plus a decision.
 ```python
 class MailProcessor(Protocol):
     processor_id: str
+
     async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult: ...
 ```
 
@@ -29,6 +30,7 @@ determinism instead of `datetime.now()`).
 ```python
 def build_processor(config: ProcessorConfig, router: LLMRouter) -> MyProcessor:
     return MyProcessor(config.options, router)
+
 
 registrar.add_processor("my-processor", build_processor)
 ```

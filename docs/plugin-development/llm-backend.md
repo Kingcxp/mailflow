@@ -8,6 +8,7 @@ named LLM configuration.
 ```python
 class LLMBackend(Protocol):
     backend_id: str
+
     async def chat(
         self,
         messages: list[dict[str, str]],
@@ -24,7 +25,8 @@ stamps `llm_id` and `backend` (the plugin id).
 
 ```python
 def build_backend(config: LLMConfig) -> MyBackend:
-    return MyBackend(config)   # base_url, api_key, model, headers, query, extra_body
+    return MyBackend(config)  # base_url, api_key, model, headers, query, extra_body
+
 
 registrar.add_llm("my-backend", build_backend)
 ```

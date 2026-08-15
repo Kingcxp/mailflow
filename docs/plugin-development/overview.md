@@ -31,19 +31,21 @@ fake-mail = "mailflow_mail_fake.plugin:plugin"
 from mailflow.plugins import PluginInfo
 
 PLUGIN_INFO = PluginInfo(
-    plugin_id="mailflow-mail-fake",   # unique across all plugins
+    plugin_id="mailflow-mail-fake",  # unique across all plugins
     name="Fake Mail Source",
     version="0.1.0",
     description="...",
     kinds=[ComponentKind.MAIL_SOURCE],
 )
 
+
 class MyPlugin:
     def mailflow_plugin_info(self) -> PluginInfo:
         return PLUGIN_INFO
 
     def mailflow_register(self, registrar, config) -> None:
-        registrar.add_source("fake", build_source)   # see per-kind guides
+        registrar.add_source("fake", build_source)  # see per-kind guides
+
 
 plugin = MyPlugin()
 ```

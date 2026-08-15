@@ -10,12 +10,14 @@ import asyncio, logging
 from mailflow.service import start_service
 from mailflow_bundled import create_plugin_manager
 
+
 class MyLogHandler(logging.Handler):
     def emit(self, record): ...  # forward records to your framework
 
+
 async def main() -> None:
     service = await start_service(
-        config,                       # MailFlowConfig or leave None for defaults
+        config,  # MailFlowConfig or leave None for defaults
         plugin_manager=create_plugin_manager(config),  # bundled set + discovery
         extra_log_handlers=[MyLogHandler()],  # optional host log sink
     )
