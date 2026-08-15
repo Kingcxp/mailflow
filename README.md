@@ -159,13 +159,15 @@ make exe-onefile
 Browse and install plugins from remote repositories:
 
 ```bash
-uv run mailflow plugin repo add mailflow-plugins https://raw.githubusercontent.com/mailflow/mailflow-plugins/main/plugins.json
+uv run mailflow plugin repo add mailflow-repo https://github.com/Kingcxp/mailflow-repo
 uv run mailflow plugin market list
-uv run mailflow plugin install mailflow-notify-webhook   # restart to load
+uv run mailflow plugin market show mailflow-notify-ntfy
+uv run mailflow plugin install mailflow-notify-ntfy     # restart to load
 ```
 
-The [mailflow-plugins](https://github.com/mailflow/mailflow-plugins)
-repository hosts the index and community plugins.
+The [mailflow-repo](https://github.com/Kingcxp/mailflow-repo) repository
+hosts the marketplace: one folder per plugin, grouped by category, so adding
+a plugin is a single pull request that never touches other plugins' files.
 
 ## Project layout
 

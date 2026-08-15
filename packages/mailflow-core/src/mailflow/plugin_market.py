@@ -1,29 +1,26 @@
-"""Plugin marketplace: browse remote plugin indexes and install plugins.
+"""Plugin marketplace: browse remote plugin repositories and install plugins.
 
-A marketplace repository is a URL serving a ``plugins.json`` index:
+A repository is a URL serving a root ``index.json`` (``{name, schema,
+categories: [{id, path}]}``) plus category folders. Each plugin lives in its
+own folder ``<category>/<plugin-id>/plugin.json`` containing the full
+metadata including the markdown readme:
 
 .. code-block:: json
 
     {
-      "name": "mailflow-plugins",
-      "plugins": [
-        {
-          "id": "mailflow-notify-webhook",
-          "name": "Webhook Notifier",
-          "version": "0.1.0",
-          "description": "Deliver mail alerts to an HTTP webhook",
-          "categories": ["notifier"],
-          "package": "mailflow-notify-webhook",
-          "source": "https://github.com/acme/mailflow-notify-webhook",
-          "entry_point": "mailflow.plugins",
-          "author": "acme",
-          "license": "MIT"
-        }
-      ]
+      "id": "mailflow-notify-ntfy",
+      "name": "ntfy Notifier",
+      "description": "Push mail alerts to any ntfy.sh topic",
+      "categories": ["notifier"],
+      "package": "mailflow-notify-ntfy",
+      "source": "git+https://github.com/...",
+      "readme": "# ...markdown..."
     }
 
-Installing runs ``uv pip install <source>`` in the active environment; the new
-plugin is discovered on the next service start (entry-point discovery).
+Adding a plugin means adding exactly one folder, so pull requests never
+conflict over a shared index. Installing runs ``uv pip install <source>`` in
+the active environment; the new plugin is discovered on the next service
+start (entry-point discovery).
 """
 
 from __future__ import annotations
@@ -74,13 +71,10 @@ class Repository:
     url: str
 
 
-def _fetch_json(url: str, timeout: float = _FETCH_TIMEOUT) -> dict[str, Any]:
+def _fetch_json(url: str, timeout: float = _FETCH_TIMEOUT) -> Any:
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("marketplace index is not a JSON object")
-    return cast(dict[str, Any], payload)
+        return json.loads(response.read().decode("utf-8"))
 
 
 class PluginMarket:
@@ -89,8 +83,80 @@ class PluginMarket:
     def __init__(self, repositories: list[Repository]) -> None:
         self._repositories = list(repositories)
 
-    def fetch_index(self, repository: Repository, timeout: float = _FETCH_TIMEOUT) -> MarketIndex:
-        return MarketIndex.model_validate(_fetch_json(repository.url, timeout))
+    @staticmethod
+    def _join(base: str, *parts: str) -> str:
+        return "/".join([base.rstrip("/"), *parts])
+
+    def _list_plugin_dirs(self, base: str, category_path: str, timeout: float) -> list[str]:
+        """Return the plugin directory names inside one category folder."""
+        if base.startswith("file://"):
+            import re
+            from pathlib import Path
+            from urllib.parse import unquote, urlparse
+
+            raw_path = unquote(urlparse(base).path)
+            if re.match(r"^/[A-Za-z]:", raw_path):
+                raw_path = raw_path[1:]  # Windows drive: /C:/... -> C:/...
+            directory = Path(raw_path) / category_path
+            if not directory.is_dir():
+                return []
+            return sorted(item.name for item in directory.iterdir() if item.is_dir())
+        if "github.com" in base:
+            import re
+
+            match = re.search(r"github\.com/([^/]+)/([^/]+)", base)
+            if match is None:
+                return []
+            owner, repo = match.group(1), match.group(2)
+            branch = "main"
+            branch_match = re.search(r"(?:/tree/|@)([^/]+)", base)
+            if branch_match:
+                branch = branch_match.group(1)
+            api_url = (
+                f"https://api.github.com/repos/{owner}/{repo}/contents/{category_path}?ref={branch}"
+            )
+            payload = _fetch_json(api_url, timeout)
+            if isinstance(payload, list):
+                entries = cast(list[dict[str, Any]], payload)
+                return sorted(str(entry["name"]) for entry in entries if entry.get("type") == "dir")
+            return []
+        # generic HTTP server: per-category manifest fallback
+        manifest = _fetch_json(self._join(base, category_path, "INDEX.json"), timeout)
+        if not isinstance(manifest, dict):
+            return []
+        mapping = cast(dict[str, Any], manifest)
+        return sorted(str(name) for name in mapping.get("plugins", []))
+
+    def fetch_index(
+        self, repository: Repository, timeout: float = _FETCH_TIMEOUT
+    ) -> list[MarketPlugin]:
+        """Fetch every per-plugin metadata file; a broken file is skipped."""
+        root = _fetch_json(self._join(repository.url, "index.json"), timeout)
+        if not isinstance(root, dict):
+            raise ValueError("marketplace index.json is not a JSON object")
+        root_map = cast(dict[str, Any], root)
+        categories = root_map.get("categories", [])
+        if not isinstance(categories, list):
+            raise ValueError("marketplace index.json has no categories list")
+        plugins: list[MarketPlugin] = []
+        for category in cast(list[Any], categories):  # type: ignore[redundant-cast]
+            if not isinstance(category, dict):
+                continue
+            category_map = cast(dict[str, Any], category)
+            category_path = str(category_map.get("path", ""))
+            if not category_path:
+                continue
+            for plugin_dir in self._list_plugin_dirs(repository.url, category_path, timeout):
+                metadata_url = self._join(repository.url, category_path, plugin_dir, "plugin.json")
+                try:
+                    payload = _fetch_json(metadata_url, timeout)
+                except (URLError, ValueError, json.JSONDecodeError) as exc:
+                    logger.error(
+                        "invalid plugin metadata %s/%s: %s", category_path, plugin_dir, exc
+                    )
+                    continue
+                plugins.append(MarketPlugin.model_validate(payload))
+        return plugins
 
     def list_plugins(
         self, timeout: float = _FETCH_TIMEOUT
@@ -103,7 +169,7 @@ class PluginMarket:
             except (URLError, ValueError, json.JSONDecodeError) as exc:
                 logger.error("marketplace %r unreachable: %s", repository.name, exc)
                 continue
-            for plugin in index.plugins:
+            for plugin in index:
                 results.append((repository, plugin))
         return results
 

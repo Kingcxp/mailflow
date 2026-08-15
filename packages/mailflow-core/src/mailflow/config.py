@@ -154,7 +154,7 @@ class LoggingConfig(BaseModel):
 
 class PluginRepositoryConfig(BaseModel):
     name: str = Field(description="Repository display name")
-    url: str = Field(description="URL of the repository's plugins.json index")
+    url: str = Field(description="Marketplace base URL (root index.json + category folders)")
 
 
 class PluginConfig(BaseModel):
@@ -167,7 +167,7 @@ class PluginConfig(BaseModel):
     )
     repositories: list[PluginRepositoryConfig] = Field(
         default_factory=lambda: [],
-        description="Plugin marketplaces: named URLs whose plugins.json indexes the market browses",
+        description="Plugin marketplaces: named URLs the market browses (one plugin.json per plugin folder)",
     )
 
     @model_validator(mode="after")

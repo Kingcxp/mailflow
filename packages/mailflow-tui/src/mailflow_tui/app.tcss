@@ -26,6 +26,14 @@ Screen {
     dock: bottom;
     height: 3;
     padding: 0 1;
+    align-vertical: middle;
+}
+
+#mail-controls Button,
+#market-actions Button,
+#runtime-plugin-actions Button {
+    height: 3;
+    content-align: center middle;
 }
 
 #mail-summary {
@@ -164,6 +172,7 @@ DataTable > .datatable--cursor {
 #market-actions {
     height: 3;
     padding: 0 1;
+    align-vertical: middle;
 }
 
 #runtime-scroll {
@@ -183,6 +192,7 @@ DataTable > .datatable--cursor {
 
 #runtime-plugin-actions {
     height: 3;
+    align-vertical: middle;
 }
 
 #runtime-status {

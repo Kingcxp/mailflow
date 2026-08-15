@@ -69,7 +69,7 @@ uv build --all-packages        # pass (11 wheels)
 | `fix(core): retry storage saves...` | save retries, broader secret redaction, coverage for all packages | `make coverage` (86%), full suite |
 | `feat(core): remind on timed actions...` | early + day-of reminders, persisted fired state | reminder unit tests (17 runtime tests) |
 | `feat(core): manage every config option...` | config list/get/set, TUI config table, comment-preserving TOML patching | `config set` CLI smoke on a commented file (comments preserved) |
-| `feat(core): plugin marketplace...` | repo/market/install commands, TUI Market tab, `mailflow-plugins` sibling repo | end-to-end install of the webhook sample via `uv pip`; uninstalled after |
+| `feat(core): plugin marketplace...` | repo/market/install commands, TUI Market tab, `mailflow-repo` sibling repo | end-to-end install of the webhook sample via `uv pip`; uninstalled after |
 
 Final phase-2 gate: 144 tests passed, mypy/pyright strict clean, ruff clean.
 

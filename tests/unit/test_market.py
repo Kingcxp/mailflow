@@ -11,41 +11,50 @@ from mailflow.plugin_market import MarketPlugin, PluginMarket, Repository
 
 INDEX = {
     "name": "test-market",
-    "plugins": [
-        {
-            "id": "mailflow-test-plugin",
-            "name": "Test Plugin",
-            "version": "1.2.3",
-            "description": "A plugin used in tests",
-            "categories": ["processor", "experimental"],
-            "package": "mailflow-test-plugin",
-            "source": "https://example.invalid/mailflow-test-plugin",
-            "author": "tester",
-            "license": "MIT",
-        },
-        {
-            "id": "mailflow-testkit",
-            "name": "Testkit",
-            "version": "0.1.0",
-            "description": "Already installed distribution",
-            "categories": ["storage"],
-            "package": "mailflow-testkit",
-            "source": "mailflow-testkit",
-        },
-    ],
+    "schema": 2,
+    "categories": [{"id": "processor", "path": "processor"}, {"id": "storage", "path": "storage"}],
+}
+
+PLUGIN_A = {
+    "id": "mailflow-test-plugin",
+    "name": "Test Plugin",
+    "version": "1.2.3",
+    "description": "A plugin used in tests",
+    "categories": ["processor", "experimental"],
+    "package": "mailflow-test-plugin",
+    "source": "https://example.invalid/mailflow-test-plugin",
+    "author": "tester",
+    "license": "MIT",
+    "readme": "## Test Plugin\n\nLong markdown description.",
+}
+
+PLUGIN_B = {
+    "id": "mailflow-testkit",
+    "name": "Testkit",
+    "version": "0.1.0",
+    "description": "Already installed distribution",
+    "categories": ["storage"],
+    "package": "mailflow-testkit",
+    "source": "mailflow-testkit",
 }
 
 
-@pytest.fixture
-def index_path(tmp_path: Path) -> Path:
-    path = tmp_path / "plugins.json"
-    path.write_text(json.dumps(INDEX), encoding="utf-8")
-    return path
+def _write_repo(tmp_path: Path) -> Path:
+    (tmp_path / "processor" / "mailflow-test-plugin").mkdir(parents=True)
+    (tmp_path / "storage" / "mailflow-testkit").mkdir(parents=True)
+    (tmp_path / "index.json").write_text(json.dumps(INDEX), encoding="utf-8")
+    (tmp_path / "processor" / "mailflow-test-plugin" / "plugin.json").write_text(
+        json.dumps(PLUGIN_A), encoding="utf-8"
+    )
+    (tmp_path / "storage" / "mailflow-testkit" / "plugin.json").write_text(
+        json.dumps(PLUGIN_B), encoding="utf-8"
+    )
+    return tmp_path
 
 
 @pytest.fixture
-def market(index_path: Path) -> PluginMarket:
-    return PluginMarket([Repository("local", index_path.as_uri())])
+def market(tmp_path: Path) -> PluginMarket:
+    return PluginMarket([Repository("local", _write_repo(tmp_path).as_uri())])
 
 
 class TestPluginMarket:
@@ -57,6 +66,7 @@ class TestPluginMarket:
         assert plugin.id == "mailflow-test-plugin"
         assert plugin.categories == ["processor", "experimental"]
         assert plugin.description == "A plugin used in tests"
+        assert plugin.readme.startswith("## Test Plugin")
 
     def test_find(self, market: PluginMarket) -> None:
         found = market.find("mailflow-test-plugin")
@@ -66,15 +76,27 @@ class TestPluginMarket:
         assert market.find("ghost") is None
 
     def test_failing_repository_is_skipped(self, tmp_path: Path) -> None:
+        good = _write_repo(tmp_path / "good")
         market = PluginMarket(
             [
-                Repository("broken", (tmp_path / "missing.json").as_uri()),
-                Repository("local", (tmp_path / "ok.json").as_uri()),
+                Repository("broken", (tmp_path / "missing").as_uri()),
+                Repository("local", good.as_uri()),
             ]
         )
-        (tmp_path / "ok.json").write_text(json.dumps(INDEX), encoding="utf-8")
         entries = market.list_plugins()
-        assert len(entries) == 2  # broken repo logged, local repo served
+        assert len(entries) == 2  # broken repo logged, good repo served
+
+    def test_broken_metadata_file_is_skipped(self, tmp_path: Path) -> None:
+        (tmp_path / "processor" / "bad").mkdir(parents=True)
+        (tmp_path / "index.json").write_text(json.dumps(INDEX), encoding="utf-8")
+        (tmp_path / "processor" / "bad" / "plugin.json").write_text("{not json", encoding="utf-8")
+        market = PluginMarket([Repository("local", tmp_path.as_uri())])
+        assert market.list_plugins() == []
+
+    def test_search_filters_by_query_and_category(self, market: PluginMarket) -> None:
+        assert len(market.search("tests")) == 1
+        assert len(market.search("", "storage")) == 1
+        assert market.search("tests", "storage") == []
 
     def test_is_installed_by_distribution_package(self) -> None:
         assert PluginMarket.is_installed("anything", package="mailflow-testkit") is True

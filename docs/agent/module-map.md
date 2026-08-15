@@ -40,9 +40,9 @@
 | `mailflow-processor-llm-importance` | `llm-importance` processor (four-level analysis) |
 | `mailflow-notify-console` | `console` notifier |
 
-A sibling marketplace repository (parent directory `mailflow-plugins`)
-publishes `plugins.json` plus community plugins (e.g.
-`mailflow-notify-webhook`).
+A sibling marketplace repository (parent directory `mailflow-repo`)
+holds plugins one folder per plugin under category folders; the market client
+reads a root `index.json` (categories only) and each plugin's `plugin.json`.
 
 ## Dependency direction
 

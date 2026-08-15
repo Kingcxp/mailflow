@@ -148,12 +148,18 @@ def build_config(db_path: Path) -> MailFlowConfig:
 
 @pytest.mark.asyncio
 async def test_tui_compose_and_data(tmp_path: Path) -> None:
-    # a local marketplace index for the market tab
+    # a local marketplace (per-plugin folder layout)
     import json as jsonlib
 
-    index = {
-        "name": "local",
-        "plugins": [
+    (tmp_path / "notifier" / "mailflow-test-market-plugin").mkdir(parents=True)
+    (tmp_path / "index.json").write_text(
+        jsonlib.dumps(
+            {"name": "local", "schema": 2, "categories": [{"id": "notifier", "path": "notifier"}]}
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "notifier" / "mailflow-test-market-plugin" / "plugin.json").write_text(
+        jsonlib.dumps(
             {
                 "id": "mailflow-test-market-plugin",
                 "name": "Market Test",
@@ -162,11 +168,12 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
                 "categories": ["notifier"],
                 "package": "mailflow-test-market-plugin",
                 "source": "",
+                "readme": "# Market Test\n\nLong markdown readme.",
             }
-        ],
-    }
-    index_path = tmp_path / "plugins.json"
-    index_path.write_text(jsonlib.dumps(index), encoding="utf-8")
+        ),
+        encoding="utf-8",
+    )
+    index_path = tmp_path
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
     manager.register(storage_plugin)

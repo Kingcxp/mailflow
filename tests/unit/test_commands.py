@@ -416,8 +416,23 @@ class TestCommandRouter:
         from mailflow.config import PluginRepositoryConfig
         from mailflow.plugin_market import PluginMarket, Repository
 
-        index = {
-            "plugins": [
+        (tmp_path / "notifier" / "mailflow-searchable").mkdir(parents=True)
+        (tmp_path / "processor" / "mailflow-other").mkdir(parents=True)
+        (tmp_path / "index.json").write_text(
+            jsonlib.dumps(
+                {
+                    "name": "local",
+                    "schema": 2,
+                    "categories": [
+                        {"id": "notifier", "path": "notifier"},
+                        {"id": "processor", "path": "processor"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "notifier" / "mailflow-searchable" / "plugin.json").write_text(
+            jsonlib.dumps(
                 {
                     "id": "mailflow-searchable",
                     "name": "Searchable Plugin",
@@ -425,7 +440,12 @@ class TestCommandRouter:
                     "categories": ["notifier"],
                     "package": "mailflow-searchable",
                     "source": "x",
-                },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "processor" / "mailflow-other" / "plugin.json").write_text(
+            jsonlib.dumps(
                 {
                     "id": "mailflow-other",
                     "name": "Other Plugin",
@@ -433,11 +453,11 @@ class TestCommandRouter:
                     "categories": ["processor"],
                     "package": "mailflow-other",
                     "source": "x",
-                },
-            ]
-        }
-        path = tmp_path / "index.json"
-        path.write_text(jsonlib.dumps(index), encoding="utf-8")
+                }
+            ),
+            encoding="utf-8",
+        )
+        path = tmp_path
         commands, _ = router
         service = commands.service
         service.config.plugins.repositories.append(
