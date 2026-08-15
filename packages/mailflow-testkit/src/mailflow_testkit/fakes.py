@@ -48,7 +48,7 @@ def make_mail(
         body_text=body_text,
         body_html=body_html,
         provider=provider,
-        provider_message_id=provider_message_id,
+        provider_message_id=provider_message_id or message_id,
         headers=headers or {},
     )
 
