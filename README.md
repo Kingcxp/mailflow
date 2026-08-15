@@ -133,10 +133,11 @@ Manual overrides win while set; reset restores the automatic value.
 ## Quality gates
 
 ```bash
-make check            # lint + format + mypy + pyright + pytest + docs gate
-make coverage         # per-package coverage report
-make build            # wheels for every package
-make exe-standalone   # Nuitka standalone (smoke test before onefile)
+make help           # grouped, colored list of every target
+make check          # lint + format + mypy + pyright + pytest + docs gate
+make coverage       # per-package coverage report
+make build          # wheels for every package
+make exe-standalone # Nuitka standalone (smoke test before onefile)
 make exe-onefile
 ```
 
