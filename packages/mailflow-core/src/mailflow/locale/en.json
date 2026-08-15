@@ -42,6 +42,7 @@
       "field_from": "From",
       "field_to": "To",
       "field_date": "Date",
+      "field_subject": "Subject",
       "field_account": "Account",
       "field_urgency": "Urgency",
       "field_manual": "Manual",

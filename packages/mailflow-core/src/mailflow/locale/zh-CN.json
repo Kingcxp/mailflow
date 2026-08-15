@@ -42,6 +42,7 @@
       "field_from": "发件人",
       "field_to": "收件人",
       "field_date": "日期",
+      "field_subject": "主题",
       "field_account": "账户",
       "field_urgency": "紧急度",
       "field_manual": "手动",
