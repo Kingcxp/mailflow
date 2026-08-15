@@ -54,7 +54,7 @@ class LLMCompletion(BaseModel):
     model: str = ""
     backend: str = ""  # backend plugin id, stamped by the router
     llm_id: str = ""  # named llm actually used, stamped by the router
-    raw: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=lambda: {})
 
 
 class LLMRouter(Protocol):
@@ -68,8 +68,7 @@ class LLMRouter(Protocol):
         fallback: list[str] | None = None,
         temperature: float | None = None,
         options: dict[str, Any] | None = None,
-    ) -> LLMCompletion:
-        ...
+    ) -> LLMCompletion: ...
 
 
 class LLMBackend(Protocol):
@@ -83,8 +82,7 @@ class LLMBackend(Protocol):
         *,
         temperature: float | None = None,
         options: dict[str, Any] | None = None,
-    ) -> LLMCompletion:
-        ...
+    ) -> LLMCompletion: ...
 
 
 class ProcessingContext(BaseModel):
@@ -92,7 +90,7 @@ class ProcessingContext(BaseModel):
 
     account_id: str
     timezone: str = "UTC"
-    options: dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=lambda: {})
     now: datetime | None = None  # injected clock for deterministic processors
 
 
@@ -108,7 +106,7 @@ class ProcessorResult(BaseModel):
     analysis: MailAnalysis | None = None  # partial overlay, merged by the pipeline
     llm_used: str = ""  # named llm actually used
     llm_backend: str = ""  # backend plugin id actually used
-    notes: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=lambda: [])
 
 
 class MailProcessor(Protocol):
@@ -116,15 +114,13 @@ class MailProcessor(Protocol):
 
     processor_id: str
 
-    async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
-        ...
+    async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult: ...
 
 
 class Notifier(Protocol):
     """Delivers an already-computed mail analysis to a channel."""
 
-    async def notify(self, record: MailRecord) -> None:
-        ...
+    async def notify(self, record: MailRecord) -> None: ...
 
 
 class StorageBackend(Protocol):
@@ -138,7 +134,9 @@ class StorageBackend(Protocol):
     async def get_mail(self, record_id: str) -> MailRecord | None: ...
     async def list_mails(self, limit: int | None = None) -> list[MailRecord]: ...
     async def count_mails(self) -> int: ...
-    async def set_manual_urgency(self, record_id: str, urgency: Urgency | None) -> MailRecord | None: ...
+    async def set_manual_urgency(
+        self, record_id: str, urgency: Urgency | None
+    ) -> MailRecord | None: ...
     async def delete_mail(self, record_id: str) -> None:  # moves full record to trash
         ...
 

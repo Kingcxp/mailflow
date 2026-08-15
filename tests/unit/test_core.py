@@ -287,9 +287,7 @@ class TestConfigValidation:
 
     def test_plugin_enabled_disabled_overlap_rejected(self) -> None:
         with pytest.raises(ValueError, match="both enabled and disabled"):
-            MailFlowConfig.model_validate(
-                {"plugins": {"enabled": ["a"], "disabled": ["a"]}}
-            )
+            MailFlowConfig.model_validate({"plugins": {"enabled": ["a"], "disabled": ["a"]}})
 
     def test_default_llm_accessor(self) -> None:
         llms = self._llms()

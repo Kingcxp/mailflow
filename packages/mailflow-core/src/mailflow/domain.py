@@ -124,14 +124,14 @@ class MailMessage(BaseModel):
     account_id: str
     subject: str
     sender: MailAddress
-    recipients: list[MailAddress] = Field(default_factory=list)
-    cc: list[MailAddress] = Field(default_factory=list)
+    recipients: list[MailAddress] = Field(default_factory=lambda: [])
+    cc: list[MailAddress] = Field(default_factory=lambda: [])
     date: datetime  # send time as reported by the provider
     received_at: datetime  # normalized fetch time, always timezone-aware UTC
     body_text: str = ""
     body_html: str = ""
-    attachments: list[Attachment] = Field(default_factory=list)
-    headers: dict[str, str] = Field(default_factory=dict)
+    attachments: list[Attachment] = Field(default_factory=lambda: [])
+    headers: dict[str, str] = Field(default_factory=lambda: {})
     thread_id: str | None = None
     in_reply_to: str | None = None
     provider: str = ""  # source plugin id that produced this message
@@ -143,8 +143,7 @@ class MailMessage(BaseModel):
             return self.provider_message_id
         digest = hashlib.sha256(
             (
-                f"{self.sender.address}|{self.subject}|{self.date.isoformat()}"
-                f"|{self.account_id}"
+                f"{self.sender.address}|{self.subject}|{self.date.isoformat()}|{self.account_id}"
             ).encode()
         ).hexdigest()[:24]
         return digest
@@ -196,7 +195,7 @@ class MailAnalysis(BaseModel):
     reason: str = ""
     reply_required: bool = False
     suggested_reply: str = ""
-    action_items: list[ActionItem] = Field(default_factory=list)
+    action_items: list[ActionItem] = Field(default_factory=lambda: [])
     notes: str = ""
     backend: str = ""  # llm backend plugin id actually used ("" if rule-based)
 
@@ -214,7 +213,7 @@ class MailRecord(BaseModel):
     auto_urgency: Urgency = Urgency.INFO
     manual_urgency: Urgency | None = None
     analysis: MailAnalysis | None = None
-    processor_notes: list[ProcessorNote] = Field(default_factory=list)
+    processor_notes: list[ProcessorNote] = Field(default_factory=lambda: [])
     received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -243,7 +242,7 @@ class TrashRecord(BaseModel):
     auto_urgency: Urgency
     manual_urgency: Urgency | None
     analysis: MailAnalysis | None
-    processor_notes: list[ProcessorNote] = Field(default_factory=list)
+    processor_notes: list[ProcessorNote] = Field(default_factory=lambda: [])
     deleted_at: datetime
     expires_at: datetime  # purge time; compared against deletion time only
 
@@ -313,8 +312,8 @@ class PluginSnapshot(BaseModel):
     name: str
     version: str = ""
     description: str = ""
-    kinds: list[ComponentKind] = Field(default_factory=list)
-    components: list[str] = Field(default_factory=list)
+    kinds: list[ComponentKind] = Field(default_factory=lambda: [])
+    components: list[str] = Field(default_factory=lambda: [])
 
 
 class ComponentSnapshot(BaseModel):
@@ -346,7 +345,7 @@ class ProcessorBindingSnapshot(BaseModel):
     plugin_id: str
     priority: int
     llm_id: str | None = None
-    fallback_llm_ids: list[str] = Field(default_factory=list)
+    fallback_llm_ids: list[str] = Field(default_factory=lambda: [])
 
 
 class RuntimeSnapshot(BaseModel):
@@ -354,11 +353,11 @@ class RuntimeSnapshot(BaseModel):
     language: str = "en"
     timezone: str = "UTC"
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    plugins: list[PluginSnapshot] = Field(default_factory=list)
-    components: list[ComponentSnapshot] = Field(default_factory=list)
-    accounts: list[AccountSnapshot] = Field(default_factory=list)
-    llms: list[LLMSnapshot] = Field(default_factory=list)
-    processors: list[ProcessorBindingSnapshot] = Field(default_factory=list)
+    plugins: list[PluginSnapshot] = Field(default_factory=lambda: [])
+    components: list[ComponentSnapshot] = Field(default_factory=lambda: [])
+    accounts: list[AccountSnapshot] = Field(default_factory=lambda: [])
+    llms: list[LLMSnapshot] = Field(default_factory=lambda: [])
+    processors: list[ProcessorBindingSnapshot] = Field(default_factory=lambda: [])
     storage: str | None = None
 
     def plugin(self, plugin_id: str) -> PluginSnapshot | None:
@@ -380,7 +379,7 @@ class StyleSpan(BaseModel):
 
 class CommandResponse(BaseModel):
     ok: bool
-    spans: list[StyleSpan] = Field(default_factory=list)
+    spans: list[StyleSpan] = Field(default_factory=lambda: [])
     text: str = ""  # plain rendering for transports without rich support
 
     @classmethod

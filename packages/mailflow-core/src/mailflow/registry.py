@@ -41,7 +41,9 @@ class ComponentRegistry:
 
     def __init__(self) -> None:
         self._snapshots: dict[str, ComponentSnapshot] = {}
-        self._factories: dict[ComponentKind, dict[str, Factory]] = {kind: {} for kind in ComponentKind}
+        self._factories: dict[ComponentKind, dict[str, Factory]] = {
+            kind: {} for kind in ComponentKind
+        }
 
     def register(
         self, kind: ComponentKind, component_id: str, plugin_id: str, factory: Factory

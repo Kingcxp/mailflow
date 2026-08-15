@@ -45,3 +45,16 @@ pythonVersion = "3.11"
 typeCheckingMode = "strict"
 include = ["packages", "plugins", "tests", "tools"]
 exclude = [".venv", "dist", "build", "mailflow-generated"]
+extraPaths = [
+  "packages/mailflow-core/src",
+  "packages/mailflow-testkit/src",
+  "packages/mailflow-bundled/src",
+  "packages/mailflow-cli/src",
+  "packages/mailflow-tui/src",
+  "plugins/mailflow-mail-fake/src",
+  "plugins/mailflow-storage-sqlite/src",
+  "plugins/mailflow-llm-openai-compatible/src",
+  "plugins/mailflow-processor-rules/src",
+  "plugins/mailflow-processor-llm-importance/src",
+  "plugins/mailflow-notify-console/src",
+]

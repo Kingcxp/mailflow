@@ -19,25 +19,39 @@ from mailflow.domain import Urgency
 
 _ENV_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
+JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+
 _LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
 _FAILURE_POLICIES = {"continue", "stop"}
 
 
-def _interpolate(value: Any, origin: str) -> Any:
+def _interpolate(value: JsonValue, origin: str) -> JsonValue:
     """Expand whole-string ``${VAR}`` placeholders recursively."""
     if isinstance(value, str):
-        match = _ENV_RE.match(value)
-        if match:
-            name = match.group(1)
-            if name not in os.environ:
-                raise ValueError(f"environment variable {name!r} (referenced by {origin}) is not set")
-            return os.environ[name]
-        return value
+        return _expand_string(value, origin)
     if isinstance(value, dict):
-        return {str(k): _interpolate(v, f"{origin}.{k}") for k, v in value.items()}
+        return _interpolate_mapping(value, origin)
     if isinstance(value, list):
-        return [_interpolate(v, f"{origin}[{i}]") for i, v in enumerate(value)]
+        return _interpolate_sequence(value, origin)
     return value
+
+
+def _expand_string(value: str, origin: str) -> str:
+    match = _ENV_RE.match(value)
+    if match:
+        name = match.group(1)
+        if name not in os.environ:
+            raise ValueError(f"environment variable {name!r} (referenced by {origin}) is not set")
+        return os.environ[name]
+    return value
+
+
+def _interpolate_mapping(value: dict[str, JsonValue], origin: str) -> dict[str, JsonValue]:
+    return {k: _interpolate(v, f"{origin}.{k}") for k, v in value.items()}
+
+
+def _interpolate_sequence(value: list[JsonValue], origin: str) -> list[JsonValue]:
+    return [_interpolate(v, f"{origin}[{i}]") for i, v in enumerate(value)]
 
 
 class GeneralConfig(BaseModel):
@@ -90,8 +104,8 @@ class LoggingConfig(BaseModel):
 
 
 class PluginConfig(BaseModel):
-    enabled: list[str] = Field(default_factory=list)  # non-empty = allowlist
-    disabled: list[str] = Field(default_factory=list)
+    enabled: list[str] = Field(default_factory=lambda: [])  # non-empty = allowlist
+    disabled: list[str] = Field(default_factory=lambda: [])
 
     @model_validator(mode="after")
     def no_overlap(self) -> PluginConfig:
@@ -106,7 +120,7 @@ class MailAccountConfig(BaseModel):
     provider: str  # mail source plugin id
     email: str = ""
     enabled: bool = True
-    options: dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=lambda: {})
 
 
 class LLMConfig(BaseModel):
@@ -119,14 +133,14 @@ class LLMConfig(BaseModel):
     api_key: str = ""
     api_key_env: str | None = None
     model: str = "gpt-4o-mini"
-    headers: dict[str, str] = Field(default_factory=dict)
-    query: dict[str, str] = Field(default_factory=dict)
-    extra_body: dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=lambda: {})
+    query: dict[str, str] = Field(default_factory=lambda: {})
+    extra_body: dict[str, Any] = Field(default_factory=lambda: {})
     timeout_seconds: float = Field(default=60.0, ge=1.0)
     max_retries: int = Field(default=2, ge=0, le=20)
     default: bool = False
-    fallback: list[str] = Field(default_factory=list)
-    options: dict[str, Any] = Field(default_factory=dict)
+    fallback: list[str] = Field(default_factory=lambda: [])
+    options: dict[str, Any] = Field(default_factory=lambda: {})
 
     @model_validator(mode="after")
     def resolve_key(self) -> LLMConfig:
@@ -145,11 +159,11 @@ class ProcessorConfig(BaseModel):
     enabled: bool = True
     priority: int = Field(default=100, ge=0)
     llm: str | None = None  # named LLM id; None = rule-based processor
-    fallback_llms: list[str] = Field(default_factory=list)
+    fallback_llms: list[str] = Field(default_factory=lambda: [])
     failure_policy: str = "continue"
     retries: int = Field(default=1, ge=0, le=5)
     timeout_seconds: float = Field(default=30.0, ge=1.0)
-    options: dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=lambda: {})
 
     @model_validator(mode="after")
     def validate_failure_policy(self) -> ProcessorConfig:
@@ -165,28 +179,28 @@ class NotifierConfig(BaseModel):
     provider: str
     enabled: bool = True
     minimum_urgency: Urgency = Urgency.IMPORTANT
-    options: dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=lambda: {})
 
 
 class StorageConfig(BaseModel):
     provider: str = "mailflow-storage-sqlite"
     path: str = "data/mailflow.db"
-    options: dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=lambda: {})
 
 
 class I18nConfig(BaseModel):
     language: str = "en"
-    extra_dirs: list[str] = Field(default_factory=list)
+    extra_dirs: list[str] = Field(default_factory=lambda: [])
 
 
 class MailFlowConfig(BaseModel):
     general: GeneralConfig = Field(default_factory=GeneralConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     plugins: PluginConfig = Field(default_factory=PluginConfig)
-    accounts: list[MailAccountConfig] = Field(default_factory=list)
-    llms: list[LLMConfig] = Field(default_factory=list)
-    processors: list[ProcessorConfig] = Field(default_factory=list)
-    notifiers: list[NotifierConfig] = Field(default_factory=list)
+    accounts: list[MailAccountConfig] = Field(default_factory=lambda: [])
+    llms: list[LLMConfig] = Field(default_factory=lambda: [])
+    processors: list[ProcessorConfig] = Field(default_factory=lambda: [])
+    notifiers: list[NotifierConfig] = Field(default_factory=lambda: [])
     storage: StorageConfig = Field(default_factory=StorageConfig)
     i18n: I18nConfig = Field(default_factory=I18nConfig)
 
