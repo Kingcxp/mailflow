@@ -231,7 +231,7 @@ class TestLLMRouter:
 
 class TestPipeline:
     def _binding(self, processor: Any, processor_id: str = "p1", **kw: Any) -> ProcessorBinding:
-        defaults = dict(priority=100, processor_id=processor_id, plugin_id="test-plugin")
+        defaults: dict[str, Any] = dict(priority=100, processor_id=processor_id, plugin_id="test-plugin")
         defaults.update(kw)
         return ProcessorBinding(processor=processor, **defaults)
 

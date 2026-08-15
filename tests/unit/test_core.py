@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 from mailflow.config import LoggingConfig, MailFlowConfig, load_config
 from mailflow.domain import (
@@ -20,8 +23,8 @@ ADDRESS = {
 }
 
 
-def make_mail(**overrides) -> MailMessage:
-    base = {
+def make_mail(**overrides: Any) -> MailMessage:
+    base: dict[str, Any] = {
         "message_id": "msg-1",
         "account_id": "acct-1",
         "subject": "Hello",
@@ -147,7 +150,7 @@ class TestMailMessage:
 
     def test_invalid_urgency_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            MailAnalysis(summary="x", urgency="not-a-value")
+            MailAnalysis.model_validate({"summary": "x", "urgency": "not-a-value"})
 
 
 class TestConfigDefaults:
@@ -170,7 +173,7 @@ class TestConfigDefaults:
 
 class TestConfigEnvInterpolation:
     def test_whole_string_placeholder_expanded(
-        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("MF_TEST_TOKEN", "secret-value")
         path = tmp_path / "c.toml"
@@ -181,7 +184,7 @@ class TestConfigEnvInterpolation:
         config = load_config(path)
         assert config.llms[0].api_key == "secret-value"
 
-    def test_embedded_placeholder_stays_literal(self, tmp_path: pytest.TempPathFactory) -> None:
+    def test_embedded_placeholder_stays_literal(self, tmp_path: Path) -> None:
         path = tmp_path / "c.toml"
         path.write_text(
             "[[llms]]\nllm_id = 'l1'\nbase_url = 'https://x'\nmodel = 'pre-${VAR}-post'\n",
@@ -191,7 +194,7 @@ class TestConfigEnvInterpolation:
         assert config.llms[0].model == "pre-${VAR}-post"
 
     def test_unset_variable_raises(
-        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("MF_MISSING_VAR", raising=False)
         path = tmp_path / "c.toml"
@@ -204,7 +207,7 @@ class TestConfigEnvInterpolation:
 
 
 class TestConfigValidation:
-    def _llms(self) -> list[dict]:
+    def _llms(self) -> list[dict[str, object]]:
         return [
             {
                 "llm_id": "primary",
@@ -296,7 +299,7 @@ class TestConfigValidation:
         assert config.default_llm() is not None
         assert config.default_llm().llm_id == "primary"  # type: ignore[union-attr]
 
-    def test_load_config_from_file(self, tmp_path: pytest.TempPathFactory) -> None:
+    def test_load_config_from_file(self, tmp_path: Path) -> None:
         path = tmp_path / "config.toml"
         path.write_text(
             "[general]\nlanguage = 'zh-CN'\nmail_retention_days = 14\n\n"
@@ -382,6 +385,7 @@ class TestLogging:
 
     def test_double_configure_replaces_cleanly(self) -> None:
         import logging
+        import logging.handlers
 
         first = configure_logging(LoggingConfig(console=False, file=False, jsonl=False))
         second = configure_logging(LoggingConfig(console=False, file=False, jsonl=False))
