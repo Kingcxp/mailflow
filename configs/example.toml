@@ -3,6 +3,8 @@
 # Copy this file to configs/local.toml (gitignored) and fill in your tokens,
 # or export the referenced environment variables. Whole-string ${ENV_VAR}
 # placeholders are expanded at load time; embedded placeholders stay literal.
+#
+# No accounts or LLMs are predefined: uncomment/add your own below.
 
 [general]
 language = "en"                 # default display language (en | zh-CN | custom packs)
@@ -40,49 +42,38 @@ disabled = []
 provider = "sqlite"
 path = "data/mailflow.db"
 
-# Mail accounts. Each account references a mail source adapter component.
-[[accounts]]
-account_id = "demo"
-provider = "fake"               # built-in deterministic fake source
-email = "demo@example.com"
-enabled = true
-[accounts.options]
-mails = [
-  { subject = "Black Friday sale 50% off", sender = "ads@shop.example", body = "Unsubscribe anytime. Limited offer, act now!" },
-  { subject = "Guest lecture: LLM systems", sender = "cs@university.example", sender_name = "CS Department", body = "The guest lecture is optional and open to all students." },
-  { subject = "Final calculus exam on June 10", sender = "exam@university.example", sender_name = "Registrar", body = "The final exam is on June 10 at 09:00 in Building C. Bring your student ID and a calculator." },
-]
-# base_time = "2026-06-01T08:00:00+00:00"   # deterministic timestamps (default 2026-01-01)
+# --- Mail accounts ----------------------------------------------------------
+# Each account references a mail source adapter component (see
+# `mailflow plugin market list` for available adapters).
+#
+# [[accounts]]
+# account_id = "my-mailbox"
+# provider = "<your-mail-source-adapter>"
+# email = "you@example.com"
+# enabled = true
+# [accounts.options]
+# ...adapter-specific options...
 
-# [[accounts]]                            # future: real providers are later plugin stages
-# account_id = "gmail-main"
-# provider = "mailflow-mail-gmail"         # NOT yet implemented — planned provider phase
-# email = "you@gmail.com"
+# --- LLMs -------------------------------------------------------------------
+# provider selects the backend adapter component; the rest of the fields are
+# the OpenAI-compatible request configuration.
+#
+# [[llms]]
+# llm_id = "my-llm"
+# name = "My relay"
+# provider = "openai-compatible"
+# base_url = "https://your-relay.example/v1"
+# api_key = "${YOUR_TOKEN}"      # or use api_key_env = "YOUR_TOKEN"
+# model = "your-model"
+# timeout_seconds = 60
+# max_retries = 2
+# default = true
+# fallback = []                  # ordered fallback named llms
+# headers = { }                  # extra HTTP headers (secrets are redacted)
+# query = { }                    # extra query-string parameters
+# extra_body = { }               # extra JSON body fields
 
-# Named LLMs: provider selects the backend adapter component; the rest of the
-# fields are the OpenAI-compatible request configuration.
-[[llms]]
-llm_id = "go"
-name = "OpenCode Go relay"
-provider = "openai-compatible"
-base_url = "https://opencodego.example/v1"
-api_key = "${MAILFLOW_LLM_GO_TOKEN}"      # or use api_key_env = "MAILFLOW_LLM_GO_TOKEN"
-model = "deepseek-chat"
-timeout_seconds = 60
-max_retries = 2
-default = true
-# headers = { "X-Org" = "acme" }
-# query = { "api-version" = "2024-01-01" }
-# extra_body = { "temperature" = 0.2 }
-
-[[llms]]
-llm_id = "local"
-name = "Local llama.cpp"
-provider = "openai-compatible"
-base_url = "http://localhost:8080/v1"     # no api_key -> no Authorization header
-model = "llama-3.2-3b"
-fallback = ["go"]                          # used when 'local' is the primary and fails
-
+# --- Processors -------------------------------------------------------------
 # Ordered processing chain: rules first (deterministic, no LLM), then the
 # semantic LLM analysis with the configured primary/fallback LLMs.
 [[processors]]
@@ -94,19 +85,20 @@ retries = 0
 advertising_keywords = ["unsubscribe", "sale", "promotion", "discount", "limited offer"]
 # important_senders = ["registrar@university.example"]
 
-[[processors]]
-processor_id = "llm-importance"
-provider = "llm-importance"
-priority = 20
-llm = "go"                                 # primary named LLM
-fallback_llms = ["local"]                  # ordered fallback
-failure_policy = "continue"                # continue | stop
-retries = 1
-timeout_seconds = 30
-[processors.options]
-max_summary_chars = 600
+# [[processors]]
+# processor_id = "llm-importance"
+# provider = "llm-importance"
+# priority = 20
+# llm = "my-llm"                 # primary named LLM (must exist above)
+# fallback_llms = []             # ordered fallback
+# failure_policy = "continue"    # continue | stop
+# retries = 1
+# timeout_seconds = 30
+# [processors.options]
+# max_summary_chars = 600
 
-# Notifiers: called only when the effective urgency meets the threshold.
+# --- Notifiers --------------------------------------------------------------
+# Called only when the effective urgency meets the threshold.
 [[notifiers]]
 notifier_id = "console"
 provider = "console"

@@ -30,11 +30,20 @@ class TuiLogHandler(logging.Handler):
             self.handleError(record)
 
 
+def tui_logging_config(config: MailFlowConfig) -> MailFlowConfig:
+    """The Textual app owns the terminal: console logs must not be written to
+    stdout while the TUI is rendering (they would corrupt the screen). File,
+    JSONL and the injected Logs-tab handler still receive every record."""
+    adjusted = config.model_copy(deep=True)
+    adjusted.logging.console = False
+    return adjusted
+
+
 def run_tui(config_path: str | None) -> None:
     """Entry point used by the CLI and the console script."""
 
     async def _run() -> None:
-        config = load_config(config_path) if config_path else MailFlowConfig()
+        config = tui_logging_config(load_config(config_path) if config_path else MailFlowConfig())
         manager = create_plugin_manager(config, discover_external=False)
         log_queue: queue_module.Queue[Any] = queue_module.Queue()
         service = await start_service(

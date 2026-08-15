@@ -19,9 +19,14 @@ dev group (pytest, pytest-asyncio, coverage, ruff, mypy, pyright, nuitka).
 
 ```bash
 uv run mailflow config-check -c configs/development.toml
-uv run mailflow tui -c configs/development.toml        # fake source, offline
-uv run mailflow shell -c configs/development.toml      # command shell
+uv run mailflow tui -c configs/development.toml        # add your accounts/LLMs first
+uv run mailflow shell -c configs/development.toml
 ```
+
+`configs/development.toml` ships with no accounts or LLMs — add your own
+mailboxes and OpenAI-compatible endpoints there (both files contain commented
+templates). The `mailflow-mail-fake` plugin remains available as a dev-only
+source adapter if you want to experiment offline without a real mailbox.
 
 For a real LLM, copy `configs/example.toml` to `configs/local.toml`, fill in
 tokens (or export `MAILFLOW_LLM_GO_TOKEN`, `MAILFLOW_LLM_LOCAL_TOKEN`) and

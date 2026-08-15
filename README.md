@@ -69,15 +69,13 @@ uv sync --all-packages --group dev
 ## Quick start
 
 ```bash
-# offline demo with a deterministic fake mailbox (no API key needed)
+# edit configs/development.toml: add your mailbox(es) and LLM endpoint(s)
 uv run mailflow tui -c configs/development.toml
-
-# command shell
 uv run mailflow shell -c configs/development.toml
 
-# real setup: copy the example config and fill in your LLM token
+# or copy the example config, fill in your tokens, and run
 cp configs/example.toml configs/local.toml
-export MAILFLOW_LLM_GO_TOKEN=your-token
+export YOUR_TOKEN=your-token
 uv run mailflow run -c configs/local.toml
 ```
 
@@ -173,7 +171,7 @@ packages/mailflow-core       host-agnostic domain, pipeline, service facade
 packages/mailflow-bundled    composition root: the official plugin set
 packages/mailflow-cli        rich Typer host (run/command/shell/...)
 packages/mailflow-tui        Textual UI (Mail/Actions/Runtime/Logs/Market/Settings)
-packages/mailflow-testkit    deterministic fakes for tests and demos
+packages/mailflow-testkit    deterministic fakes for tests (mailflow-mail-fake is a dev-only source plugin)
 plugins/*                    discoverable adapters and processors
 configs/ · translations/     example configs and language packs
 docs/                        architecture, development, agent documentation
