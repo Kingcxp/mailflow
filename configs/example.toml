@@ -1,0 +1,114 @@
+# MailFlow example configuration.
+#
+# Copy this file to configs/local.toml (gitignored) and fill in your tokens,
+# or export the referenced environment variables. Whole-string ${ENV_VAR}
+# placeholders are expanded at load time; embedded placeholders stay literal.
+
+[general]
+language = "en"                 # default display language (en | zh-CN | custom packs)
+timezone = "Asia/Shanghai"      # IANA timezone for display and the daily cleanup
+mail_retention_days = 30        # mails older than this are moved to trash daily
+trash_retention_days = 7        # trash records older than this are purged
+cleanup_hour = 4                # local-time cleanup hour
+cleanup_minute = 0
+queue_size = 500                # bounded inbound queue
+workers = 2                     # concurrent pipeline workers
+
+[logging]
+level = "INFO"                  # mailflow logger level
+console = true
+console_level = "INFO"
+# console_redirect = "logs/console.log"   # mirror console output to a file
+file = true
+file_path = "logs/mailflow.log"
+file_level = "INFO"
+file_max_bytes = 10485760
+file_backup_count = 5
+jsonl = false
+# jsonl_path = "logs/mailflow.jsonl"      # optional machine-readable sink
+
+[plugins]
+# non-empty `enabled` acts as an allowlist; `disabled` always blocks.
+enabled = []
+disabled = []
+
+[storage]
+provider = "sqlite"
+path = "data/mailflow.db"
+
+# Mail accounts. Each account references a mail source adapter component.
+[[accounts]]
+account_id = "demo"
+provider = "fake"               # built-in deterministic fake source
+email = "demo@example.com"
+enabled = true
+[accounts.options]
+mails = [
+  { subject = "Black Friday sale 50% off", sender = "ads@shop.example", body = "Unsubscribe anytime. Limited offer, act now!" },
+  { subject = "Guest lecture: LLM systems", sender = "cs@university.example", sender_name = "CS Department", body = "The guest lecture is optional and open to all students." },
+  { subject = "Final calculus exam on June 10", sender = "exam@university.example", sender_name = "Registrar", body = "The final exam is on June 10 at 09:00 in Building C. Bring your student ID and a calculator." },
+]
+# base_time = "2026-06-01T08:00:00+00:00"   # deterministic timestamps (default 2026-01-01)
+
+# [[accounts]]                            # future: real providers are later plugin stages
+# account_id = "gmail-main"
+# provider = "mailflow-mail-gmail"         # NOT yet implemented — planned provider phase
+# email = "you@gmail.com"
+
+# Named LLMs: provider selects the backend adapter component; the rest of the
+# fields are the OpenAI-compatible request configuration.
+[[llms]]
+llm_id = "go"
+name = "OpenCode Go relay"
+provider = "openai-compatible"
+base_url = "https://opencodego.example/v1"
+api_key = "${MAILFLOW_LLM_GO_TOKEN}"      # or use api_key_env = "MAILFLOW_LLM_GO_TOKEN"
+model = "deepseek-chat"
+timeout_seconds = 60
+max_retries = 2
+default = true
+# headers = { "X-Org" = "acme" }
+# query = { "api-version" = "2024-01-01" }
+# extra_body = { "temperature" = 0.2 }
+
+[[llms]]
+llm_id = "local"
+name = "Local llama.cpp"
+provider = "openai-compatible"
+base_url = "http://localhost:8080/v1"     # no api_key -> no Authorization header
+model = "llama-3.2-3b"
+fallback = ["go"]                          # used when 'local' is the primary and fails
+
+# Ordered processing chain: rules first (deterministic, no LLM), then the
+# semantic LLM analysis with the configured primary/fallback LLMs.
+[[processors]]
+processor_id = "rules"
+provider = "rules"
+priority = 10
+retries = 0
+[processors.options]
+advertising_keywords = ["unsubscribe", "sale", "promotion", "discount", "limited offer"]
+# important_senders = ["registrar@university.example"]
+
+[[processors]]
+processor_id = "llm-importance"
+provider = "llm-importance"
+priority = 20
+llm = "go"                                 # primary named LLM
+fallback_llms = ["local"]                  # ordered fallback
+failure_policy = "continue"                # continue | stop
+retries = 1
+timeout_seconds = 30
+[processors.options]
+max_summary_chars = 600
+
+# Notifiers: called only when the effective urgency meets the threshold.
+[[notifiers]]
+notifier_id = "console"
+provider = "console"
+enabled = true
+minimum_urgency = "important"              # ad | info | important | urgent
+
+[i18n]
+language = "en"
+extra_dirs = ["translations"]              # data-only JSON language packs

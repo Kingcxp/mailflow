@@ -122,6 +122,10 @@ class MailFlowService:
         """Block until the service is stopped (useful for standalone hosts)."""
         await self._stopped_event.wait()
 
+    async def wait_idle(self, timeout_seconds: float = 5.0) -> bool:
+        """Wait until all queued mails have been processed."""
+        return await self.runtime.wait_idle(timeout_seconds=timeout_seconds)
+
     def on(self, event: str, handler: Callable[..., Awaitable[None]]) -> Callable[[], None]:
         return self.events.subscribe(event, handler)
 

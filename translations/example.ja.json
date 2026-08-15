@@ -1,0 +1,54 @@
+{
+  "locale": "ja",
+  "name": "日本語",
+  "messages": {
+    "mail": {
+      "list_title": "メール（{count}）",
+      "header_urgency": "緊急度",
+      "header_subject": "件名",
+      "header_sender": "差出人",
+      "header_date": "日付",
+      "not_found": "メール {mail_id} が見つかりません",
+      "deleted": "メール {mail_id} をゴミ箱へ移動しました",
+      "restored": "メール {mail_id} を復元しました",
+      "urgency_updated": "メール {mail_id} の緊急度を {urgency} に設定しました",
+      "urgency_reset": "メール {mail_id} の緊急度を自動（{urgency}）に戻しました"
+    },
+    "action": {
+      "title": "行動項目（{count}）",
+      "empty": "期限付きの行動項目はありません"
+    },
+    "plugin": {
+      "title": "プラグイン（{count}）"
+    },
+    "account": {
+      "title": "アカウント（{count}）",
+      "status_running": "実行中",
+      "status_stopped": "停止",
+      "status_error": "エラー"
+    },
+    "llm": {
+      "title": "LLM（{count}）"
+    },
+    "reply": {
+      "created": "メール {mail_id} の下書き {draft_id} を作成しました",
+      "sent": "下書き {draft_id} から返信を送信しました"
+    },
+    "command": {
+      "unknown": "不明なコマンド：{command}",
+      "help": {
+        "title": "MailFlow コマンド"
+      }
+    },
+    "tui": {
+      "title": "MailFlow",
+      "tab_mail": "メール",
+      "tab_actions": "行動",
+      "tab_runtime": "ランタイム",
+      "tab_logs": "ログ",
+      "tab_settings": "設定",
+      "settings_language": "言語",
+      "search_placeholder": "件名・差出人・要約を検索..."
+    }
+  }
+}

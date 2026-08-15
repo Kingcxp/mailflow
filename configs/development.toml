@@ -1,0 +1,81 @@
+# MailFlow development configuration: fully offline-safe.
+#
+# Uses the deterministic fake mail source and the rules processor. The LLM
+# processor targets a local OpenAI-compatible endpoint (e.g. Ollama/llama.cpp
+# at localhost:11434); when it is not running, processing continues with the
+# rules result and the pipeline records the failure notes.
+
+[general]
+language = "en"
+timezone = "Asia/Shanghai"
+mail_retention_days = 30
+trash_retention_days = 7
+cleanup_hour = 4
+cleanup_minute = 0
+queue_size = 500
+workers = 2
+
+[logging]
+level = "INFO"
+console = true
+console_level = "INFO"
+file = true
+file_path = "logs/mailflow.log"
+file_level = "INFO"
+file_max_bytes = 10485760
+file_backup_count = 5
+jsonl = false
+
+[plugins]
+enabled = []
+disabled = []
+
+[storage]
+provider = "sqlite"
+path = "data/development.db"
+
+[[accounts]]
+account_id = "demo"
+provider = "fake"
+email = "demo@example.com"
+enabled = true
+[accounts.options]
+mails = [
+  { subject = "Black Friday sale 50% off", sender = "ads@shop.example", body = "Unsubscribe anytime. Limited offer, act now!" },
+  { subject = "Guest lecture: LLM systems", sender = "cs@university.example", sender_name = "CS Department", body = "The guest lecture is optional and open to all students." },
+  { subject = "Final calculus exam on June 10", sender = "exam@university.example", sender_name = "Registrar", body = "The final exam is on June 10 at 09:00 in Building C. Bring your student ID and a calculator." },
+]
+
+[[llms]]
+llm_id = "local"
+name = "Local endpoint (optional)"
+provider = "openai-compatible"
+base_url = "http://localhost:11434/v1"
+model = "llama3.2"
+timeout_seconds = 3
+max_retries = 0
+
+[[processors]]
+processor_id = "rules"
+provider = "rules"
+priority = 10
+retries = 0
+
+[[processors]]
+processor_id = "llm-importance"
+provider = "llm-importance"
+priority = 20
+llm = "local"
+failure_policy = "continue"
+retries = 0
+timeout_seconds = 5
+
+[[notifiers]]
+notifier_id = "console"
+provider = "console"
+enabled = true
+minimum_urgency = "important"
+
+[i18n]
+language = "en"
+extra_dirs = ["translations"]

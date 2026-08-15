@@ -228,6 +228,15 @@ class MailFlowRuntime:
 
     # -- status -----------------------------------------------------------------------
 
+    async def wait_idle(self, timeout_seconds: float = 5.0) -> bool:
+        """Wait until every queued mail has been processed (queue drained)."""
+        try:
+            await asyncio.wait_for(self._queue.join(), timeout=timeout_seconds)
+            return True
+        except TimeoutError:
+            logger.warning("queue did not drain within %.1fs", timeout_seconds)
+            return False
+
     @property
     def started_at(self) -> datetime | None:
         return self._started_at

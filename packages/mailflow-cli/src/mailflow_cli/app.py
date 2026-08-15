@@ -88,6 +88,7 @@ def command(
         )
         router = CommandRouter(service)
         try:
+            await service.wait_idle(timeout_seconds=20)  # let queued mail finish processing first
             response = await router.execute(command_text)
             _render_response(response)
         finally:
@@ -162,6 +163,7 @@ def snapshot(
             config, plugin_manager=manager, discover_plugins=False, enable_logging=False
         )
         try:
+            await service.wait_idle(timeout_seconds=20)
             snapshot_data = service.snapshot()
             if json_output:
                 print(
