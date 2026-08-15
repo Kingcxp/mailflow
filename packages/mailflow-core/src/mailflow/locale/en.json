@@ -205,7 +205,9 @@
       "confirm_trash": "Move {mail_id} to trash?",
       "confirm_title": "Confirm",
       "empty": "Nothing here yet",
-      "loading": "Loading..."
+      "loading": "Loading...",
+      "reply.label": "Reply",
+      "reply.subject_prefix": "Re:"
     },
     "cli": {
       "started": "MailFlow started. Press Ctrl+C to stop.",

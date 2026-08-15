@@ -1,0 +1,112 @@
+/* MailFlow TUI layout — readable at normal terminal sizes. */
+
+Screen {
+    background: #1e1e2e;
+}
+
+#mail-search {
+    dock: top;
+    margin: 0 1 1 1;
+}
+
+#mail-table {
+    width: 60%;
+    height: 60%;
+    border: round $primary;
+}
+
+#mail-detail {
+    width: 40%;
+    height: 60%;
+    border: round $secondary;
+    padding: 0 1;
+}
+
+#mail-controls {
+    dock: bottom;
+    height: 3;
+    padding: 0 1;
+}
+
+#mail-summary {
+    color: $text;
+}
+
+#mail-body {
+    margin-top: 1;
+    height: auto;
+    color: $text-muted;
+}
+
+#mail-notes {
+    margin-top: 1;
+}
+
+#actions-table {
+    width: 100%;
+    height: 70%;
+    border: round $primary;
+}
+
+#actions-hint {
+    height: 1;
+    color: $text-muted;
+}
+
+#runtime-plugins, #runtime-adapters, #runtime-accounts,
+#runtime-llms, #runtime-bindings, #runtime-storage {
+    margin: 0 1;
+}
+
+#log-view {
+    border: round $accent;
+    height: 100%;
+}
+
+#settings-label {
+    margin: 1 1 0 1;
+}
+
+#language-select {
+    width: 40%;
+    margin: 1;
+}
+
+#settings-help {
+    margin: 0 1;
+    color: $text-muted;
+}
+
+#reply-title, #action-title {
+    text-style: bold;
+    margin: 1;
+}
+
+#reply-body {
+    height: 8;
+    margin: 0 1;
+    border: round $primary;
+}
+
+#reply-actions {
+    height: 3;
+    margin: 1;
+}
+
+#reply-status {
+    margin: 0 1;
+    color: $text-muted;
+}
+
+#reply-confirm {
+    margin-left: 1;
+}
+
+DataTable {
+    background: #181825;
+}
+
+DataTable > .datatable--cursor {
+    background: $accent;
+    color: $text;
+}

@@ -1,0 +1,1 @@
+"""MailFlow TUI package."""

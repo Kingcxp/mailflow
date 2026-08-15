@@ -222,6 +222,18 @@ def service_doctor(config: MailFlowConfig, manager: PluginManager, registry: Any
     return text
 
 
+@app.command()
+def tui(
+    config_path: str | None = typer.Option(
+        None, "--config", "-c", help="Path to the TOML config file (defaults used when omitted)"
+    ),
+) -> None:
+    """Launch the Textual terminal UI."""
+    from mailflow_tui.runner import run_tui
+
+    run_tui(config_path)
+
+
 def main() -> None:
     app()
 
