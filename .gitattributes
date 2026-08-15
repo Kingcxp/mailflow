@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.tcss text eol=lf
+*.sh text eol=lf
