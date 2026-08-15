@@ -11,6 +11,10 @@ mail_retention_days = 30        # mails older than this are moved to trash daily
 trash_retention_days = 7        # trash records older than this are purged
 cleanup_hour = 4                # local-time cleanup hour
 cleanup_minute = 0
+reminder_days_before = 2        # days before a timed action's due date for the early reminder
+reminder_hour = 8               # local-time hour of that early reminder
+reminder_minute = 0
+reminder_interval_seconds = 60  # how often the reminder scheduler checks (a reminder also fires at 00:00 on the due date)
 queue_size = 500                # bounded inbound queue
 workers = 2                     # concurrent pipeline workers
 

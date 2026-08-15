@@ -9,17 +9,19 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from datetime import time as dt_time
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from mailflow.config import MailAccountConfig, MailFlowConfig, NotifierConfig
 from mailflow.contracts import MailSource, Notifier, StorageBackend
-from mailflow.domain import MailMessage, MailRecord
+from mailflow.domain import ActionItem, MailMessage, MailRecord, to_utc
 from mailflow.events import EventBus
 from mailflow.pipeline import PipelineEngine
 
 logger = logging.getLogger("mailflow.runtime")
+reminder_logger = logging.getLogger("mailflow.reminder")
 
 _WAIT_TIMEOUT = 0.5  # seconds between queue polls while stopping
 _EVENT_PREFIX = "mailflow."
@@ -35,6 +37,27 @@ def seconds_until_next_cleanup(
     if target <= local_now:
         target += timedelta(days=1)
     return (target - local_now).total_seconds()
+
+
+def reminder_times(
+    item: ActionItem,
+    timezone_name: str,
+    days_before: int,
+    hour: int,
+    minute: int,
+) -> list[tuple[datetime, str]]:
+    """The two reminder windows for an action item, in the configured zone.
+
+    Returns ``(local_datetime, kind)`` pairs: the early reminder
+    (``days_before`` days before the due date at ``hour:minute``) and the
+    day-of reminder (00:00 on the due date).
+    """
+    tz = ZoneInfo(timezone_name)
+    due = to_utc(item.due_at).astimezone(tz)
+    early_date = due.date() - timedelta(days=days_before)
+    early = datetime.combine(early_date, dt_time(hour, minute), tzinfo=tz)
+    midnight = datetime.combine(due.date(), dt_time(0, 0), tzinfo=tz)
+    return [(early, "early"), (midnight, "day_of")]
 
 
 class MailFlowRuntime:
@@ -98,6 +121,7 @@ class MailFlowRuntime:
         for index in range(self._config.general.workers):
             self._tasks.append(asyncio.create_task(self._worker(index), name=f"worker-{index}"))
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="cleanup"))
+        self._tasks.append(asyncio.create_task(self._reminder_loop(), name="reminders"))
         logger.info(
             "runtime started: %d accounts, %d workers, retention %d days",
             len(self._account_configs),
@@ -249,6 +273,60 @@ class MailFlowRuntime:
                 await self.run_cleanup()
             except Exception as exc:
                 logger.error("cleanup run failed: %s", exc)
+
+    async def _reminder_loop(self) -> None:
+        interval = max(10, self._config.general.reminder_interval_seconds)
+        while not self._stop_event.is_set():
+            try:
+                await self.run_reminder_tick()
+            except Exception as exc:
+                logger.error("reminder tick failed: %s", exc)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+            except TimeoutError:
+                pass
+
+    async def run_reminder_tick(self) -> int:
+        """Fire due action-item reminders; returns how many fired.
+
+        A reminder fires once (persisted in preferences) once its scheduled
+        time has passed — including when the app was off at that moment.
+        """
+        now = datetime.now(UTC)
+        fired = 0
+        config = self._config.general
+        for record in await self._storage.list_mails():
+            for item in record.action_items:
+                for when, kind in reminder_times(
+                    item,
+                    config.timezone,
+                    config.reminder_days_before,
+                    config.reminder_hour,
+                    config.reminder_minute,
+                ):
+                    if when > now:
+                        continue
+                    key = f"reminder.{item.item_id}.{item.due_at.date().isoformat()}.{kind}"
+                    if await self._storage.get_preference(key):
+                        continue
+                    await self._events.emit(
+                        f"{_EVENT_PREFIX}action.reminder",
+                        item=item,
+                        record=record,
+                        kind=kind,
+                        scheduled=when,
+                    )
+                    reminder_logger.warning(
+                        "REMINDER [%s] due %s — %s (mail %s%s)",
+                        kind,
+                        item.time_range,
+                        item.summary,
+                        record.record_id,
+                        f"; notes: {item.notes}" if item.notes else "",
+                    )
+                    await self._storage.set_preference(key, "fired")
+                    fired += 1
+        return fired
 
     # -- status -----------------------------------------------------------------------
 

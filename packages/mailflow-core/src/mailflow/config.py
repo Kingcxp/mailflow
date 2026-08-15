@@ -55,14 +55,54 @@ def _interpolate_sequence(value: list[JsonValue], origin: str) -> list[JsonValue
 
 
 class GeneralConfig(BaseModel):
-    language: str = "en"
-    timezone: str = "UTC"
-    mail_retention_days: int = Field(default=30, ge=0)
-    trash_retention_days: int = Field(default=7, ge=1)
-    cleanup_hour: int = Field(default=4, ge=0, le=23)
-    cleanup_minute: int = Field(default=0, ge=0, le=59)
-    queue_size: int = Field(default=500, ge=1)
-    workers: int = Field(default=2, ge=1)
+    language: str = Field(
+        default="en", description="Default display language code (en, zh-CN, or an external pack)"
+    )
+    timezone: str = Field(
+        default="UTC", description="IANA timezone used for display, cleanup and reminders"
+    )
+    mail_retention_days: int = Field(
+        default=30,
+        ge=0,
+        description="Mails older than this many days are moved to trash by the daily cleanup",
+    )
+    trash_retention_days: int = Field(
+        default=7,
+        ge=1,
+        description="Trash records older than this many days (from deletion) are purged",
+    )
+    cleanup_hour: int = Field(
+        default=4, ge=0, le=23, description="Local-time hour of the daily retention cleanup"
+    )
+    cleanup_minute: int = Field(
+        default=0, ge=0, le=59, description="Local-time minute of the daily retention cleanup"
+    )
+    queue_size: int = Field(default=500, ge=1, description="Bounded inbound mail queue size")
+    workers: int = Field(default=2, ge=1, description="Concurrent pipeline workers")
+    reminder_days_before: int = Field(
+        default=2,
+        ge=0,
+        le=30,
+        description="Days before a timed action's due date that the early reminder fires",
+    )
+    reminder_hour: int = Field(
+        default=8,
+        ge=0,
+        le=23,
+        description="Local-time hour of the early reminder on the days-before date",
+    )
+    reminder_minute: int = Field(
+        default=0,
+        ge=0,
+        le=59,
+        description="Local-time minute of the early reminder on the days-before date",
+    )
+    reminder_interval_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        description="How often the reminder scheduler checks due action items",
+    )
 
     @model_validator(mode="after")
     def validate_timezone(self) -> GeneralConfig:

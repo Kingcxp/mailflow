@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from mailflow.config import MailAccountConfig, MailFlowConfig, NotifierConfig
@@ -26,7 +27,7 @@ from mailflow.domain import (
 )
 from mailflow.events import EventBus
 from mailflow.pipeline import PipelineEngine, ProcessorBinding
-from mailflow.runtime import MailFlowRuntime, seconds_until_next_cleanup
+from mailflow.runtime import MailFlowRuntime, reminder_times, seconds_until_next_cleanup
 
 ADDRESS = MailAddress(name="S", address="s@example.com")
 
@@ -87,6 +88,7 @@ class FakeStorage:
         self.saved: list[MailRecord] = []
         self.cleaned_before: datetime | None = None
         self.purged_before: datetime | None = None
+        self._preferences: dict[str, str] = {}
 
     async def initialize(self) -> None:
         pass
@@ -138,10 +140,10 @@ class FakeStorage:
         pass
 
     async def get_preference(self, key: str) -> str | None:
-        return None
+        return self._preferences.get(key)
 
     async def set_preference(self, key: str, value: str) -> None:
-        pass
+        self._preferences[key] = value
 
 
 class RecordingNotifier:
@@ -321,3 +323,171 @@ class TestRuntime:
         await asyncio.sleep(1.2)  # 2 retries with backoff
         await runtime.stop()
         assert len(storage.saved) == 1  # recovered after transient failures
+
+
+class TestReminderTimes:
+    def test_early_and_midnight_windows(self) -> None:
+        from mailflow.domain import ActionItem
+
+        item = ActionItem(
+            item_id="a1",
+            mail_id="m1",
+            summary="exam",
+            action_type="exam",
+            due_at=datetime(2026, 6, 10, 9, 0, tzinfo=UTC),
+        )
+        times = reminder_times(item, "UTC", 2, 8, 0)
+        assert next(when for when, kind in times if kind == "early") == datetime(
+            2026, 6, 8, 8, 0, tzinfo=UTC
+        )
+        assert next(when for when, kind in times if kind == "day_of") == datetime(
+            2026, 6, 10, 0, 0, tzinfo=UTC
+        )
+
+    def test_timezone_applied(self) -> None:
+        from mailflow.domain import ActionItem
+
+        item = ActionItem(
+            item_id="a1",
+            mail_id="m1",
+            summary="s",
+            action_type="other",
+            due_at=datetime(2026, 6, 10, 9, 0, tzinfo=UTC),
+        )
+        early = next(
+            when for when, kind in reminder_times(item, "Asia/Shanghai", 2, 8, 0) if kind == "early"
+        )
+        assert early.tzinfo is not None
+        assert early.utcoffset().total_seconds() == 8 * 3600  # type: ignore[union-attr]
+
+
+class TestReminderScheduler:
+    async def _runtime_with_item(
+        self, item: Any, storage: FakeStorage | None = None
+    ) -> tuple[MailFlowRuntime, EventBus]:
+        from mailflow.domain import MailAnalysis
+
+        storage = storage or FakeStorage()
+        record = MailRecord(
+            record_id="r1",
+            mail=make_mail(),
+            auto_urgency=Urgency.URGENT,
+            analysis=MailAnalysis(summary="s", urgency=Urgency.URGENT, action_items=[item]),
+        )
+        await storage.save_mail(record)
+        events = EventBus()
+        config = MailFlowConfig.model_validate(
+            {
+                "general": {
+                    "workers": 1,
+                    "reminder_interval_seconds": 10,
+                    "reminder_hour": 0,
+                    "reminder_minute": 0,
+                }
+            }
+        )
+        runtime = MailFlowRuntime(
+            config,
+            sources={},
+            pipeline=PipelineEngine([]),
+            storage=storage,
+            notifiers=[],
+            notifier_configs=[],
+            events=events,
+            account_configs=[],
+        )
+        return runtime, events
+
+    async def test_early_reminder_fires_once(self) -> None:
+        from mailflow.domain import ActionItem
+
+        # due in two days: the early window (due-2d 08:00) is already past
+        item = ActionItem(
+            item_id="a1",
+            mail_id="r1",
+            summary="Collect student ID",
+            action_type="errand",
+            due_at=datetime.now(UTC) + timedelta(days=2),
+            notes="bring photo",
+        )
+        runtime, events = await self._runtime_with_item(item)
+        reminders: list[dict[str, Any]] = []
+
+        async def capture(event: str, **payload: Any) -> None:
+            reminders.append(payload)
+
+        events.subscribe("mailflow.action.reminder", capture)
+        fired = await runtime.run_reminder_tick()
+        assert fired == 1
+        assert reminders[0]["kind"] == "early"
+        assert reminders[0]["item"].item_id == "a1"
+        assert reminders[0]["record"].record_id == "r1"
+        # second tick must not re-fire
+        assert await runtime.run_reminder_tick() == 0
+        assert len(reminders) == 1
+
+    async def test_day_of_reminder_fires_for_today(self) -> None:
+        from mailflow.domain import ActionItem
+
+        # due later today: midnight window is already past
+        item = ActionItem(
+            item_id="a2",
+            mail_id="r1",
+            summary="Exam today",
+            action_type="exam",
+            due_at=datetime.now(UTC) + timedelta(hours=3),
+        )
+        runtime, events = await self._runtime_with_item(item)
+        reminders: list[dict[str, Any]] = []
+
+        async def capture(event: str, **payload: Any) -> None:
+            reminders.append(payload)
+
+        events.subscribe("mailflow.action.reminder", capture)
+        fired = await runtime.run_reminder_tick()
+        # the missed early window (2 days ago) catches up alongside day-of
+        assert fired == 2
+        assert {r["kind"] for r in reminders} == {"early", "day_of"}
+
+    async def test_future_item_does_not_fire(self) -> None:
+        from mailflow.domain import ActionItem
+
+        item = ActionItem(
+            item_id="a3",
+            mail_id="r1",
+            summary="Meeting next week",
+            action_type="meeting",
+            due_at=datetime.now(UTC) + timedelta(days=10),
+        )
+        runtime, _ = await self._runtime_with_item(item)
+        assert await runtime.run_reminder_tick() == 0
+
+    async def test_reminder_state_persisted_across_restart(self) -> None:
+        """A fired reminder stays fired after the service restarts."""
+        from mailflow.domain import ActionItem
+
+        item = ActionItem(
+            item_id="a4",
+            mail_id="r1",
+            summary="Due soon",
+            action_type="other",
+            due_at=datetime.now(UTC) + timedelta(days=2),
+        )
+        storage = FakeStorage()
+        runtime, _ = await self._runtime_with_item(item, storage=storage)
+        assert await runtime.run_reminder_tick() == 1
+        # a fresh runtime on the same storage must not re-fire
+        fresh_config = MailFlowConfig.model_validate(
+            {"general": {"reminder_hour": 0, "reminder_minute": 0}}
+        )
+        fresh = MailFlowRuntime(
+            fresh_config,
+            sources={},
+            pipeline=PipelineEngine([]),
+            storage=storage,
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            account_configs=[],
+        )
+        assert await fresh.run_reminder_tick() == 0
