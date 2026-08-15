@@ -32,6 +32,3 @@ logs/
 configs/local/
 configs/local.toml
 configs/*.local.toml
-
-# Reference/demo material not part of the deliverable
-mailflow-generated/

@@ -384,6 +384,20 @@ def _build_processors(
     return PipelineEngine(bindings, router=router)
 
 
+def _collect_secrets(config: MailFlowConfig) -> list[str]:
+    """API keys plus header values that look like tokens (defense in depth)."""
+    secrets: list[str] = []
+    token_markers = ("key", "token", "auth", "bearer", "secret")
+    for llm in config.llms:
+        if llm.api_key:
+            secrets.append(llm.api_key)
+        for name, value in llm.headers.items():
+            lowered = name.lower()
+            if any(marker in lowered for marker in token_markers) and len(value) >= 8:
+                secrets.append(value)
+    return secrets
+
+
 async def start_service(
     config: MailFlowConfig | None = None,
     config_path: str | Path | None = None,
@@ -406,7 +420,7 @@ async def start_service(
     if enable_logging:
         logging_runtime = configure_logging(
             config.logging,
-            secrets=[llm.api_key for llm in config.llms if llm.api_key],
+            secrets=_collect_secrets(config),
             extra_handlers=extra_log_handlers,
             console_stream=output,
         )

@@ -284,3 +284,40 @@ class TestRuntime:
         await runtime.stop()
         assert runtime.account_status("off") == "stopped"
         assert storage.saved == []
+
+    async def test_transient_save_failure_is_retried(self) -> None:
+        """A mail must not be lost to a transient storage error."""
+        config = MailFlowConfig.model_validate({"general": {"workers": 1}})
+        storage = FakeStorage()
+
+        class FlakySaveStorage(FakeStorage):
+            def __init__(self) -> None:
+                super().__init__()
+                self.failures_left = 2
+
+            async def save_mail(self, record: MailRecord) -> None:
+                if self.failures_left > 0:
+                    self.failures_left -= 1
+                    raise RuntimeError("disk full (transient)")
+                await super().save_mail(record)
+
+        storage = FlakySaveStorage()
+        processor = StaticProcessor(MailAnalysis(summary="s", urgency=Urgency.INFO))
+        engine = PipelineEngine(
+            [ProcessorBinding(processor_id="p", plugin_id="t", processor=processor)]
+        )
+        source = EmittingSource([make_mail()])
+        runtime = MailFlowRuntime(
+            config,
+            sources={"acct-1": source},
+            pipeline=engine,
+            storage=storage,
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            account_configs=[MailAccountConfig(account_id="acct-1", provider="fake")],
+        )
+        await runtime.start()
+        await asyncio.sleep(1.2)  # 2 retries with backoff
+        await runtime.stop()
+        assert len(storage.saved) == 1  # recovered after transient failures

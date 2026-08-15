@@ -180,9 +180,33 @@ class MailFlowRuntime:
             processor_notes=notes,
             received_at=mail.received_at,
         )
-        await self._storage.save_mail(record)
+        await self._persist_with_retry(record)
         await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
         await self._notify(record)
+
+    async def _persist_with_retry(self, record: MailRecord, attempts: int = 3) -> None:
+        """Persist the record; a mail must not be lost to a transient storage error."""
+        for attempt in range(attempts):
+            try:
+                await self._storage.save_mail(record)
+                return
+            except Exception as exc:
+                if attempt >= attempts - 1:
+                    logger.critical(
+                        "mail %r could not be persisted after %d attempts: %s",
+                        record.record_id,
+                        attempts,
+                        exc,
+                    )
+                    raise
+                logger.error(
+                    "save attempt %d/%d failed for %r: %s",
+                    attempt + 1,
+                    attempts,
+                    record.record_id,
+                    exc,
+                )
+                await asyncio.sleep(0.5 * (attempt + 1))
 
     async def _notify(self, record: MailRecord) -> None:
         for notifier, notifier_config in zip(self._notifiers, self._notifier_configs, strict=True):

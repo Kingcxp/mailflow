@@ -9,7 +9,7 @@ test:
 	$(PY) pytest -q
 
 coverage:
-	$(PY) pytest --cov=mailflow --cov-report=term-missing --cov-report=html
+	$(PY) pytest --cov=mailflow --cov=mailflow_bundled --cov=mailflow_cli --cov=mailflow_tui --cov=mailflow_testkit --cov=mailflow_mail_fake --cov=mailflow_storage_sqlite --cov=mailflow_llm_openai_compatible --cov=mailflow_processor_rules --cov=mailflow_processor_llm_importance --cov=mailflow_notify_console --cov-report=term-missing --cov-report=html
 
 lint:
 	$(PY) ruff check .
