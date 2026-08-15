@@ -9,6 +9,8 @@ resolution-markers = [
 [manifest]
 members = [
     "mailflow-core",
+    "mailflow-mail-fake",
+    "mailflow-testkit",
     "mailflow-workspace",
 ]
 
@@ -351,6 +353,32 @@ requires-dist = [
     { name = "rich", specifier = ">=13.7" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
 ]
+
+[[package]]
+name = "mailflow-mail-fake"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-mail-fake" }
+dependencies = [
+    { name = "mailflow-core" },
+    { name = "mailflow-testkit" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mailflow-core", editable = "packages/mailflow-core" },
+    { name = "mailflow-testkit", editable = "packages/mailflow-testkit" },
+]
+
+[[package]]
+name = "mailflow-testkit"
+version = "0.1.0"
+source = { editable = "packages/mailflow-testkit" }
+dependencies = [
+    { name = "mailflow-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }]
 
 [[package]]
 name = "mailflow-workspace"

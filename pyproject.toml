@@ -10,6 +10,19 @@ package = false
 [tool.uv.workspace]
 members = ["packages/*", "plugins/*"]
 
+[tool.uv.sources]
+mailflow-core = { workspace = true }
+mailflow-testkit = { workspace = true }
+mailflow-bundled = { workspace = true }
+mailflow-cli = { workspace = true }
+mailflow-tui = { workspace = true }
+mailflow-mail-fake = { workspace = true }
+mailflow-storage-sqlite = { workspace = true }
+mailflow-llm-openai-compatible = { workspace = true }
+mailflow-processor-rules = { workspace = true }
+mailflow-processor-llm-importance = { workspace = true }
+mailflow-notify-console = { workspace = true }
+
 [dependency-groups]
 dev = [
   "pytest>=8.3",
@@ -40,6 +53,19 @@ allowed-confusables = ["（", "）"]
 python_version = "3.11"
 strict = true
 warn_unused_configs = true
+mypy_path = [
+  "packages/mailflow-core/src",
+  "packages/mailflow-testkit/src",
+  "packages/mailflow-bundled/src",
+  "packages/mailflow-cli/src",
+  "packages/mailflow-tui/src",
+  "plugins/mailflow-mail-fake/src",
+  "plugins/mailflow-storage-sqlite/src",
+  "plugins/mailflow-llm-openai-compatible/src",
+  "plugins/mailflow-processor-rules/src",
+  "plugins/mailflow-processor-llm-importance/src",
+  "plugins/mailflow-notify-console/src",
+]
 
 [tool.pyright]
 pythonVersion = "3.11"
