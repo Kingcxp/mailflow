@@ -58,8 +58,16 @@ uv build --all-packages        # pass (11 wheels)
 
 ## Not executed
 
-- `make exe-onefile`: the onefile build was started after the standalone
-  smoke test; the standalone build is the verified baseline artifact.
 - Real provider integrations (IMAP/Gmail/Outlook) — explicitly out of
   scope for the 0.1.0 baseline (planned provider phase).
 - Network LLM calls in tests: never performed (httpx monkeypatched).
+
+## Executed after the initial log
+
+- `make exe-onefile` equivalent: `tools/build_exe.py --mode onefile`
+  completed; `dist/frozen_entry.exe` verified (`plugin list`,
+  `config-check -c configs/development.toml`).
+- `uv run mailflow tui -c configs/development.toml` launched and rendered
+  (header, tabs, search placeholder) in this environment.
+- Interactive `mailflow shell` pipelined `help mail`, `mail list`,
+  `lang get`, `exit` successfully.
