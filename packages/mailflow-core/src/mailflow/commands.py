@@ -362,7 +362,10 @@ class CommandRouter:
             repos = self.service.config.plugins.repositories
             spans = [
                 StyleSpan(text=self._t("plugin.repo_title", count=len(repos)), style=_STYLE_TITLE),
-                StyleSpan(text=f"\n{'NAME':<24} {'URL'}\n", style=_STYLE_HEADER),
+                StyleSpan(
+                    text=f"\n{self._t('plugin.header_name'):<24} {'URL'}\n",
+                    style=_STYLE_HEADER,
+                ),
             ]
             for repo in repos:
                 spans.append(StyleSpan(text=f"{repo.name:<24} "))
@@ -394,7 +397,8 @@ class CommandRouter:
                     text=self._t("plugin.market_title", count=len(entries)), style=_STYLE_TITLE
                 ),
                 StyleSpan(
-                    text=f"\n{'PLUGIN':<34} {'VERSION':<10} {'CATEGORIES':<26} {'DESCRIPTION'}\n",
+                    text=f"\n{self._t('plugin.header_id'):<34} {self._t('plugin.header_version'):<10} "
+                    f"{self._t('plugin.market_categories'):<26} {self._t('plugin.market_description')}\n",
                     style=_STYLE_HEADER,
                 ),
             ]
@@ -474,7 +478,8 @@ class CommandRouter:
                     text=self._t("plugin.title", count=len(snapshot.plugins)), style=_STYLE_TITLE
                 ),
                 StyleSpan(
-                    text=f"\n{'PLUGIN':<30} {'NAME':<24} {'VERSION':<10} {'PROVIDES'}\n",
+                    text=f"\n{self._t('plugin.header_id'):<30} {self._t('plugin.header_name'):<24} "
+                    f"{self._t('plugin.header_version'):<10} {self._t('plugin.header_provides')}\n",
                     style=_STYLE_HEADER,
                 ),
             ]
@@ -506,7 +511,10 @@ class CommandRouter:
         ]
         spans = [
             StyleSpan(text=self._t("adapter.title", count=len(components)), style=_STYLE_TITLE),
-            StyleSpan(text=f"\n{'ADAPTER':<32} {'PLUGIN'}\n", style=_STYLE_HEADER),
+            StyleSpan(
+                text=f"\n{self._t('adapter.header_id'):<32} {self._t('adapter.header_plugin')}\n",
+                style=_STYLE_HEADER,
+            ),
         ]
         for component in components:
             spans.append(StyleSpan(text=f"{component.component_id:<32} "))
@@ -520,7 +528,8 @@ class CommandRouter:
                 text=self._t("account.title", count=len(snapshot.accounts)), style=_STYLE_TITLE
             ),
             StyleSpan(
-                text=f"\n{'ACCOUNT':<24} {'EMAIL':<36} {'PROVIDER':<24} {'STATUS'}\n",
+                text=f"\n{self._t('account.header_id'):<24} {self._t('account.header_email'):<36} "
+                f"{self._t('account.header_provider'):<24} {self._t('account.header_status')}\n",
                 style=_STYLE_HEADER,
             ),
         ]
@@ -561,7 +570,8 @@ class CommandRouter:
         spans = [
             StyleSpan(text=self._t("llm.title", count=len(snapshot.llms)), style=_STYLE_TITLE),
             StyleSpan(
-                text=f"\n{'LLM':<20} {'NAME':<20} {'BACKEND':<30} {'MODEL':<20} {'DEFAULT'}\n",
+                text=f"\n{self._t('llm.header_id'):<20} {self._t('llm.header_name'):<20} "
+                f"{self._t('llm.header_backend'):<30} {self._t('llm.header_model'):<20} {self._t('llm.header_default')}\n",
                 style=_STYLE_HEADER,
             ),
         ]
@@ -674,7 +684,10 @@ class CommandRouter:
             if not items:
                 spans.append(StyleSpan(text=f"\n{self._t('mail.trash_empty')}", style=_STYLE_MUTED))
                 return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
-            header = f"{'ID':<26} {'':<2} {'URGENCY':<10} {'SUBJECT':<40} {'DELETED':<16}"
+            header = (
+                f"{self._t('mail.header_id'):<26} {'':<2} {self._t('mail.header_urgency'):<10} "
+                f"{self._t('mail.header_subject'):<40} {self._t('mail.header_deleted'):<16}"
+            )
             spans.append(StyleSpan(text=f"\n{header}\n", style=_STYLE_HEADER))
             for item in items:
                 spans.append(StyleSpan(text=f"{item.record_id:<26} ", style=_STYLE_MUTED))

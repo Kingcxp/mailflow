@@ -208,17 +208,15 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
 
             table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
             assert table.row_count == 3
-
             # search filters the table
             search = app.query_one("#mail-search", Input)
             search.value = "promotion"
-            await pilot.pause(0.2)
+            await pilot.pause(0.05)
             assert table.row_count == 1
 
             search.value = ""
-            await pilot.pause(0.2)
+            await pilot.pause(0.05)
             assert table.row_count == 3
-
             # select the urgent mail row: its urgency cell carries the contract color
             urgent_index = next(
                 i for i in range(table.row_count) if "urgent" in str(table.get_row_at(i)[0])
@@ -232,17 +230,21 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             pane._selected_id = "m-id"  # pyright: ignore[reportPrivateUsage]
             select = cast(Select[Any], app.query_one("#urgency-select", Select))
             select.value = "ad"
-            await pilot.pause(0.2)
+            await pilot.pause(0.05)
             record: MailRecord | None = await service.get_mail("m-id")
             assert record is not None
             assert record.manual_urgency is Urgency.AD
-
             # language switch persists
             lang_select = cast(Select[Any], app.query_one("#language-select", Select))
             lang_select.value = "zh-CN"
-            await pilot.pause(0.2)
+            await pilot.pause(0.05)
             assert await service.get_language() == "zh-CN"
+            # the tab titles and headers re-translate on language change
+            from textual.widgets import TabbedContent
 
+            tabs = app.query_one(TabbedContent)
+            tab_label = tabs.get_tab("tab-mail")  # pyright: ignore[reportUnknownMemberType]
+            assert str(tab_label.label) == "邮件"  # pyright: ignore[reportUnknownMemberType]
             # settings tab lists every config option; secrets are redacted
             from mailflow_tui.app import SettingsPane
 
@@ -257,7 +259,6 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             assert "general.reminder_hour" in all_rows
             assert "sk-tui-secret" not in all_rows
             assert "llms[].api_key*" in all_rows
-
             # market tab browses the local repository
             from mailflow_tui.app import MarketPane
 
@@ -268,11 +269,10 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             market_rows = " ".join(str(cell) for cell in market_table.get_row_at(0))
             assert "mailflow-test-market-plugin" in market_rows
             assert "notifier" in market_rows
-
             # reply modal: confirm is disabled until prepared
             pane._selected_id = "m-id"  # pyright: ignore[reportPrivateUsage]
             cast(Button, app.query_one("#btn-reply")).press()
-            await pilot.pause(0.2)
+            await pilot.pause(0.05)
             from mailflow_tui.app import ReplyModal
 
             modal = app.screen
@@ -280,8 +280,10 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             confirm_button = cast(Button, modal.query_one("#reply-confirm"))
             assert confirm_button.disabled is True
             cast(Button, modal.query_one("#reply-prepare")).press()
-            await pilot.pause(0.2)
+            await pilot.pause(0.05)
             confirm_button = cast(Button, modal.query_one("#reply-confirm"))
             assert confirm_button.disabled is False
+            app.exit()
+            await pilot.pause()
     finally:
         await service.stop()

@@ -43,10 +43,18 @@ _URGENCY_OPTIONS = [
 _BLANK = ""
 
 
-def _localize(service: MailFlowService, value: datetime) -> str:
+def _localize(service: MailFlowService, value: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
     from zoneinfo import ZoneInfo
 
-    return value.astimezone(ZoneInfo(service.config.general.timezone)).strftime("%Y-%m-%d %H:%M")
+    return value.astimezone(ZoneInfo(service.config.general.timezone)).strftime(fmt)
+
+
+def _remove_column(table: DataTable[Any], key: str) -> None:
+    """Drop a column by key, tolerating absence (used when relabeling)."""
+    try:
+        table.remove_column(key)
+    except Exception:
+        pass
 
 
 class ReplyModal(ModalScreen[Any]):
@@ -178,12 +186,6 @@ class MailPane(Vertical):
             yield Button(self._service.t("tui.btn_reply"), id="btn-reply", variant="success")
 
     async def on_mount(self) -> None:
-        table = self._mail_table()
-        table.add_column(self._service.t("tui.column_urgency"), key="urgency")
-        table.add_column(self._service.t("tui.column_subject"), key="subject")
-        table.add_column(self._service.t("tui.column_sender"), key="sender")
-        table.add_column(self._service.t("tui.column_date"), key="date")
-        self._urgency_select().tooltip = self._service.t("tui.urgency_help")
         await self.refresh_mail()
 
     def _mail_table(self) -> DataTable[Any]:
@@ -192,8 +194,26 @@ class MailPane(Vertical):
     def _urgency_select(self) -> Select[Any]:
         return self.query_one("#urgency-select", Select)  # pyright: ignore[reportUnknownVariableType]
 
+    def _ensure_columns(self) -> None:
+        if getattr(self, "_columns_done", False):
+            return
+        table = self._mail_table()
+        for key in ("urgency", "subject", "sender", "date"):
+            _remove_column(table, key)
+        table.add_column(self._service.t("tui.column_urgency"), key="urgency")
+        table.add_column(self._service.t("tui.column_subject"), key="subject")
+        table.add_column(self._service.t("tui.column_sender"), key="sender")
+        table.add_column(self._service.t("tui.column_date"), key="date")
+        self._urgency_select().tooltip = self._service.t("tui.urgency_help")
+        self._columns_done = True
+
+    async def relabel(self) -> None:
+        self._columns_done = False
+        await self.refresh_mail()
+
     async def refresh_mail(self) -> None:
         table = self._mail_table()
+        self._ensure_columns()
         table.clear()
         self._records = await self._service.list_mails()
         query = self.query_one("#mail-search", Input).value.strip().lower()
@@ -205,7 +225,7 @@ class MailPane(Vertical):
                 RichText(f"■ {urgency.value}", style=urgency.color),
                 record.mail.subject or "(no subject)",
                 record.mail.sender.address,
-                _localize(self._service, record.mail.received_at),
+                _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
                 key=record.record_id,
             )
         if self._records and self._selected_id is None:
@@ -305,19 +325,31 @@ class ActionsPane(Vertical):
         yield Static(self._service.t("tui.empty"), id="actions-hint")
 
     async def on_mount(self) -> None:
-        table = self._actions_table()
-        table.add_column(self._service.t("tui.action_time"), key="time")
-        table.add_column(self._service.t("tui.action_type"), key="type")
-        table.add_column(self._service.t("tui.action_content"), key="content")
-        table.add_column(self._service.t("tui.action_notes"), key="notes")
-        table.add_column(self._service.t("tui.action_source"), key="source")
         await self.refresh_actions()
 
     def _actions_table(self) -> DataTable[Any]:
         return self.query_one("#actions-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
 
+    def _ensure_columns(self) -> None:
+        if getattr(self, "_columns_done", False):
+            return
+        table = self._actions_table()
+        for key in ("time", "type", "content", "notes", "source"):
+            _remove_column(table, key)
+        table.add_column(self._service.t("tui.action_time"), key="time")
+        table.add_column(self._service.t("tui.action_type"), key="type")
+        table.add_column(self._service.t("tui.action_content"), key="content")
+        table.add_column(self._service.t("tui.action_notes"), key="notes")
+        table.add_column(self._service.t("tui.action_source"), key="source")
+        self._columns_done = True
+
+    async def relabel(self) -> None:
+        self._columns_done = False
+        await self.refresh_actions()
+
     async def refresh_actions(self) -> None:
         table = self._actions_table()
+        self._ensure_columns()
         table.clear()
         self._items = await self._service.list_actions()
         self.query_one("#actions-hint", Static).update(
@@ -357,6 +389,9 @@ class RuntimePane(Vertical):
             yield Static("", id="runtime-storage")
 
     async def on_mount(self) -> None:
+        await self.refresh_runtime()
+
+    async def relabel(self) -> None:
         await self.refresh_runtime()
 
     async def refresh_runtime(self) -> None:
@@ -445,6 +480,10 @@ class SettingsPane(Vertical):
         await self.refresh_languages()
         await self.refresh_config()
 
+    async def relabel(self) -> None:
+        await self.refresh_config()
+        await self.refresh_languages()
+
     async def refresh_languages(self) -> None:
         options = [
             (f"{info.name} ({info.code})", info.code)
@@ -452,7 +491,8 @@ class SettingsPane(Vertical):
         ]
         select = self.query_one("#language-select", Select)  # pyright: ignore[reportUnknownVariableType]
         select.set_options(options)  # pyright: ignore[reportUnknownMemberType]
-        select.value = self._service.i18n.language
+        if select.value != self._service.i18n.language:  # pyright: ignore[reportUnknownMemberType]
+            select.value = self._service.i18n.language
 
     def _config_table(self) -> DataTable[Any]:
         return self.query_one("#config-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
@@ -475,6 +515,8 @@ class SettingsPane(Vertical):
                 value_text = "true" if value else "false"
             elif value is None:
                 value_text = "-"
+            elif not isinstance(value, (str, int, float)):
+                value_text = "..."
             else:
                 value_text = str(value)[:24]
             key = option.key + ("*" if option.is_secret() else "")
@@ -482,7 +524,12 @@ class SettingsPane(Vertical):
             table.add_row(key, option.type_name, required, value_text, option.description[:60])
 
     async def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "language-select" and event.value:
+        if (
+            event.select.id == "language-select"
+            and event.value not in (Select.BLANK, Select.NULL)
+            and event.value is not None
+            and str(event.value) != self._service.i18n.language
+        ):
             await self._service.set_language(str(event.value))
             await self.refresh_config()
 
@@ -507,18 +554,39 @@ class MarketPane(Vertical):
         yield Static("", id="market-status")
 
     async def on_mount(self) -> None:
-        table = self._market_table()
-        table.add_column(self._service.t("plugin.header_id"), key="plugin")
-        table.add_column(self._service.t("plugin.header_version"), key="version")
-        table.add_column(self._service.t("plugin.market_categories"), key="categories")
-        table.add_column(self._service.t("plugin.market_description"), key="description")
-        table.add_column(self._service.t("plugin.market_status"), key="status")
         await self.refresh_market()
 
     def _market_table(self) -> DataTable[Any]:
         return self.query_one("#market-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
 
+    def _ensure_columns(self) -> None:
+        if getattr(self, "_columns_done", False):
+            return
+        table = self._market_table()
+        for key in ("plugin", "version", "categories", "description", "status"):
+            _remove_column(table, key)
+        table.add_column(self._service.t("plugin.header_id"), key="plugin")
+        table.add_column(self._service.t("plugin.header_version"), key="version")
+        table.add_column(self._service.t("plugin.market_categories"), key="categories")
+        table.add_column(self._service.t("plugin.market_description"), key="description")
+        table.add_column(self._service.t("plugin.market_status"), key="status")
+        self._columns_done = True
+
+    async def relabel(self) -> None:
+        self._columns_done = False
+        await self.refresh_market()
+
     async def refresh_market(self) -> None:
+        if getattr(self, "_refreshing", False):
+            return
+        self._refreshing = True
+        try:
+            await self._refresh_market_impl()
+        finally:
+            self._refreshing = False
+
+    async def _refresh_market_impl(self) -> None:
+        self._ensure_columns()
         market = self._service.market
         self.query_one("#market-status", Static).update(self._service.t("tui.loading"))
         try:
@@ -546,9 +614,14 @@ class MarketPane(Vertical):
                 key=plugin.id,
             )
         categories = sorted({c for _r, p in self._entries for c in p.categories})
+        if categories != getattr(self, "_categories", None):
+            select = self.query_one("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
+            select.set_options([("all", "all"), *[(c, c) for c in categories]])  # pyright: ignore[reportUnknownMemberType]
+            self._categories = categories
         select = self.query_one("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
-        select.set_options([("all", "all"), *[(c, c) for c in categories]])  # pyright: ignore[reportUnknownMemberType]
-        select.value = filter_value if filter_value in {"all", *categories} else "all"
+        desired = filter_value if filter_value in {*categories, "all"} else "all"
+        if select.value != desired:  # pyright: ignore[reportUnknownMemberType]
+            select.value = desired
         self.query_one("#market-status", Static).update("")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -686,13 +759,56 @@ class MailFlowApp(App[None]):
         self.title = self._service.t("tui.title")
         self.sub_title = f"v{self._service.snapshot().version}"
         self._log_timer = self.set_interval(1.0, self._drain_logs)
+        self._refresh_lock = asyncio.Lock()
         self._service.on("mail.processed", self._on_mail_processed)
+        self._service.on("language.changed", self._on_language_changed)
+
+    async def _on_language_changed(self, event: str, **payload: Any) -> None:
+        # the service runs on the same loop as the app: schedule directly
+        self._apply_language()
+
+    def _apply_language(self) -> None:
+        """Re-translate tab titles and pane labels after a language switch."""
+        self.title = self._service.t("tui.title")
+        tabs = self.query_one(TabbedContent)
+        for pane_id, key in (
+            ("tab-mail", "tui.tab_mail"),
+            ("tab-actions", "tui.tab_actions"),
+            ("tab-runtime", "tui.tab_runtime"),
+            ("tab-logs", "tui.tab_logs"),
+            ("tab-market", "tui.tab_market"),
+            ("tab-settings", "tui.tab_settings"),
+        ):
+            tab = tabs.get_tab(pane_id)
+            tab.label = self._service.t(key)  # pyright: ignore[reportUnknownMemberType]
+        self.run_worker(cast(Any, self._relabel_guarded))
+
+    async def _relabel_guarded(self) -> None:
+        async with self._refresh_lock:
+            await self._relabel_panes()
+
+    async def _relabel_panes(self) -> None:
+        for pane_type in (MailPane, ActionsPane, RuntimePane, SettingsPane, MarketPane):
+            query = self.query(pane_type)
+            if not query:
+                continue
+            pane = query.first()
+            # lazy panes compose with the current language on first activation;
+            # only already-composed panes need relabeling here
+            if not pane.is_mounted or not pane.query("*"):
+                continue
+            await pane.relabel()  # type: ignore[attr-defined]
 
     async def _on_mail_processed(self, event: str, **payload: Any) -> None:
-        self.call_from_thread(self._schedule_reload)
+        # the service runs on the same loop as the app: schedule directly
+        self._schedule_reload()
 
     def _schedule_reload(self) -> None:
-        self.run_worker(cast(Any, self._reload_all))
+        self.run_worker(cast(Any, self._reload_guarded))
+
+    async def _reload_guarded(self) -> None:
+        async with self._refresh_lock:
+            await self._reload_all()
 
     async def _reload_all(self) -> None:
         for pane_type in (MailPane, ActionsPane, RuntimePane):
