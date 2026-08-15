@@ -94,7 +94,28 @@
       "header_provides": "提供能力",
       "not_found": "未找到插件 {plugin_id}",
       "field_components": "组件",
-      "usage": "plugin <list|show <plugin_id>>"
+      "usage": "plugin <list|show <插件id>|repo <list|add <名称> <url>|remove <名称>>|market <list [分类]|show <id>>|install <id>>",
+      "repo_title": "插件仓库（{count}）",
+      "repo_added": "已添加仓库 {name}（已写入配置文件）",
+      "repo_removed": "已移除仓库 {name}",
+      "repo_usage": "plugin repo <list|add <名称> <url>|remove <名称>>",
+      "market_title": "插件市场（{count}）",
+      "market_empty": "未找到插件（用 'plugin repo add' 添加仓库）",
+      "market_not_found": "任何仓库中都未找到插件 {plugin_id}",
+      "market_categories": "分类",
+      "market_description": "简介",
+      "market_author": "作者",
+      "market_license": "许可证",
+      "market_source": "安装源",
+      "market_repo": "来源仓库",
+      "market_status": "状态",
+      "market_usage": "plugin market <list [分类]|show <id>>",
+      "install_usage": "plugin install <插件id>",
+      "installed": "已安装",
+      "not_installed": "未安装",
+      "already_installed": "{plugin_id} 已安装",
+      "installed_ok": "已安装 {plugin_id}",
+      "restart_note": "重启后生效"
     },
     "adapter": {
       "title": "邮箱适配器（{count}）",
@@ -208,7 +229,9 @@
       "loading": "加载中...",
       "reply.label": "回复",
       "reply.subject_prefix": "回复：",
-      "settings_config_title": "配置项"
+      "settings_config_title": "配置项",
+      "tab_market": "市场",
+      "market_install": "安装"
     },
     "cli": {
       "started": "MailFlow 已启动。按 Ctrl+C 停止。",

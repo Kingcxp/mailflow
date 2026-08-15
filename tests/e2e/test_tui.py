@@ -117,6 +117,7 @@ def build_config(db_path: Path) -> MailFlowConfig:
         {
             "general": {"timezone": "UTC", "workers": 2},
             "storage": {"provider": "sqlite", "path": str(db_path)},
+            "plugins": {"repositories": []},
             "accounts": [
                 {"account_id": "acct-1", "provider": "test-source", "email": "me@example.com"}
             ],
@@ -147,6 +148,25 @@ def build_config(db_path: Path) -> MailFlowConfig:
 
 @pytest.mark.asyncio
 async def test_tui_compose_and_data(tmp_path: Path) -> None:
+    # a local marketplace index for the market tab
+    import json as jsonlib
+
+    index = {
+        "name": "local",
+        "plugins": [
+            {
+                "id": "mailflow-test-market-plugin",
+                "name": "Market Test",
+                "version": "9.9.9",
+                "description": "browsable from the tui",
+                "categories": ["notifier"],
+                "package": "mailflow-test-market-plugin",
+                "source": "",
+            }
+        ],
+    }
+    index_path = tmp_path / "plugins.json"
+    index_path.write_text(jsonlib.dumps(index), encoding="utf-8")
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
     manager.register(storage_plugin)
@@ -163,6 +183,13 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
         discover_plugins=False,
         enable_logging=False,
     )
+    from mailflow.config import PluginRepositoryConfig
+    from mailflow.plugin_market import PluginMarket, Repository
+
+    service.config.plugins.repositories.append(
+        PluginRepositoryConfig(name="local", url=index_path.as_uri())
+    )
+    service.market = PluginMarket([Repository("local", index_path.as_uri())])
     CommandRouter(service)
     import queue
 
@@ -230,6 +257,17 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             assert "general.reminder_hour" in all_rows
             assert "sk-tui-secret" not in all_rows
             assert "llms[].api_key*" in all_rows
+
+            # market tab browses the local repository
+            from mailflow_tui.app import MarketPane
+
+            market_pane = app.query_one(MarketPane)
+            await market_pane.refresh_market()
+            market_table = cast(DataTable[Any], app.query_one("#market-table", DataTable))
+            assert market_table.row_count == 1
+            market_rows = " ".join(str(cell) for cell in market_table.get_row_at(0))
+            assert "mailflow-test-market-plugin" in market_rows
+            assert "notifier" in market_rows
 
             # reply modal: confirm is disabled until prepared
             pane._selected_id = "m-id"  # pyright: ignore[reportPrivateUsage]

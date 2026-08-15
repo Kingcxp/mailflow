@@ -152,6 +152,11 @@ class LoggingConfig(BaseModel):
         return self
 
 
+class PluginRepositoryConfig(BaseModel):
+    name: str = Field(description="Repository display name")
+    url: str = Field(description="URL of the repository's plugins.json index")
+
+
 class PluginConfig(BaseModel):
     enabled: list[str] = Field(
         default_factory=lambda: [],
@@ -159,6 +164,10 @@ class PluginConfig(BaseModel):
     )
     disabled: list[str] = Field(
         default_factory=lambda: [], description="Plugin ids that are never loaded"
+    )
+    repositories: list[PluginRepositoryConfig] = Field(
+        default_factory=lambda: [],
+        description="Plugin marketplaces: named URLs whose plugins.json indexes the market browses",
     )
 
     @model_validator(mode="after")

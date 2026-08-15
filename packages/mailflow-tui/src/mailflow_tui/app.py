@@ -4,11 +4,13 @@ methods; no business logic lives here."""
 
 from __future__ import annotations
 
+import asyncio
 import queue as queue_module
 from datetime import datetime
 from typing import Any, ClassVar, cast
 
 from mailflow.domain import ActionItem, MailRecord, ReplyDraft, Urgency
+from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
@@ -485,6 +487,169 @@ class SettingsPane(Vertical):
             await self.refresh_config()
 
 
+class MarketPane(Vertical):
+    """Browse the plugin marketplace and install plugins."""
+
+    def __init__(self, service: MailFlowService) -> None:
+        super().__init__()
+        self._service = service
+        self._entries: list[tuple[Repository, MarketPlugin]] = []
+        self._status = ""
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="market-controls"):
+            yield Select([], id="market-category")
+            yield Button(self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary")
+            yield Button(
+                self._service.t("tui.market_install"), id="market-install", variant="success"
+            )
+        yield DataTable(id="market-table")
+        yield Static("", id="market-status")
+
+    async def on_mount(self) -> None:
+        table = self._market_table()
+        table.add_column(self._service.t("plugin.header_id"), key="plugin")
+        table.add_column(self._service.t("plugin.header_version"), key="version")
+        table.add_column(self._service.t("plugin.market_categories"), key="categories")
+        table.add_column(self._service.t("plugin.market_description"), key="description")
+        table.add_column(self._service.t("plugin.market_status"), key="status")
+        await self.refresh_market()
+
+    def _market_table(self) -> DataTable[Any]:
+        return self.query_one("#market-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+
+    async def refresh_market(self) -> None:
+        market = self._service.market
+        self.query_one("#market-status", Static).update(self._service.t("tui.loading"))
+        try:
+            self._entries = await asyncio.to_thread(market.list_plugins)
+        except Exception as exc:
+            self.query_one("#market-status", Static).update(str(exc))
+            return
+        table = self._market_table()
+        table.clear()
+        filter_value = cast(str, self.query_one("#market-category", Select).value or "all")  # pyright: ignore[reportUnknownMemberType]
+        for _repo, plugin in self._entries:
+            if filter_value and filter_value != "all" and filter_value not in plugin.categories:
+                continue
+            installed = (
+                self._service.t("plugin.installed")
+                if market.is_installed(plugin.id, package=plugin.package)
+                else ""
+            )
+            table.add_row(
+                plugin.id,
+                plugin.version,
+                ",".join(plugin.categories),
+                plugin.description[:40],
+                installed,
+                key=plugin.id,
+            )
+        categories = sorted({c for _r, p in self._entries for c in p.categories})
+        select = self.query_one("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
+        select.set_options([("all", "all"), *[(c, c) for c in categories]])  # pyright: ignore[reportUnknownMemberType]
+        select.value = filter_value if filter_value in {"all", *categories} else "all"
+        self.query_one("#market-status", Static).update("")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "market-refresh":
+            await self.refresh_market()
+            return
+        if event.button.id == "market-install":
+            table = self._market_table()
+            cursor = table.cursor_row
+            if cursor < 0 or cursor >= len(self._entries):
+                return
+            _repo, plugin = self._entries[cursor]
+            market = self._service.market
+            if market.is_installed(plugin.id, package=plugin.package):
+                self.query_one("#market-status", Static).update(
+                    self._service.t("plugin.already_installed", plugin_id=plugin.id)
+                )
+                return
+            self.query_one("#market-status", Static).update(self._service.t("tui.loading"))
+            try:
+                await market.install(plugin)
+            except (ValueError, RuntimeError) as exc:
+                self.query_one("#market-status", Static).update(str(exc))
+                return
+            self.query_one("#market-status", Static).update(
+                self._service.t("plugin.installed_ok", plugin_id=plugin.id)
+                + f" ({self._service.t('plugin.restart_note')})"
+            )
+            await self.refresh_market()
+
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "market-category":
+            await self.refresh_market()
+
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        plugin = next((p for _r, p in self._entries if p.id == event.row_key.value), None)
+        if plugin is not None:
+            # textual types Widget.app loosely; the cast pins the concrete app
+            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+                MarketDetail(self._service, plugin)
+            )
+
+
+class MarketDetail(ModalScreen[Any]):
+    """Market plugin detail with an install button."""
+
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
+
+    def __init__(self, service: MailFlowService, plugin: Any) -> None:
+        super().__init__()
+        self._service = service
+        self._plugin = plugin
+
+    def compose(self) -> ComposeResult:
+        plugin = self._plugin
+        yield Static(f"{plugin.name or plugin.id} {plugin.version}", id="market-detail-title")
+        with Vertical():
+            yield Label(f"{self._service.t('plugin.header_id')}: {plugin.id}")
+            yield Label(
+                f"{self._service.t('plugin.market_categories')}: {', '.join(plugin.categories) or '-'}"
+            )
+            yield Label(
+                f"{self._service.t('plugin.market_description')}: {plugin.description or '-'}"
+            )
+            yield Label(f"{self._service.t('plugin.market_author')}: {plugin.author or '-'}")
+            yield Label(f"{self._service.t('plugin.market_license')}: {plugin.license or '-'}")
+            yield Label(f"{self._service.t('plugin.market_source')}: {plugin.source or '-'}")
+            yield Static("", id="market-detail-status")
+            with Horizontal():
+                yield Button(
+                    self._service.t("tui.market_install"),
+                    id="market-detail-install",
+                    variant="success",
+                )
+                yield Button(self._service.t("tui.btn_close"), id="market-detail-close")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id
+        if button_id == "market-detail-close":
+            self.dismiss(None)
+            return
+        if button_id == "market-detail-install":
+            market = self._service.market
+            plugin = self._plugin
+            if market.is_installed(plugin.id, package=plugin.package):
+                self.query_one("#market-detail-status", Static).update(
+                    self._service.t("plugin.already_installed", plugin_id=plugin.id)
+                )
+                return
+            self.query_one("#market-detail-status", Static).update(self._service.t("tui.loading"))
+            try:
+                await market.install(plugin)
+            except (ValueError, RuntimeError) as exc:
+                self.query_one("#market-detail-status", Static).update(str(exc))
+                return
+            self.query_one("#market-detail-status", Static).update(
+                self._service.t("plugin.installed_ok", plugin_id=plugin.id)
+                + f" ({self._service.t('plugin.restart_note')})"
+            )
+
+
 class MailFlowApp(App[None]):
     """Five-tab administration UI."""
 
@@ -511,6 +676,8 @@ class MailFlowApp(App[None]):
                 yield RuntimePane(self._service)
             with TabPane(self._service.t("tui.tab_logs"), id="tab-logs"):
                 yield LogsPane(self._service, self._log_queue)
+            with TabPane(self._service.t("tui.tab_market"), id="tab-market"):
+                yield MarketPane(self._service)
             with TabPane(self._service.t("tui.tab_settings"), id="tab-settings"):
                 yield SettingsPane(self._service)
         yield Footer()
@@ -528,12 +695,23 @@ class MailFlowApp(App[None]):
         self.run_worker(cast(Any, self._reload_all))
 
     async def _reload_all(self) -> None:
-        await self.query_one(MailPane).refresh_mail()
-        await self.query_one(ActionsPane).refresh_actions()
-        await self.query_one(RuntimePane).refresh_runtime()
+        for pane_type in (MailPane, ActionsPane, RuntimePane):
+            panes = self.query(pane_type)
+            if not panes:
+                continue
+            pane = panes.first()
+            if isinstance(pane, MailPane):
+                await pane.refresh_mail()
+            elif isinstance(pane, ActionsPane):
+                await pane.refresh_actions()
+            else:
+                await pane.refresh_runtime()  # type: ignore[attr-defined]
 
     def _drain_logs(self) -> None:
-        self.query_one(LogsPane).drain()
+        log_query = self.query(LogsPane)
+        logs = log_query.first() if log_query else None
+        if logs is not None:
+            logs.drain()
 
     def open_mail(self, mail_id: str) -> None:
         """Switch to the Mail tab and select a mail (used by action drill-down)."""

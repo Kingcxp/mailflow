@@ -125,3 +125,24 @@ DataTable > .datatable--cursor {
     background: $accent;
     color: $text;
 }
+
+#market-controls {
+    height: 3;
+    padding: 0 1;
+}
+
+#market-table {
+    height: 70%;
+    border: round $primary;
+}
+
+#market-status {
+    height: 1;
+    margin: 0 1;
+    color: $text-muted;
+}
+
+#market-detail-title {
+    text-style: bold;
+    margin: 1;
+}

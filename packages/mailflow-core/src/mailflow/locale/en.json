@@ -94,7 +94,28 @@
       "header_provides": "PROVIDES",
       "not_found": "Plugin {plugin_id} not found",
       "field_components": "Components",
-      "usage": "plugin <list|show <plugin_id>>"
+      "usage": "plugin <list|show <plugin_id>|repo <list|add <name> <url>|remove <name>>|market <list [category]|show <id>>|install <id>>",
+      "repo_title": "Plugin repositories ({count})",
+      "repo_added": "Repository {name} added (persisted to the config file)",
+      "repo_removed": "Repository {name} removed",
+      "repo_usage": "plugin repo <list|add <name> <url>|remove <name>>",
+      "market_title": "Plugin market ({count})",
+      "market_empty": "No plugins found (add a repository with 'plugin repo add')",
+      "market_not_found": "Plugin {plugin_id} not found in any repository",
+      "market_categories": "Categories",
+      "market_description": "Description",
+      "market_author": "Author",
+      "market_license": "License",
+      "market_source": "Source",
+      "market_repo": "Repository",
+      "market_status": "Status",
+      "market_usage": "plugin market <list [category]|show <id>>",
+      "install_usage": "plugin install <plugin_id>",
+      "installed": "installed",
+      "not_installed": "not installed",
+      "already_installed": "{plugin_id} is already installed",
+      "installed_ok": "Installed {plugin_id}",
+      "restart_note": "restart to load it"
     },
     "adapter": {
       "title": "Mail adapters ({count})",
@@ -208,7 +229,9 @@
       "loading": "Loading...",
       "reply.label": "Reply",
       "reply.subject_prefix": "Re:",
-      "settings_config_title": "Configuration"
+      "settings_config_title": "Configuration",
+      "tab_market": "Market",
+      "market_install": "Install"
     },
     "cli": {
       "started": "MailFlow started. Press Ctrl+C to stop.",

@@ -8,6 +8,7 @@ travels as style *metadata*, never embedded ANSI bytes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shlex
 from collections.abc import Awaitable, Callable
@@ -356,9 +357,116 @@ class CommandRouter:
                 return item
         return None
 
+    async def _cmd_plugin_repo(self, args: list[str]) -> CommandResponse:
+        if not args or args[0] == "list":
+            repos = self.service.config.plugins.repositories
+            spans = [
+                StyleSpan(text=self._t("plugin.repo_title", count=len(repos)), style=_STYLE_TITLE),
+                StyleSpan(text=f"\n{'NAME':<24} {'URL'}\n", style=_STYLE_HEADER),
+            ]
+            for repo in repos:
+                spans.append(StyleSpan(text=f"{repo.name:<24} "))
+                spans.append(StyleSpan(text=f"{repo.url}\n", style=_STYLE_MUTED))
+            return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        if args[0] == "add" and len(args) == 3:
+            try:
+                await self.service.plugin_repo_add(args[1], args[2])
+            except ValueError as exc:
+                return self._err(str(exc))
+            return self._ok(self._t("plugin.repo_added", name=args[1]))
+        if args[0] == "remove" and len(args) == 2:
+            try:
+                await self.service.plugin_repo_remove(args[1])
+            except KeyError as exc:
+                return self._err(str(exc))
+            return self._ok(self._t("plugin.repo_removed", name=args[1]))
+        return self._err(self._t("plugin.repo_usage"))
+
+    async def _cmd_plugin_market(self, args: list[str]) -> CommandResponse:
+        market = self.service.market
+        if not args or args[0] == "list":
+            category = args[1] if len(args) > 1 else ""
+            entries = await asyncio.to_thread(market.list_plugins)
+            if category:
+                entries = [e for e in entries if category in e[1].categories]
+            spans: list[StyleSpan] = [
+                StyleSpan(
+                    text=self._t("plugin.market_title", count=len(entries)), style=_STYLE_TITLE
+                ),
+                StyleSpan(
+                    text=f"\n{'PLUGIN':<34} {'VERSION':<10} {'CATEGORIES':<26} {'DESCRIPTION'}\n",
+                    style=_STYLE_HEADER,
+                ),
+            ]
+            for _repo, plugin in entries:
+                installed = (
+                    " [installed]" if market.is_installed(plugin.id, package=plugin.package) else ""
+                )
+                categories = ",".join(plugin.categories)
+                spans.append(StyleSpan(text=f"{plugin.id:<34} "))
+                spans.append(StyleSpan(text=f"{plugin.version:<10} ", style=_STYLE_MUTED))
+                spans.append(StyleSpan(text=f"{categories:<26} ", style=_STYLE_ACCENT))
+                spans.append(StyleSpan(text=f"{plugin.description[:40]}{installed}\n"))
+            if not entries:
+                spans.append(
+                    StyleSpan(text=f"\n{self._t('plugin.market_empty')}", style=_STYLE_MUTED)
+                )
+            return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        if args[0] == "show" and len(args) == 2:
+            found = await asyncio.to_thread(market.find, args[1])
+            if found is None:
+                return self._err(self._t("plugin.market_not_found", plugin_id=args[1]))
+            repo, plugin = found
+            spans = [
+                StyleSpan(text=f"{plugin.name or plugin.id} {plugin.version}", style=_STYLE_TITLE),
+                StyleSpan(text=f"\n{self._t('plugin.header_id')}: {plugin.id}"),
+                StyleSpan(
+                    text=f"\n{self._t('plugin.market_categories')}: {', '.join(plugin.categories) or '-'}"
+                ),
+                StyleSpan(
+                    text=f"\n{self._t('plugin.market_description')}: {plugin.description or '-'}"
+                ),
+                StyleSpan(text=f"\n{self._t('plugin.market_author')}: {plugin.author or '-'}"),
+                StyleSpan(text=f"\n{self._t('plugin.market_license')}: {plugin.license or '-'}"),
+                StyleSpan(text=f"\n{self._t('plugin.market_source')}: {plugin.source or '-'}"),
+                StyleSpan(text=f"\n{self._t('plugin.market_repo')}: {repo.name}"),
+                StyleSpan(
+                    text=f"\n{self._t('plugin.market_status')}: "
+                    f"{self._t('plugin.installed') if market.is_installed(plugin.id, package=plugin.package) else self._t('plugin.not_installed')}"
+                ),
+            ]
+            return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        return self._err(self._t("plugin.market_usage"))
+
+    async def _cmd_plugin_install(self, args: list[str]) -> CommandResponse:
+        if len(args) != 1:
+            return self._err(self._t("plugin.install_usage"))
+        market = self.service.market
+        found = await asyncio.to_thread(market.find, args[0])
+        if found is None:
+            return self._err(self._t("plugin.market_not_found", plugin_id=args[0]))
+        _repo, plugin = found
+        if market.is_installed(plugin.id, package=plugin.package):
+            return self._ok(self._t("plugin.already_installed", plugin_id=plugin.id))
+        try:
+            output = await market.install(plugin)
+        except (ValueError, RuntimeError) as exc:
+            return self._err(str(exc))
+        return self._ok(
+            self._t("plugin.installed_ok", plugin_id=plugin.id)
+            + f" ({self._t('plugin.restart_note')})"
+            + (f"\n{output}" if output else "")
+        )
+
     # -- plugins / adapters / accounts / llms -----------------------------------------------------
 
     async def _cmd_plugin(self, args: list[str]) -> CommandResponse:
+        if args and args[0] == "repo":
+            return await self._cmd_plugin_repo(args[1:])
+        if args and args[0] == "market":
+            return await self._cmd_plugin_market(args[1:])
+        if args and args[0] == "install":
+            return await self._cmd_plugin_install(args[1:])
         snapshot = self.service.snapshot()
         if not args or args[0] == "list":
             spans = [

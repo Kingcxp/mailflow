@@ -97,6 +97,11 @@ class MailFlowService:
             events=events,
             account_configs=config.accounts,
         )
+        from mailflow.plugin_market import PluginMarket, Repository
+
+        self.market = PluginMarket(
+            [Repository(repo.name, repo.url) for repo in config.plugins.repositories]
+        )
         self._started = False
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
@@ -282,6 +287,39 @@ class MailFlowService:
         self.config = updated
         await self.events.emit("config.changed", key=key)
         return self.get_config_option(key)
+
+    # -- plugin marketplace ------------------------------------------------------------
+
+    async def plugin_repo_add(self, name: str, url: str) -> None:
+        """Register a marketplace repository (persisted to the config file)."""
+        if self.config_path is None:
+            raise ValueError("no config file loaded; start with --config to persist changes")
+        from mailflow.config import PluginRepositoryConfig, write_config
+
+        repos = list(self.config.plugins.repositories)
+        if any(repo.name == name for repo in repos):
+            raise ValueError(f"repository {name!r} already configured")
+        repos.append(PluginRepositoryConfig(name=name, url=url))
+        self.config.plugins.repositories = repos
+        write_config(self.config, self.config_path)
+        from mailflow.plugin_market import PluginMarket, Repository
+
+        self.market = PluginMarket([Repository(r.name, r.url) for r in repos])
+
+    async def plugin_repo_remove(self, name: str) -> None:
+        if self.config_path is None:
+            raise ValueError("no config file loaded; start with --config to persist changes")
+        from mailflow.config import write_config
+
+        repos = list(self.config.plugins.repositories)
+        remaining = [repo for repo in repos if repo.name != name]
+        if len(remaining) == len(repos):
+            raise KeyError(f"repository {name!r} not configured")
+        self.config.plugins.repositories = remaining
+        write_config(self.config, self.config_path)
+        from mailflow.plugin_market import PluginMarket, Repository
+
+        self.market = PluginMarket([Repository(r.name, r.url) for r in remaining])
 
     # -- reply workflow ---------------------------------------------------------------------
 
