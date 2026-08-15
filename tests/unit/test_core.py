@@ -12,6 +12,7 @@ from mailflow.domain import (
     Urgency,
     parse_urgency,
 )
+from mailflow.config import MailFlowConfig, load_config
 
 ADDRESS = {
     "name": "Sender",
@@ -147,3 +148,164 @@ class TestMailMessage:
     def test_invalid_urgency_rejected(self) -> None:
         with pytest.raises(ValidationError):
             MailAnalysis(summary="x", urgency="not-a-value")
+
+
+class TestConfigDefaults:
+    def test_retention_and_cleanup_defaults(self) -> None:
+        config = MailFlowConfig()
+        assert config.general.language == "en"
+        assert config.general.timezone == "UTC"
+        assert config.general.mail_retention_days == 30
+        assert config.general.trash_retention_days == 7
+        assert config.general.cleanup_hour == 4
+        assert config.general.cleanup_minute == 0
+        assert config.general.queue_size == 500
+        assert config.general.workers == 2
+
+    def test_storage_defaults(self) -> None:
+        config = MailFlowConfig()
+        assert config.storage.provider == "mailflow-storage-sqlite"
+        assert config.storage.path == "data/mailflow.db"
+
+
+class TestConfigEnvInterpolation:
+    def test_whole_string_placeholder_expanded(
+        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MF_TEST_TOKEN", "secret-value")
+        path = tmp_path / "c.toml"
+        path.write_text(
+            "[[llms]]\nllm_id = 'l1'\nbase_url = 'https://x'\napi_key = '${MF_TEST_TOKEN}'\n",
+            encoding="utf-8",
+        )
+        config = load_config(path)
+        assert config.llms[0].api_key == "secret-value"
+
+    def test_embedded_placeholder_stays_literal(self, tmp_path: pytest.TempPathFactory) -> None:
+        path = tmp_path / "c.toml"
+        path.write_text(
+            "[[llms]]\nllm_id = 'l1'\nbase_url = 'https://x'\nmodel = 'pre-${VAR}-post'\n",
+            encoding="utf-8",
+        )
+        config = load_config(path)
+        assert config.llms[0].model == "pre-${VAR}-post"
+
+    def test_unset_variable_raises(
+        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MF_MISSING_VAR", raising=False)
+        path = tmp_path / "c.toml"
+        path.write_text(
+            "[[llms]]\nllm_id = 'l1'\nbase_url = 'https://x'\napi_key = '${MF_MISSING_VAR}'\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="MF_MISSING_VAR"):
+            load_config(path)
+
+
+class TestConfigValidation:
+    def _llms(self) -> list[dict]:
+        return [
+            {
+                "llm_id": "primary",
+                "base_url": "https://a",
+                "model": "m1",
+            },
+            {
+                "llm_id": "backup",
+                "base_url": "https://b",
+                "model": "m2",
+            },
+        ]
+
+    def test_unknown_fallback_rejected(self) -> None:
+        llms = self._llms()
+        llms[0]["fallback"] = ["ghost"]
+        with pytest.raises(ValueError, match="ghost"):
+            MailFlowConfig.model_validate({"llms": llms})
+
+    def test_multiple_defaults_rejected(self) -> None:
+        llms = self._llms()
+        llms[0]["default"] = True
+        llms[1]["default"] = True
+        with pytest.raises(ValueError, match="multiple default"):
+            MailFlowConfig.model_validate({"llms": llms})
+
+    def test_processor_unknown_llm_rejected(self) -> None:
+        with pytest.raises(ValueError, match="unknown llm"):
+            MailFlowConfig.model_validate(
+                {
+                    "llms": self._llms(),
+                    "processors": [
+                        {
+                            "processor_id": "p1",
+                            "provider": "some-plugin",
+                            "llm": "ghost",
+                        }
+                    ],
+                }
+            )
+
+    def test_processor_unknown_fallback_llm_rejected(self) -> None:
+        with pytest.raises(ValueError, match="unknown fallback llm"):
+            MailFlowConfig.model_validate(
+                {
+                    "llms": self._llms(),
+                    "processors": [
+                        {
+                            "processor_id": "p1",
+                            "provider": "some-plugin",
+                            "llm": "primary",
+                            "fallback_llms": ["ghost"],
+                        }
+                    ],
+                }
+            )
+
+    def test_fallback_without_primary_rejected(self) -> None:
+        with pytest.raises(ValueError, match="no primary llm"):
+            MailFlowConfig.model_validate(
+                {
+                    "llms": self._llms(),
+                    "processors": [
+                        {
+                            "processor_id": "p1",
+                            "provider": "some-plugin",
+                            "fallback_llms": ["backup"],
+                        }
+                    ],
+                }
+            )
+
+    def test_unknown_timezone_rejected(self) -> None:
+        with pytest.raises(ValueError, match="timezone"):
+            MailFlowConfig.model_validate({"general": {"timezone": "Not/AZone"}})
+
+    def test_invalid_log_level_rejected(self) -> None:
+        with pytest.raises(ValueError, match="log level"):
+            MailFlowConfig.model_validate({"logging": {"level": "LOUD"}})
+
+    def test_plugin_enabled_disabled_overlap_rejected(self) -> None:
+        with pytest.raises(ValueError, match="both enabled and disabled"):
+            MailFlowConfig.model_validate(
+                {"plugins": {"enabled": ["a"], "disabled": ["a"]}}
+            )
+
+    def test_default_llm_accessor(self) -> None:
+        llms = self._llms()
+        llms[0]["default"] = True
+        config = MailFlowConfig.model_validate({"llms": llms})
+        assert config.default_llm() is not None
+        assert config.default_llm().llm_id == "primary"  # type: ignore[union-attr]
+
+    def test_load_config_from_file(self, tmp_path: pytest.TempPathFactory) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(
+            "[general]\nlanguage = 'zh-CN'\nmail_retention_days = 14\n\n"
+            "[[llms]]\nllm_id = 'l1'\nbase_url = 'https://x'\nmodel = 'm'\n",
+            encoding="utf-8",
+        )
+        config = load_config(path)
+        assert config.general.language == "zh-CN"
+        assert config.general.mail_retention_days == 14
+        assert config.llms[0].llm_id == "l1"
