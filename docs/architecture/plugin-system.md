@@ -45,10 +45,17 @@ discovers them with `importlib.metadata.entry_points().select(group=...)`;
 a plugin whose hooks raise is logged and skipped — one broken plugin cannot
 kill startup.
 
-## Allow/deny
+## Allow/deny and lifecycle
 
 `[plugins] enabled = [...]` (non-empty acts as an allowlist) and
-`disabled = [...]` filter plugins by id at registry build time.
+`disabled = [...]` filter plugins by id at registry build time. `plugin
+enable/disable <id>` mutate these lists and persist the config (applies on
+the next start, like VS Code's restart requirement). Enabling/disabling is
+safe: `start_service` skips config entries whose component plugin is not
+loaded (accounts/LLMs/processors/notifiers) with a warning instead of
+crashing. `plugin uninstall <id>` removes the pip package (marketplace
+plugins only); bundled plugins are part of the distribution and are only
+enabled/disabled, never uninstalled.
 
 ## Registry and ownership
 

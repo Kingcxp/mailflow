@@ -407,3 +407,77 @@ class TestCommandRouter:
         response = await commands.execute("config set general.reminder_hour 9")
         assert not response.ok
         assert "config file" in response.text
+
+    async def test_plugin_search_filters_market(
+        self, router: tuple[CommandRouter, MemoryStorage], tmp_path: Path
+    ) -> None:
+        import json as jsonlib
+
+        from mailflow.config import PluginRepositoryConfig
+        from mailflow.plugin_market import PluginMarket, Repository
+
+        index = {
+            "plugins": [
+                {
+                    "id": "mailflow-searchable",
+                    "name": "Searchable Plugin",
+                    "description": "handles webhook delivery",
+                    "categories": ["notifier"],
+                    "package": "mailflow-searchable",
+                    "source": "x",
+                },
+                {
+                    "id": "mailflow-other",
+                    "name": "Other Plugin",
+                    "description": "completely different thing",
+                    "categories": ["processor"],
+                    "package": "mailflow-other",
+                    "source": "x",
+                },
+            ]
+        }
+        path = tmp_path / "index.json"
+        path.write_text(jsonlib.dumps(index), encoding="utf-8")
+        commands, _ = router
+        service = commands.service
+        service.config.plugins.repositories.append(
+            PluginRepositoryConfig(name="local", url=path.as_uri())
+        )
+        service.market = PluginMarket([Repository("local", path.as_uri())])
+        response = await commands.execute("plugin search webhook")
+        assert response.ok
+        assert "mailflow-searchable" in response.text
+        assert "mailflow-other" not in response.text
+        response = await commands.execute("plugin search webhook processor")
+        assert response.ok
+        assert "mailflow-searchable" not in response.text  # category mismatch
+
+    async def test_plugin_enable_disable_persists(self, tmp_path: Path) -> None:
+        from mailflow.plugins import PluginInfo
+
+        service = commands_service(MailFlowConfig(), config_path=str(tmp_path / "config.toml"))
+        service.plugin_manager = cast(Any, FakePluginManager())
+
+        class KnownManager(FakePluginManager):
+            def enabled_infos(self):
+                return [PluginInfo(plugin_id="fake-plugin")]
+
+        service.plugin_manager = cast(Any, KnownManager())
+        commands = CommandRouter(service)
+        response = await commands.execute("plugin disable fake-plugin")
+        assert response.ok
+        assert "fake-plugin" in service.config.plugins.disabled
+        response = await commands.execute("plugin enable fake-plugin")
+        assert response.ok
+        assert "fake-plugin" not in service.config.plugins.disabled
+        response = await commands.execute("plugin disable ghost")
+        assert not response.ok
+        assert "not loaded or installed" in response.text
+
+    async def test_plugin_uninstall_unknown(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, _ = router
+        response = await commands.execute("plugin uninstall ghost")
+        assert not response.ok
+        assert "not found in any repository" in response.text

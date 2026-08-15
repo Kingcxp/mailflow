@@ -55,6 +55,39 @@ _TOPICS = (
 )
 
 
+def _markdown_spans(markdown: str) -> list[StyleSpan]:
+    """Render a markdown blob as transport-neutral spans (headings/code/bullets)."""
+    spans: list[StyleSpan] = []
+    in_code = False
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            spans.append(StyleSpan(text="\n"))
+            continue
+        if in_code:
+            spans.append(StyleSpan(text=f"  {line}\n", style=_STYLE_MUTED))
+            continue
+        if stripped.startswith("#"):
+            level = len(stripped) - len(stripped.lstrip("#"))
+            title = stripped.lstrip("#").strip()
+            spans.append(
+                StyleSpan(
+                    text=f"\n{title}\n",
+                    style=_STYLE_HEADER if level == 1 else "bold",
+                )
+            )
+        elif stripped.startswith(("-", "*", "+", "•")):
+            spans.append(StyleSpan(text=f"  {stripped}\n"))
+        elif stripped.startswith(">"):
+            spans.append(StyleSpan(text=f"  {stripped[1:].strip()}\n", style=_STYLE_MUTED))
+        elif stripped == "":
+            spans.append(StyleSpan(text="\n"))
+        else:
+            spans.append(StyleSpan(text=f"{line}\n"))
+    return spans
+
+
 class CommandRouter:
     """Parses command lines and returns structured responses."""
 
@@ -421,26 +454,93 @@ class CommandRouter:
             if found is None:
                 return self._err(self._t("plugin.market_not_found", plugin_id=args[1]))
             repo, plugin = found
+            status = (
+                self._t("plugin.installed")
+                if market.is_installed(plugin.id, package=plugin.package)
+                else self._t("plugin.not_installed")
+            )
             spans = [
                 StyleSpan(text=f"{plugin.name or plugin.id} {plugin.version}", style=_STYLE_TITLE),
                 StyleSpan(text=f"\n{self._t('plugin.header_id')}: {plugin.id}"),
                 StyleSpan(
                     text=f"\n{self._t('plugin.market_categories')}: {', '.join(plugin.categories) or '-'}"
                 ),
-                StyleSpan(
-                    text=f"\n{self._t('plugin.market_description')}: {plugin.description or '-'}"
-                ),
                 StyleSpan(text=f"\n{self._t('plugin.market_author')}: {plugin.author or '-'}"),
                 StyleSpan(text=f"\n{self._t('plugin.market_license')}: {plugin.license or '-'}"),
                 StyleSpan(text=f"\n{self._t('plugin.market_source')}: {plugin.source or '-'}"),
                 StyleSpan(text=f"\n{self._t('plugin.market_repo')}: {repo.name}"),
+                StyleSpan(text=f"\n{self._t('plugin.market_status')}: {status}"),
                 StyleSpan(
-                    text=f"\n{self._t('plugin.market_status')}: "
-                    f"{self._t('plugin.installed') if market.is_installed(plugin.id, package=plugin.package) else self._t('plugin.not_installed')}"
+                    text=f"\n{self._t('plugin.market_description')}: {plugin.description or '-'}"
                 ),
             ]
+            spans.extend(_markdown_spans(plugin.readme or plugin.description or "-"))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         return self._err(self._t("plugin.market_usage"))
+
+    async def _cmd_plugin_search(self, args: list[str]) -> CommandResponse:
+        if not args:
+            return self._err(self._t("plugin.search_usage"))
+        query = args[0]
+        category = args[1] if len(args) > 1 else ""
+        entries = await asyncio.to_thread(self.service.market.search, query, category)
+        spans: list[StyleSpan] = [
+            StyleSpan(
+                text=self._t("plugin.market_title", count=len(entries)) + f" — {query!r}",
+                style=_STYLE_TITLE,
+            ),
+            StyleSpan(
+                text=f"\n{'PLUGIN':<34} {'VERSION':<10} {'CATEGORIES':<26} {'DESCRIPTION'}\n",
+                style=_STYLE_HEADER,
+            ),
+        ]
+        for _repo, plugin in entries:
+            installed = (
+                " [installed]"
+                if self.service.market.is_installed(plugin.id, package=plugin.package)
+                else ""
+            )
+            spans.append(StyleSpan(text=f"{plugin.id:<34} "))
+            spans.append(StyleSpan(text=f"{plugin.version:<10} ", style=_STYLE_MUTED))
+            spans.append(StyleSpan(text=f"{','.join(plugin.categories):<26} ", style=_STYLE_ACCENT))
+            spans.append(StyleSpan(text=f"{plugin.description[:40]}{installed}\n"))
+        if not entries:
+            spans.append(StyleSpan(text=f"\n{self._t('plugin.market_empty')}", style=_STYLE_MUTED))
+        return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+
+    async def _cmd_plugin_uninstall(self, args: list[str]) -> CommandResponse:
+        if len(args) != 1:
+            return self._err(self._t("plugin.uninstall_usage"))
+        try:
+            output = await self.service.plugin_uninstall(args[0])
+        except (KeyError, ValueError, RuntimeError) as exc:
+            return self._err(str(exc))
+        return self._ok(
+            self._t("plugin.uninstalled_ok", plugin_id=args[0]) + (f"\n{output}" if output else "")
+        )
+
+    async def _cmd_plugin_enable(self, args: list[str]) -> CommandResponse:
+        if len(args) != 1:
+            return self._err(self._t("plugin.enable_usage"))
+        try:
+            await self.service.plugin_enable(args[0])
+        except (KeyError, ValueError) as exc:
+            return self._err(str(exc))
+        return self._ok(
+            self._t("plugin.enabled_ok", plugin_id=args[0]) + f" ({self._t('plugin.restart_note')})"
+        )
+
+    async def _cmd_plugin_disable(self, args: list[str]) -> CommandResponse:
+        if len(args) != 1:
+            return self._err(self._t("plugin.disable_usage"))
+        try:
+            await self.service.plugin_disable(args[0])
+        except (KeyError, ValueError) as exc:
+            return self._err(str(exc))
+        return self._ok(
+            self._t("plugin.disabled_ok", plugin_id=args[0])
+            + f" ({self._t('plugin.restart_note')})"
+        )
 
     async def _cmd_plugin_install(self, args: list[str]) -> CommandResponse:
         if len(args) != 1:
@@ -469,8 +569,16 @@ class CommandRouter:
             return await self._cmd_plugin_repo(args[1:])
         if args and args[0] == "market":
             return await self._cmd_plugin_market(args[1:])
+        if args and args[0] == "search":
+            return await self._cmd_plugin_search(args[1:])
         if args and args[0] == "install":
             return await self._cmd_plugin_install(args[1:])
+        if args and args[0] == "uninstall":
+            return await self._cmd_plugin_uninstall(args[1:])
+        if args and args[0] == "enable":
+            return await self._cmd_plugin_enable(args[1:])
+        if args and args[0] == "disable":
+            return await self._cmd_plugin_disable(args[1:])
         snapshot = self.service.snapshot()
         if not args or args[0] == "list":
             spans = [

@@ -94,7 +94,7 @@
       "header_provides": "PROVIDES",
       "not_found": "Plugin {plugin_id} not found",
       "field_components": "Components",
-      "usage": "plugin <list|show <plugin_id>|repo <list|add <name> <url>|remove <name>>|market <list [category]|show <id>>|install <id>>",
+      "usage": "plugin <list|show <plugin_id>|repo <list|add <name> <url>|remove <name>>|market <list [category]|show <id>|search <query> [category]>|install|uninstall|enable|disable <id>>",
       "repo_title": "Plugin repositories ({count})",
       "repo_added": "Repository {name} added (persisted to the config file)",
       "repo_removed": "Repository {name} removed",
@@ -115,7 +115,16 @@
       "not_installed": "not installed",
       "already_installed": "{plugin_id} is already installed",
       "installed_ok": "Installed {plugin_id}",
-      "restart_note": "restart to load it"
+      "restart_note": "restart to load it",
+      "search_usage": "plugin search <query> [category]",
+      "uninstall_usage": "plugin uninstall <plugin_id>",
+      "enable_usage": "plugin enable <plugin_id>",
+      "disable_usage": "plugin disable <plugin_id>",
+      "uninstalled_ok": "Uninstalled {plugin_id}",
+      "enabled_ok": "Enabled {plugin_id}",
+      "disabled_ok": "Disabled {plugin_id}",
+      "unknown_plugin": "Plugin {plugin_id} is not loaded or installed",
+      "not_installed_yet": "not installed"
     },
     "adapter": {
       "title": "Mail adapters ({count})",
@@ -231,7 +240,19 @@
       "reply.subject_prefix": "Re:",
       "settings_config_title": "Configuration",
       "tab_market": "Market",
-      "market_install": "Install"
+      "market_install": "Install",
+      "market_search_placeholder": "Search plugins by name or description...",
+      "market_detail": "Plugin details",
+      "market_readme": "Readme",
+      "btn_install": "Install",
+      "btn_uninstall": "Uninstall",
+      "btn_enable": "Enable",
+      "btn_disable": "Disable",
+      "runtime_plugins_help": "Select a plugin, then press Disable/Enable (applies on next start)",
+      "plugin_status_enabled": "enabled",
+      "plugin_status_disabled": "disabled (next start)",
+      "plugin_status_not_loaded": "not loaded",
+      "confirm_uninstall": "Uninstall {plugin_id}?"
     },
     "cli": {
       "started": "MailFlow started. Press Ctrl+C to stop.",

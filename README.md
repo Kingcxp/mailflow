@@ -47,9 +47,11 @@ notifiers, storage — installed from a plugin marketplace.
   host's root logger.
 - **i18n** — English (default) and Simplified Chinese built in; other
   languages load as data-only JSON packs; the choice persists.
-- **Plugin marketplace** — browse remote repositories, install plugins with
-  one command; built-ins are categorized (mail_source, processor,
-  llm_backend, notifier, storage).
+- **Plugin marketplace** (VS Code style) — search, category filters, markdown
+  details, install / uninstall / enable / disable from commands and the TUI;
+  built-ins are categorized (mail_source, processor, llm_backend, notifier,
+  storage); disabling a plugin never breaks startup (orphaned config entries
+  are skipped with a warning).
 - **Full config management** — every option visible in the TUI and the
   `config` command (required/optional, defaults, descriptions, redacted
   secrets); `config set` persists.
@@ -89,8 +91,9 @@ mail list|show|delete|urgency <id> <level|auto>
 action list|show           timed tasks (time/type/content/notes/mail)
 plugin list|show           plugins, adapters, accounts, llms, bindings
 plugin repo add|list|remove    manage marketplaces
-plugin market list|show        browse the plugin store
-plugin install <id>            install a plugin (restart to load)
+plugin market list|show|search <query>   browse/store with markdown details
+plugin install|uninstall <id>  install or remove a plugin
+plugin enable|disable <id>     toggle a plugin (applies on next start)
 reply create|edit|prepare|confirm|cancel
 lang get|set <code>        switch language (persisted)
 trash list|restore         recover deleted mail

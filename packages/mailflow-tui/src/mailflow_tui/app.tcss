@@ -131,9 +131,28 @@ DataTable > .datatable--cursor {
     padding: 0 1;
 }
 
+#market-search {
+    width: 50%;
+}
+
+#market-category {
+    width: 24%;
+}
+
 #market-table {
-    height: 70%;
+    height: 45%;
     border: round $primary;
+}
+
+#market-detail {
+    height: 45%;
+    border: round $secondary;
+    margin: 0 1;
+}
+
+#market-readme {
+    height: 80%;
+    padding: 0 1;
 }
 
 #market-status {
@@ -142,7 +161,32 @@ DataTable > .datatable--cursor {
     color: $text-muted;
 }
 
-#market-detail-title {
-    text-style: bold;
-    margin: 1;
+#market-actions {
+    height: 3;
+    padding: 0 1;
+}
+
+#runtime-scroll {
+    padding: 0 1;
+}
+
+#runtime-plugins-table {
+    height: 8;
+    border: round $primary;
+    margin: 0 0 1 0;
+}
+
+#runtime-plugins-hint {
+    height: 1;
+    color: $text-muted;
+}
+
+#runtime-plugin-actions {
+    height: 3;
+}
+
+#runtime-status {
+    height: 1;
+    margin: 0 0 1 0;
+    color: $text-muted;
 }

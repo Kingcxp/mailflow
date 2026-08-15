@@ -19,7 +19,7 @@ from typing import Any, TextIO
 from uuid import uuid4
 
 from mailflow import __version__
-from mailflow.config import LLMConfig, MailFlowConfig, NotifierConfig, load_config
+from mailflow.config import LLMConfig, MailFlowConfig, NotifierConfig, ProcessorConfig, load_config
 from mailflow.contracts import (
     LLMBackend,
     LLMRouter,
@@ -31,6 +31,7 @@ from mailflow.contracts import (
 from mailflow.domain import (
     AccountSnapshot,
     ActionItem,
+    ComponentKind,
     LLMSnapshot,
     MailRecord,
     ProcessorBindingSnapshot,
@@ -321,6 +322,77 @@ class MailFlowService:
 
         self.market = PluginMarket([Repository(r.name, r.url) for r in remaining])
 
+    # -- plugin lifecycle: enable / disable / uninstall -----------------------------
+
+    async def _require_known_plugin(self, plugin_id: str) -> None:
+        """The plugin must be loaded (registry) or installed (entry point/package)."""
+        from mailflow.plugin_market import PluginMarket
+
+        loaded = {p.plugin_id for p in self.plugin_manager.enabled_infos()}
+        if plugin_id in loaded:
+            return
+        if PluginMarket.is_installed(plugin_id):
+            return
+        # bundled plugins: the distribution package name equals the plugin id
+        if PluginMarket.is_installed(plugin_id, package=plugin_id):
+            return
+        found = await asyncio.to_thread(self.market.find, plugin_id)
+        if found is not None and PluginMarket.is_installed(found[1].id, package=found[1].package):
+            return
+        raise KeyError(self.t("plugin.unknown_plugin", plugin_id=plugin_id))
+
+    async def plugin_disable(self, plugin_id: str) -> None:
+        """Add the plugin to the disabled list (applies on next start)."""
+        if self.config_path is None:
+            raise ValueError("no config file loaded; start with --config to persist changes")
+        from mailflow.config import write_config
+
+        await self._require_known_plugin(plugin_id)
+        plugins = self.config.plugins
+        if plugin_id not in plugins.disabled:
+            plugins.disabled.append(plugin_id)
+        plugins.enabled = [p for p in plugins.enabled if p != plugin_id]
+        write_config(self.config, self.config_path)
+        await self.events.emit("plugin.disabled", plugin_id=plugin_id)
+
+    async def plugin_enable(self, plugin_id: str) -> None:
+        """Remove the plugin from the disabled list (applies on next start)."""
+        if self.config_path is None:
+            raise ValueError("no config file loaded; start with --config to persist changes")
+        from mailflow.config import write_config
+
+        await self._require_known_plugin(plugin_id)
+        plugins = self.config.plugins
+        plugins.disabled = [p for p in plugins.disabled if p != plugin_id]
+        # an explicit `enabled` list acts as an allowlist: make sure the
+        # plugin is part of it
+        if plugins.enabled and plugin_id not in plugins.enabled:
+            plugins.enabled.append(plugin_id)
+        write_config(self.config, self.config_path)
+        await self.events.emit("plugin.enabled", plugin_id=plugin_id)
+
+    def plugin_status(self, plugin_id: str) -> str:
+        """'enabled' | 'disabled' | 'not_loaded' for the given plugin id."""
+        plugins = self.config.plugins
+        if plugin_id in plugins.disabled:
+            return "disabled"
+        if plugins.enabled and plugin_id not in plugins.enabled:
+            return "disabled"
+        loaded = {p.plugin_id for p in self.plugin_manager.enabled_infos()}
+        return "enabled" if plugin_id in loaded else "not_loaded"
+
+    async def plugin_uninstall(self, plugin_id: str) -> str:
+        """Uninstall a marketplace plugin (uv pip uninstall of its package)."""
+        from mailflow.plugin_market import PluginMarket
+
+        found = await asyncio.to_thread(self.market.find, plugin_id)
+        plugin = found[1] if found else None
+        if plugin is None:
+            raise KeyError(f"plugin {plugin_id!r} not found in any repository")
+        if not PluginMarket.is_installed(plugin_id, package=plugin.package):
+            return f"{plugin_id} is not installed"
+        return await self.market.uninstall(plugin)
+
     # -- reply workflow ---------------------------------------------------------------------
 
     async def create_reply(self, mail_id: str) -> ReplyDraft:
@@ -418,6 +490,13 @@ class MailFlowService:
 def _build_sources(config: MailFlowConfig, registry: ComponentRegistry) -> dict[str, MailSource]:
     sources: dict[str, MailSource] = {}
     for account in config.accounts:
+        if not registry.has(ComponentKind.MAIL_SOURCE, account.provider):
+            logger.warning(
+                "account %r: source adapter %r not loaded (disabled or uninstalled); skipping",
+                account.account_id,
+                account.provider,
+            )
+            continue
         factory = registry.source_factory(account.provider)
         sources[account.account_id] = factory(account)
     return sources
@@ -428,6 +507,13 @@ def _build_llms(
 ) -> tuple[dict[str, LLMBackend], dict[str, LLMConfig]]:
     backends: dict[str, LLMBackend] = {}
     for llm_config in config.llms:
+        if not registry.has(ComponentKind.LLM_BACKEND, llm_config.provider):
+            logger.warning(
+                "llm %r: backend %r not loaded (disabled or uninstalled); skipping",
+                llm_config.llm_id,
+                llm_config.provider,
+            )
+            continue
         factory = registry.llm_factory(llm_config.provider)
         backends[llm_config.llm_id] = factory(llm_config)
     configs = {llm.llm_id: llm for llm in config.llms}
@@ -439,15 +525,25 @@ def _build_processors(
     registry: ComponentRegistry,
     router: LLMRouter,
 ) -> PipelineEngine:
-    processor_configs = [p for p in config.processors if p.enabled]
+    processor_configs: list[ProcessorConfig] = []
     processors: dict[str, MailProcessor] = {}
     plugin_of: dict[str, str] = {}
-    for processor_config in processor_configs:
+    for processor_config in config.processors:
+        if not processor_config.enabled:
+            continue
+        if not registry.has(ComponentKind.MAIL_PROCESSOR, processor_config.provider):
+            logger.warning(
+                "processor %r: provider %r not loaded (disabled or uninstalled); skipping",
+                processor_config.processor_id,
+                processor_config.provider,
+            )
+            continue
         factory = registry.processor_factory(processor_config.provider)
         processors[processor_config.processor_id] = factory(processor_config, router)
         plugin_of[processor_config.processor_id] = (
             registry.plugin_for(processor_config.provider) or ""
         )
+        processor_configs.append(processor_config)
     bindings = build_bindings(processor_configs, processors, plugin_of)
     return PipelineEngine(bindings, router=router)
 
@@ -518,12 +614,20 @@ async def start_service(
         router = LLMRouterImpl(backends, llm_configs)
         pipeline = _build_processors(config, registry, router)
 
-        notifiers = [
-            registry.notifier_factory(notifier.provider)(notifier)
-            for notifier in config.notifiers
-            if notifier.enabled
-        ]
-        notifier_configs = [n for n in config.notifiers if n.enabled]
+        notifiers: list[Notifier] = []
+        notifier_configs: list[NotifierConfig] = []
+        for notifier in config.notifiers:
+            if not notifier.enabled:
+                continue
+            if not registry.has(ComponentKind.NOTIFIER, notifier.provider):
+                logger.warning(
+                    "notifier %r: provider %r not loaded (disabled or uninstalled); skipping",
+                    notifier.notifier_id,
+                    notifier.provider,
+                )
+                continue
+            notifiers.append(registry.notifier_factory(notifier.provider)(notifier))
+            notifier_configs.append(notifier)
 
         service = MailFlowService(
             config=config,

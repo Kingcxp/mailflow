@@ -18,9 +18,14 @@ Textual app on the same event loop, and stops the service in `finally`.
   Refresh / Trash / Reply buttons. Reply opens the confirmation-gated modal.
 - **Actions**: time / type / content / notes / source-mail columns; row
   selection opens a detail modal.
-- **Runtime**: plugins, mail adapters, accounts (status/errors), LLMs,
-  processor → LLM/fallback bindings, storage provider — all read from the
-  service snapshot, no config-file peeking.
+- **Runtime**: a plugins table (id/name/kinds/status) with quick
+  Disable/Enable buttons (persisted, applies on next start), plus mail
+  adapters, accounts (status/errors), LLMs, processor → LLM/fallback
+  bindings and storage provider — all read from the service snapshot.
+- **Market**: VS Code-style plugin store — search input, category filter,
+  a list of plugin name + description + version + status, and a detail pane
+  rendering the plugin's markdown readme with Install / Uninstall / Enable /
+  Disable buttons acting on the selected plugin.
 - **Logs**: `RichLog` fed by the injected handler on a timer — never stdout
   scraping.
 - **Settings**: language `Select` with an explanation; switching persists

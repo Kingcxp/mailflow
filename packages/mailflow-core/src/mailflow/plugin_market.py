@@ -59,6 +59,8 @@ class MarketPlugin(BaseModel):
     entry_point: str = "mailflow.plugins"
     author: str = ""
     license: str = ""
+    homepage: str = ""
+    readme: str = ""  # markdown long description shown in the detail view
 
 
 class MarketIndex(BaseModel):
@@ -113,6 +115,22 @@ class PluginMarket:
                 return repository, plugin
         return None
 
+    def search(
+        self, query: str, category: str = "", timeout: float = _FETCH_TIMEOUT
+    ) -> list[tuple[Repository, MarketPlugin]]:
+        """Filter plugins by name/description (case-insensitive) and category."""
+        haystack = query.strip().lower()
+        results: list[tuple[Repository, MarketPlugin]] = []
+        for repository, plugin in self.list_plugins(timeout):
+            if category and category not in plugin.categories:
+                continue
+            if haystack:
+                blob = f"{plugin.id} {plugin.name} {plugin.description}".lower()
+                if haystack not in blob:
+                    continue
+            results.append((repository, plugin))
+        return results
+
     @staticmethod
     def is_installed(plugin_id: str, group: str = "mailflow.plugins", package: str = "") -> bool:
         """True when the plugin id is a registered entry point or its pip
@@ -152,6 +170,27 @@ class PluginMarket:
         if result.returncode != 0:
             raise RuntimeError(
                 f"uv pip install failed: {(result.stderr or result.stdout).strip()[:500]}"
+            )
+        return (result.stdout or result.stderr or "").strip()
+
+    async def uninstall(self, plugin: MarketPlugin) -> str:
+        """Uninstall one plugin via uv pip; returns installer output."""
+        if not plugin.package:
+            raise ValueError(f"plugin {plugin.id!r} has no pip package to uninstall")
+        uv = shutil.which("uv")
+        if uv is None:
+            raise RuntimeError("uv executable not found on PATH; cannot uninstall plugins")
+        command = [uv, "pip", "uninstall", "-q", plugin.package]
+        logger.info("uninstalling plugin %r via %s", plugin.id, " ".join(command))
+        result = await asyncio.to_thread(
+            subprocess.run,
+            command,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"uv pip uninstall failed: {(result.stderr or result.stdout).strip()[:500]}"
             )
         return (result.stdout or result.stderr or "").strip()
 
