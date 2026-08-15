@@ -8,6 +8,7 @@ plugin with capability X" — component ids are bound to factories explicitly.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 
 from mailflow.config import (
     LLMConfig,
@@ -63,6 +64,21 @@ class ComponentRegistry:
             return self._factories[kind][component_id]
         except KeyError as exc:
             raise KeyError(f"no {kind.value} component {component_id!r}") from exc
+
+    def source_factory(self, component_id: str) -> SourceFactory:
+        return cast(SourceFactory, self.factory(ComponentKind.MAIL_SOURCE, component_id))
+
+    def llm_factory(self, component_id: str) -> LLMFactory:
+        return cast(LLMFactory, self.factory(ComponentKind.LLM_BACKEND, component_id))
+
+    def processor_factory(self, component_id: str) -> ProcessorFactory:
+        return cast(ProcessorFactory, self.factory(ComponentKind.MAIL_PROCESSOR, component_id))
+
+    def notifier_factory(self, component_id: str) -> NotifierFactory:
+        return cast(NotifierFactory, self.factory(ComponentKind.NOTIFIER, component_id))
+
+    def storage_factory(self, component_id: str) -> StorageFactory:
+        return cast(StorageFactory, self.factory(ComponentKind.STORAGE, component_id))
 
     def plugin_for(self, component_id: str) -> str | None:
         snapshot = self._snapshots.get(component_id)

@@ -193,9 +193,7 @@ class TestConfigEnvInterpolation:
         config = load_config(path)
         assert config.llms[0].model == "pre-${VAR}-post"
 
-    def test_unset_variable_raises(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_unset_variable_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MF_MISSING_VAR", raising=False)
         path = tmp_path / "c.toml"
         path.write_text(

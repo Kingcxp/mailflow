@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -43,7 +44,7 @@ class MailFlowRuntime:
         self,
         config: MailFlowConfig,
         *,
-        sources: dict[str, MailSource],
+        sources: dict[str, MailSource],  # keyed by account_id
         pipeline: PipelineEngine,
         storage: StorageBackend,
         notifiers: list[Notifier],
@@ -60,9 +61,7 @@ class MailFlowRuntime:
         self._events = events
         self._account_configs = list(account_configs)
 
-        self._queue: asyncio.Queue[MailMessage] = asyncio.Queue(
-            maxsize=config.general.queue_size
-        )
+        self._queue: asyncio.Queue[MailMessage] = asyncio.Queue(maxsize=config.general.queue_size)
         self._stop_event = asyncio.Event()
         self._tasks: list[asyncio.Task[Any]] = []
         self._account_status: dict[str, str] = {}
@@ -79,7 +78,7 @@ class MailFlowRuntime:
                 self._account_status[account.account_id] = "stopped"
                 continue
             self._account_status[account.account_id] = "starting"
-            source = self._sources.get(account.provider)
+            source = self._sources.get(account.account_id)
             if source is None:
                 self._account_status[account.account_id] = "error"
                 self._account_errors[account.account_id] = (
@@ -97,9 +96,7 @@ class MailFlowRuntime:
                 )
             )
         for index in range(self._config.general.workers):
-            self._tasks.append(
-                asyncio.create_task(self._worker(index), name=f"worker-{index}")
-            )
+            self._tasks.append(asyncio.create_task(self._worker(index), name=f"worker-{index}"))
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="cleanup"))
         logger.info(
             "runtime started: %d accounts, %d workers, retention %d days",
@@ -123,7 +120,7 @@ class MailFlowRuntime:
         for source in self._sources.values():
             try:
                 await source.close()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("source close failed: %s", exc)
         for account_id in self._account_status:
             if self._account_status[account_id] == "running":
@@ -142,7 +139,7 @@ class MailFlowRuntime:
             await source.run(emit, self._stop_event)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 — one source must not kill others
+        except Exception as exc:
             self._account_status[account.account_id] = "error"
             self._account_errors[account.account_id] = str(exc)
             logger.error("source for account %r failed: %s", account.account_id, exc)
@@ -166,7 +163,7 @@ class MailFlowRuntime:
                 continue
             try:
                 await self._process_one(mail)
-            except Exception as exc:  # noqa: BLE001 — a bad mail must not kill the worker
+            except Exception as exc:
                 logger.error("failed to process mail %r: %s", mail.message_id, exc)
             finally:
                 self._queue.task_done()
@@ -193,7 +190,7 @@ class MailFlowRuntime:
                 continue
             try:
                 await notifier.notify(record)
-            except Exception as exc:  # noqa: BLE001 — notification must not fail processing
+            except Exception as exc:
                 logger.warning("notifier failed for %r: %s", record.record_id, exc)
 
     # -- retention cleanup ----------------------------------------------------------
@@ -209,9 +206,7 @@ class MailFlowRuntime:
             moved,
             purged,
         )
-        await self._events.emit(
-            f"{_EVENT_PREFIX}cleanup.done", moved=moved, purged=purged
-        )
+        await self._events.emit(f"{_EVENT_PREFIX}cleanup.done", moved=moved, purged=purged)
 
     async def _cleanup_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -222,17 +217,13 @@ class MailFlowRuntime:
                 self._config.general.cleanup_minute,
             )
             logger.debug("next cleanup in %.0f seconds", wait_seconds)
-            try:
-                await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=max(wait_seconds, 1.0)
-                )
-            except TimeoutError:
-                pass
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._stop_event.wait(), timeout=max(wait_seconds, 1.0))
             if self._stop_event.is_set():
                 break
             try:
                 await self.run_cleanup()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error("cleanup run failed: %s", exc)
 
     # -- status -----------------------------------------------------------------------

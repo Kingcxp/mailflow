@@ -7,7 +7,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from mailflow.config import MailAccountConfig, MailFlowConfig, NotifierConfig
 from mailflow.contracts import (
     MailEmitter,
@@ -107,7 +106,9 @@ class FakeStorage:
     async def count_mails(self) -> int:
         return len(self.saved)
 
-    async def set_manual_urgency(self, record_id: str, urgency: Urgency | None) -> MailRecord | None:
+    async def set_manual_urgency(
+        self, record_id: str, urgency: Urgency | None
+    ) -> MailRecord | None:
         return None
 
     async def delete_mail(self, record_id: str) -> None:
@@ -211,7 +212,9 @@ class TestRuntime:
         analysis = MailAnalysis(summary="analyzed", urgency=Urgency.URGENT)
         source = EmittingSource([make_mail()])
         runtime, storage, notifiers = build_runtime(
-            {"fake": source}, analysis=analysis, workers=2,
+            {"acct-1": source},
+            analysis=analysis,
+            workers=2,
             accounts=[MailAccountConfig(account_id="acct-1", provider="fake")],
         )
         await runtime.start()
@@ -230,7 +233,7 @@ class TestRuntime:
         source = EmittingSource([make_mail()])
         notifier = RecordingNotifier(minimum=Urgency.IMPORTANT)
         runtime, storage, _ = build_runtime(
-            {"fake": source},
+            {"acct-1": source},
             analysis=analysis,
             workers=2,
             accounts=[MailAccountConfig(account_id="acct-1", provider="fake")],
@@ -246,7 +249,7 @@ class TestRuntime:
         broken = EmittingSource([], fail=True)
         healthy = EmittingSource([make_mail(account_id="acct-2")])
         runtime, storage, _ = build_runtime(
-            {"fake": broken, "fake2": healthy},
+            {"acct-1": broken, "acct-2": healthy},
             workers=2,
             accounts=[
                 MailAccountConfig(account_id="acct-1", provider="fake"),
@@ -273,7 +276,7 @@ class TestRuntime:
 
     async def test_disabled_account_not_started(self) -> None:
         runtime, storage, _ = build_runtime(
-            {"fake": EmittingSource([make_mail()])},
+            {"off": EmittingSource([make_mail()])},
             accounts=[MailAccountConfig(account_id="off", provider="fake", enabled=False)],
         )
         await runtime.start()

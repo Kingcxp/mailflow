@@ -160,7 +160,7 @@ class TestLLMRouter:
     async def test_primary_success_stamps_identity(self) -> None:
         backend = FakeLLM(results=["ok"])
         router = LLMRouterImpl(
-            backends={"fake": backend},
+            backends={"primary": backend},
             configs={
                 "primary": LLMConfig(
                     llm_id="primary", base_url="https://a", model="m1", provider="fake"
@@ -176,7 +176,7 @@ class TestLLMRouter:
         failing = FailingLLM()
         backup = FakeLLM(results=["backup answer"])
         router = LLMRouterImpl(
-            backends={"failing": failing, "fake": backup},
+            backends={"p": failing, "b": backup},
             configs={
                 "p": LLMConfig(llm_id="p", base_url="https://a", model="m1", provider="failing"),
                 "b": LLMConfig(llm_id="b", base_url="https://b", model="m2", provider="fake"),
@@ -191,7 +191,7 @@ class TestLLMRouter:
 
     async def test_all_backends_fail_raises(self) -> None:
         router = LLMRouterImpl(
-            backends={"failing": FailingLLM()},
+            backends={"p": FailingLLM()},
             configs={
                 "p": LLMConfig(llm_id="p", base_url="https://a", model="m1", provider="failing")
             },
@@ -202,7 +202,7 @@ class TestLLMRouter:
     async def test_dedup_repeated_ids(self) -> None:
         backend = FakeLLM(results=["x"])
         router = LLMRouterImpl(
-            backends={"fake": backend},
+            backends={"p": backend},
             configs={"p": LLMConfig(llm_id="p", base_url="https://a", model="m1", provider="fake")},
         )
         await router.chat([{"role": "user", "content": "hi"}], primary="p", fallback=["p"])
@@ -216,7 +216,7 @@ class TestLLMRouter:
                 raise RuntimeError(f"request to https://x?key={secret} failed")
 
         router = LLMRouterImpl(
-            backends={"failing": SecretFailingLLM()},
+            backends={"p": SecretFailingLLM()},
             configs={
                 "p": LLMConfig(
                     llm_id="p", base_url="https://a", model="m1", api_key=secret, provider="failing"
@@ -231,7 +231,9 @@ class TestLLMRouter:
 
 class TestPipeline:
     def _binding(self, processor: Any, processor_id: str = "p1", **kw: Any) -> ProcessorBinding:
-        defaults: dict[str, Any] = dict(priority=100, processor_id=processor_id, plugin_id="test-plugin")
+        defaults: dict[str, Any] = dict(
+            priority=100, processor_id=processor_id, plugin_id="test-plugin"
+        )
         defaults.update(kw)
         return ProcessorBinding(processor=processor, **defaults)
 

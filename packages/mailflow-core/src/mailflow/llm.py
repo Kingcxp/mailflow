@@ -22,7 +22,12 @@ class LLMRouteError(RuntimeError):
 
 
 class LLMRouterImpl:
-    """Concrete router; satisfies the ``mailflow.contracts.LLMRouter`` protocol."""
+    """Concrete router; satisfies the ``mailflow.contracts.LLMRouter`` protocol.
+
+    ``backends`` maps named llm ids to their backend *instances* (one instance
+    per configured LLM — each has its own endpoint, model and credentials);
+    ``configs`` maps the same ids to their configuration.
+    """
 
     def __init__(
         self, backends: Mapping[str, LLMBackend], configs: Mapping[str, LLMConfig]
@@ -32,11 +37,9 @@ class LLMRouterImpl:
         self._secrets = [cfg.api_key for cfg in self._configs.values() if cfg.api_key]
 
     def backend_for(self, llm_id: str) -> tuple[LLMBackend, LLMConfig] | None:
+        backend = self._backends.get(llm_id)
         config = self._configs.get(llm_id)
-        if config is None:
-            return None
-        backend = self._backends.get(config.provider)
-        if backend is None:
+        if backend is None or config is None:
             return None
         return backend, config
 

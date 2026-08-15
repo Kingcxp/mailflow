@@ -34,8 +34,6 @@ src = ["packages", "plugins", "tests", "tools"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "RUF"]
 ignore = ["E501"]
-
-[tool.ruff.lint.flake8-confusables]
 allowed-confusables = ["（", "）"]
 
 [tool.mypy]
