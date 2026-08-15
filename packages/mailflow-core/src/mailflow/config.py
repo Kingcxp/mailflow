@@ -89,6 +89,8 @@ class LoggingConfig(BaseModel):
     jsonl: bool = False
     jsonl_path: str = "logs/mailflow.jsonl"
     jsonl_level: str = "INFO"
+    # Optional per-logger overrides: {"mailflow.runtime": "DEBUG"}
+    logger_levels: dict[str, str] = Field(default_factory=lambda: {})
 
     @model_validator(mode="after")
     def validate_levels(self) -> LoggingConfig:
@@ -97,6 +99,7 @@ class LoggingConfig(BaseModel):
             self.console_level,
             self.file_level,
             self.jsonl_level,
+            *self.logger_levels.values(),
         ):
             if level.upper() not in _LOG_LEVELS:
                 raise ValueError(f"invalid log level {level!r}")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from mailflow.config import MailFlowConfig, load_config
+from mailflow.config import LoggingConfig, MailFlowConfig, load_config
 from mailflow.domain import (
     MailAnalysis,
     MailMessage,
@@ -11,6 +11,7 @@ from mailflow.domain import (
     Urgency,
     parse_urgency,
 )
+from mailflow.logging import configure_logging
 from pydantic import ValidationError
 
 ADDRESS = {
@@ -306,3 +307,95 @@ class TestConfigValidation:
         assert config.general.language == "zh-CN"
         assert config.general.mail_retention_days == 14
         assert config.llms[0].llm_id == "l1"
+
+
+class TestLogging:
+    """Stage 06: root isolation, queue delivery and secret redaction."""
+
+    def _capture_config(self) -> tuple[LoggingConfig, list[str]]:
+        captured: list[str] = []
+        config = LoggingConfig(
+            console=False,
+            file=False,
+            jsonl=False,
+            level="DEBUG",
+            logger_levels={},
+        )
+        return config, captured
+
+    def test_root_handler_list_unchanged(self) -> None:
+        import logging
+
+        root_before = list(logging.getLogger().handlers)
+        runtime = configure_logging(LoggingConfig(console=False, file=False, jsonl=False))
+        try:
+            root_after = list(logging.getLogger().handlers)
+            assert root_before == root_after
+            mailflow_logger = logging.getLogger("mailflow")
+            assert mailflow_logger.propagate is False
+        finally:
+            runtime.close()
+
+    def test_propagate_false_scoped_to_mailflow(self) -> None:
+        import logging
+
+        runtime = configure_logging(LoggingConfig(console=False, file=False, jsonl=False))
+        try:
+            assert logging.getLogger("mailflow").propagate is False
+            assert logging.getLogger("mailflow.runtime").propagate is True
+            assert logging.getLogger("unrelated").propagate is True
+        finally:
+            runtime.close()
+
+    def test_secret_redacted_in_message_and_exc_text(self) -> None:
+        import logging
+
+        class CaptureHandler(logging.Handler):
+            def __init__(self) -> None:
+                super().__init__()
+                self.records: list[logging.LogRecord] = []
+
+            def emit(self, record: logging.LogRecord) -> None:
+                self.records.append(record)
+
+        capture = CaptureHandler()
+        runtime = configure_logging(
+            LoggingConfig(console=False, file=False, jsonl=False),
+            extra_handlers=[capture],
+            secrets=["sk-super-secret"],
+        )
+        try:
+            log = logging.getLogger("mailflow.test")
+            log.warning("token=%s ok", "sk-super-secret")
+            try:
+                raise RuntimeError("failed with sk-super-secret in traceback")
+            except RuntimeError:
+                log.exception("processing failed")
+            records = capture.records
+            assert len(records) == 2
+            assert "sk-super-secret" not in records[0].getMessage()
+            assert "***" in records[0].getMessage()
+            formatted = records[1].getMessage() + (records[1].exc_text or "")
+            assert "sk-super-secret" not in formatted
+        finally:
+            runtime.close()
+
+    def test_double_configure_replaces_cleanly(self) -> None:
+        import logging
+
+        first = configure_logging(LoggingConfig(console=False, file=False, jsonl=False))
+        second = configure_logging(LoggingConfig(console=False, file=False, jsonl=False))
+        try:
+            mailflow_logger = logging.getLogger("mailflow")
+            queue_handlers = [
+                h for h in mailflow_logger.handlers if isinstance(h, logging.handlers.QueueHandler)
+            ]
+            null_handlers = [
+                h for h in mailflow_logger.handlers if isinstance(h, logging.NullHandler)
+            ]
+            # exactly one queue chain; the NullHandler bootstrap guard stays
+            assert len(queue_handlers) == 1
+            assert len(null_handlers) == 1
+        finally:
+            second.close()
+            first.close()
