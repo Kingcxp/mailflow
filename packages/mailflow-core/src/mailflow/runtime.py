@@ -281,10 +281,8 @@ class MailFlowRuntime:
                 await self.run_reminder_tick()
             except Exception as exc:
                 logger.error("reminder tick failed: %s", exc)
-            try:
+            with suppress(TimeoutError):
                 await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
-            except TimeoutError:
-                pass
 
     async def run_reminder_tick(self) -> int:
         """Fire due action-item reminders; returns how many fired.

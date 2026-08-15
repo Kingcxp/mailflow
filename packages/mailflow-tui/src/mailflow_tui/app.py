@@ -469,7 +469,7 @@ class SettingsPane(Vertical):
         table.clear()
         for option in self._service.list_config_options():
             value = option.value
-            if isinstance(value, list) or isinstance(value, dict):
+            if isinstance(value, (list, dict)):
                 value_text = f"{len(value)} items"  # pyright: ignore[reportUnknownArgumentType]
             elif isinstance(value, bool):
                 value_text = "true" if value else "false"

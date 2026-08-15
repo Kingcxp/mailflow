@@ -708,7 +708,7 @@ class CommandRouter:
             for option in options:
                 key = option.key + ("*" if option.is_secret() else "")
                 value = option.value
-                if isinstance(value, list) or isinstance(value, dict):
+                if isinstance(value, (list, dict)):
                     value_text = f"{len(value)} items"  # pyright: ignore[reportUnknownArgumentType]
                 elif value is None or isinstance(value, (str, int, float, bool)):
                     value_text = "-" if value is None else str(value)[:20]

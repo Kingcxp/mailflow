@@ -12,7 +12,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 DIR_PATTERNS = (
-    ".venv",
+    # NOTE: the root .venv is intentionally NOT removed: `make clean` runs
+    # through `uv run`, which needs it. Recreate/upgrade it with `make sync`
+    # or delete it manually for a from-scratch environment.
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",

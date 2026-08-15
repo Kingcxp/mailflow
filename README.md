@@ -1,134 +1,185 @@
+<div align="center">
+
 # MailFlow
 
-Unified multi-account mail inbox with a plugin pipeline for filtering and
-LLM-assisted analysis, a rich terminal UI, and an embeddable core service.
+**统一多账户邮件收件箱：插件化过滤、LLM 智能分析、富终端界面与可嵌入核心**
 
-Mail accounts from different providers are merged into one stream, processed
-by an ordered plugin chain (deterministic rules first, LLM semantics after),
-stored with a seven-day recovery trash, and surfaced through a Textual TUI, a
-command shell, or any chat-bot host embedding the core.
+*Unified multi-account mail inbox — plugin pipeline, LLM analysis, rich TUI, embeddable core*
 
-## Status
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
+[![Tests](https://img.shields.io/badge/tests-144%20passed-67C23A)]()
+[![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
+[![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
+[![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
 
-`v0.1.0` — framework baseline. The architecture, plugin system, storage,
-OpenAI-compatible LLM backend, processing chain, CLI and TUI are complete and
-covered by unit/integration/e2e tests. Real mail providers (IMAP, Gmail,
-Outlook) are **deliberately scheduled as later provider plugins** and are not
-part of this baseline.
+</div>
 
-## The four-level urgency contract
+MailFlow merges mails from multiple accounts and providers into one stream,
+classifies every message with a four-level urgency contract, extracts timed
+obligations (exams, meetings, errands) into a schedule table with reminders,
+stores everything with a recoverable trash, and surfaces it through a
+Textual TUI, a colored command shell, or any chat-bot host embedding the
+core. Extend it with plugins — mail sources, LLM backends, processors,
+notifiers, storage — installed from a plugin marketplace.
 
-| Level      | Color    | Meaning                                                        |
-| ---------- | -------- | -------------------------------------------------------------- |
-| `ad`       | #909399  | irrelevant advertising / junk; ignore                          |
-| `info`     | #67C23A  | useful but not time-critical (e.g. a lecture notice)           |
-| `important`| #E6A23C  | needs reading (e.g. a verification code)                       |
-| `urgent`   | #F56C6C  | must be handled now or at a specific time (exam, ID pickup)    |
+## Features
 
-The automatic value is produced by the processing chain; the user may set a
-manual override which wins while set, and resetting restores the automatic
-value. The colors are part of the public contract (`Urgency.color`) and are
-reused by the CLI, TUI and notifiers.
+- **Multi-account, multi-adapter** — provider adapters merge into one bounded
+  stream; per-account failure isolation.
+- **Four-level urgency contract** — `ad #909399` (junk) · `info #67C23A`
+  (useful) · `important #E6A23C` (read it) · `urgent #F56C6C` (act now).
+  Colors are part of the public contract, reused by CLI, TUI and notifiers.
+- **LLM analysis** — OpenAI-compatible chat completions (works with OpenCode
+  relays, llama.cpp, vLLM); named LLMs with ordered fallback; structured
+  summaries, reasons, reply drafts and timed action items.
+- **Timed-action table + reminders** — exams/meetings/errands with time,
+  type, content and preparation notes, drilling into the source mail;
+  reminders fire at a configurable fixed time two days before the due date
+  and at midnight on the due day.
+- **Two-step confirmed replies** — draft → prepare (short-lived token) →
+  confirm; double-send safe, editing invalidates the token.
+- **Recoverable retention** — configurable mail retention (default 30 days)
+  with a daily 04:00 cleanup; deleted mails recoverable for 7 days in trash.
+- **Rich logging** — queue-based rich console output, rotating file, JSONL;
+  levels, redirects and secret redaction all configurable; never touches the
+  host's root logger.
+- **i18n** — English (default) and Simplified Chinese built in; other
+  languages load as data-only JSON packs; the choice persists.
+- **Plugin marketplace** — browse remote repositories, install plugins with
+  one command; built-ins are categorized (mail_source, processor,
+  llm_backend, notifier, storage).
+- **Full config management** — every option visible in the TUI and the
+  `config` command (required/optional, defaults, descriptions, redacted
+  secrets); `config set` persists.
+- **Quality gates** — 144 unit/integration/e2e tests, mypy & pyright strict,
+  ruff lint + format, Nuitka standalone/onefile executables, docs gate.
 
-## Layout
+## Install
 
-```
-packages/mailflow-core       host-agnostic domain, pipeline, service facade
-packages/mailflow-bundled    composition root: the official plugin set
-packages/mailflow-cli        rich Typer host: run/command/shell/snapshot/...
-packages/mailflow-tui        Textual terminal UI (Mail/Actions/Runtime/Logs/Settings)
-packages/mailflow-testkit    deterministic fake components for tests and demos
-plugins/*                    discoverable adapter/processor plugins
-configs/                     example and development configurations
-translations/                data-only external language packs
-docs/                        architecture, development, plugin, agent documentation
+Requires **Python ≥ 3.11** and [uv](https://docs.astral.sh/uv/).
+
+```bash
+git clone https://github.com/mailflow/mailflow.git
+cd mailflow
+uv sync --all-packages --group dev
 ```
 
 ## Quick start
 
 ```bash
-uv sync --all-packages --group dev
-uv run mailflow config-check -c configs/example.toml
-cp configs/example.toml configs/local.toml   # then fill in tokens
+# offline demo with a deterministic fake mailbox (no API key needed)
+uv run mailflow tui -c configs/development.toml
+
+# command shell
+uv run mailflow shell -c configs/development.toml
+
+# real setup: copy the example config and fill in your LLM token
+cp configs/example.toml configs/local.toml
+export MAILFLOW_LLM_GO_TOKEN=your-token
 uv run mailflow run -c configs/local.toml
 ```
 
-Development setup without any external service:
+See [docs/development/setup.md](docs/development/setup.md) for details.
 
-```bash
-uv run mailflow tui -c configs/development.toml
-uv run mailflow shell -c configs/development.toml
-```
-
-## Command interface
-
-One command router serves the CLI shell and any chat platform:
+## Commands
 
 ```
-help                     colored command documentation
+help                       colored command documentation
 mail list|show|delete|urgency <id> <level|auto>
-action list|show <item_id>
-plugin list|show <plugin_id>
-adapter list  account list  llm list|bindings  runtime
-reply create|show|edit|prepare|confirm|cancel
-lang get|set <code>      trash list|restore <id>
+action list|show           timed tasks (time/type/content/notes/mail)
+plugin list|show           plugins, adapters, accounts, llms, bindings
+plugin repo add|list|remove    manage marketplaces
+plugin market list|show        browse the plugin store
+plugin install <id>            install a plugin (restart to load)
+reply create|edit|prepare|confirm|cancel
+lang get|set <code>        switch language (persisted)
+trash list|restore         recover deleted mail
+config list|get|set        inspect and change every option
 ```
 
-Replies require a two-step confirmation: `prepare` issues a short-lived token,
-`confirm` validates it and sends through the matching mail source.
-
-## Embedding (chat bots, other hosts)
+## Embedding in a bot or service
 
 ```python
 from mailflow.service import start_service
 from mailflow_bundled import create_plugin_manager
 
-config = load_config("configs/local.toml")
 service = await start_service(
     config,
     plugin_manager=create_plugin_manager(config),
     extra_log_handlers=[my_host_handler],
 )
-# service.snapshot(), service.list_mails(), service.commands.execute("mail list"), ...
-# await service.stop()
+snapshot = service.snapshot()  # plugins, accounts, LLMs, bindings
+mails = await service.list_mails()  # full records + analysis + actions
+service.on("mail.processed", handler)  # async events
+await service.commands.execute("mail list")
+await service.stop()
 ```
 
-The service exposes everything a host needs: runtime snapshots (plugins,
-adapters, accounts, LLMs, processor→LLM bindings), mail/action/trash queries,
-urgency mutations, persistent language, and the confirmed reply workflow.
-See `docs/development/embedding.md`.
+See [docs/development/embedding.md](docs/development/embedding.md).
 
-## Configuration
+## Urgency contract
 
-See `configs/example.toml` and `docs/configuration/overview.md`. Secrets use
-whole-string `${ENV_VAR}` placeholders expanded at load time. Mail retention
-(default 30 days) and trash retention (7 days) are configurable; a cleanup
-runs daily at 04:00 local time.
+| Level       | Color    | Meaning                                             |
+| ----------- | -------- | --------------------------------------------------- |
+| `ad`        | #909399  | irrelevant advertising / junk                       |
+| `info`      | #67C23A  | useful but not time-critical (lecture notice)       |
+| `important` | #E6A23C  | needs reading (verification code)                   |
+| `urgent`    | #F56C6C  | must be handled now or at a specific time (exam)    |
 
-## i18n
-
-English (default) and Simplified Chinese ship built-in; other languages load
-as data-only JSON packs from configured directories. Switch with `lang set`
-or the TUI settings tab; the choice persists across restarts. See
-`docs/configuration/i18n.md`.
+Manual overrides win while set; reset restores the automatic value.
 
 ## Quality gates
 
 ```bash
-make check          # lint + format-check + mypy + pyright + pytest + docs
-make coverage
-make build          # wheel build for every package
-make exe-standalone # Nuitka standalone; smoke test before onefile
+make check            # lint + format + mypy + pyright + pytest + docs gate
+make coverage         # per-package coverage report
+make build            # wheels for every package
+make exe-standalone   # Nuitka standalone (smoke test before onefile)
 make exe-onefile
 ```
 
 ## Documentation
 
-- `docs/architecture/` — how MailFlow works
-- `docs/development/` — setup, embedding, testing, quality, packaging
-- `docs/plugin-development/` — write your own adapters and processors
-- `docs/configuration/` — runtime configuration and i18n
-- `docs/agent/` — invariants, module map and change playbook for AI agents
-- `docs/adr/` — architecture decision records
-- `MAILFLOW_FROM_ZERO.md` — the staged reconstruction plan
-- `docs/build-log/BUILD_LOG.md` — what was actually executed and verified
+| Area | Links |
+| ---- | ----- |
+| Architecture | [overview](docs/architecture/overview.md) · [domain & mail](docs/architecture/domain-and-mail.md) · [plugins](docs/architecture/plugin-system.md) · [pipeline](docs/architecture/pipeline.md) · [LLM](docs/architecture/llm.md) · [logging](docs/architecture/logging.md) · [storage & retention](docs/architecture/storage-and-retention.md) · [replies](docs/architecture/replies.md) · [TUI](docs/architecture/tui.md) |
+| Development | [setup](docs/development/setup.md) · [embedding](docs/development/embedding.md) · [tests](docs/development/tests.md) · [quality](docs/development/quality.md) · [packaging](docs/development/packaging.md) |
+| Plugin development | [overview](docs/plugin-development/overview.md) · [mail source](docs/plugin-development/mail-source.md) · [processor](docs/plugin-development/processor.md) · [LLM backend](docs/plugin-development/llm-backend.md) · [notifier](docs/plugin-development/notifier.md) · [storage](docs/plugin-development/storage.md) |
+| Configuration | [overview](docs/configuration/overview.md) · [i18n](docs/configuration/i18n.md) |
+| For AI agents | [invariants](docs/agent/invariants.md) · [module map](docs/agent/module-map.md) · [change playbook](docs/agent/change-playbook.md) |
+| Decisions | [ADRs](docs/adr/0001-uv-workspace.md) · [0002-pluggy-pipeline](docs/adr/0002-pluggy-pipeline.md) · [0003-host-independent-core](docs/adr/0003-host-independent-core.md) |
+| Build history | [BUILD_LOG](docs/build-log/BUILD_LOG.md) · [reconstruction plan](MAILFLOW_FROM_ZERO.md) |
+
+## Plugin marketplace
+
+Browse and install plugins from remote repositories:
+
+```bash
+uv run mailflow plugin repo add mailflow-plugins https://raw.githubusercontent.com/mailflow/mailflow-plugins/main/plugins.json
+uv run mailflow plugin market list
+uv run mailflow plugin install mailflow-notify-webhook   # restart to load
+```
+
+The [mailflow-plugins](https://github.com/mailflow/mailflow-plugins)
+repository hosts the index and community plugins.
+
+## Project layout
+
+```
+packages/mailflow-core       host-agnostic domain, pipeline, service facade
+packages/mailflow-bundled    composition root: the official plugin set
+packages/mailflow-cli        rich Typer host (run/command/shell/...)
+packages/mailflow-tui        Textual UI (Mail/Actions/Runtime/Logs/Market/Settings)
+packages/mailflow-testkit    deterministic fakes for tests and demos
+plugins/*                    discoverable adapters and processors
+configs/ · translations/     example configs and language packs
+docs/                        architecture, development, agent documentation
+```
+
+## License
+
+MIT. Real provider adapters (IMAP, Gmail, Outlook) are planned future
+plugins and are not part of the 0.1.0 baseline — see
+[CHANGELOG.md](CHANGELOG.md).

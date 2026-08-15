@@ -4,7 +4,11 @@ MailFlow is a plugin pipeline for unified mail: multiple provider adapters
 merge into one bounded stream, an ordered processor chain classifies each
 mail (four-level urgency, summary, reply flag, timed action items), results
 are persisted with a recoverable trash, and CLI/TUI/bot hosts render the
-system state through one embeddable service facade.
+system state through one embeddable service facade. A reminder scheduler
+fires on timed action items (configurable fixed time two days before the due
+date, and 00:00 on the due day); a plugin marketplace browses remote
+repositories and installs plugins; every configuration option is inspectable
+and settable from commands and the TUI.
 
 ## Layers
 
@@ -37,7 +41,11 @@ Everything a host needs lives on `MailFlowService`:
 - Reply workflow — `create_reply`, `edit_draft`, `prepare_reply` (token),
   `confirm_reply` (validated, double-send safe), `cancel_reply`.
 - `commands.execute(line)` — transport-neutral command responses.
-- Events — `service.on("mail.processed", handler)`.
+- Configuration — `list_config_options`, `get_config_option`,
+  `set_config_value` (persisted, comment-preserving), `config_path`.
+- Marketplace — `service.market` (fetch indexes, browse, install) and
+  `plugin_repo_add/remove`.
+- Events — `service.on("mail.processed" | "mailflow.action.reminder" | ...)`.
 
 `start_service(config, ...)` is the single entry point that composes
 configuration, plugins, storage, LLMs, processors, sources, notifiers, events
@@ -57,6 +65,10 @@ sets the stop event, cancels tasks gracefully, closes sources and storage.
 - `plugin-system.md` — hooks, registries, ownership
 - `pipeline.md` — ordering, retries, failure policy
 - `llm.md` — routing, fallback, secrets
+- reminders: runtime scheduler in `runtime.py` (`reminder_times`, persisted
+  fired state), config under `[general] reminder_*`, event
+  `mailflow.action.reminder`; marketplace: `plugin_market.py` + `plugin
+  repo/market/install` commands + TUI Market tab
 - `logging.md` — queue sinks and redaction
 - `storage-and-retention.md` — durability and the daily cleanup
 - `replies.md` — the confirmed reply state machine

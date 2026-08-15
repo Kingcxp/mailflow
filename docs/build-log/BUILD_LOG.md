@@ -62,6 +62,17 @@ uv build --all-packages        # pass (11 wheels)
   scope for the 0.1.0 baseline (planned provider phase).
 - Network LLM calls in tests: never performed (httpx monkeypatched).
 
+## Phase 2 (post-tag review & features)
+
+| Commit | Change | Executed verification |
+| ------ | ------ | --------------------- |
+| `fix(core): retry storage saves...` | save retries, broader secret redaction, coverage for all packages | `make coverage` (86%), full suite |
+| `feat(core): remind on timed actions...` | early + day-of reminders, persisted fired state | reminder unit tests (17 runtime tests) |
+| `feat(core): manage every config option...` | config list/get/set, TUI config table, comment-preserving TOML patching | `config set` CLI smoke on a commented file (comments preserved) |
+| `feat(core): plugin marketplace...` | repo/market/install commands, TUI Market tab, `mailflow-plugins` sibling repo | end-to-end install of the webhook sample via `uv pip`; uninstalled after |
+
+Final phase-2 gate: 144 tests passed, mypy/pyright strict clean, ruff clean.
+
 ## Executed after the initial log
 
 - `make exe-onefile` equivalent: `tools/build_exe.py --mode onefile`

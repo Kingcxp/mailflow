@@ -16,7 +16,8 @@
 | `i18n.py` | builtin + external JSON packs, English fallback, language switch |
 | `runtime.py` | bounded queue, per-account source tasks, workers, notifier thresholds, cleanup scheduler, wait_idle |
 | `service.py` | MailFlowService facade, start_service composition, run_service, reply workflow |
-| `commands.py` | CommandRouter: shlex parse, transport-neutral colored responses, all management commands |
+| `commands.py` | CommandRouter: shlex parse, transport-neutral colored responses, all management commands (incl. config, plugin repo/market/install) |
+| `plugin_market.py` | PluginMarket: fetch/validate marketplace indexes, find, install via uv pip --no-deps, installed-state checks |
 | `locale/en.json`, `locale/zh-CN.json` | built-in language packs |
 
 ## packages/
@@ -38,6 +39,10 @@
 | `mailflow-processor-rules` | `rules` processor (ad keywords, important senders) |
 | `mailflow-processor-llm-importance` | `llm-importance` processor (four-level analysis) |
 | `mailflow-notify-console` | `console` notifier |
+
+A sibling marketplace repository (parent directory `mailflow-plugins`)
+publishes `plugins.json` plus community plugins (e.g.
+`mailflow-notify-webhook`).
 
 ## Dependency direction
 
