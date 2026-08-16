@@ -20,8 +20,8 @@ def main() -> int:
     for case in root.iter("testcase"):
         for kind in ("failure", "error"):
             for item in case.iter(kind):
-                message = (item.get("message") or "").strip().splitlines()
-                message = message[0][:500] if message else kind
+                lines = (item.get("message") or "").strip().splitlines()
+                message = lines[0][:500] if lines else kind
                 print(f"::error file={case.get('classname') or ''}::{case.get('name')} {message}")
                 count += 1
     return 1 if count else 0
