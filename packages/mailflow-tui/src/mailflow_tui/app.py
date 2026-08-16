@@ -36,6 +36,7 @@ from textual.widgets import (
 
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
+from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
 
 _URGENCY_OPTIONS = [
@@ -751,19 +752,27 @@ class MarketPane(Vertical):
         self._refresh_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="market-controls"):
-            yield Input(
-                placeholder=self._service.t("tui.market_search_placeholder"), id="market-search"
-            )
-            yield Select([], id="market-category")
-            yield Button(self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary")
-            yield Button(self._service.t("tui.btn_new_plugin"), id="market-create")
-            yield Button(self._service.t("tui.btn_export"), id="market-export", variant="success")
-            yield Button(
-                self._service.t("tui.btn_install_local"),
-                id="market-install-local",
-                variant="default",
-            )
+        with Vertical(id="market-controls"):
+            with Horizontal(id="market-controls-top"):
+                yield Input(
+                    placeholder=self._service.t("tui.market_search_placeholder"),
+                    id="market-search",
+                )
+                yield Select([], id="market-category")
+            with Horizontal(id="market-controls-buttons"):
+                yield Button(
+                    self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary"
+                )
+                yield Button(self._service.t("tui.btn_new_plugin"), id="market-create")
+                yield Button(
+                    self._service.t("tui.btn_export"), id="market-export", variant="success"
+                )
+                yield Button(
+                    self._service.t("tui.btn_install_local"),
+                    id="market-install-local",
+                    variant="default",
+                )
+                yield Button(self._service.t("tui.btn_repos"), id="market-repos", variant="default")
         yield DataTable(id="market-table")
         with Vertical(id="market-detail"):
             yield Markdown("", id="market-readme")
@@ -881,9 +890,15 @@ class MarketPane(Vertical):
         readme = plugin.readme_for(language) or (
             f"# {plugin.name or plugin.id}\n\n{plugin.description_for(language)}"
         )
+        meta = (
+            f"**{plugin.name or plugin.id}** v{plugin.version}\n\n"
+            f"{self._service.t('plugin.field_author')}: {plugin.author or '-'} · "
+            f"{self._service.t('plugin.field_updated')}: {plugin.updated or '-'}\n"
+            f"{self._service.t('plugin.field_homepage')}: {plugin.homepage or '-'}\n\n---\n\n"
+        )
         readme_node = self.query_one_optional("#market-readme", Markdown)
         if readme_node is not None:
-            readme_node.update(readme)
+            readme_node.update(meta + readme)
         self._set_status(
             f"{self._service.t('plugin.header_id')}: {plugin.id} — {self._market_status_of(plugin)}"
         )
@@ -917,6 +932,11 @@ class MarketPane(Vertical):
         if button_id == "market-install-local":
             cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
                 InstallScreen(self._service)
+            )
+            return
+        if button_id == "market-repos":
+            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+                ReposScreen(self._service)
             )
             return
         if self._selected is None:

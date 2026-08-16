@@ -386,6 +386,7 @@ async def test_bot_export_wizard(tmp_path: Path) -> None:
         enable_logging=False,
     )
     service.market = PluginMarket([])
+    service.config_path = tmp_path / "cfg.toml"
     CommandRouter(service)
     import queue
 
@@ -477,6 +478,129 @@ async def test_reply_letter_template_and_toolbar(tmp_path: Path) -> None:
             # saving persists the templated body
             cast(Button, app.screen.query_one("#reply-save")).press()
             await pilot.pause(0.1)
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_market_repos_screen(tmp_path: Path) -> None:
+    """The Market tab manages remote repositories from a dedicated screen."""
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.app import MarketPane
+    from mailflow_tui.repos import ReposScreen
+    from textual.widgets import DataTable, TabbedContent
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    service.config_path = tmp_path / "cfg.toml"
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test() as pilot:
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-market"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause()
+            market_pane = app.query_one(MarketPane)
+            cast(Button, market_pane.query_one("#market-repos")).press()
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, ReposScreen)
+            # add a repository through the form
+            app.screen.query_one("#repos-name", Input).value = "third-party"
+            app.screen.query_one("#repos-url", Input).value = "https://example.com/repo"
+            cast(Button, app.screen.query_one("#repos-add")).press()
+            await pilot.pause(0.1)
+            table = app.screen.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+            assert table.row_count == 1  # pyright: ignore[reportUnknownMemberType]
+            names = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]  # pyright: ignore[reportUnknownMemberType, reportUnknownIndexType, reportUnknownArgumentType]
+            assert "third-party" in names
+            # the service config now carries the repository
+            assert any(repo.name == "third-party" for repo in service.config.plugins.repositories)
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
+    """Plugin details surface the author and the last-updated date."""
+    import json as jsonlib
+
+    from mailflow.plugin_market import PluginMarket, Repository
+    from mailflow_tui.app import MarketPane
+
+    repo_root = tmp_path / "market"
+    plugin_dir = repo_root / "notifier" / "mailflow-demo-notify"
+    plugin_dir.mkdir(parents=True)
+    (repo_root / "index.json").write_text(
+        jsonlib.dumps(
+            {"name": "local", "schema": 2, "categories": [{"id": "notifier", "path": "notifier"}]}
+        ),
+        encoding="utf-8",
+    )
+    (plugin_dir / "plugin.json").write_text(
+        jsonlib.dumps(
+            {
+                "id": "mailflow-demo-notify",
+                "name": "Demo Notify",
+                "version": "1.0.0",
+                "description": "demo",
+                "categories": ["notifier"],
+                "package": "mailflow-demo-notify",
+                "source": str(plugin_dir),
+                "author": "Test Author",
+                "updated": "2026-08-01",
+                "readme": "# Demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([Repository("local", repo_root.as_uri())])
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            market_pane = app.query_one(MarketPane)
+            await market_pane.refresh_market()
+            market_table = cast(DataTable[Any], app.query_one("#market-table", DataTable))
+            # select the row -> detail pane shows author and updated date
+            market_table.move_cursor(row=0, animate=False)  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.1)
+            await pilot.press("enter")  # select the row -> detail updates
+            await pilot.pause(0.2)
+            # the detail path feeds metadata (author/updated) into the pane
+            entries = market_pane._entries  # pyright: ignore[reportPrivateUsage]
+            assert entries
+            market_pane._show_detail(entries[0][1])  # pyright: ignore[reportPrivateUsage]
+            await pilot.pause(0.1)
+            selected = market_pane._selected  # pyright: ignore[reportPrivateUsage]
+            assert selected is not None
+            assert selected.author == "Test Author"
+            assert selected.updated == "2026-08-01"
             app.exit()
             await pilot.pause()
     finally:

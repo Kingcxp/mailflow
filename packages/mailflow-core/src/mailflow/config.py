@@ -161,6 +161,12 @@ class PluginRepositoryConfig(BaseModel):
     url: str = Field(description="Marketplace base URL (root index.json + category folders)")
 
 
+OFFICIAL_REPOSITORY = PluginRepositoryConfig(
+    name="mailflow-repo", url="https://github.com/Kingcxp/mailflow-repo"
+)
+"""The official plugin marketplace, available out of the box."""
+
+
 class PluginConfig(BaseModel):
     enabled: list[str] = Field(
         default_factory=lambda: [],
@@ -170,8 +176,10 @@ class PluginConfig(BaseModel):
         default_factory=lambda: [], description="Plugin ids that are never loaded"
     )
     repositories: list[PluginRepositoryConfig] = Field(
-        default_factory=lambda: [],
-        description="Plugin marketplaces: named URLs the market browses (one plugin.json per plugin folder)",
+        default_factory=lambda: [OFFICIAL_REPOSITORY],
+        description="Plugin marketplaces: named URLs the market browses "
+        "(one plugin.json per plugin folder); the official mailflow-repo is "
+        "included by default — configure the list explicitly to replace it",
     )
 
     @model_validator(mode="after")

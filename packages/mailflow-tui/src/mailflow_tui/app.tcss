@@ -337,3 +337,77 @@ InstallScreen {
     margin: 0 1;
     content-align: center middle;
 }
+
+/* market: two control rows so every button stays on screen */
+#market-controls {
+    height: 6;
+    padding: 0 1;
+}
+
+#market-controls-top {
+    height: 3;
+    align-vertical: middle;
+}
+
+#market-controls-buttons {
+    height: 3;
+    align-vertical: middle;
+}
+
+#market-controls-buttons Button {
+    height: 3;
+    margin-right: 1;
+    content-align: center middle;
+    padding: 0 0 1 0;   /* lift the label one row (visual centering) */
+}
+
+/* plugin action buttons: same label lift */
+#market-actions Button {
+    content-align: center middle;
+    padding: 0 0 1 0;
+}
+
+/* remote repository manager */
+ReposScreen {
+    align: center middle;
+}
+
+#repos-dialog {
+    width: 80;
+    height: 24;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+
+#repos-dialog .scaffold-title {
+    content-align: center middle;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#repos-table {
+    height: 10;
+    border: round $primary;
+    margin-bottom: 1;
+}
+
+#repos-form {
+    height: auto;
+}
+
+#repos-form Input {
+    margin-bottom: 1;
+}
+
+#repos-actions {
+    height: 3;
+    align-vertical: middle;
+    content-align: center middle;
+}
+
+#repos-actions Button {
+    width: 16;
+    margin: 0 1;
+    content-align: center middle;
+}

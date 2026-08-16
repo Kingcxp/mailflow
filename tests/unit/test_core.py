@@ -414,3 +414,17 @@ class TestLogging:
         finally:
             second.close()
             first.close()
+
+
+class TestDefaultMarketplace:
+    def test_official_repository_configured_by_default(self) -> None:
+        config = MailFlowConfig()
+        assert len(config.plugins.repositories) == 1
+        assert config.plugins.repositories[0].name == "mailflow-repo"
+        assert "github.com/Kingcxp/mailflow-repo" in config.plugins.repositories[0].url
+
+    def test_explicit_repositories_replace_default(self) -> None:
+        config = MailFlowConfig.model_validate(
+            {"plugins": {"repositories": [{"name": "x", "url": "https://example.com"}]}}
+        )
+        assert [r.name for r in config.plugins.repositories] == ["x"]

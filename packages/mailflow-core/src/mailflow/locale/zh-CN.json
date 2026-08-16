@@ -134,7 +134,11 @@
       "not_installed_yet": "未安装",
       "local_none_found": "在 {path} 下未找到插件",
       "local_installed": "已安装 {count} 个本地插件：{plugins}",
-      "local_failed": "部分安装失败：{detail}"
+      "local_failed": "部分安装失败：{detail}",
+      "market_updated": "最后更新",
+      "field_author": "作者",
+      "field_updated": "更新时间",
+      "field_homepage": "主页"
     },
     "adapter": {
       "title": "邮箱适配器（{count}）",
@@ -279,7 +283,15 @@
       "reply_markup_hint": "标记：**加粗** *斜体* <right>右对齐</right> <center>居中</center>",
       "btn_install_local": "从文件夹安装",
       "install_title": "从文件夹安装插件",
-      "install_pick_folder": "选择包含插件的文件夹（单个插件或一批插件）"
+      "install_pick_folder": "选择包含插件的文件夹（单个插件或一批插件）",
+      "btn_repos": "仓库",
+      "repos_title": "远程插件仓库",
+      "repos_name": "仓库名称",
+      "repos_url": "仓库地址（index.json 所在目录）",
+      "btn_add": "添加",
+      "btn_remove": "移除",
+      "repos_missing_fields": "请填写仓库名称与地址",
+      "repos_pick_first": "请先选择要移除的仓库"
     },
     "cli": {
       "started": "MailFlow 已启动。按 Ctrl+C 停止。",

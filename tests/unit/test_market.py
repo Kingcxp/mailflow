@@ -25,6 +25,7 @@ PLUGIN_A = {
     "source": "https://example.invalid/mailflow-test-plugin",
     "author": "tester",
     "license": "MIT",
+    "updated": "2026-07-15",
     "readme": "## Test Plugin\n\nLong markdown description.",
 }
 
@@ -116,3 +117,12 @@ class TestPluginMarket:
         plugin = MarketPlugin(id="x", name="x", source="")
         with pytest.raises(ValueError, match="no install source"):
             asyncio.run(PluginMarket([]).install(plugin))
+
+
+class TestPluginMetadata:
+    async def test_author_and_updated_parsed(self, market: PluginMarket) -> None:
+        plugin = market.find("mailflow-test-plugin")
+        assert plugin is not None
+        _repo, entry = plugin
+        assert entry.author == "tester"
+        assert entry.updated == "2026-07-15"

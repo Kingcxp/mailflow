@@ -58,6 +58,7 @@ class MarketPlugin(BaseModel):
     author: str = ""
     license: str = ""
     homepage: str = ""
+    updated: str = ""  # ISO date of the last plugin update (optional)
     readme: str = ""  # markdown long description shown in the detail view
     # locale code -> translated one-line description / markdown readme; the
     # active app language is preferred, falling back to the default fields.

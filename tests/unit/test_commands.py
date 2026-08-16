@@ -640,6 +640,8 @@ class TestMarketLocalization:
                     "categories": ["notifier"],
                     "package": "mailflow-l10n",
                     "source": "x",
+                    "author": "Test Author",
+                    "updated": "2026-07-01",
                     "descriptions": {"zh-CN": "中文简介"},
                     "readme": 'English readme with <span style="color:#ff5500">orange</span> and **bold**.',
                     "readmes": {
@@ -661,6 +663,8 @@ class TestMarketLocalization:
         commands, _ = self._repo(tmp_path, "zh-CN")
         response = await commands.execute("plugin market show mailflow-l10n")
         assert response.ok
+        assert "Test Author" in response.text
+        assert "2026-07-01" in response.text
         assert "中文 readme" in response.text
         assert "English readme" not in response.text
 

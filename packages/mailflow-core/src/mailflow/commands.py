@@ -726,6 +726,7 @@ class CommandRouter:
                     text=f"\n{self._t('plugin.market_categories')}: {', '.join(plugin.categories) or '-'}"
                 ),
                 StyleSpan(text=f"\n{self._t('plugin.market_author')}: {plugin.author or '-'}"),
+                StyleSpan(text=f"\n{self._t('plugin.market_updated')}: {plugin.updated or '-'}"),
                 StyleSpan(text=f"\n{self._t('plugin.market_license')}: {plugin.license or '-'}"),
                 StyleSpan(text=f"\n{self._t('plugin.market_source')}: {plugin.source or '-'}"),
                 StyleSpan(text=f"\n{self._t('plugin.market_repo')}: {repo.name}"),
