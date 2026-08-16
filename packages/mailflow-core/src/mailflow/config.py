@@ -162,7 +162,8 @@ class PluginRepositoryConfig(BaseModel):
 
 
 OFFICIAL_REPOSITORY = PluginRepositoryConfig(
-    name="mailflow-repo", url="https://github.com/Kingcxp/mailflow-repo"
+    name="mailflow-repo",
+    url="https://raw.githubusercontent.com/Kingcxp/mailflow-repo/main",
 )
 """The official plugin marketplace, available out of the box."""
 

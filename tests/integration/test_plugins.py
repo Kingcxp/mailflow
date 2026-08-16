@@ -566,6 +566,8 @@ class TestIMAPMailSource:
         from mailflow_mail_imap.plugin import IMAPSource
 
         class FakeIMAP:
+            uids: ClassVar[list[int]] = [1, 2]
+
             def __init__(self, host: str, port: int) -> None:
                 self.host = host
                 self.port = port
@@ -578,16 +580,17 @@ class TestIMAPMailSource:
             def select(self, folder: str) -> None:
                 self.selected = folder
 
-            def search(self, *args: Any) -> tuple[str, list[Any]]:
-                return "OK", [b"1 2"]
-
-            def fetch(self, message_id: str, spec: str) -> tuple[str, list[Any]]:
+            def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+                if command == "search":
+                    return "OK", [b" ".join(str(u).encode() for u in self.uids)]
+                assert command == "fetch"
+                uid = int(args[0])
                 raw = (
-                    f"From: a@example.com\r\nSubject: msg {message_id}\r\n"
-                    f"Message-ID: <x-{message_id}@e>\r\n"
+                    f"From: a@example.com\r\nSubject: msg {uid}\r\n"
+                    f"Message-ID: <x-{uid}@e>\r\n"
                     "Date: Mon, 10 Jun 2026 09:00:00 +0800\r\n\r\nbody"
                 ).encode()
-                return "OK", [(b"1 (RFC822)", raw)]
+                return "OK", [(b"1 (UID %d RFC822)" % uid, raw)]
 
             def logout(self) -> None:
                 pass
@@ -608,9 +611,13 @@ class TestIMAPMailSource:
         fetched = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
         assert len(fetched) == 2
         assert fetched[0].subject == "msg 1"
-        # dedup within the poll loop
+        # incremental poll: no new mails -> nothing fetched
         fetched_again = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
         assert fetched_again == []
+        # a burst beyond the first-poll window is still picked up via UIDs
+        FakeIMAP.uids = [1, 2, 3, 4, 5]
+        fetched_burst = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        assert [m.subject for m in fetched_burst] == ["msg 3", "msg 4", "msg 5"]
 
 
 class TestAnthropicBackend:

@@ -291,7 +291,8 @@
       "btn_add": "添加",
       "btn_remove": "移除",
       "repos_missing_fields": "请填写仓库名称与地址",
-      "repos_pick_first": "请先选择要移除的仓库"
+      "repos_pick_first": "请先选择要移除的仓库",
+      "repos_url_header": "URL"
     },
     "cli": {
       "started": "MailFlow 已启动。按 Ctrl+C 停止。",

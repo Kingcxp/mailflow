@@ -21,7 +21,7 @@ from email import message_from_bytes
 from email.header import decode_header
 from email.message import EmailMessage, Message
 from email.utils import formatdate, parseaddr, parsedate_to_datetime
-from typing import Any
+from typing import Any, cast
 
 from mailflow.config import MailAccountConfig
 from mailflow.contracts import MailEmitter
@@ -166,6 +166,7 @@ class IMAPSource:
         self._interval = int(account.options.get("interval_seconds", 300))
         self._limit = int(account.options.get("limit", 20))
         self._seen: set[str] = set()
+        self._last_uid: int | None = None
         self._username = str(account.options.get("username") or account.email)
         self._password = str(account.options.get("password") or "")
 
@@ -190,12 +191,23 @@ class IMAPSource:
     def _fetch_once(self) -> list[MailMessage]:
         client = self._imap_client()
         try:
-            _status, data = client.search(None, "ALL")
-            ids = (data[0] or b"").split()
-            wanted = ids[-self._limit :]
+            _status, data = client.uid("search", cast(Any, None), "ALL")
+            all_uids = (data[0] or b"").split()
+            if self._last_uid is not None:
+                # Incremental: only mails that arrived after the previous poll.
+                wanted = [u for u in all_uids if int(u) > self._last_uid]
+            else:
+                # First poll: the most recent ``limit`` mails (avoid flooding).
+                wanted = all_uids[-self._limit :]
             messages: list[MailMessage] = []
-            for message_id in wanted:
-                _status, fetch = client.fetch(message_id.decode(), "(RFC822)")
+            for uid in wanted:
+                try:
+                    uid_int = int(uid)
+                except ValueError:
+                    continue
+                if self._last_uid is None or uid_int > self._last_uid:
+                    self._last_uid = uid_int
+                _status, fetch = client.uid("fetch", uid.decode(), "(RFC822)")
                 if not fetch or fetch[0] is None:
                     continue
                 raw = fetch[0][1]
@@ -203,6 +215,10 @@ class IMAPSource:
                 if mail.normalized_message_id() not in self._seen:
                     self._seen.add(mail.normalized_message_id())
                     messages.append(mail)
+            if len(self._seen) > 10000:
+                # UID tracking already guarantees single fetch; the set is
+                # only a defense against servers that repeat UIDs.
+                self._seen.clear()
             return messages
         finally:
             with contextlib.suppress(Exception):

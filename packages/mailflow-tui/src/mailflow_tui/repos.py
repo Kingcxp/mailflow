@@ -45,7 +45,7 @@ class ReposScreen(ModalScreen[bool | None]):
     def on_mount(self) -> None:
         table = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         table.add_column(self._t("plugin.header_name"), key="name")  # pyright: ignore[reportUnknownMemberType]
-        table.add_column("URL", key="url")  # pyright: ignore[reportUnknownMemberType]
+        table.add_column(self._t("tui.repos_url_header"), key="url")  # pyright: ignore[reportUnknownMemberType]
         self._reload()
 
     def _reload(self) -> None:

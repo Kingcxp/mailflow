@@ -142,13 +142,13 @@ class TestLLMImportanceProcessor:
         assert result.analysis.urgency is Urgency.INFO
         assert result.analysis.action_items == []
 
-    async def test_no_llm_configured_returns_informational(self) -> None:
+    async def test_no_llm_configured_leaves_rules_result_intact(self) -> None:
         config = ProcessorConfig(processor_id="p1", provider="llm-importance", llm=None)
         processor = LLMImportanceProcessor(config, None)  # type: ignore[arg-type]
         result = await processor.process(make_mail(), CONTEXT)
-        assert result.analysis is not None
-        assert result.analysis.urgency is Urgency.INFO
-        assert "no llm configured" in result.analysis.reason
+        # Without an LLM the step emits no overlay, so the deterministic
+        # rules urgency (and later processors) survive the merge.
+        assert result.analysis is None
 
 
 class TestLLMEnhancers:

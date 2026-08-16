@@ -51,6 +51,7 @@ from mailflow.llm import LLMRouterImpl
 from mailflow.logging import LoggingRuntime, configure_logging
 from mailflow.pipeline import PipelineEngine, build_bindings
 from mailflow.plugins import PluginManager
+from mailflow.processors import LLMImportanceProcessor as _BUILTIN_LLM_IMPORTANCE
 from mailflow.processors import register_builtin_processors
 from mailflow.registry import ComponentRegistry
 from mailflow.runtime import MailFlowRuntime
@@ -732,8 +733,14 @@ def _build_llm_enhancers(config: MailFlowConfig, registry: ComponentRegistry) ->
                 for section in config.processors
                 if section.provider == enhancer_id or section.processor_id == enhancer_id
             ),
-            ProcessorConfig(processor_id=enhancer_id, provider=enhancer_id),
+            None,
         )
+        # An explicit section may disable the enhancer; without a section
+        # the enhancer is active (installing a plugin enables it).
+        if enhancer_config is not None and not enhancer_config.enabled:
+            continue
+        if enhancer_config is None:
+            enhancer_config = ProcessorConfig(processor_id=enhancer_id, provider=enhancer_id)
         enhancers.append(cast(Any, factory(enhancer_config)))
     return enhancers
 
@@ -758,7 +765,13 @@ def _build_processors(
             )
             continue
         factory = registry.processor_factory(processor_config.provider)
-        if processor_config.provider == "llm-importance" and enhancers:
+        if (
+            processor_config.provider == "llm-importance"
+            and enhancers
+            and factory is _BUILTIN_LLM_IMPORTANCE
+        ):
+            # The built-in factory takes the enhancer list as a third
+            # argument; a plugin-replaced factory keeps the 2-arg contract.
             processors[processor_config.processor_id] = cast(Any, factory)(
                 processor_config, router, enhancers
             )

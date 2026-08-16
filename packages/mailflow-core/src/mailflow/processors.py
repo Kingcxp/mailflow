@@ -228,13 +228,9 @@ class LLMImportanceProcessor:
     async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
         primary = self._config.llm
         if primary is None:
-            return ProcessorResult(
-                analysis=MailAnalysis(
-                    summary=mail.subject,
-                    urgency=Urgency.INFO,
-                    reason="no llm configured for this processor",
-                )
-            )
+            # Nothing to classify without an LLM: return no overlay so the
+            # deterministic rules result (and later processors) survive.
+            return ProcessorResult()
         messages = self._build_messages(mail, context)
         completion = await self._router.chat(
             messages,

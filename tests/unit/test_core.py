@@ -421,7 +421,9 @@ class TestDefaultMarketplace:
         config = MailFlowConfig()
         assert len(config.plugins.repositories) == 1
         assert config.plugins.repositories[0].name == "mailflow-repo"
-        assert "github.com/Kingcxp/mailflow-repo" in config.plugins.repositories[0].url
+        assert (
+            "raw.githubusercontent.com/Kingcxp/mailflow-repo" in config.plugins.repositories[0].url
+        )
 
     def test_explicit_repositories_replace_default(self) -> None:
         config = MailFlowConfig.model_validate(
