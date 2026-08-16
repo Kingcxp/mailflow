@@ -86,7 +86,7 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
             base = base.parent
         plugin_id = self.query_one("#scaffold-plugin-id", Input).value.strip()
         try:
-            type_select = self.query_one("#scaffold-type", Select[Any])
+            type_select: Select[Any] = self.query_one("#scaffold-type", Select)  # pyright: ignore[reportUnknownVariableType]
             category = str(type_select.value)
             if self.query_one("#scaffold-subfolder", Checkbox).value:
                 folder_name = self.query_one("#scaffold-folder-name", Input).value.strip()
