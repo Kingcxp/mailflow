@@ -22,6 +22,7 @@ from typing import Any
 
 from mailflow.config import StorageConfig
 from mailflow.domain import (
+    ActionItem,
     ComponentKind,
     MailRecord,
     ReplyDraft,
@@ -51,6 +52,10 @@ CREATE TABLE IF NOT EXISTS drafts (
 CREATE TABLE IF NOT EXISTS preferences (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS custom_actions (
+    item_id   TEXT PRIMARY KEY,
+    item_json TEXT NOT NULL
 );
 """
 
@@ -285,6 +290,30 @@ class SQLiteStorage:
                 (key, value),
             )
             conn.commit()
+
+    # -- custom action items ---------------------------------------------------
+
+    async def save_custom_action(self, item: ActionItem) -> None:
+        async with self._lock:
+            conn = self._check_conn()
+            conn.execute(
+                "INSERT OR REPLACE INTO custom_actions (item_id, item_json) VALUES (?, ?)",
+                (item.item_id, item.model_dump_json()),
+            )
+            conn.commit()
+
+    async def list_custom_actions(self) -> list[ActionItem]:
+        async with self._lock:
+            conn = self._check_conn()
+            rows = conn.execute("SELECT item_json FROM custom_actions ORDER BY item_id").fetchall()
+        return [ActionItem.model_validate_json(row[0]) for row in rows]
+
+    async def delete_custom_action(self, item_id: str) -> bool:
+        async with self._lock:
+            conn = self._check_conn()
+            cursor = conn.execute("DELETE FROM custom_actions WHERE item_id = ?", (item_id,))
+            conn.commit()
+        return cursor.rowcount > 0
 
 
 PLUGIN_INFO = PluginInfo(

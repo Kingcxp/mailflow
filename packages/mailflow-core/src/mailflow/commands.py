@@ -14,7 +14,7 @@ import logging
 import re
 import shlex
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
@@ -434,24 +434,7 @@ class CommandRouter:
 
     async def _cmd_action(self, args: list[str]) -> CommandResponse:
         if not args or args[0] == "list":
-            items = await self.service.list_actions()
-            spans: list[StyleSpan] = [
-                StyleSpan(text=self._t("action.title", count=len(items)), style=_STYLE_TITLE),
-            ]
-            if not items:
-                spans.append(StyleSpan(text=f"\n{self._t('action.empty')}", style=_STYLE_MUTED))
-                return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
-            header = f"{'ID':<12} {'TIME':<18} {'TYPE':<10} {'CONTENT':<32} {'NOTES':<20} {'SOURCE MAIL':<26}"
-            spans.append(StyleSpan(text=f"\n{header}\n", style=_STYLE_HEADER))
-            for item in items:
-                spans.append(StyleSpan(text=f"{item.item_id[:10]:<12} ", style=_STYLE_MUTED))
-                spans.append(StyleSpan(text=f"{self._fmt_time(item.due_at):<18} "))
-                spans.append(StyleSpan(text=f"{item.action_type:<10} ", style=_STYLE_ACCENT))
-                spans.append(StyleSpan(text=f"{item.summary[:30]:<32} "))
-                spans.append(StyleSpan(text=f"{item.notes[:18]:<20} ", style=_STYLE_MUTED))
-                spans.append(StyleSpan(text=f"{item.mail_id:<26}", style=_STYLE_MUTED))
-                spans.append(StyleSpan(text="\n"))
-            return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+            return await self._action_list()
         if args[0] == "show" and len(args) == 2:
             action = await self._find_action(args[1])
             if action is None:
@@ -467,16 +450,110 @@ class CommandRouter:
                 StyleSpan(text=f"\n{self._t('action.header_type')}: {action.action_type}"),
                 StyleSpan(text=f"\n{self._t('action.header_summary')}: {action.summary}"),
                 StyleSpan(text=f"\n{self._t('action.header_notes')}: {action.notes or '-'}"),
-                StyleSpan(text=f"\n{self._t('action.field_mail')}: {action.mail_id}"),
+                StyleSpan(
+                    text=f"\n{self._t('action.field_mail')}: "
+                    f"{action.mail_id or self._t('action.source_user')}"
+                ),
             ]
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        if args[0] == "add":
+            return await self._action_add(args[1:])
+        if args[0] == "delete" and len(args) == 2:
+            action = await self._find_action(args[1])
+            if action is None:
+                return self._err(self._t("action.not_found", item_id=args[1]))
+            if action.mail_id:
+                # mail-derived items are deleted with the source mail
+                return self._err(self._t("action.not_found", item_id=args[1]))
+            if await self.service.delete_action(action.item_id):
+                return self._ok(self._t("action.deleted", item_id=action.item_id[:10]))
+            return self._err(self._t("action.not_found", item_id=args[1]))
         return self._err(self._t("action.usage"))
 
+    async def _action_list(self) -> CommandResponse:
+        items = await self.service.list_actions()
+        spans: list[StyleSpan] = [
+            StyleSpan(text=self._t("action.title", count=len(items)), style=_STYLE_TITLE),
+        ]
+        if not items:
+            spans.append(StyleSpan(text=f"\n{self._t('action.empty')}", style=_STYLE_MUTED))
+            return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        header = f"{'ID':<12} {'TIME':<18} {'TYPE':<10} {'CONTENT':<32} {'NOTES':<20} {'SOURCE MAIL':<26}"
+        spans.append(StyleSpan(text=f"\n{header}\n", style=_STYLE_HEADER))
+        for item in items:
+            spans.append(StyleSpan(text=f"{item.item_id[:10]:<12} ", style=_STYLE_MUTED))
+            spans.append(StyleSpan(text=f"{self._fmt_time(item.due_at):<18} "))
+            spans.append(StyleSpan(text=f"{item.action_type:<10} ", style=_STYLE_ACCENT))
+            spans.append(StyleSpan(text=f"{item.summary[:30]:<32} "))
+            spans.append(StyleSpan(text=f"{item.notes[:18]:<20} ", style=_STYLE_MUTED))
+            spans.append(
+                StyleSpan(
+                    text=f"{(item.mail_id or self._t('action.source_user')):<26}",
+                    style=_STYLE_MUTED,
+                )
+            )
+            spans.append(StyleSpan(text="\n"))
+        return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+
+    async def _action_add(self, args: list[str]) -> CommandResponse:
+        """Parse ``action add <summary> --due <time> [--type <type>] [--notes <notes>]``."""
+        summary: str | None = None
+        due_raw: str | None = None
+        action_type = "errand"
+        notes = ""
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg in ("--due", "--type", "--notes"):
+                if index + 1 >= len(args):
+                    return self._err(self._t("action.add_usage"))
+                value = args[index + 1]
+                if arg == "--due":
+                    due_raw = value
+                elif arg == "--type":
+                    action_type = value
+                else:
+                    notes = value
+                index += 2
+                continue
+            summary = arg if summary is None else f"{summary} {arg}"
+            index += 1
+        if summary is None:
+            return self._err(self._t("action.add_usage"))
+        if due_raw is None:
+            return self._err(self._t("action.missing_due"))
+        due = self._parse_local_time(due_raw)
+        if due is None:
+            return self._err(self._t("action.invalid_due", value=due_raw))
+        item = await self.service.add_action(summary, due, action_type=action_type, notes=notes)
+        return self._ok(
+            self._t(
+                "action.added",
+                item_id=item.item_id[:10],
+                summary=item.summary,
+                time=self._fmt_time(item.due_at),
+            )
+        )
+
+    def _parse_local_time(self, raw: str) -> datetime | None:
+        """Parse ``YYYY-MM-DD HH:MM`` in the configured timezone; naive input
+        is interpreted in that zone, and the result is converted to UTC."""
+        try:
+            naive = datetime.strptime(raw, "%Y-%m-%d %H:%M")
+        except ValueError:
+            return None
+        zone = ZoneInfo(self.service.config.general.timezone)
+        return naive.replace(tzinfo=zone).astimezone(UTC)
+
     async def _find_action(self, item_id: str) -> ActionItem | None:
-        for item in await self.service.list_actions():
-            if item.item_id == item_id:
-                return item
-        return None
+        """Exact id wins; otherwise a unique prefix (the list truncates ids
+        to ten characters, so the shown id must resolve)."""
+        matches = [
+            item
+            for item in await self.service.list_actions()
+            if item.item_id == item_id or item.item_id.startswith(item_id)
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     async def _cmd_plugin_repo(self, args: list[str]) -> CommandResponse:
         if not args or args[0] == "list":

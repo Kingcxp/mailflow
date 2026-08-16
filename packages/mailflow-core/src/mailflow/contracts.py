@@ -17,6 +17,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 from mailflow.domain import (
+    ActionItem,
     MailAddress,
     MailAnalysis,
     MailMessage,
@@ -155,6 +156,11 @@ class StorageBackend(Protocol):
     # -- preferences (e.g. persisted language) --------------------------------
     async def get_preference(self, key: str) -> str | None: ...
     async def set_preference(self, key: str, value: str) -> None: ...
+
+    # -- custom action items (user-created; reminder-capable) -----------------
+    async def save_custom_action(self, item: ActionItem) -> None: ...
+    async def list_custom_actions(self) -> list[ActionItem]: ...
+    async def delete_custom_action(self, item_id: str) -> bool: ...
 
 
 __all__ = [

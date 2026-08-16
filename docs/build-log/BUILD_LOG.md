@@ -107,3 +107,12 @@ Final phase-2 gate: 144 tests passed, mypy/pyright strict clean, ruff clean.
 | TUI `BotExportScreen` wizard (framework select + DirectoryTree + subfolder) wired to the Market tab Export button | headless pilot e2e test exports into tmp_path |
 | `mailflow-repo`: `bot_exporter` category (2 plugins), docs/bot-exporter.md, validator support | `validate_plugin.py --all` passes 5/5 existing + 2/2 new (against local core; scratch-env core install requires the pushed core) |
 | README.zh-CN.md + README bot-export docs; MAILFLOW_FROM_ZERO.md removed, references cleaned | docs gate OK (35 mandatory documents) |
+
+## User action items round (post bot-export round)
+
+| Change | Verification |
+| ------ | ------------ |
+| `action add|delete` commands (summary + --due/--type/--notes, local-zone parsing) and `service.add_action/delete_action`; `list_actions` merges mail-derived + user items sorted by due time | command unit tests (add/list/show/delete, validation, mail-derived not deletable) |
+| StorageBackend protocol + SQLite `custom_actions` table + MemoryStorage/FakeStorage fakes | sqlite roundtrip/overwrite/delete + restart-persistence tests |
+| Reminder scheduler fires for user items too (`_fire_reminder` refactor; record=None payload) | runtime test: user item fires once, record is None, no re-fire |
+| i18n keys (en/zh-CN) for add/delete/source-user; README commands rows | i18n parity test green |

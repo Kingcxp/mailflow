@@ -19,6 +19,7 @@ from mailflow.contracts import (
     ReplyDraft,
 )
 from mailflow.domain import (
+    ActionItem,
     MailAddress,
     MailAnalysis,
     MailRecord,
@@ -89,6 +90,7 @@ class FakeStorage:
         self.cleaned_before: datetime | None = None
         self.purged_before: datetime | None = None
         self._preferences: dict[str, str] = {}
+        self.custom_actions: list[ActionItem] = []
 
     async def initialize(self) -> None:
         pass
@@ -107,6 +109,17 @@ class FakeStorage:
 
     async def count_mails(self) -> int:
         return len(self.saved)
+
+    async def save_custom_action(self, item: ActionItem) -> None:
+        self.custom_actions.append(item)
+
+    async def list_custom_actions(self) -> list[ActionItem]:
+        return list(self.custom_actions)
+
+    async def delete_custom_action(self, item_id: str) -> bool:
+        before = len(self.custom_actions)
+        self.custom_actions = [i for i in self.custom_actions if i.item_id != item_id]
+        return len(self.custom_actions) < before
 
     async def set_manual_urgency(
         self, record_id: str, urgency: Urgency | None
@@ -491,3 +504,60 @@ class TestReminderScheduler:
             account_configs=[],
         )
         assert await fresh.run_reminder_tick() == 0
+
+
+class TestCustomActionReminders:
+    async def test_user_created_action_fires_reminder(self) -> None:
+        """Custom action items (no source mail) enter the reminder scheduler."""
+        from mailflow.domain import ActionItem, MailAnalysis
+
+        storage = FakeStorage()
+        item = ActionItem(
+            item_id="user-1",
+            mail_id="",
+            summary="Water the plants",
+            action_type="errand",
+            due_at=datetime.now(UTC) + timedelta(days=2),
+            notes="",
+        )
+        await storage.save_custom_action(item)
+        record = MailRecord(
+            record_id="r1",
+            mail=make_mail(),
+            auto_urgency=Urgency.URGENT,
+            analysis=MailAnalysis(summary="s", urgency=Urgency.URGENT, action_items=[]),
+        )
+        await storage.save_mail(record)
+        events = EventBus()
+        config = MailFlowConfig.model_validate(
+            {
+                "general": {
+                    "workers": 1,
+                    "reminder_interval_seconds": 10,
+                    "reminder_hour": 0,
+                    "reminder_minute": 0,
+                }
+            }
+        )
+        runtime = MailFlowRuntime(
+            config,
+            sources={},
+            pipeline=PipelineEngine([]),
+            storage=storage,
+            notifiers=[],
+            notifier_configs=[],
+            events=events,
+            account_configs=[],
+        )
+        reminders: list[dict[str, Any]] = []
+
+        async def capture(event: str, **payload: Any) -> None:
+            reminders.append(payload)
+
+        events.subscribe("mailflow.action.reminder", capture)
+        fired = await runtime.run_reminder_tick()
+        assert fired == 1
+        assert reminders[0]["item"].item_id == "user-1"
+        assert reminders[0]["record"] is None  # no source mail
+        assert await runtime.run_reminder_tick() == 0
+        assert len(reminders) == 1

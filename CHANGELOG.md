@@ -7,6 +7,12 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- User-created timed action items: `action add "<summary>" --due
+  "YYYY-MM-DD HH:MM" [--type <type>] [--notes "..."]` and
+  `action delete <item_id>`; custom items persist in the storage backend,
+  appear in `action list|show` with source "user", and enter the reminder
+  scheduler like mail-derived items (`mailflow.action.reminder` events fire
+  for them too).
 - Bot-framework export: `BOT_EXPORTER` plugin kind with
   `registrar.add_bot_exporter(framework_id, factory)`; `mailflow.bot_export`
   (`BotExportContext`/`BotExportResult`, `export_bot_plugin`) shared by the

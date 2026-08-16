@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-195%20passed-67C23A)]()
+[![Tests](https://img.shields.io/badge/tests-201%20passed-67C23A)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -78,7 +78,7 @@ uv run mailflow run -c configs/local.toml
 ```
 help                      彩色命令文档
 mail list|show|delete|urgency <id> <level|auto>
-action list|show          定时任务（时间/类型/内容/备注/邮件）
+action list|show|add|delete   定时任务；add "<摘要>" --due "YYYY-MM-DD HH:MM" [--type] [--notes]
 plugin list|show          插件、适配器、账户、llms、绑定
 plugin repo add|list|remove    管理插件商城
 plugin market list|show|search <query>   浏览/搜索带 markdown 详情的插件

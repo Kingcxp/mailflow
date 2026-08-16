@@ -14,7 +14,7 @@ from datetime import time as dt_time
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from mailflow.config import MailAccountConfig, MailFlowConfig, NotifierConfig
+from mailflow.config import GeneralConfig, MailAccountConfig, MailFlowConfig, NotifierConfig
 from mailflow.contracts import MailSource, Notifier, StorageBackend
 from mailflow.domain import ActionItem, MailMessage, MailRecord, to_utc
 from mailflow.events import EventBus
@@ -295,35 +295,50 @@ class MailFlowRuntime:
         config = self._config.general
         for record in await self._storage.list_mails():
             for item in record.action_items:
-                for when, kind in reminder_times(
-                    item,
-                    config.timezone,
-                    config.reminder_days_before,
-                    config.reminder_hour,
-                    config.reminder_minute,
-                ):
-                    if when > now:
-                        continue
-                    key = f"reminder.{item.item_id}.{item.due_at.date().isoformat()}.{kind}"
-                    if await self._storage.get_preference(key):
-                        continue
-                    await self._events.emit(
-                        f"{_EVENT_PREFIX}action.reminder",
-                        item=item,
-                        record=record,
-                        kind=kind,
-                        scheduled=when,
-                    )
-                    reminder_logger.warning(
-                        "REMINDER [%s] due %s — %s (mail %s%s)",
-                        kind,
-                        item.time_range,
-                        item.summary,
-                        record.record_id,
-                        f"; notes: {item.notes}" if item.notes else "",
-                    )
-                    await self._storage.set_preference(key, "fired")
-                    fired += 1
+                fired += await self._fire_reminder(item, record, now, config)
+        for item in await self._storage.list_custom_actions():
+            fired += await self._fire_reminder(item, None, now, config)
+        return fired
+
+    async def _fire_reminder(
+        self,
+        item: ActionItem,
+        record: MailRecord | None,
+        now: datetime,
+        config: GeneralConfig,
+    ) -> int:
+        """Emit a once-per-window reminder for one action item when due."""
+        fired = 0
+        for when, kind in reminder_times(
+            item,
+            config.timezone,
+            config.reminder_days_before,
+            config.reminder_hour,
+            config.reminder_minute,
+        ):
+            if when > now:
+                continue
+            key = f"reminder.{item.item_id}.{item.due_at.date().isoformat()}.{kind}"
+            if await self._storage.get_preference(key):
+                continue
+            await self._events.emit(
+                f"{_EVENT_PREFIX}action.reminder",
+                item=item,
+                record=record,
+                kind=kind,
+                scheduled=when,
+            )
+            source = record.record_id if record is not None else "user"
+            reminder_logger.warning(
+                "REMINDER [%s] due %s — %s (mail %s%s)",
+                kind,
+                item.time_range,
+                item.summary,
+                source,
+                f"; notes: {item.notes}" if item.notes else "",
+            )
+            await self._storage.set_preference(key, "fired")
+            fired += 1
         return fired
 
     # -- status -----------------------------------------------------------------------

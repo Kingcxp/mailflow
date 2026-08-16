@@ -13,7 +13,7 @@ import asyncio
 import logging
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, TextIO
 from uuid import uuid4
@@ -197,10 +197,43 @@ class MailFlowService:
         return await self.storage.count_mails()
 
     async def list_actions(self) -> list[ActionItem]:
+        """All timed action items: mail-derived plus user-created, by due time."""
         items: list[ActionItem] = []
         for record in await self.storage.list_mails():
             items.extend(record.action_items)
+        items.extend(await self.storage.list_custom_actions())
         return sorted(items, key=lambda item: item.due_at)
+
+    async def add_action(
+        self,
+        summary: str,
+        due_at: datetime,
+        *,
+        action_type: str = "errand",
+        notes: str = "",
+    ) -> ActionItem:
+        """Create a user-created timed action item (mail_id stays empty); it
+        participates in the reminder scheduler like mail-derived items."""
+        if not summary.strip():
+            raise ValueError("action summary must not be empty")
+        if due_at.tzinfo is None:
+            raise ValueError("due_at must be timezone-aware")
+        item = ActionItem(
+            item_id=uuid4().hex,
+            mail_id="",
+            summary=summary.strip(),
+            action_type=action_type.strip() or "errand",
+            due_at=due_at,
+            due_end=None,
+            notes=notes.strip(),
+        )
+        await self.storage.save_custom_action(item)
+        return item
+
+    async def delete_action(self, item_id: str) -> bool:
+        """Delete a user-created action item; mail-derived items are not
+        stored here and are left untouched."""
+        return await self.storage.delete_custom_action(item_id)
 
     async def list_trash(self) -> list[TrashRecord]:
         return await self.storage.list_trash()

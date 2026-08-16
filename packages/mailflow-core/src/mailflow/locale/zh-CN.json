@@ -78,13 +78,19 @@
       "header_notes": "备注",
       "header_mail": "来源邮件",
       "not_found": "未找到事务 {item_id}",
-      "usage": "action <list|show <item_id>>",
+      "usage": "action <list|show <item_id>|add <摘要> --due <YYYY-MM-DD HH:MM> [--type <类型>] [--notes <备注>]|delete <item_id>>",
       "type_exam": "考试",
       "type_meeting": "会议",
       "type_errand": "事务",
       "type_other": "其他",
       "field_mail": "来源邮件",
-      "detail_title": "事务 {item_id}"
+      "detail_title": "事务 {item_id}",
+      "add_usage": "用法：action add \"<摘要>\" --due \"YYYY-MM-DD HH:MM\" [--type <类型>] [--notes \"...\"]",
+      "missing_due": "action add 需要 --due \"YYYY-MM-DD HH:MM\"",
+      "invalid_due": "无效的截止时间 {value!r}；请使用 YYYY-MM-DD HH:MM",
+      "added": "已添加待办 {item_id}：{summary}（截止 {time}）",
+      "deleted": "已删除待办 {item_id}",
+      "source_user": "用户"
     },
     "plugin": {
       "title": "插件（{count}）",

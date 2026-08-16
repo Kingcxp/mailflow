@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
 from mailflow.config import LLMConfig, StorageConfig
-from mailflow.domain import Attachment, MailAnalysis, MailRecord, ReplyDraft, Urgency, utcnow
+from mailflow.domain import (
+    ActionItem,
+    Attachment,
+    MailAnalysis,
+    MailRecord,
+    ReplyDraft,
+    Urgency,
+    utcnow,
+)
 from mailflow_storage_sqlite.plugin import SQLiteStorage
 from mailflow_testkit.fakes import make_mail
 
@@ -366,3 +374,46 @@ class TestBundledRegistration:
         manager = create_plugin_manager(MailFlowConfig(), discover_external=True)
         # entry points resolve to the same singletons; no double registration
         assert manager.plugin_ids.count("mailflow-storage-sqlite") == 1
+
+
+class TestSQLiteCustomActions:
+    async def test_custom_action_roundtrip_and_delete(self, storage: SQLiteStorage) -> None:
+        item = ActionItem(
+            item_id="u1",
+            mail_id="",
+            summary="Water the plants",
+            action_type="errand",
+            due_at=datetime(2026, 9, 1, 8, 0, tzinfo=UTC),
+            notes="balcony",
+        )
+        await storage.save_custom_action(item)
+        assert await storage.list_custom_actions() == [item]
+        # overwrite by id
+        updated = item.model_copy(update={"summary": "Water the garden"})
+        await storage.save_custom_action(updated)
+        assert await storage.list_custom_actions() == [updated]
+        assert await storage.delete_custom_action("u1") is True
+        assert await storage.list_custom_actions() == []
+        assert await storage.delete_custom_action("u1") is False
+
+    async def test_custom_action_persists_across_restart(self, tmp_path: Path) -> None:
+        from mailflow.config import StorageConfig
+
+        path = tmp_path / "actions.db"
+        first = SQLiteStorage(StorageConfig(provider="sqlite", path=str(path)))
+        await first.initialize()
+        item = ActionItem(
+            item_id="u2",
+            mail_id="",
+            summary="Renew passport",
+            action_type="errand",
+            due_at=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+            notes="",
+        )
+        await first.save_custom_action(item)
+        await first.close()
+
+        second = SQLiteStorage(StorageConfig(provider="sqlite", path=str(path)))
+        await second.initialize()
+        assert await second.list_custom_actions() == [item]
+        await second.close()

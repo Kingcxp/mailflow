@@ -78,13 +78,19 @@
       "header_notes": "NOTES",
       "header_mail": "SOURCE MAIL",
       "not_found": "Action {item_id} not found",
-      "usage": "action <list|show <item_id>>",
+      "usage": "action <list|show <item_id>|add <summary> --due <YYYY-MM-DD HH:MM> [--type <type>] [--notes <notes>]|delete <item_id>>",
       "type_exam": "exam",
       "type_meeting": "meeting",
       "type_errand": "errand",
       "type_other": "other",
       "field_mail": "Source mail",
-      "detail_title": "Action {item_id}"
+      "detail_title": "Action {item_id}",
+      "add_usage": "usage: action add \"<summary>\" --due \"YYYY-MM-DD HH:MM\" [--type <type>] [--notes \"...\"]",
+      "missing_due": "action add requires --due \"YYYY-MM-DD HH:MM\"",
+      "invalid_due": "invalid due time {value!r}; use YYYY-MM-DD HH:MM",
+      "added": "Action {item_id} added: {summary} (due {time})",
+      "deleted": "Action {item_id} deleted",
+      "source_user": "user"
     },
     "plugin": {
       "title": "Plugins ({count})",

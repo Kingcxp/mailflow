@@ -55,6 +55,7 @@ class MemoryStorage:
         self.trash: dict[str, TrashRecord] = {}
         self.drafts: dict[str, ReplyDraft] = {}
         self.preferences: dict[str, str] = {}
+        self.custom_actions: dict[str, ActionItem] = {}
 
     async def initialize(self) -> None:
         pass
@@ -128,6 +129,15 @@ class MemoryStorage:
 
     async def set_preference(self, key: str, value: str) -> None:
         self.preferences[key] = value
+
+    async def save_custom_action(self, item: ActionItem) -> None:
+        self.custom_actions[item.item_id] = item
+
+    async def list_custom_actions(self) -> list[ActionItem]:
+        return list(self.custom_actions.values())
+
+    async def delete_custom_action(self, item_id: str) -> bool:
+        return self.custom_actions.pop(item_id, None) is not None
 
 
 class FakePluginManager:
@@ -312,6 +322,64 @@ class TestCommandRouter:
         response = await commands.execute("action show a1")
         assert response.ok
         assert "Bring student ID and calculator" in response.text
+
+    async def test_action_add_list_and_show(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        response = await commands.execute(
+            'action add "Pick up parcel" --due "2026-06-20 15:30" --type errand --notes "gate 3"'
+        )
+        assert response.ok, response.text
+        assert "Pick up parcel" in response.text
+        item_id = next(iter(storage.custom_actions))
+        assert storage.custom_actions[item_id].mail_id == ""  # user-created marker
+        assert storage.custom_actions[item_id].action_type == "errand"
+        assert storage.custom_actions[item_id].notes == "gate 3"
+        # the user item appears in action list/show with "user" as the source
+        response = await commands.execute("action list")
+        assert response.ok
+        assert "Pick up parcel" in response.text
+        assert "user" in response.text
+        response = await commands.execute(f"action show {item_id}")
+        assert response.ok
+        assert "Pick up parcel" in response.text
+
+    async def test_action_add_validation(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
+        commands, storage = router
+        # missing --due
+        response = await commands.execute('action add "no due"')
+        assert not response.ok
+        assert "requires --due" in response.text
+        # malformed due time
+        response = await commands.execute('action add "bad" --due "not-a-time"')
+        assert not response.ok
+        assert "invalid due time" in response.text
+        # multi-word summary without --type/--notes
+        response = await commands.execute(
+            'action add "Renew passport at the office" --due "2026-07-01 09:00"'
+        )
+        assert response.ok
+        item = next(iter(storage.custom_actions.values()))
+        assert item.summary == "Renew passport at the office"
+        assert item.action_type == "errand"  # default type
+
+    async def test_action_delete(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
+        commands, storage = router
+        await commands.execute('action add "Buy tickets" --due "2026-08-01 10:00"')
+        item_id = next(iter(storage.custom_actions))
+        # the list truncates ids to ten characters; the truncated id must resolve
+        response = await commands.execute(f"action delete {item_id[:10]}")
+        assert response.ok
+        assert item_id not in storage.custom_actions
+        # deleting again reports not found
+        response = await commands.execute(f"action delete {item_id}")
+        assert not response.ok
+        assert "not found" in response.text
+        # mail-derived items cannot be deleted through this path
+        response = await commands.execute("action delete a1")
+        assert not response.ok
+        assert "a1" in response.text
 
     async def test_plugin_account_llm_adapter_commands(
         self, router: tuple[CommandRouter, MemoryStorage]

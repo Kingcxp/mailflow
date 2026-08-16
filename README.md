@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-195%20passed-67C23A)]()
+[![Tests](https://img.shields.io/badge/tests-201%20passed-67C23A)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -96,7 +96,7 @@ See [docs/development/setup.md](docs/development/setup.md) for details.
 ```
 help                       colored command documentation
 mail list|show|delete|urgency <id> <level|auto>
-action list|show           timed tasks (time/type/content/notes/mail)
+action list|show|add|delete    timed tasks; add "<summary>" --due "YYYY-MM-DD HH:MM" [--type] [--notes]
 plugin list|show           plugins, adapters, accounts, llms, bindings
 plugin repo add|list|remove    manage marketplaces
 plugin market list|show|search <query>   browse/store with markdown details
