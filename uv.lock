@@ -13,8 +13,10 @@ members = [
     "mailflow-core",
     "mailflow-export-astrbot",
     "mailflow-export-nonebot",
+    "mailflow-llm-anthropic",
     "mailflow-llm-openai-compatible",
     "mailflow-mail-fake",
+    "mailflow-mail-imap",
     "mailflow-notify-console",
     "mailflow-notify-telegram",
     "mailflow-storage-sqlite",
@@ -446,8 +448,10 @@ dependencies = [
     { name = "mailflow-core" },
     { name = "mailflow-export-astrbot" },
     { name = "mailflow-export-nonebot" },
+    { name = "mailflow-llm-anthropic" },
     { name = "mailflow-llm-openai-compatible" },
     { name = "mailflow-mail-fake" },
+    { name = "mailflow-mail-imap" },
     { name = "mailflow-notify-console" },
     { name = "mailflow-storage-sqlite" },
 ]
@@ -457,8 +461,10 @@ requires-dist = [
     { name = "mailflow-core", editable = "packages/mailflow-core" },
     { name = "mailflow-export-astrbot", editable = "plugins/mailflow-export-astrbot" },
     { name = "mailflow-export-nonebot", editable = "plugins/mailflow-export-nonebot" },
+    { name = "mailflow-llm-anthropic", editable = "plugins/mailflow-llm-anthropic" },
     { name = "mailflow-llm-openai-compatible", editable = "plugins/mailflow-llm-openai-compatible" },
     { name = "mailflow-mail-fake", editable = "plugins/mailflow-mail-fake" },
+    { name = "mailflow-mail-imap", editable = "plugins/mailflow-mail-imap" },
     { name = "mailflow-notify-console", editable = "plugins/mailflow-notify-console" },
     { name = "mailflow-storage-sqlite", editable = "plugins/mailflow-storage-sqlite" },
 ]
@@ -526,6 +532,21 @@ dependencies = [
 requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }]
 
 [[package]]
+name = "mailflow-llm-anthropic"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-llm-anthropic" }
+dependencies = [
+    { name = "httpx" },
+    { name = "mailflow-core" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx" },
+    { name = "mailflow-core", editable = "packages/mailflow-core" },
+]
+
+[[package]]
 name = "mailflow-llm-openai-compatible"
 version = "0.1.0"
 source = { editable = "plugins/mailflow-llm-openai-compatible" }
@@ -554,6 +575,17 @@ requires-dist = [
     { name = "mailflow-core", editable = "packages/mailflow-core" },
     { name = "mailflow-testkit", editable = "packages/mailflow-testkit" },
 ]
+
+[[package]]
+name = "mailflow-mail-imap"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-mail-imap" }
+dependencies = [
+    { name = "mailflow-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }]
 
 [[package]]
 name = "mailflow-notify-console"

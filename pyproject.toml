@@ -17,8 +17,10 @@ mailflow-bundled = { workspace = true }
 mailflow-cli = { workspace = true }
 mailflow-tui = { workspace = true }
 mailflow-mail-fake = { workspace = true }
+mailflow-mail-imap = { workspace = true }
 mailflow-storage-sqlite = { workspace = true }
 mailflow-llm-openai-compatible = { workspace = true }
+mailflow-llm-anthropic = { workspace = true }
 mailflow-notify-console = { workspace = true }
 mailflow-export-nonebot = { workspace = true }
 mailflow-export-astrbot = { workspace = true }
@@ -61,8 +63,10 @@ mypy_path = [
   "packages/mailflow-cli/src",
   "packages/mailflow-tui/src",
   "plugins/mailflow-mail-fake/src",
+  "plugins/mailflow-mail-imap/src",
   "plugins/mailflow-storage-sqlite/src",
   "plugins/mailflow-llm-openai-compatible/src",
+  "plugins/mailflow-llm-anthropic/src",
   "plugins/mailflow-notify-console/src",
   "plugins/mailflow-export-nonebot/src",
   "plugins/mailflow-export-astrbot/src",
@@ -81,8 +85,10 @@ extraPaths = [
   "packages/mailflow-cli/src",
   "packages/mailflow-tui/src",
   "plugins/mailflow-mail-fake/src",
+  "plugins/mailflow-mail-imap/src",
   "plugins/mailflow-storage-sqlite/src",
   "plugins/mailflow-llm-openai-compatible/src",
+  "plugins/mailflow-llm-anthropic/src",
   "plugins/mailflow-notify-console/src",
   "plugins/mailflow-export-nonebot/src",
   "plugins/mailflow-export-astrbot/src",

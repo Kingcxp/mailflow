@@ -13,15 +13,19 @@ from mailflow.config import MailFlowConfig
 from mailflow.plugins import PluginManager
 from mailflow_export_astrbot.plugin import plugin as astrbot_export_plugin
 from mailflow_export_nonebot.plugin import plugin as nonebot_export_plugin
+from mailflow_llm_anthropic.plugin import plugin as anthropic_plugin
 from mailflow_llm_openai_compatible.plugin import plugin as openai_plugin
 from mailflow_mail_fake.plugin import plugin as fake_plugin
+from mailflow_mail_imap.plugin import plugin as imap_plugin
 from mailflow_notify_console.plugin import plugin as notify_plugin
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 
 BUNDLED_PLUGINS: tuple[Any, ...] = (
     fake_plugin,
+    imap_plugin,
     storage_plugin,
     openai_plugin,
+    anthropic_plugin,
     notify_plugin,
     nonebot_export_plugin,
     astrbot_export_plugin,

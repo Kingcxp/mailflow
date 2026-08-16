@@ -345,15 +345,19 @@ class TestBundledRegistration:
         registry = manager.build_registry()
         assert set(manager.plugin_ids) == {
             "mailflow-mail-fake",
+            "mailflow-mail-imap",
             "mailflow-storage-sqlite",
             "mailflow-llm-openai-compatible",
+            "mailflow-llm-anthropic",
             "mailflow-notify-console",
             "mailflow-export-nonebot",
             "mailflow-export-astrbot",
         }
         assert registry.has(ComponentKind.MAIL_SOURCE, "fake")
+        assert registry.has(ComponentKind.MAIL_SOURCE, "imap")
         assert registry.has(ComponentKind.STORAGE, "sqlite")
         assert registry.has(ComponentKind.LLM_BACKEND, "openai-compatible")
+        assert registry.has(ComponentKind.LLM_BACKEND, "anthropic")
         assert registry.has(ComponentKind.NOTIFIER, "console")
         # rules/llm-importance are built into the core, not plugin-provided;
         # start_service registers them (covered by the e2e service tests)
@@ -470,3 +474,201 @@ class TestTelegramNotifier:
         assert "chat_id=42" in sent["body"]
         assert "Exam tomorrow" in unquote_plus(sent["body"])
         assert "secret-token" not in unquote_plus(sent["body"])
+
+
+class TestIMAPMailSource:
+    def test_parse_mime_basic(self) -> None:
+        from mailflow_mail_imap.plugin import parse_mime
+
+        raw = (
+            b"From: Alice <alice@example.com>\r\n"
+            b"To: me@example.com\r\n"
+            b"Subject: =?utf-8?B?5Lya6K6u6YCa55+l?=\r\n"  # 会议通知
+            b"Message-ID: <abc-123@example.com>\r\n"
+            b"Date: Mon, 10 Jun 2026 09:00:00 +0800\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n"
+            b"\r\n"
+            b"Hello body\r\n"
+        )
+        mail = parse_mime(raw, account_id="acct-1")
+        assert mail.message_id == "abc-123@example.com"
+        assert mail.sender.address == "alice@example.com"
+        assert mail.sender.name == "Alice"
+        assert mail.subject == "会议通知"
+        assert mail.body_text == "Hello body"
+        assert mail.account_id == "acct-1"
+        assert mail.date.utcoffset() is not None
+
+    def test_parse_mime_html_preferred(self) -> None:
+        from mailflow_mail_imap.plugin import parse_mime
+
+        raw = (
+            b"From: a@example.com\r\n"
+            b"To: b@example.com\r\n"
+            b"Subject: HTML mail\r\n"
+            b"Content-Type: multipart/alternative; boundary=x\r\n"
+            b"\r\n"
+            b"--x\r\nContent-Type: text/plain\r\n\r\nplain text\r\n"
+            b"--x\r\nContent-Type: text/html\r\n\r\n<p>html text</p>\r\n"
+            b"--x--\r\n"
+        )
+        mail = parse_mime(raw, account_id="acct-1")
+        assert mail.body_text == "plain text"
+        assert "<p>html text</p>" in mail.body_html
+
+    async def test_send_reply_via_smtp(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mailflow.config import MailAccountConfig
+        from mailflow_mail_imap.plugin import IMAPSource
+
+        sent: list[dict[str, Any]] = []
+
+        class FakeSMTP:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                sent.append({"args": args, "kwargs": kwargs, "mail": None})
+
+            def starttls(self) -> None:
+                sent[-1]["starttls"] = True
+
+            def login(self, user: str, password: str) -> None:
+                sent[-1]["login"] = (user, password)
+
+            def send_message(self, message: Any) -> None:
+                sent[-1]["mail"] = message
+
+            def quit(self) -> None:
+                pass
+
+        monkeypatch.setattr("mailflow_mail_imap.plugin.smtplib.SMTP_SSL", FakeSMTP)
+        account = MailAccountConfig(
+            account_id="acct-1",
+            provider="imap",
+            email="me@example.com",
+            options={"preset": "qq", "username": "me@qq.com", "password": "secret"},
+        )
+        source = IMAPSource(account)
+        from mailflow.domain import MailAddress, ReplyDraft
+
+        draft = ReplyDraft(
+            draft_id="d1",
+            mail_id="m1",
+            account_id="acct-1",
+            to=MailAddress(address="them@example.com"),
+            subject="Re: Hi",
+            body="<p>Dear them,</p>",
+        )
+        await source.send_reply("m1", draft)
+        assert sent and sent[0]["login"] == ("me@qq.com", "secret")
+        assert sent[0]["mail"]["To"] == "them@example.com"
+        assert "Dear them" in str(sent[0]["mail"].get_body())
+
+    async def test_fetch_once_polls_inbox(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mailflow.config import MailAccountConfig
+        from mailflow_mail_imap.plugin import IMAPSource
+
+        class FakeIMAP:
+            def __init__(self, host: str, port: int) -> None:
+                self.host = host
+                self.port = port
+                self.logged = False
+                self.selected = ""
+
+            def login(self, user: str, password: str) -> None:
+                self.logged = (user, password)
+
+            def select(self, folder: str) -> None:
+                self.selected = folder
+
+            def search(self, *args: Any) -> tuple[str, list[Any]]:
+                return "OK", [b"1 2"]
+
+            def fetch(self, message_id: str, spec: str) -> tuple[str, list[Any]]:
+                raw = (
+                    f"From: a@example.com\r\nSubject: msg {message_id}\r\n"
+                    f"Message-ID: <x-{message_id}@e>\r\n"
+                    "Date: Mon, 10 Jun 2026 09:00:00 +0800\r\n\r\nbody"
+                ).encode()
+                return "OK", [(b"1 (RFC822)", raw)]
+
+            def logout(self) -> None:
+                pass
+
+        monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", FakeIMAP)
+        account = MailAccountConfig(
+            account_id="acct-1",
+            provider="imap",
+            email="me@qq.com",
+            options={
+                "preset": "qq",
+                "username": "me@qq.com",
+                "password": "secret",
+                "limit": 5,
+            },
+        )
+        source = IMAPSource(account)
+        fetched = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        assert len(fetched) == 2
+        assert fetched[0].subject == "msg 1"
+        # dedup within the poll loop
+        fetched_again = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        assert fetched_again == []
+
+
+class TestAnthropicBackend:
+    async def test_chat_uses_messages_api(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mailflow.config import LLMConfig
+        from mailflow_llm_anthropic.plugin import AnthropicBackend
+
+        captured: list[dict[str, Any]] = []
+
+        class FakeClient:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> FakeClient:
+                return self
+
+            async def __aexit__(self, *exc: object) -> None:
+                return None
+
+            async def post(self, url: str, **kwargs: Any) -> FakeResponse:
+                captured.append({"url": url, **kwargs})
+                return FakeResponse(
+                    {
+                        "content": [{"type": "text", "text": "the answer"}],
+                        "model": "claude-3-5-sonnet",
+                    }
+                )
+
+        class FakeResponse:
+            def __init__(self, payload: dict[str, Any]) -> None:
+                self._payload = payload
+                self.status_code = 200
+                self.text = ""
+
+            def json(self) -> dict[str, Any]:
+                return self._payload
+
+        monkeypatch.setattr("mailflow_llm_anthropic.plugin.httpx.AsyncClient", FakeClient)
+        backend = AnthropicBackend(
+            LLMConfig(
+                llm_id="claude",
+                provider="anthropic",
+                model="claude-3-5-sonnet",
+                api_key="sk-ant-secret",
+                base_url="https://api.anthropic.com/v1/messages",
+            )
+        )
+        completion = await backend.chat(
+            [
+                {"role": "system", "content": "Be concise."},
+                {"role": "user", "content": "Summarize this mail."},
+            ]
+        )
+        assert completion.text == "the answer"
+        assert completion.model == "claude-3-5-sonnet"
+        body = captured[0]["json"]
+        assert body["model"] == "claude-3-5-sonnet"
+        assert body["system"] == "Be concise."
+        assert body["messages"] == [{"role": "user", "content": "Summarize this mail."}]
+        assert captured[0]["headers"]["x-api-key"] == "sk-ant-secret"
+        assert captured[0]["headers"]["anthropic-version"] == "2023-06-01"

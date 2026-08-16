@@ -6,8 +6,10 @@ requires-python = ">=3.11"
 dependencies = [
   "mailflow-core",
   "mailflow-mail-fake",
+  "mailflow-mail-imap",
   "mailflow-storage-sqlite",
   "mailflow-llm-openai-compatible",
+  "mailflow-llm-anthropic",
   "mailflow-notify-console",
   "mailflow-export-nonebot",
   "mailflow-export-astrbot",
