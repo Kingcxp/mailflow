@@ -67,6 +67,16 @@ picks the translation matching the active app language automatically.
 
 - `descriptions`: locale code -> one-line summary (e.g. `"zh-CN"`)
 - `readmes`: locale code -> translated markdown readme
+
+### Development environment
+
+```bash
+# uv is the only tool you need; install it when missing (skipped if present)
+curl -LsSf https://astral.sh/uv/install.sh | sh       # Linux / macOS
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"   # Windows
+uv sync --group dev      # creates .venv with pytest/ruff/mypy
+uv run pytest            # run your tests
+```
 """
 
 
@@ -97,6 +107,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/{package}"]
+
+# One-command development environment: `uv sync --group dev` (uv installs
+# itself on first use when missing, on every major platform).
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.12",
+  "mypy>=1.17",
+]
 """
 
 
