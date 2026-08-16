@@ -103,7 +103,7 @@ plugin market list|show|search <query>   browse/store with markdown details
 plugin install|uninstall <id>  install or remove a plugin
 plugin enable|disable <id>     toggle a plugin (applies on next start)
 export --framework <id> --output <dir>   generate a chatbot-framework plugin (NoneBot, AstrBot, ...)
-reply create|edit|prepare|confirm|cancel
+reply create|compose cn/en|edit|prepare|confirm|cancel   compose: letter template (auto date, right-aligned signature)
 lang get|set <code>        switch language (persisted)
 trash list|restore         recover deleted mail
 config list|get|set        inspect and change every option

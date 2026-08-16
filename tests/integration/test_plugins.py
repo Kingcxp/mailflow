@@ -417,3 +417,58 @@ class TestSQLiteCustomActions:
         await second.initialize()
         assert await second.list_custom_actions() == [item]
         await second.close()
+
+
+class TestTelegramNotifier:
+    async def test_skips_without_credentials(self) -> None:
+        from mailflow.config import NotifierConfig
+        from mailflow_notify_telegram.plugin import TelegramNotifier
+
+        notifier = TelegramNotifier(NotifierConfig(notifier_id="tg", provider="telegram"))
+        await notifier.notify(make_record())
+        # no exception, nothing sent
+
+    async def test_posts_to_bot_api(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from urllib.request import Request
+
+        from mailflow.config import NotifierConfig
+        from mailflow_notify_telegram.plugin import TelegramNotifier
+
+        sent: dict[str, str] = {}
+
+        class FakeResponse:
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *exc: object) -> bool:
+                return False
+
+            def read(self) -> bytes:
+                return b"{}"
+
+        def fake_urlopen(request: Request, timeout: float) -> FakeResponse:
+            sent["url"] = request.full_url
+            data = request.data
+            sent["body"] = data.decode("utf-8") if isinstance(data, bytes) else ""
+            return FakeResponse()
+
+        import importlib
+
+        tg_plugin = importlib.import_module("mailflow_notify_telegram.plugin")
+        monkeypatch.setattr(tg_plugin, "urlopen", fake_urlopen)  # pyright: ignore[reportUnknownMemberType]
+        notifier = TelegramNotifier(
+            NotifierConfig(
+                notifier_id="tg",
+                provider="telegram",
+                options={"bot_token": "secret-token", "chat_id": "42"},
+            )
+        )
+        record = make_record(urgency=Urgency.URGENT)
+        record.mail.subject = "Exam tomorrow"
+        await notifier.notify(record)
+        from urllib.parse import unquote_plus
+
+        assert "botsecret-token/sendMessage" in sent["url"]
+        assert "chat_id=42" in sent["body"]
+        assert "Exam tomorrow" in unquote_plus(sent["body"])
+        assert "secret-token" not in unquote_plus(sent["body"])

@@ -163,7 +163,7 @@
       "usage": "llm <list|bindings>"
     },
     "reply": {
-      "usage": "reply <create <mail_id>|show <draft_id>|edit <draft_id> <subject> <body>|prepare <draft_id>|confirm <draft_id> <token>|cancel <draft_id>>",
+      "usage": "reply <create <mail_id>|compose <mail_id> <cn|en>|show <draft_id>|edit <draft_id> <subject> <body>|prepare <draft_id>|confirm <draft_id> <token>|cancel <draft_id>>",
       "created": "Draft {draft_id} created for mail {mail_id}",
       "mail_not_found": "Mail {mail_id} not found",
       "draft_not_found": "Draft {draft_id} not found",
@@ -180,7 +180,10 @@
       "sent": "Reply sent from draft {draft_id}",
       "confirm_invalid": "Invalid or expired confirmation token",
       "cancelled": "Draft {draft_id} cancelled",
-      "not_reply_required": "Mail {mail_id} does not require a reply"
+      "not_reply_required": "Mail {mail_id} does not require a reply",
+      "composed": "Letter draft {draft_id} created for mail {mail_id} ({language}); date auto-filled",
+      "template_unknown": "unknown letter template {language!r}; use cn or en",
+      "markup_help": "body markup: **bold** *italic* <right>…</right> <center>…</center>"
     },
     "runtime": {
       "title": "Runtime",
@@ -258,7 +261,18 @@
       "plugin_status_enabled": "enabled",
       "plugin_status_disabled": "disabled (next start)",
       "plugin_status_not_loaded": "not loaded",
-      "confirm_uninstall": "Uninstall {plugin_id}?"
+      "confirm_uninstall": "Uninstall {plugin_id}?",
+      "reply_tpl_cn": "中文信件",
+      "reply_tpl_en": "英文信件",
+      "reply_tpl_hint": "以信件模板开始（日期自动填入，署名右对齐）",
+      "reply_toolbar_bold": "B",
+      "reply_toolbar_italic": "I",
+      "reply_toolbar_left": "L",
+      "reply_toolbar_center": "C",
+      "reply_toolbar_right": "R",
+      "reply_tpl_applied": "Applied the {language} letter template; the date is filled in automatically",
+      "reply_select_hint": "请先选择要加粗/倾斜的文本",
+      "reply_markup_hint": "标记：**加粗** *斜体* <right>右对齐</right> <center>居中</center>"
     },
     "cli": {
       "started": "MailFlow started. Press Ctrl+C to stop.",

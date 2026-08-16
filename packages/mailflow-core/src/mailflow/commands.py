@@ -28,6 +28,7 @@ from mailflow.domain import (
     Urgency,
     parse_urgency,
 )
+from mailflow.letters import LETTER_LANGUAGES, html_to_text, markup_to_html
 
 if TYPE_CHECKING:
     from rich.text import Text
@@ -880,14 +881,33 @@ class CommandRouter:
         if sub == "create" and rest:
             draft = await self.service.create_reply(rest[0])
             return self._ok(self._t("reply.created", draft_id=draft.draft_id, mail_id=rest[0]))
+        if sub == "compose" and len(rest) == 2:
+            language = rest[1].lower()
+            if language not in LETTER_LANGUAGES:
+                return self._err(self._t("reply.template_unknown", language=rest[1]))
+            draft = await self.service.create_letter_draft(rest[0], language)
+            return self._ok(
+                self._t(
+                    "reply.composed",
+                    draft_id=draft.draft_id,
+                    mail_id=rest[0],
+                    language=language,
+                )
+            )
         if sub == "show" and rest:
             shown = await self.service.get_draft(rest[0])
             if shown is None:
                 return self._err(self._t("reply.draft_not_found", draft_id=rest[0]))
             return self._render_draft(shown)
         if sub == "edit" and len(rest) >= 3:
-            draft = await self.service.edit_draft(rest[0], rest[1], " ".join(rest[2:]))
-            return self._ok(self._t("reply.edited", draft_id=draft.draft_id))
+            body = markup_to_html(" ".join(rest[2:]))
+            draft = await self.service.edit_draft(rest[0], rest[1], body)
+            return CommandResponse.rich(
+                [
+                    (self._t("reply.edited", draft_id=draft.draft_id), _STYLE_OK),
+                    (f"\n{self._t('reply.markup_help')}", _STYLE_MUTED),
+                ]
+            )
         if sub == "prepare" and rest:
             draft = await self.service.prepare_reply(rest[0])
             expires = self._fmt_time(draft.token_expires_at) if draft.token_expires_at else "-"
@@ -921,7 +941,10 @@ class CommandRouter:
             StyleSpan(text=f"\n{self._t('reply.field_to')}: {draft.to.display}"),
             StyleSpan(text=f"\n{self._t('reply.field_subject')}: {draft.subject}"),
             StyleSpan(text=f"\n{self._t('reply.field_state')}: {draft.state.value}"),
-            StyleSpan(text=f"\n{self._t('reply.field_body')}:\n{draft.body}"),
+            StyleSpan(
+                text=f"\n{self._t('reply.field_body')}:\n{html_to_text(draft.body)}",
+                style=_STYLE_MUTED,
+            ),
         ]
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 

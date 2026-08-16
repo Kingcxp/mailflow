@@ -411,6 +411,45 @@ class TestCommandRouter:
         response = await commands.execute(f"reply confirm {draft_id} wrong")
         assert not response.ok
 
+    async def test_reply_compose_letter_templates(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        cn = await commands.execute("reply compose m1 cn")
+        assert cn.ok, cn.text
+        cn_id = cn.text.split()[2]
+        draft = storage.drafts[cn_id]
+        assert "尊敬的" in draft.body
+        assert "text-align:right" in draft.body  # right-aligned signature block
+        en = await commands.execute("reply compose m1 en")
+        assert en.ok
+        en_draft = storage.drafts[en.text.split()[2]]
+        assert "Dear" in en_draft.body
+        # unknown template rejected
+        bad = await commands.execute("reply compose m1 ja")
+        assert not bad.ok
+        assert "unknown letter template" in bad.text
+
+    async def test_reply_edit_markup_conversion(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        created = await commands.execute("reply create m1")
+        draft_id = created.text.split()[1]
+        edited = await commands.execute(
+            f"reply edit {draft_id} 'Re: Exam' '**urgent** note <right>Li Si</right>'"
+        )
+        assert edited.ok
+        body = storage.drafts[draft_id].body
+        assert "<b>urgent</b>" in body
+        assert '<div style="text-align:right">Li Si</div>' in body
+        # show renders a plain-text view without tags
+        shown = await commands.execute(f"reply show {draft_id}")
+        assert shown.ok
+        assert "urgent" in shown.text
+        assert "<b>" not in shown.text
+        assert "Li Si" in shown.text
+
     async def test_lang_get_and_set(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
         commands, storage = router
         response = await commands.execute("lang get")
@@ -604,7 +643,7 @@ class TestMarketLocalization:
                     "descriptions": {"zh-CN": "中文简介"},
                     "readme": 'English readme with <span style="color:#ff5500">orange</span> and **bold**.',
                     "readmes": {
-                        "zh-CN": '中文 readme，<span style="color:red">红色</span>与 ~~删除线~~。'  # noqa: RUF001
+                        "zh-CN": '中文 readme，<span style="color:red">红色</span>与 ~~删除线~~。'
                     },
                 }
             ),

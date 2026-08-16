@@ -1,0 +1,16 @@
+[project]
+name = "mailflow-notify-telegram"
+version = "0.1.0"
+description = "MailFlow Telegram notifier: pushes mail alerts to a Telegram chat via the Bot API"
+requires-python = ">=3.11"
+dependencies = ["mailflow-core"]
+
+[project.entry-points."mailflow.plugins"]
+telegram-notify = "mailflow_notify_telegram.plugin:plugin"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mailflow_notify_telegram"]

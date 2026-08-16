@@ -85,7 +85,7 @@ plugin market list|show|search <query>   浏览/搜索带 markdown 详情的插�
 plugin install|uninstall <id>  安装或移除插件
 plugin enable|disable <id>     启用/禁用插件（下次启动生效）
 export --framework <id> --output <dir>   生成聊天机器人框架插件（NoneBot、AstrBot 等）
-reply create|edit|prepare|confirm|cancel
+reply create|compose cn/en|edit|prepare|confirm|cancel   compose：信件模板（自动日期、署名右对齐）
 lang get|set <code>       切换语言（持久化）
 trash list|restore        恢复已删除的邮件
 config list|get|set       查看和修改每个选项

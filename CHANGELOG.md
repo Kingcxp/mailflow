@@ -7,6 +7,15 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- Formal-letter reply templates (Chinese / English): `reply compose
+  <mail_id> <cn|en>` (or the TUI template buttons) pre-fills the draft with
+  an opening, body, closing and a right-aligned signature block, the date
+  filled automatically. The TUI reply editor gains a toolbar — bold,
+  italic, and left/center/right alignment — and chat clients can type the
+  same constructs directly: `**bold**`, `*italic*`, `<right>…</right>`,
+  `<center>…</center>`; `reply show` renders a plain-text view.
+- `mailflow-notify-telegram` marketplace plugin: Telegram Bot API notifier
+  (urllib only, skips gracefully without credentials).
 - User-created timed action items: `action add "<summary>" --due
   "YYYY-MM-DD HH:MM" [--type <type>] [--notes "..."]` and
   `action delete <item_id>`; custom items persist in the storage backend,

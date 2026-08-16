@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, TextIO
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from mailflow import __version__
 from mailflow.config import LLMConfig, MailFlowConfig, NotifierConfig, ProcessorConfig, load_config
@@ -44,6 +45,7 @@ from mailflow.domain import (
 )
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
+from mailflow.letters import build_letter
 from mailflow.llm import LLMRouterImpl
 from mailflow.logging import LoggingRuntime, configure_logging
 from mailflow.pipeline import PipelineEngine, build_bindings
@@ -439,6 +441,45 @@ class MailFlowService:
             to=record.mail.sender,
             subject=f"Re: {record.mail.subject}",
             body=record.analysis.suggested_reply if record.analysis else "",
+        )
+        await self.storage.save_draft(draft)
+        await self.events.emit("reply.created", draft_id=draft.draft_id, mail_id=mail_id)
+        return draft
+
+    async def create_letter_draft(
+        self,
+        mail_id: str,
+        language: str,
+        *,
+        opening: str = "",
+        body: str = "",
+        signature: str = "",
+    ) -> ReplyDraft:
+        """Create a reply draft pre-filled with a formal letter template
+        (``"cn"`` or ``"en"``): the date is filled automatically and the
+        signature block is right-aligned. Empty parts keep placeholders for
+        the user to fill in."""
+        record = await self.storage.get_mail(mail_id)
+        if record is None:
+            raise KeyError(f"mail {mail_id} not found")
+        tz = ZoneInfo(self.config.general.timezone)
+        today = datetime.now(tz).date()
+        recipient = record.mail.sender.display or record.mail.sender.address
+        body_html = build_letter(
+            language,
+            recipient=recipient,
+            today=today,
+            opening=opening,
+            body=body,
+            signature=signature,
+        )
+        draft = ReplyDraft(
+            draft_id=uuid4().hex[:16],
+            mail_id=mail_id,
+            account_id=record.mail.account_id,
+            to=record.mail.sender,
+            subject=f"Re: {record.mail.subject}",
+            body=body_html,
         )
         await self.storage.save_draft(draft)
         await self.events.emit("reply.created", draft_id=draft.draft_id, mail_id=mail_id)

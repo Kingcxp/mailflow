@@ -116,3 +116,13 @@ Final phase-2 gate: 144 tests passed, mypy/pyright strict clean, ruff clean.
 | StorageBackend protocol + SQLite `custom_actions` table + MemoryStorage/FakeStorage fakes | sqlite roundtrip/overwrite/delete + restart-persistence tests |
 | Reminder scheduler fires for user items too (`_fire_reminder` refactor; record=None payload) | runtime test: user item fires once, record is None, no re-fire |
 | i18n keys (en/zh-CN) for add/delete/source-user; README commands rows | i18n parity test green |
+
+## Letter replies + formatting round (post user-action round)
+
+| Change | Verification |
+| ------ | ------------ |
+| `mailflow.letters`: cn/en formal-letter templates (auto date, right-aligned signature block), lightweight markup dialect (`**bold** *italic* <right> <center>`, blank-line paragraphs), `html_to_text` | 13 unit tests (structure, skeleton, escaping, round-trip, passthrough, alignment) |
+| `service.create_letter_draft(mail_id, language)` (config-timezone today); commands `reply compose <id> <cn\|en>`, `reply edit` markup conversion, `reply show` plain text | command tests: compose cn/en + unknown template, edit markup, show without tags |
+| TUI ReplyModal: template buttons + format toolbar (bold/italic/left/center/right via TextArea selection/line ops), dialog layout in app.tcss | e2e: apply cn template (structure + right align + date), bold selection, align line, save persists |
+| `plugins/mailflow-notify-telegram` + marketplace copy, notifier docs/INDEX/README | integration test (urllib monkeypatch: URL/body, skip-without-credentials); `validate_plugin.py` ok 1/1 |
+| i18n keys (reply.*, tui.reply_*) en/zh-CN; README command rows; changelog | i18n parity test green |

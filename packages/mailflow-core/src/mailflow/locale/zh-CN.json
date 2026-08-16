@@ -163,7 +163,7 @@
       "usage": "llm <list|bindings>"
     },
     "reply": {
-      "usage": "reply <create <邮件id>|show <草稿id>|edit <草稿id> <主题> <正文>|prepare <草稿id>|confirm <草稿id> <令牌>|cancel <草稿id>>",
+      "usage": "reply <create <mail_id>|compose <mail_id> <cn|en>|show <draft_id>|edit <draft_id> <主题> <正文>|prepare <draft_id>|confirm <draft_id> <令牌>|cancel <draft_id>>",
       "created": "已为邮件 {mail_id} 创建草稿 {draft_id}",
       "mail_not_found": "未找到邮件 {mail_id}",
       "draft_not_found": "未找到草稿 {draft_id}",
@@ -180,7 +180,10 @@
       "sent": "已通过草稿 {draft_id} 发送回复",
       "confirm_invalid": "确认令牌无效或已过期",
       "cancelled": "草稿 {draft_id} 已取消",
-      "not_reply_required": "邮件 {mail_id} 不需要回复"
+      "not_reply_required": "邮件 {mail_id} 不需要回复",
+      "composed": "已为邮件 {mail_id} 创建信件草稿 {draft_id}（{language}）；日期已自动填入",
+      "template_unknown": "未知信件模板 {language!r}；请使用 cn 或 en",
+      "markup_help": "正文标记：**加粗** *斜体* <right>右对齐…</right> <center>居中…</center>"
     },
     "runtime": {
       "title": "运行时",
@@ -258,7 +261,18 @@
       "plugin_status_enabled": "已启用",
       "plugin_status_disabled": "已禁用（下次启动）",
       "plugin_status_not_loaded": "未加载",
-      "confirm_uninstall": "卸载 {plugin_id}？"
+      "confirm_uninstall": "卸载 {plugin_id}？",
+      "reply_tpl_cn": "中文信件",
+      "reply_tpl_en": "英文信件",
+      "reply_tpl_hint": "以信件模板开始（日期自动填入，署名右对齐）",
+      "reply_toolbar_bold": "粗",
+      "reply_toolbar_italic": "斜",
+      "reply_toolbar_left": "左",
+      "reply_toolbar_center": "中",
+      "reply_toolbar_right": "右",
+      "reply_tpl_applied": "已套用{language}模板，日期已自动填入",
+      "reply_select_hint": "请先选择要加粗/倾斜的文本",
+      "reply_markup_hint": "标记：**加粗** *斜体* <right>右对齐</right> <center>居中</center>"
     },
     "cli": {
       "started": "MailFlow 已启动。按 Ctrl+C 停止。",

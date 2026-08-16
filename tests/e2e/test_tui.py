@@ -418,3 +418,66 @@ async def test_bot_export_wizard(tmp_path: Path) -> None:
             await pilot.pause()
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_reply_letter_template_and_toolbar(tmp_path: Path) -> None:
+    """The reply modal applies CN/EN letter templates (auto date, right-aligned
+    signature) and the toolbar wraps selections in bold/italic and aligns."""
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.app import MailPane, ReplyModal
+    from textual.widgets import TextArea
+    from textual.widgets.text_area import Selection
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    from mailflow_processor_rules.plugin import plugin as rules_plugin
+
+    manager.register(rules_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            pane = app.query_one(MailPane)
+            pane._selected_id = "m-id"  # pyright: ignore[reportPrivateUsage]
+            cast(Button, app.query_one("#btn-reply")).press()
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, ReplyModal)
+            textarea = app.screen.query_one("#reply-body", TextArea)
+            # apply the Chinese letter template: structure + auto date + alignment
+            cast(Button, app.screen.query_one("#reply-tpl-cn")).press()
+            await pilot.pause(0.05)
+            body = textarea.text
+            assert "尊敬的" in body
+            assert "text-align:right" in body
+            assert "署名：" in body
+            # select some text and bold it
+            textarea.selection = Selection((0, 0), (0, 4))
+            await pilot.pause(0.05)
+            cast(Button, app.screen.query_one("#reply-bold")).press()
+            await pilot.pause(0.05)
+            assert "<b>" in textarea.text
+            # align the cursor line right (no selection -> current line)
+            textarea.selection = Selection(textarea.cursor_location, textarea.cursor_location)
+            await pilot.pause(0.05)
+            cast(Button, app.screen.query_one("#reply-align-right")).press()
+            await pilot.pause(0.05)
+            assert "text-align:right" in textarea.text
+            # saving persists the templated body
+            cast(Button, app.screen.query_one("#reply-save")).press()
+            await pilot.pause(0.1)
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()

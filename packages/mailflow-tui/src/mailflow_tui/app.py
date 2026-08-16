@@ -61,7 +61,12 @@ def _remove_column(table: DataTable[Any], key: str) -> None:
 
 
 class ReplyModal(ModalScreen[Any]):
-    """Draft, prepare and confirm a reply with a mandatory confirmation token."""
+    """Draft, prepare and confirm a reply with a mandatory confirmation token.
+
+    A formal-letter template (Chinese / English) pre-fills the body with the
+    date filled automatically and a right-aligned signature block; the
+    toolbar wraps the selection in bold/italic and aligns paragraphs.
+    """
 
     BINDINGS: ClassVar[list[Any]] = [
         Binding("escape", "dismiss", "Close"),
@@ -73,36 +78,113 @@ class ReplyModal(ModalScreen[Any]):
         self._record = record
         self._draft: ReplyDraft | None = None
 
+    def _t(self, key: str, **params: Any) -> str:
+        return self._service.t(key, **params)
+
     def compose(self) -> ComposeResult:
         yield Static(self._service.t("tui.reply.label", default="Reply"), id="reply-title")
-        with Vertical():
+        with Vertical(id="reply-dialog"):
             yield Label(f"To: {self._record.mail.sender.display}")
             yield Label(
                 f"Subject: {self._service.t('tui.reply.subject_prefix')} {self._record.mail.subject}"
             )
+            with Horizontal(id="reply-templates"):
+                yield Button(self._t("tui.reply_tpl_cn"), id="reply-tpl-cn", variant="primary")
+                yield Button(self._t("tui.reply_tpl_en"), id="reply-tpl-en", variant="primary")
+                yield Static(self._t("tui.reply_tpl_hint"), id="reply-tpl-hint")
             yield TextArea(
                 placeholder=self._service.t("tui.reply_body_placeholder"),
                 id="reply-body",
             )
-            with Horizontal(id="reply-actions"):
-                yield Button(self._service.t("tui.reply_save"), id="reply-save", variant="primary")
+            with Horizontal(id="reply-toolbar"):
                 yield Button(
-                    self._service.t("tui.reply_prepare"), id="reply-prepare", variant="warning"
+                    self._t("tui.reply_toolbar_bold"), id="reply-bold", classes="reply-tool"
                 )
                 yield Button(
-                    self._service.t("tui.reply_confirm"),
+                    self._t("tui.reply_toolbar_italic"), id="reply-italic", classes="reply-tool"
+                )
+                yield Button(
+                    self._t("tui.reply_toolbar_left"), id="reply-align-left", classes="reply-tool"
+                )
+                yield Button(
+                    self._t("tui.reply_toolbar_center"),
+                    id="reply-align-center",
+                    classes="reply-tool",
+                )
+                yield Button(
+                    self._t("tui.reply_toolbar_right"),
+                    id="reply-align-right",
+                    classes="reply-tool",
+                )
+                yield Static(self._t("tui.reply_markup_hint"), id="reply-markup-hint")
+            with Horizontal(id="reply-actions"):
+                yield Button(self._t("tui.reply_save"), id="reply-save", variant="primary")
+                yield Button(self._t("tui.reply_prepare"), id="reply-prepare", variant="warning")
+                yield Button(
+                    self._t("tui.reply_confirm"),
                     id="reply-confirm",
                     variant="success",
                     disabled=True,
                 )
-                yield Button(
-                    self._service.t("tui.reply_cancel"), id="reply-cancel", variant="default"
-                )
-            yield Static(self._service.t("tui.reply_confirm_hint"), id="reply-status")
+                yield Button(self._t("tui.reply_cancel"), id="reply-cancel", variant="default")
+            yield Static(self._t("tui.reply_confirm_hint"), id="reply-status")
 
     async def on_mount(self) -> None:
         self._draft = await self._service.create_reply(self._record.record_id)
         self.query_one("#reply-body", TextArea).text = self._draft.body
+
+    def _set_status(self, text: str) -> None:
+        self.query_one("#reply-status", Static).update(text)
+
+    def _apply_template(self, language: str) -> None:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from mailflow.letters import build_letter
+
+        tz = ZoneInfo(self._service.config.general.timezone)
+        today = datetime.now(tz).date()
+        recipient = self._record.mail.sender.display or self._record.mail.sender.address
+        body = build_letter(language, recipient=recipient, today=today)
+        self.query_one("#reply-body", TextArea).text = body
+        label = self._t("tui.reply_tpl_cn" if language == "cn" else "tui.reply_tpl_en")
+        self._set_status(self._t("tui.reply_tpl_applied", language=label))
+
+    def _wrap_selection(self, tag: str) -> None:
+        from textual.widgets.text_area import Selection
+
+        textarea = self.query_one("#reply-body", TextArea)
+        selection = textarea.selection  # pyright: ignore[reportUnknownVariableType]
+        if selection is None or selection.is_empty:  # pyright: ignore[reportUnnecessaryComparison]
+            self._set_status(self._t("tui.reply_select_hint"))
+            return
+        text = textarea.get_text_range(selection.start, selection.end)
+        wrapped = f"<{tag}>{text}</{tag}>"
+        textarea.replace(wrapped, selection.start, selection.end, maintain_selection_offset=False)
+        textarea.selection = Selection(textarea.cursor_location, textarea.cursor_location)
+        self._set_status("")
+
+    def _align_paragraph(self, align: str) -> None:
+        from textual.widgets.text_area import Selection
+
+        textarea = self.query_one("#reply-body", TextArea)
+        selection = textarea.selection  # pyright: ignore[reportUnknownVariableType]
+        if selection is None or selection.is_empty:  # pyright: ignore[reportUnnecessaryComparison]
+            row, _ = textarea.cursor_location
+            line = textarea.document.get_line(row)
+            start = (row, 0)
+            end = (row, len(line))
+        else:
+            start, end = selection.start, selection.end
+        text = textarea.get_text_range(start, end)
+        textarea.replace(
+            f'<div style="text-align:{align}">{text}</div>',
+            start,
+            end,
+            maintain_selection_offset=False,
+        )
+        textarea.selection = Selection(textarea.cursor_location, textarea.cursor_location)
+        self._set_status("")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -110,24 +192,38 @@ class ReplyModal(ModalScreen[Any]):
         if button_id == "reply-cancel":
             self.dismiss(None)
             return
+        if button_id in ("reply-tpl-cn", "reply-tpl-en"):
+            self._apply_template("cn" if button_id == "reply-tpl-cn" else "en")
+            return
+        if button_id in ("reply-bold", "reply-italic"):
+            self._wrap_selection("b" if button_id == "reply-bold" else "i")
+            return
+        if button_id in ("reply-align-left", "reply-align-center", "reply-align-right"):
+            self._align_paragraph(
+                {
+                    "reply-align-left": "left",
+                    "reply-align-center": "center",
+                    "reply-align-right": "right",
+                }[button_id]
+            )
+            return
         if button_id == "reply-save":
             body = self.query_one("#reply-body", TextArea).text
             try:
                 self._draft = await self._service.edit_draft(
                     self._draft.draft_id, self._draft.subject, body
                 )
-                self.query_one("#reply-status", Static).update("✓ saved")
+                self._set_status("✓ saved")
             except ValueError as exc:
-                self.query_one("#reply-status", Static).update(str(exc))
+                self._set_status(str(exc))
             return
         if button_id == "reply-prepare":
             try:
                 self._draft = await self._service.prepare_reply(self._draft.draft_id)
             except ValueError as exc:
-                self.query_one("#reply-status", Static).update(str(exc))
+                self._set_status(str(exc))
                 return
-            status = self.query_one("#reply-status", Static)
-            status.update(self._service.t("tui.reply_prepared", token=self._draft.token or ""))
+            self._set_status(self._t("tui.reply_prepared", token=self._draft.token or ""))
             self.query_one("#reply-confirm", Button).disabled = False
             return
         if button_id == "reply-confirm":
@@ -135,9 +231,9 @@ class ReplyModal(ModalScreen[Any]):
             try:
                 await self._service.confirm_reply(self._draft.draft_id, self._draft.token)
             except PermissionError as exc:
-                self.query_one("#reply-status", Static).update(str(exc))
+                self._set_status(str(exc))
                 return
-            self.query_one("#reply-status", Static).update(self._service.t("tui.reply_sent"))
+            self._set_status(self._t("tui.reply_sent"))
             self.query_one("#reply-confirm", Button).disabled = True
 
 

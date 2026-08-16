@@ -16,6 +16,7 @@ members = [
     "mailflow-llm-openai-compatible",
     "mailflow-mail-fake",
     "mailflow-notify-console",
+    "mailflow-notify-telegram",
     "mailflow-processor-llm-importance",
     "mailflow-processor-rules",
     "mailflow-storage-sqlite",
@@ -564,6 +565,17 @@ requires-dist = [
 name = "mailflow-notify-console"
 version = "0.1.0"
 source = { editable = "plugins/mailflow-notify-console" }
+dependencies = [
+    { name = "mailflow-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }]
+
+[[package]]
+name = "mailflow-notify-telegram"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-notify-telegram" }
 dependencies = [
     { name = "mailflow-core" },
 ]
