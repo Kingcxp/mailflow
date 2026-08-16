@@ -131,7 +131,10 @@
       "enabled_ok": "已启用 {plugin_id}",
       "disabled_ok": "已禁用 {plugin_id}",
       "unknown_plugin": "插件 {plugin_id} 未加载或未安装",
-      "not_installed_yet": "未安装"
+      "not_installed_yet": "未安装",
+      "local_none_found": "在 {path} 下未找到插件",
+      "local_installed": "已安装 {count} 个本地插件：{plugins}",
+      "local_failed": "部分安装失败：{detail}"
     },
     "adapter": {
       "title": "邮箱适配器（{count}）",
@@ -273,7 +276,10 @@
       "reply_toolbar_right": "右",
       "reply_tpl_applied": "已套用{language}模板，日期已自动填入",
       "reply_select_hint": "请先选择要加粗/倾斜的文本",
-      "reply_markup_hint": "标记：**加粗** *斜体* <right>右对齐</right> <center>居中</center>"
+      "reply_markup_hint": "标记：**加粗** *斜体* <right>右对齐</right> <center>居中</center>",
+      "btn_install_local": "从文件夹安装",
+      "install_title": "从文件夹安装插件",
+      "install_pick_folder": "选择包含插件的文件夹（单个插件或一批插件）"
     },
     "cli": {
       "started": "MailFlow 已启动。按 Ctrl+C 停止。",
@@ -334,6 +340,17 @@
     "feedback": {
       "usage": "feedback <mail_id> <原因...>",
       "added": "已记录对 {mail_id} 的反馈；LLM 将据此调整筛选策略"
+    },
+    "update": {
+      "usage": "update <check|now|status|auto <on|off>>",
+      "title": "更新",
+      "mailflow": "MailFlow {current}",
+      "available": "有可用更新",
+      "up_to_date": "已是最新",
+      "plugins_up_to_date": "所有插件均为最新",
+      "applied_title": "已应用的更新",
+      "status": "MailFlow {version}；自动更新：{auto}",
+      "auto_set": "自动更新：{state}"
     }
   }
 }

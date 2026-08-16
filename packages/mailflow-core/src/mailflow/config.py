@@ -106,6 +106,10 @@ class GeneralConfig(BaseModel):
         le=3600,
         description="How often the reminder scheduler checks due action items",
     )
+    auto_update: bool = Field(
+        default=True,
+        description="Check daily for MailFlow releases and plugin updates, and apply them automatically",
+    )
 
     @model_validator(mode="after")
     def validate_timezone(self) -> GeneralConfig:

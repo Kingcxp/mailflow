@@ -15,9 +15,11 @@ import re
 import shlex
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from mailflow import __version__
 from mailflow.domain import (
     ActionItem,
     CommandResponse,
@@ -29,6 +31,7 @@ from mailflow.domain import (
     parse_urgency,
 )
 from mailflow.letters import LETTER_LANGUAGES, html_to_text, markup_to_html
+from mailflow.updates import UpdateReport
 
 if TYPE_CHECKING:
     from rich.text import Text
@@ -58,6 +61,7 @@ _TOPICS = (
     "runtime",
     "config",
     "feedback",
+    "update",
 )
 
 _PAGE_SIZE = 10
@@ -234,6 +238,7 @@ class CommandRouter:
             "runtime": self._cmd_runtime,
             "config": self._cmd_config,
             "feedback": self._cmd_feedback,
+            "update": self._cmd_update,
         }
 
     # -- helpers ----------------------------------------------------------------------
@@ -778,6 +783,7 @@ class CommandRouter:
             output = await self.service.plugin_uninstall(args[0])
         except (KeyError, ValueError, RuntimeError) as exc:
             return self._err(str(exc))
+        await self.service.clear_plugin_source(args[0])
         return self._ok(
             self._t("plugin.uninstalled_ok", plugin_id=args[0]) + (f"\n{output}" if output else "")
         )
@@ -808,6 +814,11 @@ class CommandRouter:
     async def _cmd_plugin_install(self, args: list[str]) -> CommandResponse:
         if len(args) != 1:
             return self._err(self._t("plugin.install_usage"))
+        import os
+
+        local = Path(args[0])
+        if await asyncio.to_thread(os.path.exists, str(local)):
+            return await self._install_local(local)
         market = self.service.market
         found = await asyncio.to_thread(market.find, args[0])
         if found is None:
@@ -819,11 +830,66 @@ class CommandRouter:
             output = await market.install(plugin)
         except (ValueError, RuntimeError) as exc:
             return self._err(str(exc))
+        await self.service.record_plugin_source(plugin.id, plugin.source)
         return self._ok(
             self._t("plugin.installed_ok", plugin_id=plugin.id)
             + f" ({self._t('plugin.restart_note')})"
             + (f"\n{output}" if output else "")
         )
+
+    async def _install_local(self, root: Path) -> CommandResponse:
+        """Install plugins found under a local folder: the folder itself when
+        it is one plugin, otherwise each of its plugin subfolders."""
+        from mailflow.plugin_market import MarketPlugin, detect_plugin_folders
+
+        folders = detect_plugin_folders(root)
+        if not folders:
+            return self._err(self._t("plugin.local_none_found", path=str(root)))
+        installed: list[str] = []
+        failed: list[str] = []
+        for folder in folders:
+            plugin_id = self._plugin_id_of(folder)
+            try:
+                await self.service.market.install(
+                    MarketPlugin(
+                        id=plugin_id,
+                        name=folder.name,
+                        version="",
+                        categories=[],
+                        package=plugin_id,
+                        source=str(folder),
+                    )
+                )
+            except (ValueError, RuntimeError) as exc:
+                failed.append(f"{plugin_id}: {exc}")
+                continue
+            # local installs keep their source recorded so update checks can
+            # see it is not a remote source (and skip auto updates)
+            await self.service.record_plugin_source(plugin_id, str(folder))
+            installed.append(plugin_id)
+        if not installed:
+            return self._err(self._t("plugin.local_failed", detail="; ".join(failed)))
+        return self._ok(
+            self._t("plugin.local_installed", count=len(installed), plugins=", ".join(installed))
+            + (f"\n{self._t('plugin.restart_note')}" if not failed else "")
+            + (f"\n{self._t('plugin.local_failed', detail='; '.join(failed))}" if failed else "")
+        )
+
+    @staticmethod
+    def _plugin_id_of(folder: Path) -> str:
+        """Plugin id: plugin.json id when present, else the folder name."""
+        import json as jsonlib
+
+        metadata_path = folder / "plugin.json"
+        if metadata_path.is_file():
+            try:
+                payload = jsonlib.loads(metadata_path.read_text(encoding="utf-8"))
+                plugin_id = payload.get("id")
+                if isinstance(plugin_id, str) and plugin_id:
+                    return plugin_id
+            except (jsonlib.JSONDecodeError, OSError):
+                pass
+        return folder.name
 
     # -- plugins / adapters / accounts / llms -----------------------------------------------------
 
@@ -1038,6 +1104,74 @@ class CommandRouter:
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
     # -- feedback -------------------------------------------------------------------------------------
+
+    async def _cmd_update(self, args: list[str]) -> CommandResponse:
+        """``update <check|now|status|auto <on|off>>``."""
+        sub = args[0] if args else ""
+        if sub == "check":
+            report = await self.service.check_updates()
+            return self._render_update_report(report)
+        if sub == "now":
+            results = await self.service.apply_updates()
+            spans: list[StyleSpan] = [
+                StyleSpan(text=self._t("update.applied_title"), style=_STYLE_TITLE),
+            ]
+            if not results:
+                spans.append(
+                    StyleSpan(text=f"\n{self._t('update.up_to_date')}", style=_STYLE_MUTED)
+                )
+            for key, outcome in results.items():
+                spans.append(StyleSpan(text=f"\n  {key}: {outcome}"))
+            return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        if sub == "status":
+            auto = self.service.config.general.auto_update
+            return self._ok(
+                self._t(
+                    "update.status",
+                    version=__version__,
+                    auto=self._t("common.yes" if auto else "common.no"),
+                )
+            )
+        if sub == "auto" and len(args) == 2 and args[1] in ("on", "off"):
+            enabled = args[1] == "on"
+            await self.service.set_config_value(
+                "general.auto_update", "true" if enabled else "false"
+            )
+            return self._ok(
+                self._t("update.auto_set", state=self._t("common.yes" if enabled else "common.no"))
+            )
+        return self._err(self._t("update.usage"))
+
+    def _render_update_report(self, report: UpdateReport) -> CommandResponse:
+        spans: list[StyleSpan] = [
+            StyleSpan(text=self._t("update.title"), style=_STYLE_TITLE),
+            StyleSpan(
+                text=f"\n{self._t('update.mailflow', current=report.mailflow_current)}",
+                style=_STYLE_HEADER,
+            ),
+        ]
+        if report.mailflow_update:
+            spans.append(
+                StyleSpan(
+                    text=f" → {report.mailflow_latest} ({self._t('update.available')})",
+                    style=_STYLE_ACCENT,
+                )
+            )
+        else:
+            spans.append(StyleSpan(text=f" ({self._t('update.up_to_date')})", style=_STYLE_MUTED))
+        if report.plugin_updates:
+            for plugin_id, (old, new) in report.plugin_updates.items():
+                spans.append(
+                    StyleSpan(
+                        text=f"\n  {plugin_id}: {old} → {new}",
+                        style=_STYLE_ACCENT,
+                    )
+                )
+        else:
+            spans.append(
+                StyleSpan(text=f"\n{self._t('update.plugins_up_to_date')}", style=_STYLE_MUTED)
+            )
+        return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
     async def _cmd_feedback(self, args: list[str]) -> CommandResponse:
         """``feedback <mail_id> <reason...>`` — teach the LLM what to ignore."""

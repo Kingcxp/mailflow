@@ -33,6 +33,7 @@ import subprocess
 import urllib.request
 from dataclasses import dataclass
 from importlib import metadata
+from pathlib import Path
 from typing import Any, cast
 from urllib.error import URLError
 
@@ -281,3 +282,17 @@ class PluginMarket:
 
 
 __all__ = ["MarketIndex", "MarketPlugin", "PluginMarket", "Repository"]
+
+
+def detect_plugin_folders(root: str | Path) -> list[Path]:
+    """Locate plugin folders under ``root``: the root itself when it is a
+    plugin (has ``plugin.json``), otherwise its immediate subfolders that
+    look like plugins (``plugin.json`` or a pip-installable ``pyproject``)."""
+    base = Path(root)
+    if (base / "plugin.json").is_file():
+        return [base]
+    candidates = [p for p in base.iterdir() if p.is_dir()]
+    with_metadata = [p for p in candidates if (p / "plugin.json").is_file()]
+    if with_metadata:
+        return with_metadata
+    return [p for p in candidates if (p / "pyproject.toml").is_file()]

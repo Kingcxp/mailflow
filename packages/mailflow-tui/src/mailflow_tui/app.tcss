@@ -295,3 +295,45 @@ PluginScaffoldScreen {
     margin: 0 1;
     content-align: center middle;
 }
+
+/* local plugin installer */
+InstallScreen {
+    align: center middle;
+}
+
+#install-dialog {
+    width: 72;
+    height: 32;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+
+#install-dialog .scaffold-title {
+    content-align: center middle;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#install-dialog .scaffold-hint {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#install-tree {
+    height: 20;
+    border: round $primary;
+    margin-bottom: 1;
+}
+
+#install-actions {
+    height: 3;
+    align-vertical: middle;
+    content-align: center middle;
+}
+
+#install-actions Button {
+    width: 16;
+    margin: 0 1;
+    content-align: center middle;
+}

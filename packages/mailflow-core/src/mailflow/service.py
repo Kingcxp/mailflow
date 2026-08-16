@@ -10,6 +10,7 @@ sources, notifiers, events, logging and the runtime.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
@@ -52,6 +53,7 @@ from mailflow.pipeline import PipelineEngine, build_bindings
 from mailflow.plugins import PluginManager
 from mailflow.registry import ComponentRegistry
 from mailflow.runtime import MailFlowRuntime
+from mailflow.updates import UpdateReport
 
 logger = logging.getLogger("mailflow.service")
 
@@ -108,6 +110,7 @@ class MailFlowService:
         self._started = False
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
+        self._update_task: asyncio.Task[Any] | None = None
         self.commands: Any | None = None  # CommandRouter wired by mailflow.commands
 
     # -- lifecycle ---------------------------------------------------------------
@@ -118,10 +121,13 @@ class MailFlowService:
         await self.runtime.start()
         self._started = True
         self._stopped_event = asyncio.Event()
+        self._update_task = asyncio.create_task(self._update_loop(), name="updates")
         logger.info("mailflow service started (version %s)", __version__)
 
     async def stop(self) -> None:
         self._stopped_event.set()
+        if self._update_task is not None:
+            self._update_task.cancel()
         await self.runtime.stop()
         await self.storage.close()
         self._started = False
@@ -259,6 +265,93 @@ class MailFlowService:
 
     async def feedback_guidelines(self) -> str:
         return await self.storage.get_preference("feedback.guidelines") or ""
+
+    # -- plugin update sources --------------------------------------------------
+
+    async def record_plugin_source(self, plugin_id: str, source: str) -> None:
+        """Remember where a plugin was installed from ('' clears it)."""
+        if source:
+            await self.storage.set_preference(f"plugin.source.{plugin_id}", source)
+        else:
+            await self.clear_plugin_source(plugin_id)
+
+    async def _update_loop(self) -> None:
+        """Daily auto-update: once per local day, check MailFlow releases and
+        plugin versions and apply them (respects ``general.auto_update``)."""
+        while not self._stopped_event.is_set():
+            try:
+                await self._run_daily_update()
+            except Exception as exc:
+                logger.error("daily update check failed: %s", exc)
+            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+                await asyncio.wait_for(self._stopped_event.wait(), timeout=3600)
+
+    async def _run_daily_update(self) -> None:
+        if not self.config.general.auto_update:
+            return
+        today = datetime.now(ZoneInfo(self.config.general.timezone)).date().isoformat()
+        if await self.storage.get_preference(f"update.check.{today}"):
+            return
+        await self.storage.set_preference(f"update.check.{today}", "done")
+        report = await self.check_updates()
+        await self.events.emit(
+            "mailflow.update.checked",
+            mailflow_current=report.mailflow_current,
+            mailflow_latest=report.mailflow_latest,
+            plugin_updates={
+                plugin_id: {"from": old, "to": new}
+                for plugin_id, (old, new) in report.plugin_updates.items()
+            },
+        )
+        if not report.has_updates:
+            return
+        results = await self.apply_updates()
+        await self.events.emit("mailflow.update.applied", results=results)
+
+    async def clear_plugin_source(self, plugin_id: str) -> None:
+        await self.storage.set_preference(f"plugin.source.{plugin_id}", "")
+
+    async def plugin_sources(self) -> dict[str, str]:
+        """plugin_id -> recorded install source ('' when local/unknown)."""
+        sources: dict[str, str] = {}
+        for info in self.plugin_manager.enabled_infos():
+            sources[info.plugin_id] = (
+                await self.storage.get_preference(f"plugin.source.{info.plugin_id}") or ""
+            )
+        return sources
+
+    async def check_updates(self) -> UpdateReport:
+        from mailflow.updates import check_updates
+
+        return await asyncio.to_thread(
+            check_updates,
+            self.market,
+            installed_plugins=await self.installed_plugin_versions(),
+            sources=await self.plugin_sources(),
+            mailflow_current=__version__,
+        )
+
+    async def installed_plugin_versions(self) -> dict[str, str]:
+        from mailflow.updates import installed_plugin_versions
+
+        return await asyncio.to_thread(installed_plugin_versions)
+
+    async def apply_updates(self) -> dict[str, str]:
+        """Apply every available update; returns plugin_id -> outcome and
+        reports the mailflow upgrade result under a ``mailflow`` key."""
+        from mailflow.updates import apply_plugin_updates, upgrade_mailflow
+
+        report = await self.check_updates()
+        results: dict[str, str] = {}
+        if report.mailflow_update:
+            try:
+                results["mailflow"] = await upgrade_mailflow()
+            except Exception as exc:
+                logger.error("mailflow upgrade failed: %s", exc)
+                results["mailflow"] = f"failed: {exc}"
+        if report.plugin_updates:
+            results.update(await apply_plugin_updates(self.market, report.plugin_updates))
+        return results
 
     async def list_trash(self) -> list[TrashRecord]:
         return await self.storage.list_trash()

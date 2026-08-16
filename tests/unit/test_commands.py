@@ -783,3 +783,69 @@ class TestPaginationAndFeedback:
         assert "Promotions are noise" in shown.text
         # unknown mail rejected
         assert not (await commands.execute("feedback ghost reason")).ok
+
+
+class TestLocalPluginInstall:
+    async def test_install_single_plugin_folder(
+        self,
+        tmp_path: Path,
+        router: tuple[CommandRouter, MemoryStorage],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        commands, storage = router
+        plugin_dir = tmp_path / "my-plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.json").write_text(
+            '{"id": "my-plugin", "name": "My Plugin"}', encoding="utf-8"
+        )
+        calls: list[str] = []
+
+        async def fake_install(plugin: Any, *, check: bool = True) -> str:
+            calls.append(plugin.source)
+            return "ok"
+
+        monkeypatch.setattr(commands.service.market, "install", fake_install)
+        response = await commands.execute(
+            f"plugin install {str(plugin_dir).replace(chr(92), chr(47))}"
+        )
+        assert response.ok, response.text
+        assert calls == [str(plugin_dir)]
+        # local installs keep their source recorded (never auto-updated)
+        assert storage.preferences.get("plugin.source.my-plugin") == str(plugin_dir)
+
+    async def test_install_batch_of_plugin_folders(
+        self,
+        tmp_path: Path,
+        router: tuple[CommandRouter, MemoryStorage],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        commands, _ = router
+        root = tmp_path / "plugins"
+        for plugin_id in ("alpha", "beta"):
+            folder = root / plugin_id
+            folder.mkdir(parents=True)
+            (folder / "plugin.json").write_text(
+                f'{{"id": "{plugin_id}", "name": "{plugin_id}"}}', encoding="utf-8"
+            )
+        calls: list[str] = []
+
+        async def fake_install(plugin: Any, *, check: bool = True) -> str:
+            calls.append(plugin.id)
+            return "ok"
+
+        monkeypatch.setattr(commands.service.market, "install", fake_install)
+        response = await commands.execute(f"plugin install {str(root).replace(chr(92), chr(47))}")
+        assert response.ok, response.text
+        assert calls == ["alpha", "beta"]
+
+    async def test_install_no_plugins_found(
+        self,
+        tmp_path: Path,
+        router: tuple[CommandRouter, MemoryStorage],
+    ) -> None:
+        commands, _ = router
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        response = await commands.execute(f"plugin install {str(empty).replace(chr(92), chr(47))}")
+        assert not response.ok
+        assert "no plugins found" in response.text

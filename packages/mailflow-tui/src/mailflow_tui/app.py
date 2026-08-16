@@ -35,6 +35,7 @@ from textual.widgets import (
 )
 
 from mailflow_tui.export import BotExportScreen
+from mailflow_tui.install import InstallScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
 
 _URGENCY_OPTIONS = [
@@ -758,6 +759,11 @@ class MarketPane(Vertical):
             yield Button(self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary")
             yield Button(self._service.t("tui.btn_new_plugin"), id="market-create")
             yield Button(self._service.t("tui.btn_export"), id="market-export", variant="success")
+            yield Button(
+                self._service.t("tui.btn_install_local"),
+                id="market-install-local",
+                variant="default",
+            )
         yield DataTable(id="market-table")
         with Vertical(id="market-detail"):
             yield Markdown("", id="market-readme")
@@ -906,6 +912,11 @@ class MarketPane(Vertical):
         if button_id == "market-export":
             cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
                 BotExportScreen(self._service)
+            )
+            return
+        if button_id == "market-install-local":
+            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+                InstallScreen(self._service)
             )
             return
         if self._selected is None:

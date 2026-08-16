@@ -131,7 +131,10 @@
       "enabled_ok": "Enabled {plugin_id}",
       "disabled_ok": "Disabled {plugin_id}",
       "unknown_plugin": "Plugin {plugin_id} is not loaded or installed",
-      "not_installed_yet": "not installed"
+      "not_installed_yet": "not installed",
+      "local_none_found": "no plugins found under {path}",
+      "local_installed": "Installed {count} local plugin(s): {plugins}",
+      "local_failed": "Some installs failed: {detail}"
     },
     "adapter": {
       "title": "Mail adapters ({count})",
@@ -273,7 +276,10 @@
       "reply_toolbar_right": "R",
       "reply_tpl_applied": "Applied the {language} letter template; the date is filled in automatically",
       "reply_select_hint": "请先选择要加粗/倾斜的文本",
-      "reply_markup_hint": "标记：**加粗** *斜体* <right>右对齐</right> <center>居中</center>"
+      "reply_markup_hint": "标记：**加粗** *斜体* <right>右对齐</right> <center>居中</center>",
+      "btn_install_local": "从文件夹安装",
+      "install_title": "从文件夹安装插件",
+      "install_pick_folder": "选择包含插件的文件夹（单个插件或一批插件）"
     },
     "cli": {
       "started": "MailFlow started. Press Ctrl+C to stop.",
@@ -334,6 +340,17 @@
     "feedback": {
       "usage": "feedback <mail_id> <reason...>",
       "added": "Feedback recorded for {mail_id}; the LLM will adjust its filtering strategy"
+    },
+    "update": {
+      "usage": "update <check|now|status|auto <on|off>>",
+      "title": "Updates",
+      "mailflow": "MailFlow {current}",
+      "available": "update available",
+      "up_to_date": "up to date",
+      "plugins_up_to_date": "all plugins up to date",
+      "applied_title": "Applied updates",
+      "status": "MailFlow {version}; auto update: {auto}",
+      "auto_set": "Auto update: {state}"
     }
   }
 }
