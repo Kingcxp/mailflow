@@ -44,7 +44,11 @@ jobs:
         run: uv run pyright
 
       - name: Tests
-        run: uv run pytest tests -q
+        run: uv run pytest tests -q --junitxml=pytest.xml
+
+      - name: Annotate test failures
+        if: failure()
+        run: uv run python tools/annotate_pytest_failures.py pytest.xml
 
       - name: Docs gate
         run: uv run python tools/check_docs.py
