@@ -561,3 +561,50 @@ class TestCustomActionReminders:
         assert reminders[0]["record"] is None  # no source mail
         assert await runtime.run_reminder_tick() == 0
         assert len(reminders) == 1
+
+
+class TestDeduplication:
+    async def test_duplicate_mail_across_accounts_stored_once(self) -> None:
+        """Forwarded copies of the same mail (same message id from two
+        accounts) are processed, stored and notified exactly once."""
+        analysis = MailAnalysis(summary="dup", urgency=Urgency.IMPORTANT)
+        m1 = make_mail(account_id="acct-1")
+        m2 = m1.model_copy(update={"account_id": "acct-2"})  # forwarded copy
+        runtime, storage, notifiers = build_runtime(
+            {"acct-1": EmittingSource([m1]), "acct-2": EmittingSource([m2])},
+            analysis=analysis,
+            workers=2,
+            accounts=[
+                MailAccountConfig(account_id="acct-1", provider="fake"),
+                MailAccountConfig(account_id="acct-2", provider="fake"),
+            ],
+            notifiers=[RecordingNotifier()],
+        )
+        await runtime.start()
+        await asyncio.sleep(0.4)
+        await runtime.stop()
+        assert len(storage.saved) == 1
+        assert len(notifiers[0].notified) == 1
+
+    async def test_same_account_refetch_is_skipped(self) -> None:
+        """Re-fetching an already stored mail does not reprocess it."""
+        analysis = MailAnalysis(summary="s", urgency=Urgency.INFO)
+        mail = make_mail()
+        runtime, storage, notifiers = build_runtime(
+            {"acct-1": EmittingSource([mail])},
+            analysis=analysis,
+            workers=2,
+            accounts=[MailAccountConfig(account_id="acct-1", provider="fake")],
+            notifiers=[RecordingNotifier()],
+        )
+        # pre-seed the stored copy, then let the source emit the same mail again
+        from mailflow.domain import MailRecord
+
+        await storage.save_mail(
+            MailRecord(record_id=mail.normalized_message_id(), mail=mail)
+        )
+        await runtime.start()
+        await asyncio.sleep(0.3)
+        await runtime.stop()
+        assert len(storage.saved) == 1
+        assert notifiers[0].notified == []

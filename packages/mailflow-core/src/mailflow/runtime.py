@@ -91,6 +91,10 @@ class MailFlowRuntime:
         self._account_errors: dict[str, str | None] = {}
         self._started_at: datetime | None = None
         self._closed = False
+        # record ids seen since start; makes the dedup check atomic across
+        # workers (storage lookup alone would race). Cross-restart dedup is
+        # covered by the storage lookup in _process_one.
+        self._seen_ids: set[str] = set()
 
     # -- lifecycle --------------------------------------------------------------
 
@@ -193,11 +197,21 @@ class MailFlowRuntime:
                 self._queue.task_done()
 
     async def _process_one(self, mail: MailMessage) -> None:
+        record_id = mail.normalized_message_id()
+        if record_id in self._seen_ids:
+            logger.info("duplicate mail skipped (already processed): %s", record_id)
+            return
+        self._seen_ids.add(record_id)  # no await: atomic across workers
+        if await self._storage.get_mail(record_id) is not None:
+            # Forwarded copies of the same mail (multiple accounts, restarts)
+            # share the normalized id; process and store exactly one copy.
+            logger.info("duplicate mail skipped (already stored): %s", record_id)
+            return
         analysis, notes, _, _ = await self._pipeline.process(
             mail, mail.account_id, timezone=self._config.general.timezone
         )
         record = MailRecord(
-            record_id=mail.normalized_message_id(),
+            record_id=record_id,
             mail=mail,
             auto_urgency=analysis.urgency,
             analysis=analysis,

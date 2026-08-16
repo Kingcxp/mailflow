@@ -25,8 +25,12 @@ The normalized, provider-independent mail: identity (`message_id`,
 `date`/`received_at` (timezone-aware), and the **original** `body_text` /
 `body_html`. Analysis is never stored inside the message.
 
-`normalized_message_id()` returns the provider id when present, else a
-content digest — it is the record identity in storage.
+`normalized_message_id()` returns the provider id when present, else the
+RFC message id (kept by forwarders), else a content digest over
+sender/subject/date/body — it is the record identity in storage and is
+**account-independent**, so forwarded copies of the same mail arriving
+through several accounts deduplicate to one record (the runtime skips
+already-known ids before processing/notifying).
 
 ## MailAnalysis
 

@@ -138,12 +138,17 @@ class MailMessage(BaseModel):
     provider_message_id: str = ""  # provider-specific stable id
 
     def normalized_message_id(self) -> str:
-        """Stable identity: provider id when present, else content digest."""
+        """Stable identity, account-independent so forwarded copies of the
+        same mail deduplicate across accounts: provider id when present,
+        else the RFC message id (kept by forwarders), else a content digest
+        over sender/subject/date/body."""
         if self.provider_message_id:
             return self.provider_message_id
+        if self.message_id:
+            return self.message_id
         digest = hashlib.sha256(
             (
-                f"{self.sender.address}|{self.subject}|{self.date.isoformat()}|{self.account_id}"
+                f"{self.sender.address}|{self.subject}|{self.date.isoformat()}|{self.body_text}"
             ).encode()
         ).hexdigest()[:24]
         return digest
