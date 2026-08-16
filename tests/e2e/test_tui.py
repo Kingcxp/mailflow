@@ -294,3 +294,73 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             await pilot.pause()
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_plugin_scaffold_wizard(tmp_path: Path) -> None:
+    """The market wizard scaffolds a loadable plugin into a picked folder."""
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.app import MarketPane
+    from mailflow_tui.scaffold import PluginScaffoldScreen
+    from textual.widgets import Checkbox, DirectoryTree
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test() as pilot:
+            # open the wizard from the market tab
+            from textual.widgets import TabbedContent
+
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-market"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause()
+            market_pane = app.query_one(MarketPane)
+            cast(Button, market_pane.query_one("#market-create")).press()
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, PluginScaffoldScreen)
+            tree = app.screen.query_one("#scaffold-tree", DirectoryTree)
+            tree.path = tmp_path
+            await pilot.pause(0.2)
+            tree.move_cursor(tree.root, animate=False)  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.05)
+            # subfolder + name + plugin id + template type
+            app.screen.query_one("#scaffold-subfolder", Checkbox).value = True
+            await pilot.pause(0.05)
+            app.screen.query_one("#scaffold-folder-name", Input).value = "mailflow-demo-wizard"
+            app.screen.query_one("#scaffold-plugin-id", Input).value = "mailflow-demo-wizard"
+            type_select = cast(Select[Any], app.screen.query_one("#scaffold-type", Select))
+            type_select.value = "processor"
+            await pilot.pause(0.05)
+            app.screen.query_one("#scaffold-generate", Button).press()
+            for _ in range(100):
+                target = tmp_path / "mailflow-demo-wizard"
+                if (target / "plugin.json").is_file():
+                    break
+                await pilot.pause(0.05)
+            assert (tmp_path / "mailflow-demo-wizard" / "plugin.json").is_file()
+            assert (
+                tmp_path / "mailflow-demo-wizard" / "src" / "mailflow_demo_wizard" / "plugin.py"
+            ).is_file()
+            import json as jsonlib
+
+            metadata = jsonlib.loads(
+                (tmp_path / "mailflow-demo-wizard" / "plugin.json").read_text(encoding="utf-8")
+            )
+            assert metadata["id"] == "mailflow-demo-wizard"
+            assert metadata["categories"] == ["processor"]
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()

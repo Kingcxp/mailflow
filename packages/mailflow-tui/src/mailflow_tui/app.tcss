@@ -200,3 +200,51 @@ DataTable > .datatable--cursor {
     margin: 0 0 1 0;
     color: $text-muted;
 }
+
+/* plugin scaffold wizard */
+PluginScaffoldScreen {
+    align: center middle;
+}
+
+#scaffold-dialog {
+    width: 72;
+    height: 32;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+
+#scaffold-dialog .scaffold-title {
+    content-align: center middle;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#scaffold-dialog .scaffold-hint {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#scaffold-tree {
+    height: 14;
+    border: round $primary;
+    margin-bottom: 1;
+}
+
+#scaffold-dialog Input,
+#scaffold-dialog Select,
+#scaffold-dialog Checkbox {
+    margin-bottom: 1;
+}
+
+#scaffold-actions {
+    height: 3;
+    align-vertical: middle;
+    content-align: center middle;
+}
+
+#scaffold-actions Button {
+    width: 16;
+    margin: 0 1;
+    content-align: center middle;
+}

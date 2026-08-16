@@ -16,8 +16,9 @@
 | `i18n.py` | builtin + external JSON packs, English fallback, language switch |
 | `runtime.py` | bounded queue, per-account source tasks, workers, notifier thresholds, cleanup scheduler, wait_idle |
 | `service.py` | MailFlowService facade, start_service composition, run_service, reply workflow |
-| `commands.py` | CommandRouter: shlex parse, transport-neutral colored responses, all management commands (incl. config, plugin repo/market/install) |
-| `plugin_market.py` | PluginMarket: fetch/validate marketplace indexes, find, install via uv pip --no-deps, installed-state checks |
+| `commands.py` | CommandRouter: shlex parse, transport-neutral colored responses, all management commands (incl. config, plugin repo/market/install); rich markdown→span rendering with span-color support |
+| `plugin_market.py` | PluginMarket: fetch per-plugin metadata from category folders (file://, GitHub contents API, INDEX.json fallback), localized descriptions/readmes, find/search/install via uv pip --no-deps |
+| `plugin_template.py` | Plugin scaffolding: category templates (mail_source/processor/llm_backend/notifier/storage) that produce complete, loadable plugins; used by the TUI wizard |
 | `locale/en.json`, `locale/zh-CN.json` | built-in language packs |
 
 ## packages/
@@ -40,9 +41,12 @@
 | `mailflow-processor-llm-importance` | `llm-importance` processor (four-level analysis) |
 | `mailflow-notify-console` | `console` notifier |
 
-A sibling marketplace repository (parent directory `mailflow-repo`)
-holds plugins one folder per plugin under category folders; the market client
-reads a root `index.json` (categories only) and each plugin's `plugin.json`.
+A sibling marketplace repository (`mailflow-repo`, pushed to
+github.com/Kingcxp/mailflow-repo) holds plugins one folder per plugin under
+category folders; the market client reads a root `index.json` (categories
+only) and each plugin's `plugin.json`, which may carry localized
+`descriptions` / `readmes`. The repo ships the developer docs (docs/), the
+validation script (tools/validate_plugin.py) and a PR validation workflow.
 
 ## Dependency direction
 

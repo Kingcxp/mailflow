@@ -501,3 +501,94 @@ class TestCommandRouter:
         response = await commands.execute("plugin uninstall ghost")
         assert not response.ok
         assert "not found in any repository" in response.text
+
+
+class TestMarketLocalization:
+    """Localized plugin metadata and rich markdown rendering."""
+
+    def _repo(self, tmp_path: Path, language: str) -> tuple[CommandRouter, MailFlowService]:
+        import json as jsonlib
+
+        from mailflow.config import PluginRepositoryConfig
+        from mailflow.plugin_market import PluginMarket, Repository
+
+        (tmp_path / "notifier" / "mailflow-l10n").mkdir(parents=True)
+        (tmp_path / "index.json").write_text(
+            jsonlib.dumps(
+                {
+                    "name": "local",
+                    "schema": 2,
+                    "categories": [{"id": "notifier", "path": "notifier"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "notifier" / "mailflow-l10n" / "plugin.json").write_text(
+            jsonlib.dumps(
+                {
+                    "id": "mailflow-l10n",
+                    "name": "L10n Plugin",
+                    "version": "1.0.0",
+                    "description": "English summary",
+                    "categories": ["notifier"],
+                    "package": "mailflow-l10n",
+                    "source": "x",
+                    "descriptions": {"zh-CN": "中文简介"},
+                    "readme": 'English readme with <span style="color:#ff5500">orange</span> and **bold**.',
+                    "readmes": {
+                        "zh-CN": '中文 readme，<span style="color:red">红色</span>与 ~~删除线~~。'  # noqa: RUF001
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        service = commands_service()
+        service.i18n = I18n(language=language)
+        service.config.plugins.repositories.append(
+            PluginRepositoryConfig(name="local", url=tmp_path.as_uri())
+        )
+        service.market = PluginMarket([Repository("local", tmp_path.as_uri())])
+        return CommandRouter(service), service
+
+    async def test_market_show_uses_localized_readme(self, tmp_path: Path) -> None:
+        commands, _ = self._repo(tmp_path, "zh-CN")
+        response = await commands.execute("plugin market show mailflow-l10n")
+        assert response.ok
+        assert "中文 readme" in response.text
+        assert "English readme" not in response.text
+
+    async def test_market_show_falls_back_to_english(self, tmp_path: Path) -> None:
+        commands, _ = self._repo(tmp_path, "en")
+        response = await commands.execute("plugin market show mailflow-l10n")
+        assert response.ok
+        assert "English readme" in response.text
+        assert "中文 readme" not in response.text
+
+    async def test_market_list_uses_localized_description(self, tmp_path: Path) -> None:
+        commands, _ = self._repo(tmp_path, "zh-CN")
+        response = await commands.execute("plugin market list")
+        assert response.ok
+        assert "中文简介" in response.text
+
+    async def test_markdown_renders_span_color_and_strike(self) -> None:
+        from mailflow.commands import _markdown_spans  # pyright: ignore[reportPrivateUsage]
+
+        spans = _markdown_spans(
+            'Before <span style="color:#ff5500">orange</span> and **bold** and ~~strike~~.'
+        )
+        text = "".join(s.text for s in spans)
+        assert "orange" in text and "bold" in text and "strike" in text
+        styles = {s.style for s in spans}
+        assert "#ff5500" in styles
+        assert any("bold" in s.style for s in spans)
+        assert any("strike" in s.style for s in spans)
+
+    async def test_markdown_span_color_is_bounded(self) -> None:
+        from mailflow.commands import _markdown_spans  # pyright: ignore[reportPrivateUsage]
+
+        spans = _markdown_spans('A <span style="color:red">red</span> plain.')
+        joined = "".join(s.text for s in spans)
+        assert "red" in joined and "plain" in joined
+        red_runs = [s for s in spans if s.style == "red"]
+        assert len(red_runs) == 1
+        assert red_runs[0].text.strip() == "red"

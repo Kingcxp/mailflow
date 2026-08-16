@@ -9,7 +9,9 @@ travels as style *metadata*, never embedded ANSI bytes.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import re
 import shlex
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -28,6 +30,8 @@ from mailflow.domain import (
 )
 
 if TYPE_CHECKING:
+    from rich.text import Text
+
     from mailflow.service import MailFlowService
 
 logger = logging.getLogger("mailflow.commands")
@@ -55,37 +59,121 @@ _TOPICS = (
 )
 
 
-def _markdown_spans(markdown: str) -> list[StyleSpan]:
-    """Render a markdown blob as transport-neutral spans (headings/code/bullets)."""
-    spans: list[StyleSpan] = []
-    in_code = False
-    for line in markdown.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_code = not in_code
-            spans.append(StyleSpan(text="\n"))
-            continue
-        if in_code:
-            spans.append(StyleSpan(text=f"  {line}\n", style=_STYLE_MUTED))
-            continue
-        if stripped.startswith("#"):
-            level = len(stripped) - len(stripped.lstrip("#"))
-            title = stripped.lstrip("#").strip()
-            spans.append(
-                StyleSpan(
-                    text=f"\n{title}\n",
-                    style=_STYLE_HEADER if level == 1 else "bold",
-                )
-            )
-        elif stripped.startswith(("-", "*", "+", "•")):
-            spans.append(StyleSpan(text=f"  {stripped}\n"))
-        elif stripped.startswith(">"):
-            spans.append(StyleSpan(text=f"  {stripped[1:].strip()}\n", style=_STYLE_MUTED))
-        elif stripped == "":
-            spans.append(StyleSpan(text="\n"))
+_SPAN_OPEN = re.compile(r"<span\b[^>]*?\bstyle\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))[^>]*>")
+_SPAN_CLOSE = re.compile(r"</span\s*>")
+# Private-use markers smuggled through the markdown renderer, then resolved
+# into span styles so `<span style="color:...">` colors text in every frontend.
+_SPAN_BEGIN = "\ue000"
+_SPAN_END = "\ue001"
+_SPAN_STOP = "\ue002"
+
+
+def _span_color(style_text: str) -> str | None:
+    match = re.search(r"color\s*:\s*([^;]+)", style_text or "")
+    if not match:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def _inject_span_markers(markdown: str) -> str:
+    """Replace <span style="color:X">…</span> with sentinel markers that the
+    markdown renderer treats as literal text, so the color survives parsing."""
+
+    def open_repl(match: re.Match[str]) -> str:
+        color = _span_color(match.group(1) or match.group(2) or match.group(3) or "")
+        return f"{_SPAN_BEGIN}{color}{_SPAN_END}" if color else ""
+
+    return _SPAN_CLOSE.sub(_SPAN_STOP, _SPAN_OPEN.sub(open_repl, markdown))
+
+
+def _resolve_span_markers(text: Text) -> None:
+    """Turn sentinel markers into real color styles on the rich Text,
+    keeping every other span's offsets valid."""
+    opens: list[tuple[int, str]] = []
+    closes: list[int] = []
+    position = 0
+    while True:
+        next_open = text.plain.find(_SPAN_BEGIN, position)
+        next_close = text.plain.find(_SPAN_STOP, position)
+        if next_open == -1 and next_close == -1:
+            break
+        if next_close != -1 and (next_open == -1 or next_close < next_open):
+            closes.append(next_close)
+            position = next_close + 1
         else:
-            spans.append(StyleSpan(text=f"{line}\n"))
-    return spans
+            color_end = text.plain.index(_SPAN_END, next_open)
+            color = text.plain[next_open + 1 : color_end]
+            opens.append((next_open, color))
+            position = color_end + 1
+    for start, color in opens:
+        content_start = start + 1 + len(color) + 1
+        content_end = next((c for c in closes if c > content_start), len(text.plain))
+        text.stylize(color, content_start, content_end)
+    removals = sorted(
+        [(start, 1 + len(color) + 1) for start, color in opens] + [(c, 1) for c in closes],
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    for at, length in removals:
+        text.spans = [
+            span._replace(  # pyright: ignore[reportPrivateUsage]
+                start=span.start - length if span.start >= at else span.start,
+                end=span.end - length if span.end > at else span.end,
+            )
+            for span in text.spans
+        ]
+        # assign last: Text.plain's setter trims out-of-range spans, so the
+        # spans must already be shifted into the new coordinate space
+        text.plain = text.plain[:at] + text.plain[at + length :]
+
+
+def _markdown_spans(markdown: str) -> list[StyleSpan]:
+    """Render markdown as transport-neutral spans via rich, keeping headings,
+    bold/italic/strike, code blocks and `<span style="color:…">` colors."""
+    from rich.console import Console
+    from rich.markdown import Markdown
+    from rich.text import Text
+
+    console = Console(record=True, force_terminal=False, highlight=False, file=io.StringIO())
+    console.print(Markdown(_inject_span_markers(markdown or "")))
+    merged = Text()
+    for text, style, _meta in console._record_buffer:  # pyright: ignore[reportPrivateUsage]
+        if text:
+            merged.append(text, style=style)
+    _resolve_span_markers(merged)
+    spans: list[StyleSpan] = []
+    offset = 0
+    for line in merged.plain.splitlines():
+        line_len = len(line)
+        if line_len:
+            char_styles = [""] * line_len
+            for span in merged.spans:
+                start = max(span.start - offset, 0)
+                end = min(span.end - offset, line_len)
+                style_str = str(span.style) if span.style else ""
+                if not style_str:
+                    continue
+                for index in range(start, end):
+                    char_styles[index] = " ".join(
+                        part for part in (char_styles[index], style_str) if part
+                    )
+            run_start = 0
+            for index in range(1, line_len + 1):
+                current = char_styles[index - 1]
+                nxt = char_styles[index] if index < line_len else None
+                if current != nxt:
+                    spans.append(
+                        StyleSpan(
+                            text=line[run_start:index] + ("\n" if index == line_len else ""),
+                            style=current,
+                        )
+                    )
+                    run_start = index
+        else:
+            spans.append(StyleSpan(text="\n"))
+        offset += line_len + 1
+    return spans or [StyleSpan(text="\n")]
 
 
 class CommandRouter:
@@ -440,10 +528,11 @@ class CommandRouter:
                     " [installed]" if market.is_installed(plugin.id, package=plugin.package) else ""
                 )
                 categories = ",".join(plugin.categories)
+                description = plugin.description_for(self.service.i18n.language)
                 spans.append(StyleSpan(text=f"{plugin.id:<34} "))
                 spans.append(StyleSpan(text=f"{plugin.version:<10} ", style=_STYLE_MUTED))
                 spans.append(StyleSpan(text=f"{categories:<26} ", style=_STYLE_ACCENT))
-                spans.append(StyleSpan(text=f"{plugin.description[:40]}{installed}\n"))
+                spans.append(StyleSpan(text=f"{description[:40]}{installed}\n"))
             if not entries:
                 spans.append(
                     StyleSpan(text=f"\n{self._t('plugin.market_empty')}", style=_STYLE_MUTED)
@@ -459,6 +548,7 @@ class CommandRouter:
                 if market.is_installed(plugin.id, package=plugin.package)
                 else self._t("plugin.not_installed")
             )
+            language = self.service.i18n.language
             spans = [
                 StyleSpan(text=f"{plugin.name or plugin.id} {plugin.version}", style=_STYLE_TITLE),
                 StyleSpan(text=f"\n{self._t('plugin.header_id')}: {plugin.id}"),
@@ -471,10 +561,15 @@ class CommandRouter:
                 StyleSpan(text=f"\n{self._t('plugin.market_repo')}: {repo.name}"),
                 StyleSpan(text=f"\n{self._t('plugin.market_status')}: {status}"),
                 StyleSpan(
-                    text=f"\n{self._t('plugin.market_description')}: {plugin.description or '-'}"
+                    text=f"\n{self._t('plugin.market_description')}: "
+                    f"{plugin.description_for(language) or '-'}"
                 ),
             ]
-            spans.extend(_markdown_spans(plugin.readme or plugin.description or "-"))
+            spans.extend(
+                _markdown_spans(
+                    plugin.readme_for(language) or plugin.description_for(language) or "-"
+                )
+            )
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         return self._err(self._t("plugin.market_usage"))
 
@@ -483,7 +578,9 @@ class CommandRouter:
             return self._err(self._t("plugin.search_usage"))
         query = args[0]
         category = args[1] if len(args) > 1 else ""
-        entries = await asyncio.to_thread(self.service.market.search, query, category)
+        entries = await asyncio.to_thread(
+            self.service.market.search, query, category, self.service.i18n.language
+        )
         spans: list[StyleSpan] = [
             StyleSpan(
                 text=self._t("plugin.market_title", count=len(entries)) + f" — {query!r}",
@@ -500,10 +597,11 @@ class CommandRouter:
                 if self.service.market.is_installed(plugin.id, package=plugin.package)
                 else ""
             )
+            description = plugin.description_for(self.service.i18n.language)
             spans.append(StyleSpan(text=f"{plugin.id:<34} "))
             spans.append(StyleSpan(text=f"{plugin.version:<10} ", style=_STYLE_MUTED))
             spans.append(StyleSpan(text=f"{','.join(plugin.categories):<26} ", style=_STYLE_ACCENT))
-            spans.append(StyleSpan(text=f"{plugin.description[:40]}{installed}\n"))
+            spans.append(StyleSpan(text=f"{description[:40]}{installed}\n"))
         if not entries:
             spans.append(StyleSpan(text=f"\n{self._t('plugin.market_empty')}", style=_STYLE_MUTED))
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))

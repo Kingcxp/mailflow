@@ -5,6 +5,7 @@ methods; no business logic lives here."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import queue as queue_module
 from datetime import datetime
 from typing import Any, ClassVar, cast
@@ -33,6 +34,8 @@ from textual.widgets import (
     TextArea,
 )
 
+from mailflow_tui.scaffold import PluginScaffoldScreen
+
 _URGENCY_OPTIONS = [
     ("ad (gray: ads)", "ad"),
     ("info (green: useful)", "info"),
@@ -52,10 +55,8 @@ def _localize(service: MailFlowService, value: datetime, fmt: str = "%Y-%m-%d %H
 
 def _remove_column(table: DataTable[Any], key: str) -> None:
     """Drop a column by key, tolerating absence (used when relabeling)."""
-    try:
+    with contextlib.suppress(Exception):
         table.remove_column(key)
-    except Exception:
-        pass
 
 
 class ReplyModal(ModalScreen[Any]):
@@ -622,6 +623,7 @@ class MarketPane(Vertical):
             )
             yield Select([], id="market-category")
             yield Button(self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary")
+            yield Button(self._service.t("tui.btn_new_plugin"), id="market-create")
         yield DataTable(id="market-table")
         with Vertical(id="market-detail"):
             yield Markdown("", id="market-readme")
@@ -693,16 +695,18 @@ class MarketPane(Vertical):
         table.clear()
         filter_value = cast(str, self.query_one("#market-category", Select).value or "all")  # pyright: ignore[reportUnknownMemberType]
         query = self.query_one("#market-search", Input).value.strip().lower()
+        language = self._service.i18n.language
         for _repo, plugin in self._entries:
             if filter_value and filter_value != "all" and filter_value not in plugin.categories:
                 continue
             if query:
                 blob = f"{plugin.id} {plugin.name} {plugin.description}".lower()
+                blob += f" {plugin.description_for(language)}".lower()
                 if query not in blob:
                     continue
             table.add_row(
                 plugin.name or plugin.id,
-                plugin.description[:44],
+                plugin.description_for(language)[:44],
                 plugin.version,
                 self._market_status_of(plugin),
                 key=plugin.id,
@@ -722,7 +726,10 @@ class MarketPane(Vertical):
 
     def _show_detail(self, plugin: MarketPlugin) -> None:
         self._selected = plugin
-        readme = plugin.readme or f"# {plugin.name or plugin.id}\n\n{plugin.description}"
+        language = self._service.i18n.language
+        readme = plugin.readme_for(language) or (
+            f"# {plugin.name or plugin.id}\n\n{plugin.description_for(language)}"
+        )
         self.query_one("#market-readme", Markdown).update(readme)
         self.query_one("#market-status", Static).update(
             f"{self._service.t('plugin.header_id')}: {plugin.id} — {self._market_status_of(plugin)}"
@@ -745,6 +752,9 @@ class MarketPane(Vertical):
         button_id = event.button.id
         if button_id == "market-refresh":
             await self.refresh_market()
+            return
+        if button_id == "market-create":
+            self.app.push_screen(PluginScaffoldScreen(self._service))  # pyright: ignore[reportUnknownMemberType]
             return
         if self._selected is None:
             return

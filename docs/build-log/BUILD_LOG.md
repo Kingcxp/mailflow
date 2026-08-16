@@ -82,3 +82,16 @@ Final phase-2 gate: 144 tests passed, mypy/pyright strict clean, ruff clean.
   (header, tabs, search placeholder) in this environment.
 - Interactive `mailflow shell` pipelined `help mail`, `mail list`,
   `lang get`, `exit` successfully.
+
+## Marketplace v2 round (post v0.2.0)
+
+| Change | Verification |
+| ------ | ------------ |
+| Per-plugin folder layout: root `index.json` (categories only) + `category/<id>/plugin.json` (markdown readme) + source; `_list_plugin_dirs` over file://, GitHub contents API, INDEX.json fallback | CLI e2e: `repo add` local + `market list` (5) + `market show`; unit/e2e fixtures migrated; 152 tests |
+| Plugin i18n: `MarketPlugin.descriptions` / `readmes`; `description_for` / `readme_for` pick the active app language (CLI list/show/search + TUI table/detail); search matches translations | localization tests (zh-CN readme/description, en fallback) |
+| Rich markdown spans: render via rich Markdown with `<span style="color:…">` support (sentinel markers → span styles), bold/strike/code/quote/bullets/headings; bounded and merged with overlapping styles | span-color + boundedness unit tests |
+| Plugin template generator (`mailflow.plugin_template`): 5 category stubs producing complete loadable plugins | 14 template tests; e2e: scaffold → temp venv install → entry-point discovery → `build_registry` instantiation → processor `process()` ran |
+| TUI new-plugin wizard (`PluginScaffoldScreen`): DirectoryTree folder pick + subfolder checkbox/name + template-category Select | headless pilot test scaffolds into tmp_path |
+| `mailflow-repo` documentation: docs/ (getting started, metadata ref, categories, per-category guides, localization, validation), per-category README + INDEX.json, per-plugin README, README links | repo pushed; validator `--all` passes 5/5 |
+| Plugin PR validation workflow (`validate-plugins.yml`) + `tools/validate_plugin.py`: changed-plugin detection (unchanged plugins skipped), metadata/install/entry-point/registration checks + real processor run | local run of the script against all 5 plugins: `ok: 5 plugin(s) valid, loadable and runnable` |
+| MailFlow CI workflow (`ci.yml`): uv sync, ruff check/format, mypy, pyright, pytest, docs gate on push + PR (ubuntu + windows) | workflow committed |

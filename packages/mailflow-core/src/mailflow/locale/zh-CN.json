@@ -288,6 +288,21 @@
       "required": "必需",
       "value": "值",
       "description": "说明"
-    }
+    },
+    "tui.scaffold_title": "新建插件向导",
+    "tui.scaffold_pick_folder": "在目录树中选择目标文件夹",
+    "tui.scaffold_subfolder": "创建新的子文件夹",
+    "tui.scaffold_folder_name": "子文件夹名称",
+    "tui.scaffold_plugin_id": "插件 id（小写字母与短横线，如 mailflow-notify-foo）",
+    "tui.scaffold_type": "模板分类",
+    "tui.btn_generate": "生成",
+    "tui.btn_cancel": "取消",
+    "tui.scaffold_created": "插件模板已创建：{path}",
+    "plugin.template.mail_source": "向流水线提供标准化邮件",
+    "plugin.template.processor": "分类链上的一步处理",
+    "plugin.template.llm_backend": "接入一个模型的对话补全服务",
+    "plugin.template.notifier": "把分析结果投递到某个渠道",
+    "plugin.template.storage": "持久化存储后端",
+    "tui.btn_new_plugin": "新建"
   }
 }

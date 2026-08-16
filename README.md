@@ -9,6 +9,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
+[![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-144%20passed-67C23A)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
@@ -168,6 +169,21 @@ uv run mailflow plugin install mailflow-notify-ntfy     # restart to load
 The [mailflow-repo](https://github.com/Kingcxp/mailflow-repo) repository
 hosts the marketplace: one folder per plugin, grouped by category, so adding
 a plugin is a single pull request that never touches other plugins' files.
+Its docs/ folder is the plugin-development guide, and a pull-request
+workflow validates exactly the plugins each PR changes.
+
+**Write your own plugin** — the TUI has a new-plugin wizard (Market tab →
+New): pick a folder in the directory tree, optionally create a subfolder,
+choose the template category (mail source / processor / LLM backend /
+notifier / storage), and MailFlow generates a complete, loadable template.
+The wizard is also available to hosts embedding the core via
+`mailflow.plugin_template.scaffold_plugin`.
+
+**Localized and styled** — plugins can ship translated one-line
+descriptions and markdown readmes (`descriptions` / `readmes` in
+plugin.json); CLI and TUI automatically use the variant matching the app
+language, and `market show` renders the readme with rich markdown effects
+(**bold**, ~~strike~~, `<span style="color:#ff5500">colors</span>`).
 
 ## Project layout
 

@@ -58,6 +58,18 @@ class MarketPlugin(BaseModel):
     license: str = ""
     homepage: str = ""
     readme: str = ""  # markdown long description shown in the detail view
+    # locale code -> translated one-line description / markdown readme; the
+    # active app language is preferred, falling back to the default fields.
+    descriptions: dict[str, str] = Field(default_factory=lambda: {})
+    readmes: dict[str, str] = Field(default_factory=lambda: {})
+
+    def description_for(self, language: str) -> str:
+        """One-line description for a language, falling back to the default."""
+        return self.descriptions.get(language) or self.description
+
+    def readme_for(self, language: str) -> str:
+        """Markdown readme for a language, falling back to the default."""
+        return self.readmes.get(language) or self.readme
 
 
 class MarketIndex(BaseModel):
@@ -182,9 +194,14 @@ class PluginMarket:
         return None
 
     def search(
-        self, query: str, category: str = "", timeout: float = _FETCH_TIMEOUT
+        self,
+        query: str,
+        category: str = "",
+        language: str = "",
+        timeout: float = _FETCH_TIMEOUT,
     ) -> list[tuple[Repository, MarketPlugin]]:
-        """Filter plugins by name/description (case-insensitive) and category."""
+        """Filter plugins by name/description (case-insensitive) and category.
+        Localized descriptions are matched too when a language is given."""
         haystack = query.strip().lower()
         results: list[tuple[Repository, MarketPlugin]] = []
         for repository, plugin in self.list_plugins(timeout):
@@ -192,6 +209,8 @@ class PluginMarket:
                 continue
             if haystack:
                 blob = f"{plugin.id} {plugin.name} {plugin.description}".lower()
+                if language:
+                    blob += f" {plugin.description_for(language)}".lower()
                 if haystack not in blob:
                     continue
             results.append((repository, plugin))
