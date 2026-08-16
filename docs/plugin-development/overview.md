@@ -27,11 +27,42 @@ fake-mail = "mailflow_mail_fake.plugin:plugin"
 
 ## Hooks
 
+**Declarative style (recommended)** — one definition plus one decorated
+class per component; ids resolve from the decorator argument,
+`component_id`/`backend_id`/`processor_id` attributes, or the class name:
+
+```python
+from mailflow.plugin_api import define_plugin
+
+PLUGIN = define_plugin(
+    "mailflow-mail-fake",  # unique across all plugins
+    name="Fake Mail Source",
+    version="0.1.0",
+    description="...",
+)
+
+
+@PLUGIN.source("fake")
+class FakeSource:
+    async def run(self, emit, stop_event) -> None: ...
+
+
+plugin = PLUGIN.build()
+```
+
+Available decorators: `@PLUGIN.source`, `@PLUGIN.processor`, `@PLUGIN.llm`,
+`@PLUGIN.notifier`, `@PLUGIN.storage`, `@PLUGIN.bot_exporter` — the
+component kinds are collected automatically. The scaffold templates
+generate this style, so a new plugin is a definition plus one class.
+
+**Classic style** — the two hooks by hand, equivalent to the declarative
+API:
+
 ```python
 from mailflow.plugins import PluginInfo
 
 PLUGIN_INFO = PluginInfo(
-    plugin_id="mailflow-mail-fake",  # unique across all plugins
+    plugin_id="mailflow-mail-fake",
     name="Fake Mail Source",
     version="0.1.0",
     description="...",
@@ -73,6 +104,11 @@ continues (the failure is logged).
 - `llm-backend.md` — a chat-completions transport
 - `notifier.md` — deliver computed analyses
 - `storage.md` — durable persistence with trash semantics
+- `bot-exporter.md` — turn a configured instance into a chatbot-framework plugin
+
+See [development/deployment.md](../development/deployment.md) for the
+three-platform setup (Windows/Linux/macOS): running the project, exporting
+bot plugins, installing plugins, and managing a service from CLI/TUI/chat.
 
 ## Testing
 

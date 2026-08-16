@@ -7,6 +7,32 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- Mail deduplication: `normalized_message_id` is account-independent
+  (provider id → RFC message id → content digest) and the runtime skips
+  already-stored or in-flight copies, so a mail forwarded to several
+  configured accounts is processed, stored and notified exactly once.
+- Chat-first command surface: `mail list`/`action list`/`plugin list`/
+  `help` are paginated (10 rows per page) with wrap-friendly layouts,
+  `mail list --query` filtering, and unique-prefix ids for every
+  `mail`/`action` operation.
+- `feedback <mail_id> <reason>`: user notes roll into guidelines injected
+  into every LLM analysis, so the model adjusts its filtering strategy with
+  a grounded rationale; `mail show` displays the note.
+- Daily 08:00 digest (`mailflow.action.digest`): today/upcoming counts plus
+  approaching action items, once per day, for the host to paginate.
+- Updates: MailFlow releases via the GitHub API and plugin versions via the
+  marketplace for the recorded update source (local installs and removed
+  repositories are never auto-updated); `update check|now|status|auto on|off`
+  and a daily auto-update loop (`general.auto_update`, default on).
+- Local plugin installs: `plugin install <path>` (single plugin folder or a
+  batch of folders) and a TUI file-tree installer (Market → 从文件夹安装).
+- Chat bridge in exported bot plugins: `mailflow ...` (NoneBot) /
+  `/mailflow ...` (AstrBot) messages dispatch to the shared command router,
+  long replies split into several messages, the digest is paginated.
+- Declarative plugin API (`mailflow.plugin_api.define_plugin` + decorators)
+  and scaffold templates that ship a uv-ready dev environment
+  (`uv sync --group dev`); uv install instructions for all three platforms.
+- docs/development/deployment.md: Windows/Linux/macOS walkthrough.
 - Formal-letter reply templates (Chinese / English): `reply compose
   <mail_id> <cn|en>` (or the TUI template buttons) pre-fills the draft with
   an opening, body, closing and a right-aligned signature block, the date

@@ -140,7 +140,7 @@ make exe-onefile
 | 领域 | 链接 |
 | ---- | ----- |
 | 架构 | [总览](docs/architecture/overview.md) · [领域与邮件](docs/architecture/domain-and-mail.md) · [插件](docs/architecture/plugin-system.md) · [流水线](docs/architecture/pipeline.md) · [LLM](docs/architecture/llm.md) · [日志](docs/architecture/logging.md) · [存储与保留](docs/architecture/storage-and-retention.md) · [回复](docs/architecture/replies.md) · [TUI](docs/architecture/tui.md) · [机器人导出](docs/architecture/bot-export.md) |
-| 开发 | [环境搭建](docs/development/setup.md) · [内嵌](docs/development/embedding.md) · [测试](docs/development/tests.md) · [质量](docs/development/quality.md) · [打包](docs/development/packaging.md) |
+| 开发 | [环境搭建](docs/development/setup.md) · [部署](docs/development/deployment.md) · [内嵌](docs/development/embedding.md) · [测试](docs/development/tests.md) · [质量](docs/development/quality.md) · [打包](docs/development/packaging.md) |
 | 插件开发 | [总览](docs/plugin-development/overview.md) · [邮件源](docs/plugin-development/mail-source.md) · [处理器](docs/plugin-development/processor.md) · [LLM 后端](docs/plugin-development/llm-backend.md) · [通知器](docs/plugin-development/notifier.md) · [存储](docs/plugin-development/storage.md) · [机器人导出器](docs/plugin-development/bot-exporter.md) |
 | 配置 | [总览](docs/configuration/overview.md) · [i18n](docs/configuration/i18n.md) |
 | 给 AI 代理 | [不变量](docs/agent/invariants.md) · [模块地图](docs/agent/module-map.md) · [变更手册](docs/agent/change-playbook.md) |

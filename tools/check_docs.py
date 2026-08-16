@@ -27,6 +27,7 @@ REQUIRED = (
     "docs/development/tests.md",
     "docs/development/quality.md",
     "docs/development/packaging.md",
+    "docs/development/deployment.md",
     "docs/plugin-development/overview.md",
     "docs/plugin-development/mail-source.md",
     "docs/plugin-development/processor.md",

@@ -126,3 +126,17 @@ Final phase-2 gate: 144 tests passed, mypy/pyright strict clean, ruff clean.
 | TUI ReplyModal: template buttons + format toolbar (bold/italic/left/center/right via TextArea selection/line ops), dialog layout in app.tcss | e2e: apply cn template (structure + right align + date), bold selection, align line, save persists |
 | `plugins/mailflow-notify-telegram` + marketplace copy, notifier docs/INDEX/README | integration test (urllib monkeypatch: URL/body, skip-without-credentials); `validate_plugin.py` ok 1/1 |
 | i18n keys (reply.*, tui.reply_*) en/zh-CN; README command rows; changelog | i18n parity test green |
+
+## Chat/updates/template round (post letter round)
+
+| Change | Verification |
+| ------ | ------------ |
+| Account-independent mail identity + in-flight/storage dedup in the runtime | dedup tests: cross-account forward stored/notified once, refetch skipped, digest identity |
+| Paginated chat listings (mail/action/plugin/help, 10/page), --query, unique-prefix ids, wrap-friendly rows | command tests: pagination/query/prefix |
+| `feedback` command → rolling guidelines injected into LLM analysis (ProcessingContext) | pipeline injection tests + command tests |
+| Daily 08:00 digest event (today/upcoming counts + items) once per day | runtime digest tests (fires once, pre-hour silent) |
+| `mailflow.updates`: GitHub release check, plugin marketplace version check, update-source gating, `update` commands, daily auto-update loop, `general.auto_update` | updates unit tests (release/plugin/local-source gating/commands/loop) |
+| Local plugin installs: `plugin install <path>` + TUI file-tree installer (detect_plugin_folders) | command tests single/batch/empty |
+| Chat bridge in exported nonebot/astrbot templates (mailflow prefix, chunked replies, digest paging); marketplace copies synced | templates compile-checked; export tests |
+| `mailflow.plugin_api` declarative decorators; scaffold templates generate this style with dev dependency group + uv install docs | plugin_api tests; all six template categories compile/load/register |
+| docs/development/deployment.md (3 platforms) + overview decorator style; docs gate now 37 | docs gate OK |
