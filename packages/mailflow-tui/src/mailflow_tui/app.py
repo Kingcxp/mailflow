@@ -190,23 +190,27 @@ class MailPane(Vertical):
     async def on_mount(self) -> None:
         await self.refresh_mail()
 
-    def _mail_table(self) -> DataTable[Any]:
-        return self.query_one("#mail-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+    def _mail_table(self) -> DataTable[Any] | None:
+        return self.query_one_optional("#mail-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
 
-    def _urgency_select(self) -> Select[Any]:
-        return self.query_one("#urgency-select", Select)  # pyright: ignore[reportUnknownVariableType]
+    def _urgency_select(self) -> Select[Any] | None:
+        return self.query_one_optional("#urgency-select", Select)  # pyright: ignore[reportUnknownVariableType]
 
     def _ensure_columns(self) -> None:
         if getattr(self, "_columns_done", False):
             return
         table = self._mail_table()
+        if table is None:
+            return
         for key in ("urgency", "subject", "sender", "date"):
             _remove_column(table, key)
         table.add_column(self._service.t("tui.column_urgency"), key="urgency")
         table.add_column(self._service.t("tui.column_subject"), key="subject")
         table.add_column(self._service.t("tui.column_sender"), key="sender")
         table.add_column(self._service.t("tui.column_date"), key="date")
-        self._urgency_select().tooltip = self._service.t("tui.urgency_help")
+        urgency = self._urgency_select()
+        if urgency is not None:
+            urgency.tooltip = self._service.t("tui.urgency_help")
         self._columns_done = True
 
     async def relabel(self) -> None:
@@ -215,10 +219,13 @@ class MailPane(Vertical):
 
     async def refresh_mail(self) -> None:
         table = self._mail_table()
-        self._ensure_columns()
+        if table is None:
+            return
         table.clear()
+        self._ensure_columns()
         self._records = await self._service.list_mails()
-        query = self.query_one("#mail-search", Input).value.strip().lower()
+        search = self.query_one_optional("#mail-search", Input)
+        query = search.value.strip().lower() if search is not None else ""
         for record in self._records:
             if query and not self._matches(record, query):
                 continue
@@ -246,6 +253,11 @@ class MailPane(Vertical):
         self._selected_id = event.row_key.value
         await self._show_selected()
 
+    def _set_static(self, selector: str, content: str) -> None:
+        node = self.query_one_optional(selector, Static)
+        if node is not None:
+            node.update(content)
+
     async def _show_selected(self) -> None:
         if self._selected_id is None:
             return
@@ -253,12 +265,14 @@ class MailPane(Vertical):
         if record is None:
             return
         service = self._service
-        self.query_one("#mail-summary", Static).update(
-            f"[bold]{service.t('tui.detail_summary')}:[/bold] {record.summary}"
+        self._set_static(
+            "#mail-summary",
+            f"[bold]{service.t('tui.detail_summary')}:[/bold] {record.summary}",
         )
         reason = record.analysis.reason if record.analysis else ""
-        self.query_one("#mail-reason", Static).update(
-            f"[bold]{service.t('tui.detail_reason')}:[/bold] {reason or '-'}"
+        self._set_static(
+            "#mail-reason",
+            f"[bold]{service.t('tui.detail_reason')}:[/bold] {reason or '-'}",
         )
         actions_text = ""
         if record.action_items:
@@ -268,19 +282,18 @@ class MailPane(Vertical):
                 for item in record.action_items
             ]
             actions_text = f"\n[bold]{service.t('tui.action_content')}:[/bold]\n" + "\n".join(lines)
-        self.query_one("#mail-actions", Static).update(actions_text)
+        self._set_static("#mail-actions", actions_text)
         body = record.mail.body_text.strip() or "(no body)"
-        self.query_one("#mail-body", Static).update(
-            f"[bold]{service.t('tui.detail_body')}:[/bold]\n{body}"
-        )
+        self._set_static("#mail-body", f"[bold]{service.t('tui.detail_body')}:[/bold]\n{body}")
         reply_flag = (
             f"\n[bold yellow]{service.t('tui.detail_reply_required', answer=service.t('common.yes'))}[/bold yellow]"
             if record.analysis and record.analysis.reply_required
             else ""
         )
-        self.query_one("#mail-notes", Static).update(
+        self._set_static(
+            "#mail-notes",
             f"{reply_flag}\n{service.t('tui.urgency_label')}: {record.effective_urgency.value} "
-            f"({'manual' if record.manual_urgency is not None else 'auto'})"
+            f"({'manual' if record.manual_urgency is not None else 'auto'})",
         )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -329,13 +342,15 @@ class ActionsPane(Vertical):
     async def on_mount(self) -> None:
         await self.refresh_actions()
 
-    def _actions_table(self) -> DataTable[Any]:
-        return self.query_one("#actions-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+    def _actions_table(self) -> DataTable[Any] | None:
+        return self.query_one_optional("#actions-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
 
     def _ensure_columns(self) -> None:
         if getattr(self, "_columns_done", False):
             return
         table = self._actions_table()
+        if table is None:
+            return
         for key in ("time", "type", "content", "notes", "source"):
             _remove_column(table, key)
         table.add_column(self._service.t("tui.action_time"), key="time")
@@ -351,12 +366,14 @@ class ActionsPane(Vertical):
 
     async def refresh_actions(self) -> None:
         table = self._actions_table()
-        self._ensure_columns()
+        if table is None:
+            return
         table.clear()
+        self._ensure_columns()
         self._items = await self._service.list_actions()
-        self.query_one("#actions-hint", Static).update(
-            self._service.t("tui.empty") if not self._items else _BLANK
-        )
+        hint = self.query_one_optional("#actions-hint", Static)
+        if hint is not None:
+            hint.update(self._service.t("tui.empty") if not self._items else _BLANK)
         for item in self._items:
             table.add_row(
                 item.time_range,
@@ -408,13 +425,20 @@ class RuntimePane(Vertical):
         self._columns_done = False
         await self.refresh_runtime()
 
-    def _plugins_table(self) -> DataTable[Any]:
-        return self.query_one("#runtime-plugins-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+    def _set_static(self, selector: str, content: str) -> None:
+        node = self.query_one_optional(selector, Static)
+        if node is not None:
+            node.update(content)
+
+    def _plugins_table(self) -> DataTable[Any] | None:
+        return self.query_one_optional("#runtime-plugins-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
 
     def _ensure_columns(self) -> None:
         if getattr(self, "_columns_done", False):
             return
         table = self._plugins_table()
+        if table is None:
+            return
         for key in ("plugin", "name", "kinds", "status"):
             _remove_column(table, key)
         table.add_column(self._service.t("plugin.header_id"), key="plugin")
@@ -426,9 +450,11 @@ class RuntimePane(Vertical):
     async def refresh_runtime(self) -> None:
         snapshot = self._service.snapshot()
         service = self._service
-        self._ensure_columns()
         table = self._plugins_table()
+        if table is None:
+            return
         table.clear()
+        self._ensure_columns()
         for plugin in snapshot.plugins:
             status_key = service.plugin_status(plugin.plugin_id)
             status_text = {
@@ -463,20 +489,25 @@ class RuntimePane(Vertical):
             + (f"  fallback: {', '.join(b.fallback_llm_ids)}" if b.fallback_llm_ids else "")
             for b in snapshot.processors
         )
-        self.query_one("#runtime-adapters", Static).update(
-            f"\n[bold]{service.t('tui.runtime_adapters')}:[/bold]\n{adapters or '  -'}"
+        self._set_static(
+            "#runtime-adapters",
+            f"\n[bold]{service.t('tui.runtime_adapters')}:[/bold]\n{adapters or '  -'}",
         )
-        self.query_one("#runtime-accounts", Static).update(
-            f"\n[bold]{service.t('tui.runtime_accounts')}:[/bold]\n{accounts or '  -'}"
+        self._set_static(
+            "#runtime-accounts",
+            f"\n[bold]{service.t('tui.runtime_accounts')}:[/bold]\n{accounts or '  -'}",
         )
-        self.query_one("#runtime-llms", Static).update(
-            f"\n[bold]{service.t('tui.runtime_llms')}:[/bold]\n{llms or '  -'}"
+        self._set_static(
+            "#runtime-llms",
+            f"\n[bold]{service.t('tui.runtime_llms')}:[/bold]\n{llms or '  -'}",
         )
-        self.query_one("#runtime-bindings", Static).update(
-            f"\n[bold]{service.t('tui.runtime_bindings')}:[/bold]\n{bindings or '  -'}"
+        self._set_static(
+            "#runtime-bindings",
+            f"\n[bold]{service.t('tui.runtime_bindings')}:[/bold]\n{bindings or '  -'}",
         )
-        self.query_one("#runtime-storage", Static).update(
-            f"\n[bold]{service.t('tui.runtime_storage')}:[/bold] {snapshot.storage or '-'}"
+        self._set_static(
+            "#runtime-storage",
+            f"\n[bold]{service.t('tui.runtime_storage')}:[/bold] {snapshot.storage or '-'}",
         )
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -561,17 +592,21 @@ class SettingsPane(Vertical):
             (f"{info.name} ({info.code})", info.code)
             for info in self._service.i18n.available_languages()
         ]
-        select = self.query_one("#language-select", Select)  # pyright: ignore[reportUnknownVariableType]
+        select = self.query_one_optional("#language-select", Select)  # pyright: ignore[reportUnknownVariableType]
+        if select is None:
+            return
         select.set_options(options)  # pyright: ignore[reportUnknownMemberType]
         if select.value != self._service.i18n.language:  # pyright: ignore[reportUnknownMemberType]
             select.value = self._service.i18n.language
 
-    def _config_table(self) -> DataTable[Any]:
-        return self.query_one("#config-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+    def _config_table(self) -> DataTable[Any] | None:
+        return self.query_one_optional("#config-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
 
     async def refresh_config(self) -> None:
         """List every configurable option (required/optional, default, value)."""
         table = self._config_table()
+        if table is None:
+            return
         if not table.columns:
             table.add_column(self._service.t("config.option"), key="option")
             table.add_column(self._service.t("config.type"), key="type")
@@ -615,6 +650,7 @@ class MarketPane(Vertical):
         self._service = service
         self._entries: list[tuple[Repository, MarketPlugin]] = []
         self._selected: MarketPlugin | None = None
+        self._refresh_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="market-controls"):
@@ -643,13 +679,20 @@ class MarketPane(Vertical):
     async def on_mount(self) -> None:
         await self.refresh_market()
 
-    def _market_table(self) -> DataTable[Any]:
-        return self.query_one("#market-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+    def _market_table(self) -> DataTable[Any] | None:
+        return self.query_one_optional("#market-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+
+    def _set_status(self, text: str) -> None:
+        status = self.query_one_optional("#market-status", Static)
+        if status is not None:
+            status.update(text)
 
     def _ensure_columns(self) -> None:
         if getattr(self, "_columns_done", False):
             return
         table = self._market_table()
+        if table is None:
+            return
         for key in ("plugin", "description", "version", "status"):
             _remove_column(table, key)
         table.add_column(self._service.t("plugin.header_name"), key="plugin")
@@ -659,8 +702,9 @@ class MarketPane(Vertical):
         self._columns_done = True
 
     async def relabel(self) -> None:
-        self._columns_done = False
-        await self.refresh_market()
+        async with self._refresh_lock:
+            self._columns_done = False
+            await self._refresh_market_impl()
 
     def _market_status_of(self, plugin: MarketPlugin) -> str:
         market = self._service.market
@@ -674,27 +718,29 @@ class MarketPane(Vertical):
         return self._service.t("plugin.installed")
 
     async def refresh_market(self) -> None:
-        if getattr(self, "_refreshing", False):
-            return
-        self._refreshing = True
-        try:
+        async with self._refresh_lock:
             await self._refresh_market_impl()
-        finally:
-            self._refreshing = False
 
     async def _refresh_market_impl(self) -> None:
+        table = self._market_table()
+        if table is None:
+            return
+        table.clear()
         self._ensure_columns()
         market = self._service.market
-        self.query_one("#market-status", Static).update(self._service.t("tui.loading"))
+        self._set_status(self._service.t("tui.loading"))
         try:
             self._entries = await asyncio.to_thread(market.list_plugins)
         except Exception as exc:
-            self.query_one("#market-status", Static).update(str(exc))
+            self._set_status(str(exc))
             return
         table = self._market_table()
-        table.clear()
-        filter_value = cast(str, self.query_one("#market-category", Select).value or "all")  # pyright: ignore[reportUnknownMemberType]
-        query = self.query_one("#market-search", Input).value.strip().lower()
+        if table is None:
+            return
+        category = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
+        filter_value = cast(str, category.value or "all") if category is not None else "all"  # pyright: ignore[reportUnknownMemberType]
+        search = self.query_one_optional("#market-search", Input)
+        query = search.value.strip().lower() if search is not None else ""
         language = self._service.i18n.language
         for _repo, plugin in self._entries:
             if filter_value and filter_value != "all" and filter_value not in plugin.categories:
@@ -713,14 +759,15 @@ class MarketPane(Vertical):
             )
         categories = sorted({c for _r, p in self._entries for c in p.categories})
         if categories != getattr(self, "_categories", None):
-            select = self.query_one("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
-            select.set_options([("all", "all"), *[(c, c) for c in categories]])  # pyright: ignore[reportUnknownMemberType]
-            self._categories = categories
-        select = self.query_one("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
+            select = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
+            if select is not None:
+                select.set_options([("all", "all"), *[(c, c) for c in categories]])  # pyright: ignore[reportUnknownMemberType]
+                self._categories = categories
+        select = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
         desired = filter_value if filter_value in {*categories, "all"} else "all"
-        if select.value != desired:  # pyright: ignore[reportUnknownMemberType]
+        if select is not None and select.value != desired:  # pyright: ignore[reportUnknownMemberType]
             select.value = desired
-        self.query_one("#market-status", Static).update("")
+        self._set_status("")
         if self._selected is not None:
             self._show_detail(self._selected)
 
@@ -730,8 +777,10 @@ class MarketPane(Vertical):
         readme = plugin.readme_for(language) or (
             f"# {plugin.name or plugin.id}\n\n{plugin.description_for(language)}"
         )
-        self.query_one("#market-readme", Markdown).update(readme)
-        self.query_one("#market-status", Static).update(
+        readme_node = self.query_one_optional("#market-readme", Markdown)
+        if readme_node is not None:
+            readme_node.update(readme)
+        self._set_status(
             f"{self._service.t('plugin.header_id')}: {plugin.id} — {self._market_status_of(plugin)}"
         )
 
