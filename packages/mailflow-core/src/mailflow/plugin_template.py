@@ -17,6 +17,8 @@ Category templates (mirrors of the marketplace category folders):
 - ``storage``      — StorageBackend: durable persistence
 - ``bot_exporter`` — BotExporter: generate a chatbot-framework plugin from a
   configured MailFlow instance (NoneBot, AstrBot, or any framework of yours)
+- ``llm_enhancer`` — LLMEnhancer: bounded customization of the built-in LLM
+  analysis (system prompt, extra messages, output post-processing)
 """
 
 from __future__ import annotations
@@ -25,7 +27,15 @@ import json
 import re
 from pathlib import Path
 
-CATEGORIES = ("mail_source", "processor", "llm_backend", "notifier", "storage", "bot_exporter")
+CATEGORIES = (
+    "mail_source",
+    "processor",
+    "llm_backend",
+    "notifier",
+    "storage",
+    "bot_exporter",
+    "llm_enhancer",
+)
 
 _CATEGORY_LABEL = {
     "mail_source": "Mail source",
@@ -34,6 +44,7 @@ _CATEGORY_LABEL = {
     "notifier": "Notifier",
     "storage": "Storage backend",
     "bot_exporter": "Bot exporter",
+    "llm_enhancer": "LLM enhancer",
 }
 
 _DESCRIPTION = {
@@ -43,6 +54,7 @@ _DESCRIPTION = {
     "notifier": "MailFlow notifier: delivers computed analyses to a channel",
     "storage": "MailFlow storage backend: durable persistence for records and drafts",
     "bot_exporter": "MailFlow bot exporter: turns a configured instance into a chatbot-framework plugin",
+    "llm_enhancer": "MailFlow LLM enhancer: bounded customization of the built-in LLM analysis",
 }
 
 # plugin.json readme shown in the marketplace; the <<SPAN_COLOR>> placeholder
@@ -148,14 +160,6 @@ def _plugin_module(plugin_id: str, category: str, description: str) -> str:
     """The category-specific plugin.py stub, loadable and registrable."""
     component_id = _component_id(plugin_id)
     framework_id = component_id.removeprefix("export-")
-    kind_by_category = {
-        "mail_source": "MAIL_SOURCE",
-        "processor": "MAIL_PROCESSOR",
-        "llm_backend": "LLM_BACKEND",
-        "notifier": "NOTIFIER",
-        "storage": "STORAGE",
-        "bot_exporter": "BOT_EXPORTER",
-    }
     common = f'''"""<<name>>: {_CATEGORY_LABEL[category].lower()} for MailFlow.
 
 Scaffolded from the MailFlow plugin template — implement the TODO markers and
@@ -164,22 +168,13 @@ open a pull request against the plugin repository.
 
 from __future__ import annotations
 
-import asyncio
-import logging
-from typing import Any
+from mailflow.plugin_api import define_plugin
 
-from mailflow.domain import ComponentKind
-from mailflow.plugins import PluginInfo
-from mailflow.registry import PluginRegistrar
-
-logger = logging.getLogger("mailflow.plugin.{component_id}")
-
-PLUGIN_INFO = PluginInfo(
-    plugin_id="{plugin_id}",
+PLUGIN = define_plugin(
+    "{plugin_id}",
     name="<<name>>",
     version="0.1.0",
     description="{description}",
-    kinds=[ComponentKind.{kind_by_category[category]}],
 )
 
 '''
@@ -190,35 +185,29 @@ PLUGIN_INFO = PluginInfo(
         "notifier": _NOTIFIER_BODY,
         "storage": _STORAGE_BODY,
         "bot_exporter": _BOT_EXPORTER_BODY,
+        "llm_enhancer": _LLM_ENHANCER_BODY,
     }
     body = (
         module_by_category[category]
         .replace("{component_id}", component_id)
         .replace("{framework_id}", framework_id)
     )
-    tail = f"""
-class {_CATEGORY_LABEL[category].split()[0]}Plugin:
-    def mailflow_plugin_info(self) -> PluginInfo:
-        return PLUGIN_INFO
+    tail = """
+plugin = PLUGIN.build()
 
-    def mailflow_register(self, registrar: PluginRegistrar, config: Any) -> None:
-{body}
-
-
-plugin = {_CATEGORY_LABEL[category].split()[0]}Plugin()
-
-__all__ = ["PLUGIN_INFO", "plugin"]
+__all__ = ["PLUGIN", "plugin"]
 """
-    return common.replace("<<name>>", _CATEGORY_LABEL[category]) + tail
+    return common.replace("<<name>>", _CATEGORY_LABEL[category]) + body + tail
 
 
-_MAIL_SOURCE_BODY = """        registrar.add_source("{component_id}", {Category}Source)
-
-
+_MAIL_SOURCE_BODY = '''@PLUGIN.source("{component_id}")
 class {Category}Source:
-    \"\"\"Streams normalized messages; send replies through the provider.\"\"\"
+    """Streams normalized messages; send replies through the provider."""
 
-    async def run(self, emit, stop_event: asyncio.Event) -> None:
+    def __init__(self, config):
+        self._config = config
+
+    async def run(self, emit, stop_event):
         # TODO: poll your provider and emit(MailMessage(...)) until stop_event
         # is set. Example: emit a placeholder message once.
         # from mailflow.domain import MailAddress, MailMessage
@@ -227,171 +216,180 @@ class {Category}Source:
         #                  recipients=[MailAddress("me@example.com", "Me")]))
         await asyncio.sleep(1)
 
-    async def send_reply(self, mail_id: str, draft: Any) -> None:
+    async def send_reply(self, mail_id, draft):
         # TODO: send the confirmed reply (draft.subject / draft.body / draft.to)
         raise NotImplementedError
 
-    async def close(self) -> None:
-        pass""".replace("{Category}", "Mail")
-
-_PROCESSOR_BODY = """        registrar.add_processor("{component_id}", {Category}Processor)
+    async def close(self):
+        pass
 
 
+'''.replace("{Category}", "Mail")
+
+_PROCESSOR_BODY = '''@PLUGIN.processor("{component_id}")
 class {Category}Processor:
-    \"\"\"One step of the ordered classification chain.\"\"\"
+    """One step of the ordered classification chain."""
 
     processor_id = "{component_id}"
 
-    async def process(self, mail: Any, context: Any) -> Any:
+    def __init__(self, config, router):
+        self._config = config
+        self._router = router
+
+    async def process(self, mail, context):
         # TODO: inspect mail.subject / mail.body and context, then return a
         # ProcessorResult (decision, analysis overlay, notes).
         from mailflow.contracts import ProcessorResult
 
-        return ProcessorResult(notes=[f"processed by {self.processor_id}"])""".replace(
-    "{Category}", "Mail"
-)
-
-_LLM_BODY = """        registrar.add_llm("{component_id}", {Category}Backend)
+        return ProcessorResult(notes=[f"processed by {{self.processor_id}}"])
 
 
+'''.replace("{Category}", "Mail")
+
+_LLM_BODY = '''@PLUGIN.llm("{component_id}")
 class {Category}Backend:
-    \"\"\"Chat-completions transport for one model provider.\"\"\"
+    """Chat-completions transport for one model provider."""
 
     backend_id = "{component_id}"
 
-    async def chat(
-        self,
-        messages: list[dict[str, str]],
-        *,
-        temperature: float | None = None,
-        options: dict[str, Any] | None = None,
-    ) -> Any:
+    def __init__(self, config):
+        self._config = config
+
+    async def chat(self, messages, *, temperature=None, options=None):
         # TODO: call your LLM provider with messages (list of {"role",
         # "content"}) and return an LLMCompletion(text=..., model=...,
         # backend_id=self.backend_id).
         from mailflow.contracts import LLMCompletion
 
-        raise NotImplementedError""".replace("{Category}", "LLM")
-
-_NOTIFIER_BODY = """        registrar.add_notifier("{component_id}", {Category}Notifier)
+        raise NotImplementedError
 
 
+'''.replace("{Category}", "LLM")
+
+_NOTIFIER_BODY = '''@PLUGIN.notifier("{component_id}")
 class {Category}Notifier:
-    \"\"\"Delivers a computed mail analysis to a channel.\"\"\"
+    """Delivers a computed mail analysis to a channel."""
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config):
         self._config = config
 
-    async def notify(self, record: Any) -> None:
+    async def notify(self, record):
         # TODO: deliver record.summary / record.effective_urgency to your
         # channel; skip gracefully when required options are missing.
-        logger.info("notify via {component_id}: %s", record.summary)""".replace(
-    "{Category}", "Channel"
-)
-
-_STORAGE_BODY = """        registrar.add_storage("{component_id}", {Category}Storage)
+        logger.info("notify via {component_id}: %s", record.summary)
 
 
+'''.replace("{Category}", "Channel")
+
+_STORAGE_BODY = '''@PLUGIN.storage("{component_id}")
 class {Category}Storage:
-    \"\"\"Durable persistence. In-memory placeholder; replace with your backend.\"\"\"
+    """Durable persistence. In-memory placeholder; replace with your backend."""
 
-    def __init__(self) -> None:
-        self._mails: dict[str, Any] = {}
-        self._trash: dict[str, Any] = {}
-        self._drafts: dict[str, Any] = {}
-        self._preferences: dict[str, str] = {}
+    def __init__(self, config=None):
+        self._config = config
 
-    async def initialize(self) -> None:
+    async def initialize(self):
         pass
 
-    async def close(self) -> None:
+    async def close(self):
         pass
 
-    async def save_mail(self, record: Any) -> None:
-        self._mails[record.record_id] = record
+    async def save_mail(self, record):
+        raise NotImplementedError
 
-    async def get_mail(self, record_id: str) -> Any:
-        return self._mails.get(record_id)
+    async def get_mail(self, record_id):
+        raise NotImplementedError
 
-    async def list_mails(self, limit: int | None = None) -> list[Any]:
-        return list(self._mails.values())[:limit]
+    async def list_mails(self, limit=None):
+        raise NotImplementedError
 
-    async def count_mails(self) -> int:
-        return len(self._mails)
+    async def count_mails(self):
+        raise NotImplementedError
 
-    async def set_manual_urgency(self, record_id: str, urgency: Any) -> Any:
-        record = self._mails.get(record_id)
-        if record is None:
-            return None
-        record.manual_urgency = urgency
-        return record
+    async def set_manual_urgency(self, record_id, urgency):
+        raise NotImplementedError
 
-    async def delete_mail(self, record_id: str) -> None:
-        record = self._mails.pop(record_id, None)
-        if record is not None:
-            self._trash[record_id] = record
+    async def delete_mail(self, record_id):
+        raise NotImplementedError
 
-    async def list_trash(self) -> list[Any]:
-        return list(self._trash.values())
+    async def list_trash(self):
+        raise NotImplementedError
 
-    async def restore_from_trash(self, record_id: str) -> Any:
-        record = self._trash.pop(record_id, None)
-        if record is not None:
-            self._mails[record_id] = record
-        return record
+    async def restore_from_trash(self, record_id):
+        raise NotImplementedError
 
-    async def purge_trash(self, before: Any) -> int:
-        count = 0
-        for record_id in [r for r, t in self._trash.items() if t.received_at < before]:
-            del self._trash[record_id]
-            count += 1
-        return count
+    async def purge_trash(self, before):
+        raise NotImplementedError
 
-    async def cleanup_mail(self, before: Any) -> int:
-        count = 0
-        for record_id in [r for r, m in self._mails.items() if m.received_at < before]:
-            record = self._mails.pop(record_id)
-            self._trash[record_id] = record
-            count += 1
-        return count
+    async def cleanup_mail(self, before):
+        raise NotImplementedError
 
-    async def save_draft(self, draft: Any) -> None:
-        self._drafts[draft.draft_id] = draft
+    async def save_draft(self, draft):
+        raise NotImplementedError
 
-    async def get_draft(self, draft_id: str) -> Any:
-        return self._drafts.get(draft_id)
+    async def get_draft(self, draft_id):
+        raise NotImplementedError
 
-    async def delete_draft(self, draft_id: str) -> None:
-        self._drafts.pop(draft_id, None)
+    async def delete_draft(self, draft_id):
+        raise NotImplementedError
 
-    async def get_preference(self, key: str) -> str | None:
-        return self._preferences.get(key)
+    async def get_preference(self, key):
+        raise NotImplementedError
 
-    async def set_preference(self, key: str, value: str) -> None:
-        self._preferences[key] = value""".replace("{Category}", "Memory")
+    async def set_preference(self, key, value):
+        raise NotImplementedError
 
-_BOT_EXPORTER_BODY = """        def export(context: Any) -> Any:
-            # TODO: generate the chatbot-framework plugin package under
-            # context.output_dir. context carries the resolved config
-            # (context.config), the enabled plugin ids (context.plugin_ids)
-            # and the active language (context.language). Return a
-            # BotExportResult listing the files you wrote.
-            from mailflow.bot_export import BotExportResult
 
-            target = context.output_dir / "{component_id}"
-            target.mkdir(parents=True, exist_ok=True)
-            readme = target / "README.md"
-            readme.write_text(
-                "# MailFlow for " + "{framework_id}" + "\\n", encoding="utf-8"
-            )
-            return BotExportResult(
-                framework="{framework_id}",
-                plugin_name="{component_id}",
-                created=["{component_id}/README.md"],
-                notes="TODO: replace the placeholder with a real framework plugin",
-            )
+'''.replace("{Category}", "Memory")
 
-        registrar.add_bot_exporter("{framework_id}", export)""".replace("{Category}", "Bot")
+_BOT_EXPORTER_BODY = '''@PLUGIN.bot_exporter("{framework_id}")
+def export_plugin(context):
+    """Writes a chatbot-framework plugin for a configured MailFlow instance."""
+
+    # TODO: generate the framework plugin package under
+    # context.output_dir. context carries the resolved config
+    # (context.config), the enabled plugin ids (context.plugin_ids) and
+    # the active language (context.language). Return a BotExportResult
+    # listing the files you wrote.
+    from mailflow.bot_export import BotExportResult
+
+    target = context.output_dir / "{component_id}"
+    target.mkdir(parents=True, exist_ok=True)
+    readme = target / "README.md"
+    readme.write_text(
+        "# MailFlow for " + "{framework_id}" + "\\n", encoding="utf-8"
+    )
+    return BotExportResult(
+        framework="{framework_id}",
+        plugin_name="{component_id}",
+        created=["{component_id}/README.md"],
+        notes="TODO: replace the placeholder with a real framework plugin",
+    )
+
+
+'''
+
+_LLM_ENHANCER_BODY = '''@PLUGIN.llm_enhancer("{component_id}")
+class {Category}Enhancer:
+    """Bounded customization of the built-in LLM analysis."""
+
+    def __init__(self, config):
+        self._config = config
+
+    def system_prompt(self, base: str) -> str:
+        # TODO: return base + your additions (e.g. output format guidance)
+        return base
+
+    def extra_messages(self, mail, context) -> list[dict[str, str]]:
+        # TODO: additional messages appended after the user message
+        return []
+
+    def post_process(self, analysis, mail, context):
+        # TODO: adjust the parsed analysis; return None to keep it unchanged
+        return None
+
+
+'''.replace("{Category}", "LLM")
 
 
 def template_files(plugin_id: str, category: str, *, name: str = "") -> dict[str, str]:

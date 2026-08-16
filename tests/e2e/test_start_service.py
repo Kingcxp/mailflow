@@ -26,8 +26,6 @@ from mailflow.plugins import PluginInfo, PluginManager
 from mailflow.registry import PluginRegistrar
 from mailflow.service import MailFlowService, start_service
 from mailflow_notify_console.plugin import plugin as notify_plugin
-from mailflow_processor_llm_importance.plugin import plugin as llm_processor_plugin
-from mailflow_processor_rules.plugin import plugin as rules_plugin
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import FakeMailSource, make_mail
 
@@ -159,13 +157,7 @@ async def test_full_service_flow(tmp_path: Path) -> None:
     notified: list[MailRecord] = []
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     e2e_plugin = E2EPlugin(captured, notified)
-    for plugin in (
-        e2e_plugin,
-        rules_plugin,
-        llm_processor_plugin,
-        storage_plugin,
-        notify_plugin,
-    ):
+    for plugin in (e2e_plugin, storage_plugin, notify_plugin):
         assert manager.register(plugin) is not None
 
     service: MailFlowService | None = None
@@ -212,7 +204,7 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         account = next(a for a in snapshot.accounts if a.account_id == "acct-1")
         assert account.provider == "test-source"
         binding = next(b for b in snapshot.processors if b.processor_id == "llm-importance")
-        assert binding.plugin_id == "mailflow-processor-llm-importance"
+        assert binding.plugin_id == "mailflow-core"  # built into the core
         assert binding.llm_id == "primary"
         assert binding.fallback_llm_ids == ["backup"]
         llm_snapshot = next(item for item in snapshot.llms if item.llm_id == "primary")
@@ -278,7 +270,7 @@ async def test_language_persists_across_restart(tmp_path: Path) -> None:
     notified: list[MailRecord] = []
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     e2e_plugin = E2EPlugin(captured, notified)
-    for plugin in (e2e_plugin, rules_plugin, llm_processor_plugin, storage_plugin, notify_plugin):
+    for plugin in (e2e_plugin, storage_plugin, notify_plugin):
         assert manager.register(plugin) is not None
 
     config = build_config(tmp_path / "persist.db")

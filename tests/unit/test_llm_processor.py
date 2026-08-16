@@ -10,7 +10,7 @@ import pytest
 from mailflow.config import ProcessorConfig
 from mailflow.contracts import LLMCompletion, ProcessingContext
 from mailflow.domain import Urgency
-from mailflow_processor_llm_importance.plugin import (
+from mailflow.processors import (
     LLMImportanceProcessor,
     extract_json,
     parse_due_at,
@@ -149,3 +149,51 @@ class TestLLMImportanceProcessor:
         assert result.analysis is not None
         assert result.analysis.urgency is Urgency.INFO
         assert "no llm configured" in result.analysis.reason
+
+
+class TestLLMEnhancers:
+    """Processor plugins extend the built-in LLM analysis through enhancers."""
+
+    class AppendingEnhancer:
+        def system_prompt(self, base: str) -> str:
+            return base + "\nExtra: always answer in Chinese."
+
+        def extra_messages(self, mail: Any, context: ProcessingContext) -> list[dict[str, str]]:
+            return [{"role": "user", "content": "Be very concise."}]
+
+        def post_process(self, analysis: Any, mail: Any, context: ProcessingContext) -> Any:
+            if analysis.urgency is Urgency.URGENT:
+                return analysis.model_copy(
+                    update={"reason": analysis.reason + " (confirmed by enhancer)"}
+                )
+            return None
+
+    async def test_enhancer_prompt_messages_and_output(self) -> None:
+        router = StubRouter(CRITICAL_EXAM_JSON)
+        config = ProcessorConfig(
+            processor_id="p1",
+            provider="llm-importance",
+            llm="primary",
+            fallback_llms=["backup"],
+        )
+        processor = LLMImportanceProcessor(config, router, enhancers=[self.AppendingEnhancer()])
+        result = await processor.process(make_mail(), CONTEXT)
+        # system prompt appended
+        assert any(
+            "Extra: always answer in Chinese." in m["content"]
+            for m in router.last_messages
+            if m["role"] == "system"
+        )
+        # extra message injected after the user message
+        assert {"role": "user", "content": "Be very concise."} in router.last_messages
+        # post-processing adjusted the parsed analysis
+        assert result.analysis is not None
+        assert "confirmed by enhancer" in result.analysis.reason
+
+    async def test_no_enhancers_unchanged(self) -> None:
+        router = StubRouter(CRITICAL_EXAM_JSON)
+        processor = make_processor(router)
+        result = await processor.process(make_mail(), CONTEXT)
+        assert result.analysis is not None
+        assert "confirmed by enhancer" not in result.analysis.reason
+        assert len(router.last_messages) == 2  # system + user only

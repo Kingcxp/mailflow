@@ -119,6 +119,34 @@ class MailProcessor(Protocol):
     async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult: ...
 
 
+class LLMEnhancer(Protocol):
+    """Extends the built-in LLM analysis within a bounded scope.
+
+    Processor plugins implement this to customize how the built-in
+    ``llm-importance`` processor talks to the model and what it keeps:
+    append to the system prompt, inject extra chat messages, and adjust
+    the parsed analysis afterwards. Every hook is optional; the defaults
+    are no-ops.
+    """
+
+    def system_prompt(self, base: str) -> str:
+        """Return the system prompt with your additions appended."""
+        return base
+
+    def extra_messages(self, mail: MailMessage, context: ProcessingContext) -> list[dict[str, str]]:
+        """Additional messages appended after the user message."""
+        return []
+
+    def post_process(
+        self,
+        analysis: MailAnalysis,
+        mail: MailMessage,
+        context: ProcessingContext,
+    ) -> MailAnalysis | None:
+        """Adjust the parsed analysis; return ``None`` to keep it unchanged."""
+        return None
+
+
 class Notifier(Protocol):
     """Delivers an already-computed mail analysis to a channel."""
 

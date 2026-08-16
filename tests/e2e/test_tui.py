@@ -178,11 +178,7 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
     manager.register(TUIPlugin())
     manager.register(storage_plugin)
     from mailflow_notify_console.plugin import plugin as notify_plugin
-    from mailflow_processor_llm_importance.plugin import plugin as llm_processor_plugin
-    from mailflow_processor_rules.plugin import plugin as rules_plugin
 
-    manager.register(rules_plugin)
-    manager.register(llm_processor_plugin)
     manager.register(notify_plugin)
     service = await start_service(
         build_config(tmp_path / "tui.db"),
@@ -433,9 +429,6 @@ async def test_reply_letter_template_and_toolbar(tmp_path: Path) -> None:
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
     manager.register(storage_plugin)
-    from mailflow_processor_rules.plugin import plugin as rules_plugin
-
-    manager.register(rules_plugin)
     service = await start_service(
         build_config(tmp_path / "tui.db"),
         plugin_manager=manager,

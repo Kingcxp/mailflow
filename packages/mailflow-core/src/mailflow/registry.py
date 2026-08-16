@@ -21,6 +21,7 @@ from mailflow.config import (
 )
 from mailflow.contracts import (
     LLMBackend,
+    LLMEnhancer,
     LLMRouter,
     MailProcessor,
     MailSource,
@@ -35,6 +36,7 @@ ProcessorFactory = Callable[[ProcessorConfig, LLMRouter], MailProcessor]
 NotifierFactory = Callable[[NotifierConfig], Notifier]
 StorageFactory = Callable[[StorageConfig], StorageBackend]
 BotExporterFactory = Callable[[BotExportContext], BotExportResult]
+LLMEnhancerFactory = Callable[[ProcessorConfig], LLMEnhancer]
 
 Factory = (
     SourceFactory
@@ -43,6 +45,7 @@ Factory = (
     | NotifierFactory
     | StorageFactory
     | BotExporterFactory
+    | LLMEnhancerFactory
 )
 
 
@@ -91,6 +94,9 @@ class ComponentRegistry:
 
     def bot_exporter_factory(self, component_id: str) -> BotExporterFactory:
         return cast(BotExporterFactory, self.factory(ComponentKind.BOT_EXPORTER, component_id))
+
+    def llm_enhancer_factory(self, component_id: str) -> LLMEnhancerFactory:
+        return cast(LLMEnhancerFactory, self.factory(ComponentKind.LLM_ENHANCER, component_id))
 
     def plugin_for(self, component_id: str) -> str | None:
         snapshot = self._snapshots.get(component_id)
@@ -145,6 +151,11 @@ class PluginRegistrar:
         a plugin for the chatbot framework ``framework_id`` (e.g. ``nonebot``)."""
         self._register(ComponentKind.BOT_EXPORTER, framework_id, factory)
 
+    def add_llm_enhancer(self, component_id: str, factory: LLMEnhancerFactory) -> None:
+        """Register an LLM enhancer: bounded customization of the built-in
+        LLM analysis (system prompt, extra messages, output post-processing)."""
+        self._register(ComponentKind.LLM_ENHANCER, component_id, factory)
+
     @property
     def config(self) -> MailFlowConfig:
         return self._config
@@ -154,6 +165,7 @@ __all__ = [
     "BotExporterFactory",
     "ComponentRegistry",
     "Factory",
+    "LLMEnhancerFactory",
     "LLMFactory",
     "NotifierFactory",
     "PluginRegistrar",

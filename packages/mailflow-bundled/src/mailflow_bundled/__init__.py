@@ -16,16 +16,12 @@ from mailflow_export_nonebot.plugin import plugin as nonebot_export_plugin
 from mailflow_llm_openai_compatible.plugin import plugin as openai_plugin
 from mailflow_mail_fake.plugin import plugin as fake_plugin
 from mailflow_notify_console.plugin import plugin as notify_plugin
-from mailflow_processor_llm_importance.plugin import plugin as llm_processor_plugin
-from mailflow_processor_rules.plugin import plugin as rules_plugin
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 
 BUNDLED_PLUGINS: tuple[Any, ...] = (
     fake_plugin,
     storage_plugin,
     openai_plugin,
-    rules_plugin,
-    llm_processor_plugin,
     notify_plugin,
     nonebot_export_plugin,
     astrbot_export_plugin,

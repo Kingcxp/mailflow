@@ -8,8 +8,6 @@ dependencies = [
   "mailflow-mail-fake",
   "mailflow-storage-sqlite",
   "mailflow-llm-openai-compatible",
-  "mailflow-processor-rules",
-  "mailflow-processor-llm-importance",
   "mailflow-notify-console",
   "mailflow-export-nonebot",
   "mailflow-export-astrbot",

@@ -308,6 +308,7 @@ class ComponentKind(StrEnum):
     MAIL_SOURCE = "mail_source"
     MAIL_PROCESSOR = "mail_processor"
     LLM_BACKEND = "llm_backend"
+    LLM_ENHANCER = "llm_enhancer"
     NOTIFIER = "notifier"
     STORAGE = "storage"
     BOT_EXPORTER = "bot_exporter"

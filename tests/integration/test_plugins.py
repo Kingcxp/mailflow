@@ -347,8 +347,6 @@ class TestBundledRegistration:
             "mailflow-mail-fake",
             "mailflow-storage-sqlite",
             "mailflow-llm-openai-compatible",
-            "mailflow-processor-rules",
-            "mailflow-processor-llm-importance",
             "mailflow-notify-console",
             "mailflow-export-nonebot",
             "mailflow-export-astrbot",
@@ -356,9 +354,9 @@ class TestBundledRegistration:
         assert registry.has(ComponentKind.MAIL_SOURCE, "fake")
         assert registry.has(ComponentKind.STORAGE, "sqlite")
         assert registry.has(ComponentKind.LLM_BACKEND, "openai-compatible")
-        assert registry.has(ComponentKind.MAIL_PROCESSOR, "rules")
-        assert registry.has(ComponentKind.MAIL_PROCESSOR, "llm-importance")
         assert registry.has(ComponentKind.NOTIFIER, "console")
+        # rules/llm-importance are built into the core, not plugin-provided;
+        # start_service registers them (covered by the e2e service tests)
         assert registry.has(ComponentKind.BOT_EXPORTER, "nonebot")
         assert registry.has(ComponentKind.BOT_EXPORTER, "astrbot")
         # ownership is stamped at registration

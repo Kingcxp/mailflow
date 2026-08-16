@@ -1,10 +1,11 @@
-"""LLM importance processor: maps chat-completions JSON into MailFlow domain.
+"""Built-in processors: the deterministic rules pre-filter and the LLM
+importance classifier, shipped with the core (no plugin install needed).
 
-Prompts with the exact four-level urgency semantics, parses structured JSON
-(summary/urgency/reason/reply_required/suggested_reply/action_items/notes),
-maps timed action items with a mail_id backlink, tolerates fenced or
-prose-wrapped JSON, normalizes urgency case and records which backend/LLM
-actually served the request.
+The LLM processor is the extension point for *processor* plugins: an
+:class:`LLMEnhancer` (registered via ``registrar.add_llm_enhancer``) can
+append to the system prompt, add extra chat messages, and post-process the
+LLM output — bounded, composable customization without reimplementing the
+classification itself.
 """
 
 from __future__ import annotations
@@ -17,21 +18,74 @@ from datetime import datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
+from pydantic import BaseModel, Field
+
 from mailflow.config import ProcessorConfig
-from mailflow.contracts import LLMRouter, ProcessingContext, ProcessorResult
+from mailflow.contracts import LLMEnhancer, LLMRouter, ProcessingContext, ProcessorResult
 from mailflow.domain import (
     ActionItem,
-    ComponentKind,
     MailAnalysis,
     MailMessage,
     Urgency,
     parse_urgency,
 )
-from mailflow.plugins import PluginInfo
-from mailflow.registry import PluginRegistrar
-from pydantic import BaseModel, Field
 
-logger = logging.getLogger("mailflow.processor.llm_importance")
+logger = logging.getLogger("mailflow.processor")
+
+_DEFAULT_KEYWORDS = (
+    "unsubscribe",
+    "promotion",
+    "sale",
+    "discount",
+    "advertisement",
+    "limited offer",
+    "act now",
+    "click here",
+)
+
+
+class RulesProcessor:
+    """Deterministic ad/sender pre-filter before any LLM work."""
+
+    processor_id = "rules"
+
+    def __init__(self, config: ProcessorConfig, router: LLMRouter | None = None) -> None:
+        self._keywords: list[str] = [
+            str(kw).lower() for kw in config.options.get("advertising_keywords", _DEFAULT_KEYWORDS)
+        ]
+        self._important_senders: list[str] = [
+            str(addr).lower() for addr in config.options.get("important_senders", [])
+        ]
+
+    def _is_advertisement(self, haystack: str) -> bool:
+        return any(re.search(rf"\b{re.escape(keyword)}\b", haystack) for keyword in self._keywords)
+
+    def _is_important_sender(self, sender_address: str) -> bool:
+        normalized = sender_address.lower()
+        return any(normalized == important for important in self._important_senders)
+
+    async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
+        haystack = f"{mail.subject}\n{mail.body_text}".lower()
+        if self._is_advertisement(haystack):
+            return ProcessorResult(
+                analysis=MailAnalysis(
+                    summary="Advertisement detected by rules",
+                    urgency=Urgency.AD,
+                    reason="matches advertising keywords",
+                    backend="",
+                )
+            )
+        if self._is_important_sender(mail.sender.address):
+            return ProcessorResult(
+                analysis=MailAnalysis(
+                    summary=mail.subject,
+                    urgency=Urgency.IMPORTANT,
+                    reason="sender is on the important-senders list",
+                    backend="",
+                )
+            )
+        return ProcessorResult()
+
 
 SYSTEM_PROMPT = """You classify email into exactly four importance levels:
 - "ad": irrelevant advertising/junk (gray #909399). Do NOT reply to these.
@@ -118,11 +172,24 @@ def parse_due_at(value: str, timezone: str) -> datetime:
 
 
 class LLMImportanceProcessor:
+    """Classifies urgency and extracts timed actions via chat completions.
+
+    ``enhancers`` (list of :class:`LLMEnhancer`) let processor plugins
+    extend the prompt and adjust the output without replacing the
+    classification logic.
+    """
+
     processor_id = "llm-importance"
 
-    def __init__(self, config: ProcessorConfig, router: LLMRouter) -> None:
+    def __init__(
+        self,
+        config: ProcessorConfig,
+        router: LLMRouter,
+        enhancers: list[LLMEnhancer] | None = None,
+    ) -> None:
         self._config = config
         self._router = router
+        self._enhancers = list(enhancers or [])
         self._max_summary_chars = int(config.options.get("max_summary_chars", 600))
         self._max_body_chars = int(config.options.get("max_body_chars", 6000))
 
@@ -147,10 +214,16 @@ class LLMImportanceProcessor:
                 "priorities; e.g. mark matching mail lower importance):\n"
                 f"{context.feedback_guidelines}\n"
             )
-        return [
-            {"role": "system", "content": SYSTEM_PROMPT},
+        system_prompt = SYSTEM_PROMPT
+        for enhancer in self._enhancers:
+            system_prompt = enhancer.system_prompt(system_prompt)
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user},
         ]
+        for enhancer in self._enhancers:
+            messages.extend(enhancer.extra_messages(mail, context))
+        return messages
 
     async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
         primary = self._config.llm
@@ -193,6 +266,10 @@ class LLMImportanceProcessor:
             notes=payload.notes[:500],
             backend=completion.backend,
         )
+        for enhancer in self._enhancers:
+            adjusted = enhancer.post_process(analysis, mail, context)
+            if adjusted is not None:
+                analysis = adjusted
         return ProcessorResult(
             analysis=analysis,
             llm_used=completion.llm_id,
@@ -200,30 +277,35 @@ class LLMImportanceProcessor:
         )
 
 
-PLUGIN_INFO = PluginInfo(
-    plugin_id="mailflow-processor-llm-importance",
-    name="LLM Importance Processor",
-    version="0.1.0",
-    description="Classifies mail urgency and extracts timed actions via chat completions",
-    kinds=[ComponentKind.MAIL_PROCESSOR],
-)
+def register_builtin_processors(registry: Any) -> None:
+    """Register the built-in ``rules`` and ``llm-importance`` processors.
 
+    A plugin registering the same component id wins (the built-in is
+    skipped), so third-party implementations can replace the defaults.
+    """
+    from mailflow.domain import ComponentKind
 
-class LLMImportancePlugin:
-    def mailflow_plugin_info(self) -> PluginInfo:
-        return PLUGIN_INFO
+    for component_id, factory in (
+        ("rules", RulesProcessor),
+        ("llm-importance", LLMImportanceProcessor),
+    ):
+        if registry.has(ComponentKind.MAIL_PROCESSOR, component_id):
+            continue
+        registry.register(
+            ComponentKind.MAIL_PROCESSOR,
+            component_id,
+            "mailflow-core",
+            factory,
+        )
 
-    def mailflow_register(self, registrar: PluginRegistrar, config: Any) -> None:
-        registrar.add_processor("llm-importance", LLMImportanceProcessor)
-
-
-plugin = LLMImportancePlugin()
 
 __all__ = [
+    "SYSTEM_PROMPT",
     "ActionPayload",
     "AnalysisPayload",
     "LLMImportanceProcessor",
+    "RulesProcessor",
     "extract_json",
     "parse_due_at",
-    "plugin",
+    "register_builtin_processors",
 ]

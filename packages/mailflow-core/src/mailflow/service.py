@@ -16,7 +16,7 @@ import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -51,6 +51,7 @@ from mailflow.llm import LLMRouterImpl
 from mailflow.logging import LoggingRuntime, configure_logging
 from mailflow.pipeline import PipelineEngine, build_bindings
 from mailflow.plugins import PluginManager
+from mailflow.processors import register_builtin_processors
 from mailflow.registry import ComponentRegistry
 from mailflow.runtime import MailFlowRuntime
 from mailflow.updates import UpdateReport
@@ -710,6 +711,33 @@ def _build_llms(
     return backends, configs
 
 
+def _default_processors() -> list[ProcessorConfig]:
+    """The out-of-the-box chain: deterministic rules first, LLM second."""
+    return [
+        ProcessorConfig(processor_id="rules", provider="rules", priority=10),
+        ProcessorConfig(processor_id="llm-importance", provider="llm-importance", priority=20),
+    ]
+
+
+def _build_llm_enhancers(config: MailFlowConfig, registry: ComponentRegistry) -> list[Any]:
+    """Instantiate every registered LLM enhancer with its config section."""
+    from mailflow.contracts import LLMEnhancer
+
+    enhancers: list[LLMEnhancer] = []
+    for enhancer_id in registry.component_ids(ComponentKind.LLM_ENHANCER):
+        factory = registry.llm_enhancer_factory(enhancer_id)
+        enhancer_config = next(
+            (
+                section
+                for section in config.processors
+                if section.provider == enhancer_id or section.processor_id == enhancer_id
+            ),
+            ProcessorConfig(processor_id=enhancer_id, provider=enhancer_id),
+        )
+        enhancers.append(cast(Any, factory(enhancer_config)))
+    return enhancers
+
+
 def _build_processors(
     config: MailFlowConfig,
     registry: ComponentRegistry,
@@ -718,7 +746,8 @@ def _build_processors(
     processor_configs: list[ProcessorConfig] = []
     processors: dict[str, MailProcessor] = {}
     plugin_of: dict[str, str] = {}
-    for processor_config in config.processors:
+    enhancers = _build_llm_enhancers(config, registry)
+    for processor_config in config.processors or _default_processors():
         if not processor_config.enabled:
             continue
         if not registry.has(ComponentKind.MAIL_PROCESSOR, processor_config.provider):
@@ -729,7 +758,12 @@ def _build_processors(
             )
             continue
         factory = registry.processor_factory(processor_config.provider)
-        processors[processor_config.processor_id] = factory(processor_config, router)
+        if processor_config.provider == "llm-importance" and enhancers:
+            processors[processor_config.processor_id] = cast(Any, factory)(
+                processor_config, router, enhancers
+            )
+        else:
+            processors[processor_config.processor_id] = factory(processor_config, router)
         plugin_of[processor_config.processor_id] = (
             registry.plugin_for(processor_config.provider) or ""
         )
@@ -796,6 +830,7 @@ async def start_service(
         if discover_plugins and plugin_manager is None:
             manager.discover()
         registry = manager.build_registry()
+        register_builtin_processors(registry)
 
         storage = registry.storage_factory(config.storage.provider)(config.storage)
 

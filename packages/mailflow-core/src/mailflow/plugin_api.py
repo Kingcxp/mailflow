@@ -101,6 +101,9 @@ class PluginBuilder:
     def bot_exporter(self, component_id: str | None = None) -> Callable[[Factory], Factory]:
         return self._register(ComponentKind.BOT_EXPORTER, component_id)
 
+    def llm_enhancer(self, component_id: str | None = None) -> Callable[[Factory], Factory]:
+        return self._register(ComponentKind.LLM_ENHANCER, component_id)
+
     def build(self) -> Any:
         """Return a plugin object exposing the two pluggy hooks."""
         plugin_id = self._plugin_id
@@ -129,6 +132,7 @@ class PluginBuilder:
                         ComponentKind.NOTIFIER: registrar.add_notifier,
                         ComponentKind.STORAGE: registrar.add_storage,
                         ComponentKind.BOT_EXPORTER: registrar.add_bot_exporter,
+                        ComponentKind.LLM_ENHANCER: registrar.add_llm_enhancer,
                     }[registration.kind]
                     add(registration.component_id, registration.factory)
 
