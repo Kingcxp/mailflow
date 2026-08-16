@@ -9,9 +9,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 REQUIRED = (
     "README.md",
+    "README.zh-CN.md",
     "AGENTS.md",
     "CHANGELOG.md",
-    "MAILFLOW_FROM_ZERO.md",
     "docs/architecture/overview.md",
     "docs/architecture/domain-and-mail.md",
     "docs/architecture/plugin-system.md",
@@ -21,6 +21,7 @@ REQUIRED = (
     "docs/architecture/storage-and-retention.md",
     "docs/architecture/replies.md",
     "docs/architecture/tui.md",
+    "docs/architecture/bot-export.md",
     "docs/development/setup.md",
     "docs/development/embedding.md",
     "docs/development/tests.md",
@@ -32,6 +33,7 @@ REQUIRED = (
     "docs/plugin-development/llm-backend.md",
     "docs/plugin-development/notifier.md",
     "docs/plugin-development/storage.md",
+    "docs/plugin-development/bot-exporter.md",
     "docs/configuration/overview.md",
     "docs/configuration/i18n.md",
     "docs/agent/README.md",

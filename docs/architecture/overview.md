@@ -15,13 +15,15 @@ and settable from commands and the TUI.
 ```
 Hosts (mailflow-cli, mailflow-tui, chat bots)
         │  command router / service facade (snapshots, queries, mutations)
+        │  bot export (mailflow.bot_export — CLI export / TUI wizard / make)
         ▼
 mailflow-core          domain · config · contracts · registry · plugins
                        events · llm router · pipeline · logging · i18n
-                       runtime · service · commands
+                       runtime · service · commands · bot_export
         ▲  component factories (ownership stamped at registration)
         │
-plugins/*              mail sources · storage · llm backends · processors · notifiers
+plugins/*              mail sources · storage · llm backends · processors
+                       notifiers · bot exporters
 mailflow-bundled       composition root: the official plugin set
 ```
 
@@ -73,3 +75,5 @@ sets the stop event, cancels tasks gracefully, closes sources and storage.
 - `storage-and-retention.md` — durability and the daily cleanup
 - `replies.md` — the confirmed reply state machine
 - `tui.md` — the Textual client
+- `bot-export.md` — shipping MailFlow as a chatbot-framework plugin
+- `../plugin-development/bot-exporter.md` — writing exporter plugins

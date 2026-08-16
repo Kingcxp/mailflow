@@ -1,8 +1,8 @@
 # Build log — MailFlow v0.1.0 reconstruction
 
 Honest record of what was actually executed and verified while rebuilding
-MailFlow from `MAILFLOW_FROM_ZERO.md` (stage by stage, one commit per stage).
-Every commit passed `git diff --check`; gates were re-run after each stage.
+MailFlow stage by stage (one commit per stage). Every commit passed
+`git diff --check`; gates were re-run after each stage.
 
 Environment: Windows 11, Python 3.11.4, uv 0.11.2, git 2.55. The workspace
 resolved to Python 3.11 (tzdata added as a Core Windows dependency so
@@ -95,3 +95,15 @@ Final phase-2 gate: 144 tests passed, mypy/pyright strict clean, ruff clean.
 | `mailflow-repo` documentation: docs/ (getting started, metadata ref, categories, per-category guides, localization, validation), per-category README + INDEX.json, per-plugin README, README links | repo pushed; validator `--all` passes 5/5 |
 | Plugin PR validation workflow (`validate-plugins.yml`) + `tools/validate_plugin.py`: changed-plugin detection (unchanged plugins skipped), metadata/install/entry-point/registration checks + real processor run | local run of the script against all 5 plugins: `ok: 5 plugin(s) valid, loadable and runnable` |
 | MailFlow CI workflow (`ci.yml`): uv sync, ruff check/format, mypy, pyright, pytest, docs gate on push + PR (ubuntu + windows) | workflow committed |
+
+## Bot-export round (post v0.2.0)
+
+| Change | Verification |
+| ------ | ------------ |
+| `BOT_EXPORTER` component kind + `registrar.add_bot_exporter`/`bot_exporter_factory`; `mailflow.bot_export` (`BotExportContext`/`BotExportResult`, `available_frameworks`, `export_bot_plugin`) | pyright/mypy strict clean; unit tests (registry + export + exporters) |
+| `plugins/mailflow-export-nonebot` + `plugins/mailflow-export-astrbot` (framework plugin generators embedding resolved config + deps) | workspace smoke: both frameworks export and config round-trips; scratch-venv install → entry-point discovery → factory instantiation OK |
+| `bot_exporter` scaffold category in `mailflow.plugin_template` (wizard + template) | scaffolded module compiles, imports, reports BOT_EXPORTER kind, registers framework id |
+| CLI `mailflow export --framework <id> --output <dir>` + `make bot-plugin*` targets | CLI export runs end-to-end on the dev config |
+| TUI `BotExportScreen` wizard (framework select + DirectoryTree + subfolder) wired to the Market tab Export button | headless pilot e2e test exports into tmp_path |
+| `mailflow-repo`: `bot_exporter` category (2 plugins), docs/bot-exporter.md, validator support | `validate_plugin.py --all` passes 5/5 existing + 2/2 new (against local core; scratch-env core install requires the pushed core) |
+| README.zh-CN.md + README bot-export docs; MAILFLOW_FROM_ZERO.md removed, references cleaned | docs gate OK (35 mandatory documents) |

@@ -5,6 +5,30 @@ All notable changes are recorded here; the format follows
 
 ## [Unreleased]
 
+### Added
+
+- Bot-framework export: `BOT_EXPORTER` plugin kind with
+  `registrar.add_bot_exporter(framework_id, factory)`; `mailflow.bot_export`
+  (`BotExportContext`/`BotExportResult`, `export_bot_plugin`) shared by the
+  CLI, the TUI export wizard and make targets; built-in NoneBot2 and AstrBot
+  exporters (`plugins/mailflow-export-nonebot`,
+  `plugins/mailflow-export-astrbot`) registered in `mailflow-bundled`.
+- `mailflow export --framework <id> --output <dir>` command; `make
+  bot-plugin` / `bot-plugin-nonebot` / `bot-plugin-astrbot` targets.
+- TUI export wizard (`BotExportScreen`): framework select, directory tree
+  with optional subfolder creation, export button on the Market tab.
+- `bot_exporter` scaffold template category (TUI wizard + plugin_template).
+- `mailflow-repo` marketplace: `bot_exporter` category with the two exporter
+  plugins, bot-exporter developer guide, validator support for the new kind.
+- Documentation: `docs/architecture/bot-export.md`,
+  `docs/plugin-development/bot-exporter.md`, full Simplified Chinese README
+  (`README.zh-CN.md`).
+
+### Changed
+
+- Removed `MAILFLOW_FROM_ZERO.md` (reconstruction plan archived into the
+  build log); all references updated.
+
 ### Planned provider phase (not implemented in 0.1.0)
 
 - Generic IMAP source adapter (incremental UID tracking, MIME normalization)

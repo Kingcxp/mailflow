@@ -1,8 +1,8 @@
 # Agent rules for modifying MailFlow
 
 Rules for AI agents (and humans) making changes to this repository. Read
-`docs/agent/` for invariants, the module map and the change playbook; the
-staged reconstruction plan lives in `MAILFLOW_FROM_ZERO.md`.
+`docs/agent/` for invariants, the module map and the change playbook;
+`docs/build-log/BUILD_LOG.md` records what was actually executed.
 
 ## First-entry rules
 

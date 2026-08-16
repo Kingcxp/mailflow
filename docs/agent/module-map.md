@@ -18,7 +18,8 @@
 | `service.py` | MailFlowService facade, start_service composition, run_service, reply workflow |
 | `commands.py` | CommandRouter: shlex parse, transport-neutral colored responses, all management commands (incl. config, plugin repo/market/install); rich markdown→span rendering with span-color support |
 | `plugin_market.py` | PluginMarket: fetch per-plugin metadata from category folders (file://, GitHub contents API, INDEX.json fallback), localized descriptions/readmes, find/search/install via uv pip --no-deps |
-| `plugin_template.py` | Plugin scaffolding: category templates (mail_source/processor/llm_backend/notifier/storage) that produce complete, loadable plugins; used by the TUI wizard |
+| `plugin_template.py` | Plugin scaffolding: category templates (mail_source/processor/llm_backend/notifier/storage/bot_exporter) that produce complete, loadable plugins; used by the TUI wizard |
+| `bot_export.py` | Bot-framework export: BotExportContext/BotExportResult, available_frameworks, export_bot_plugin (single entry point used by CLI, TUI and make targets) |
 | `locale/en.json`, `locale/zh-CN.json` | built-in language packs |
 
 ## packages/
@@ -26,8 +27,8 @@
 | Package | Owns |
 | ------- | ---- |
 | `mailflow-bundled` | composition root: static registration of the official plugins, optional discovery |
-| `mailflow-cli` | Typer host: run/command/shell/config-check/snapshot/doctor/tui; renders CommandResponse with rich |
-| `mailflow-tui` | Textual app (Mail/Actions/Runtime/Logs/Settings), runner with injected log handler, app.tcss |
+| `mailflow-cli` | Typer host: run/command/shell/config-check/snapshot/doctor/export/tui; renders CommandResponse with rich |
+| `mailflow-tui` | Textual app (Mail/Actions/Runtime/Logs/Market/Settings), export wizard (export.py), runner with injected log handler, app.tcss |
 | `mailflow-testkit` | FakeMailSource, FakeLLMBackend, FakeNotifier, make_mail/fixed_timestamps |
 
 ## plugins/
@@ -40,6 +41,8 @@
 | `mailflow-processor-rules` | `rules` processor (ad keywords, important senders) |
 | `mailflow-processor-llm-importance` | `llm-importance` processor (four-level analysis) |
 | `mailflow-notify-console` | `console` notifier |
+| `mailflow-export-nonebot` | `nonebot` bot exporter (generates a NoneBot2 plugin) |
+| `mailflow-export-astrbot` | `astrbot` bot exporter (generates an AstrBot plugin) |
 
 A sibling marketplace repository (`mailflow-repo`, pushed to
 github.com/Kingcxp/mailflow-repo) holds plugins one folder per plugin under

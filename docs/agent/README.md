@@ -8,6 +8,5 @@ intentionally named `agent`, not `ai`.
 - `change-playbook.md` — safe procedures for common change types
 
 Start with `invariants.md`, then `module-map.md`. The root `AGENTS.md`
-summarizes the rules; `MAILFLOW_FROM_ZERO.md` is the staged reconstruction
-plan with per-stage commits; `docs/build-log/BUILD_LOG.md` records what was
+summarizes the rules; `docs/build-log/BUILD_LOG.md` records what was
 actually executed.

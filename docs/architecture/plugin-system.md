@@ -86,5 +86,10 @@ Frozen mode does not promise arbitrary post-build plugin discovery.
 | `MAIL_PROCESSOR`  | `(ProcessorConfig, LLMRouter) -> MailProcessor`    | `rules`, `llm-importance` |
 | `NOTIFIER`        | `(NotifierConfig) -> Notifier`                     | `console`             |
 | `STORAGE`         | `(StorageConfig) -> StorageBackend`                | `sqlite`              |
+| `BOT_EXPORTER`    | `(BotExportContext) -> BotExportResult`            | `nonebot`, `astrbot`  |
+
+`BOT_EXPORTER` factories turn a configured instance into a chatbot-framework
+plugin; see `docs/architecture/bot-export.md` and
+`docs/plugin-development/bot-exporter.md`.
 
 See `docs/plugin-development/` for authoring guides.

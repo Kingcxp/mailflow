@@ -25,7 +25,15 @@ Textual app on the same event loop, and stops the service in `finally`.
 - **Market**: VS Code-style plugin store — search input, category filter,
   a list of plugin name + description + version + status, and a detail pane
   rendering the plugin's markdown readme with Install / Uninstall / Enable /
-  Disable buttons acting on the selected plugin.
+  Disable buttons acting on the selected plugin. **New** opens the plugin
+  wizard (`scaffold.py`); **Export** opens the bot-framework export wizard
+  (`export.py`).
+- **Export wizard** (`BotExportScreen`): framework `Select` (every
+  registered `BOT_EXPORTER` plugin), `DirectoryTree` folder pick, optional
+  subfolder checkbox + input, and a Generate button running
+  `mailflow.bot_export.export_bot_plugin` in a worker — the generated
+  plugin package (e.g. a NoneBot/AstrBot plugin) lands in the chosen
+  folder.
 - **Logs**: `RichLog` fed by the injected handler on a timer — never stdout
   scraping.
 - **Settings**: language `Select` with an explanation; switching persists

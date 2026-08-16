@@ -6,11 +6,13 @@
 
 *Unified multi-account mail inbox — plugin pipeline, LLM analysis, rich TUI, embeddable core*
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-144%20passed-67C23A)]()
+[![Tests](https://img.shields.io/badge/tests-195%20passed-67C23A)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -51,8 +53,13 @@ notifiers, storage — installed from a plugin marketplace.
 - **Plugin marketplace** (VS Code style) — search, category filters, markdown
   details, install / uninstall / enable / disable from commands and the TUI;
   built-ins are categorized (mail_source, processor, llm_backend, notifier,
-  storage); disabling a plugin never breaks startup (orphaned config entries
-  are skipped with a warning).
+  storage, bot_exporter); disabling a plugin never breaks startup (orphaned
+  config entries are skipped with a warning).
+- **Bot-framework export** — turn a configured instance into a plugin for
+  NoneBot2, AstrBot or any other chatbot framework (`mailflow export
+  --framework <id>`, TUI export wizard with folder tree, `make
+  bot-plugin-*`); exporters are plugins themselves, so new frameworks are a
+  marketplace install, not a core change.
 - **Full config management** — every option visible in the TUI and the
   `config` command (required/optional, defaults, descriptions, redacted
   secrets); `config set` persists.
@@ -95,6 +102,7 @@ plugin repo add|list|remove    manage marketplaces
 plugin market list|show|search <query>   browse/store with markdown details
 plugin install|uninstall <id>  install or remove a plugin
 plugin enable|disable <id>     toggle a plugin (applies on next start)
+export --framework <id> --output <dir>   generate a chatbot-framework plugin (NoneBot, AstrBot, ...)
 reply create|edit|prepare|confirm|cancel
 lang get|set <code>        switch language (persisted)
 trash list|restore         recover deleted mail
@@ -139,6 +147,8 @@ make help           # grouped, colored list of every target
 make check          # lint + format + mypy + pyright + pytest + docs gate
 make coverage       # per-package coverage report
 make build          # wheels for every package
+make bot-plugin-nonebot | bot-plugin-astrbot   # export the NoneBot / AstrBot plugin
+make bot-plugin FRAMEWORK=<id> OUTPUT=<dir>     # export for any installed exporter
 make exe-standalone # Nuitka standalone (smoke test before onefile)
 make exe-onefile
 ```
@@ -147,13 +157,13 @@ make exe-onefile
 
 | Area | Links |
 | ---- | ----- |
-| Architecture | [overview](docs/architecture/overview.md) · [domain & mail](docs/architecture/domain-and-mail.md) · [plugins](docs/architecture/plugin-system.md) · [pipeline](docs/architecture/pipeline.md) · [LLM](docs/architecture/llm.md) · [logging](docs/architecture/logging.md) · [storage & retention](docs/architecture/storage-and-retention.md) · [replies](docs/architecture/replies.md) · [TUI](docs/architecture/tui.md) |
+| Architecture | [overview](docs/architecture/overview.md) · [domain & mail](docs/architecture/domain-and-mail.md) · [plugins](docs/architecture/plugin-system.md) · [pipeline](docs/architecture/pipeline.md) · [LLM](docs/architecture/llm.md) · [logging](docs/architecture/logging.md) · [storage & retention](docs/architecture/storage-and-retention.md) · [replies](docs/architecture/replies.md) · [TUI](docs/architecture/tui.md) · [bot export](docs/architecture/bot-export.md) |
 | Development | [setup](docs/development/setup.md) · [embedding](docs/development/embedding.md) · [tests](docs/development/tests.md) · [quality](docs/development/quality.md) · [packaging](docs/development/packaging.md) |
-| Plugin development | [overview](docs/plugin-development/overview.md) · [mail source](docs/plugin-development/mail-source.md) · [processor](docs/plugin-development/processor.md) · [LLM backend](docs/plugin-development/llm-backend.md) · [notifier](docs/plugin-development/notifier.md) · [storage](docs/plugin-development/storage.md) |
+| Plugin development | [overview](docs/plugin-development/overview.md) · [mail source](docs/plugin-development/mail-source.md) · [processor](docs/plugin-development/processor.md) · [LLM backend](docs/plugin-development/llm-backend.md) · [notifier](docs/plugin-development/notifier.md) · [storage](docs/plugin-development/storage.md) · [bot exporter](docs/plugin-development/bot-exporter.md) |
 | Configuration | [overview](docs/configuration/overview.md) · [i18n](docs/configuration/i18n.md) |
 | For AI agents | [invariants](docs/agent/invariants.md) · [module map](docs/agent/module-map.md) · [change playbook](docs/agent/change-playbook.md) |
 | Decisions | [ADRs](docs/adr/0001-uv-workspace.md) · [0002-pluggy-pipeline](docs/adr/0002-pluggy-pipeline.md) · [0003-host-independent-core](docs/adr/0003-host-independent-core.md) |
-| Build history | [BUILD_LOG](docs/build-log/BUILD_LOG.md) · [reconstruction plan](MAILFLOW_FROM_ZERO.md) |
+| Build history | [BUILD_LOG](docs/build-log/BUILD_LOG.md) · [简体中文 README](README.zh-CN.md) |
 
 ## Plugin marketplace
 
@@ -175,9 +185,16 @@ workflow validates exactly the plugins each PR changes.
 **Write your own plugin** — the TUI has a new-plugin wizard (Market tab →
 New): pick a folder in the directory tree, optionally create a subfolder,
 choose the template category (mail source / processor / LLM backend /
-notifier / storage), and MailFlow generates a complete, loadable template.
-The wizard is also available to hosts embedding the core via
-`mailflow.plugin_template.scaffold_plugin`.
+notifier / storage / bot exporter), and MailFlow generates a complete,
+loadable template. The wizard is also available to hosts embedding the core
+via `mailflow.plugin_template.scaffold_plugin`.
+
+**Ship MailFlow as a bot plugin** — the Market tab's Export button opens the
+same folder-tree wizard, now selecting a framework (NoneBot, AstrBot, ...)
+and exporting a ready-to-install framework plugin from your configured
+instance. The command-line equivalent is `mailflow export --framework <id>
+--output <dir>`; exporters are plugins, so a new framework is one install
+away. See [docs/architecture/bot-export.md](docs/architecture/bot-export.md).
 
 **Localized and styled** — plugins can ship translated one-line
 descriptions and markdown readmes (`descriptions` / `readmes` in
@@ -188,12 +205,12 @@ language, and `market show` renders the readme with rich markdown effects
 ## Project layout
 
 ```
-packages/mailflow-core       host-agnostic domain, pipeline, service facade
+packages/mailflow-core       host-agnostic domain, pipeline, service facade, bot export
 packages/mailflow-bundled    composition root: the official plugin set
-packages/mailflow-cli        rich Typer host (run/command/shell/...)
-packages/mailflow-tui        Textual UI (Mail/Actions/Runtime/Logs/Market/Settings)
+packages/mailflow-cli        rich Typer host (run/command/shell/export/...)
+packages/mailflow-tui        Textual UI (Mail/Actions/Runtime/Logs/Market/Settings + export wizard)
 packages/mailflow-testkit    deterministic fakes for tests (mailflow-mail-fake is a dev-only source plugin)
-plugins/*                    discoverable adapters and processors
+plugins/*                    discoverable adapters, processors and bot exporters
 configs/ · translations/     example configs and language packs
 docs/                        architecture, development, agent documentation
 ```
