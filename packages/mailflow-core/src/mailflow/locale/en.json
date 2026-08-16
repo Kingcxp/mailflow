@@ -303,6 +303,12 @@
     "plugin.template.llm_backend": "Chat-completions transport for a model provider",
     "plugin.template.notifier": "Delivers computed analyses to a channel",
     "plugin.template.storage": "Durable persistence backend",
-    "tui.btn_new_plugin": "New"
+    "tui.btn_new_plugin": "New",
+    "tui.btn_export": "Export",
+    "tui.export_title": "Export MailFlow as a bot plugin",
+    "tui.export_pick_folder": "Pick the target folder in the tree",
+    "tui.export_created": "Exported {count} file(s) to {path}",
+    "tui.export_failed": "Export failed: {message}",
+    "tui.export_no_framework": "No bot-framework exporter plugin installed"
   }
 }

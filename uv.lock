@@ -11,6 +11,8 @@ members = [
     "mailflow-bundled",
     "mailflow-cli",
     "mailflow-core",
+    "mailflow-export-astrbot",
+    "mailflow-export-nonebot",
     "mailflow-llm-openai-compatible",
     "mailflow-mail-fake",
     "mailflow-notify-console",
@@ -443,6 +445,8 @@ version = "0.1.0"
 source = { editable = "packages/mailflow-bundled" }
 dependencies = [
     { name = "mailflow-core" },
+    { name = "mailflow-export-astrbot" },
+    { name = "mailflow-export-nonebot" },
     { name = "mailflow-llm-openai-compatible" },
     { name = "mailflow-mail-fake" },
     { name = "mailflow-notify-console" },
@@ -454,6 +458,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "mailflow-core", editable = "packages/mailflow-core" },
+    { name = "mailflow-export-astrbot", editable = "plugins/mailflow-export-astrbot" },
+    { name = "mailflow-export-nonebot", editable = "plugins/mailflow-export-nonebot" },
     { name = "mailflow-llm-openai-compatible", editable = "plugins/mailflow-llm-openai-compatible" },
     { name = "mailflow-mail-fake", editable = "plugins/mailflow-mail-fake" },
     { name = "mailflow-notify-console", editable = "plugins/mailflow-notify-console" },
@@ -501,6 +507,28 @@ requires-dist = [
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
 ]
+
+[[package]]
+name = "mailflow-export-astrbot"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-export-astrbot" }
+dependencies = [
+    { name = "mailflow-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }]
+
+[[package]]
+name = "mailflow-export-nonebot"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-export-nonebot" }
+dependencies = [
+    { name = "mailflow-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }]
 
 [[package]]
 name = "mailflow-llm-openai-compatible"

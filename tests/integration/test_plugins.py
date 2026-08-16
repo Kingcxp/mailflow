@@ -342,6 +342,8 @@ class TestBundledRegistration:
             "mailflow-processor-rules",
             "mailflow-processor-llm-importance",
             "mailflow-notify-console",
+            "mailflow-export-nonebot",
+            "mailflow-export-astrbot",
         }
         assert registry.has(ComponentKind.MAIL_SOURCE, "fake")
         assert registry.has(ComponentKind.STORAGE, "sqlite")
@@ -349,9 +351,13 @@ class TestBundledRegistration:
         assert registry.has(ComponentKind.MAIL_PROCESSOR, "rules")
         assert registry.has(ComponentKind.MAIL_PROCESSOR, "llm-importance")
         assert registry.has(ComponentKind.NOTIFIER, "console")
+        assert registry.has(ComponentKind.BOT_EXPORTER, "nonebot")
+        assert registry.has(ComponentKind.BOT_EXPORTER, "astrbot")
         # ownership is stamped at registration
         assert registry.plugin_for("fake") == "mailflow-mail-fake"
         assert registry.plugin_for("sqlite") == "mailflow-storage-sqlite"
+        assert registry.plugin_for("nonebot") == "mailflow-export-nonebot"
+        assert registry.plugin_for("astrbot") == "mailflow-export-astrbot"
 
     def test_discovery_deduplicates_bundled_plugins(self) -> None:
         from mailflow.config import MailFlowConfig

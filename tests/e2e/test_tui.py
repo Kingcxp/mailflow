@@ -364,3 +364,57 @@ async def test_plugin_scaffold_wizard(tmp_path: Path) -> None:
             await pilot.pause()
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_bot_export_wizard(tmp_path: Path) -> None:
+    """The market export wizard generates a NoneBot plugin into a picked folder."""
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_export_nonebot.plugin import plugin as nonebot_export_plugin
+    from mailflow_tui.app import MarketPane
+    from mailflow_tui.export import BotExportScreen
+    from textual.widgets import DirectoryTree, TabbedContent
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    manager.register(nonebot_export_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test() as pilot:
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-market"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause()
+            market_pane = app.query_one(MarketPane)
+            cast(Button, market_pane.query_one("#market-export")).press()
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, BotExportScreen)
+            # the exporter plugin is registered -> the framework select defaults to nonebot
+            framework_select = cast(Select[Any], app.screen.query_one("#export-framework", Select))
+            assert framework_select.value == "nonebot"
+            tree = app.screen.query_one("#export-tree", DirectoryTree)
+            tree.path = tmp_path
+            await pilot.pause(0.2)
+            tree.move_cursor(tree.root, animate=False)  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.05)
+            app.screen.query_one("#export-run", Button).press()
+            for _ in range(100):
+                if (tmp_path / "pyproject.toml").is_file():
+                    break
+                await pilot.pause(0.05)
+            assert (tmp_path / "pyproject.toml").is_file()
+            assert (tmp_path / "src" / "nonebot_plugin_mailflow" / "config.toml").is_file()
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()

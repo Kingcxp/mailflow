@@ -34,6 +34,7 @@ from textual.widgets import (
     TextArea,
 )
 
+from mailflow_tui.export import BotExportScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
 
 _URGENCY_OPTIONS = [
@@ -660,6 +661,7 @@ class MarketPane(Vertical):
             yield Select([], id="market-category")
             yield Button(self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary")
             yield Button(self._service.t("tui.btn_new_plugin"), id="market-create")
+            yield Button(self._service.t("tui.btn_export"), id="market-export", variant="success")
         yield DataTable(id="market-table")
         with Vertical(id="market-detail"):
             yield Markdown("", id="market-readme")
@@ -804,6 +806,11 @@ class MarketPane(Vertical):
             return
         if button_id == "market-create":
             self.app.push_screen(PluginScaffoldScreen(self._service))  # pyright: ignore[reportUnknownMemberType]
+            return
+        if button_id == "market-export":
+            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+                BotExportScreen(self._service)
+            )
             return
         if self._selected is None:
             return

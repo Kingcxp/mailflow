@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import cast
 
+from mailflow.bot_export import BotExportContext, BotExportResult
 from mailflow.config import (
     LLMConfig,
     MailAccountConfig,
@@ -33,8 +34,16 @@ LLMFactory = Callable[[LLMConfig], LLMBackend]
 ProcessorFactory = Callable[[ProcessorConfig, LLMRouter], MailProcessor]
 NotifierFactory = Callable[[NotifierConfig], Notifier]
 StorageFactory = Callable[[StorageConfig], StorageBackend]
+BotExporterFactory = Callable[[BotExportContext], BotExportResult]
 
-Factory = SourceFactory | LLMFactory | ProcessorFactory | NotifierFactory | StorageFactory
+Factory = (
+    SourceFactory
+    | LLMFactory
+    | ProcessorFactory
+    | NotifierFactory
+    | StorageFactory
+    | BotExporterFactory
+)
 
 
 class ComponentRegistry:
@@ -79,6 +88,9 @@ class ComponentRegistry:
 
     def storage_factory(self, component_id: str) -> StorageFactory:
         return cast(StorageFactory, self.factory(ComponentKind.STORAGE, component_id))
+
+    def bot_exporter_factory(self, component_id: str) -> BotExporterFactory:
+        return cast(BotExporterFactory, self.factory(ComponentKind.BOT_EXPORTER, component_id))
 
     def plugin_for(self, component_id: str) -> str | None:
         snapshot = self._snapshots.get(component_id)
@@ -128,12 +140,18 @@ class PluginRegistrar:
     def add_storage(self, component_id: str, factory: StorageFactory) -> None:
         self._register(ComponentKind.STORAGE, component_id, factory)
 
+    def add_bot_exporter(self, framework_id: str, factory: BotExporterFactory) -> None:
+        """Register a factory that exports a configured MailFlow instance as
+        a plugin for the chatbot framework ``framework_id`` (e.g. ``nonebot``)."""
+        self._register(ComponentKind.BOT_EXPORTER, framework_id, factory)
+
     @property
     def config(self) -> MailFlowConfig:
         return self._config
 
 
 __all__ = [
+    "BotExporterFactory",
     "ComponentRegistry",
     "Factory",
     "LLMFactory",

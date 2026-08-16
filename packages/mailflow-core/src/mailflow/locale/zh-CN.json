@@ -303,6 +303,12 @@
     "plugin.template.llm_backend": "接入一个模型的对话补全服务",
     "plugin.template.notifier": "把分析结果投递到某个渠道",
     "plugin.template.storage": "持久化存储后端",
-    "tui.btn_new_plugin": "新建"
+    "tui.btn_new_plugin": "新建",
+    "tui.btn_export": "导出",
+    "tui.export_title": "将 MailFlow 导出为机器人插件",
+    "tui.export_pick_folder": "在树中选择目标文件夹",
+    "tui.export_created": "已导出 {count} 个文件到 {path}",
+    "tui.export_failed": "导出失败：{message}",
+    "tui.export_no_framework": "未安装机器人框架导出插件"
   }
 }

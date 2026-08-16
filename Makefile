@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help sync test coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile docs clean
+.PHONY: help sync test coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot docs clean
 
 PY ?= uv run
 
@@ -55,6 +55,17 @@ exe-standalone: ## Build the Nuitka standalone executable (smoke test before one
 
 exe-onefile: ## Build the Nuitka onefile executable (only after a standalone smoke test)
 	$(PY) python tools/build_exe.py --mode onefile
+
+### Bot framework plugins
+
+bot-plugin: ## Export MailFlow as a chatbot-framework plugin (FRAMEWORK=<id> OUTPUT=<dir>)
+	$(PY) mailflow export --framework $(FRAMEWORK) --output $(OUTPUT) -c configs/development.toml
+
+bot-plugin-nonebot: ## Export the NoneBot plugin (configs/development.toml -> dist/nonebot_plugin_mailflow)
+	$(PY) mailflow export --framework nonebot --output dist/nonebot_plugin_mailflow -c configs/development.toml
+
+bot-plugin-astrbot: ## Export the AstrBot plugin (configs/development.toml -> dist/astrbot_plugin_mailflow)
+	$(PY) mailflow export --framework astrbot --output dist/astrbot_plugin_mailflow -c configs/development.toml
 
 ### Docs & cleanup
 

@@ -41,6 +41,7 @@ def test_generated_module_compiles_and_loads(category: str, tmp_path: Path) -> N
         "llm_backend": "llm_backend",
         "notifier": "notifier",
         "storage": "storage",
+        "bot_exporter": "bot_exporter",
     }[category]
     plugin_id = f"mailflow-demo-{category.replace('_', '-')}"
     target = scaffold_plugin(tmp_path / "plugin", plugin_id, category)
@@ -112,3 +113,39 @@ def test_readme_template_demonstrates_rich_markdown(tmp_path: Path) -> None:
     assert '<span style="color:' in readme
     assert "~~strikethrough~~" in readme
     assert "**bold**" in readme
+
+
+def test_bot_exporter_template_registers_framework(tmp_path: Path) -> None:
+    """The generated bot_exporter module registers a runnable exporter factory."""
+    target = scaffold_plugin(tmp_path, "mailflow-export-demo", "bot_exporter")
+    module_path = target / "src" / "mailflow_export_demo" / "plugin.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import importlib.util, sys;"
+                f"spec = importlib.util.spec_from_file_location('tpl', r'{module_path}');"
+                "m = importlib.util.module_from_spec(spec); sys.modules['tpl'] = m;"
+                "spec.loader.exec_module(m);"
+                "from mailflow.registry import PluginRegistrar, ComponentRegistry;"
+                "from mailflow.config import MailFlowConfig;"
+                "from mailflow.domain import ComponentKind;"
+                "r = PluginRegistrar(ComponentRegistry(), MailFlowConfig(), 'x');"
+                "m.plugin.mailflow_register(r, MailFlowConfig());"
+                "ids = r._registry.component_ids(ComponentKind.BOT_EXPORTER);"
+                "assert ids == ['demo'], ids;"
+                "from mailflow.bot_export import BotExportContext;"
+                "from pathlib import Path;"
+                "import tempfile;"
+                "factory = r._registry.bot_exporter_factory('demo');"
+                "ctx = BotExportContext(config=MailFlowConfig(), plugin_ids=[],"
+                " output_dir=Path(tempfile.mkdtemp()));"
+                "res = factory(ctx);"
+                "assert res.framework == 'demo' and res.created == ['export-demo/README.md'], res"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

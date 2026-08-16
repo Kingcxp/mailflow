@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import typer
+from mailflow import __version__
+from mailflow.bot_export import available_frameworks, export_bot_plugin
 from mailflow.commands import CommandRouter
 from mailflow.config import MailFlowConfig, load_config
+from mailflow.domain import ComponentKind
 from mailflow.plugins import PluginManager
 from mailflow.service import start_service
 from mailflow_bundled import create_plugin_manager
@@ -210,6 +214,55 @@ def doctor(
     manager = create_plugin_manager(config)
     registry = manager.build_registry()
     console.print(service_doctor(config, manager, registry))
+
+
+def run_export(config_path: str | None, framework: str, output: str) -> int:
+    """Run the bot-framework export; kept pure (no typer) for testing."""
+    config = _load_config(config_path)
+    manager = create_plugin_manager(config)
+    registry = manager.build_registry()
+    # the generated plugin depends on runtime components, not on exporters
+    plugin_ids = [
+        info.plugin_id
+        for info in manager.enabled_infos()
+        if ComponentKind.BOT_EXPORTER not in info.kinds
+    ]
+    try:
+        result = export_bot_plugin(
+            registry,
+            config,
+            framework=framework,
+            output_dir=Path(output),
+            plugin_ids=plugin_ids,
+            version=__version__,
+        )
+    except KeyError:
+        available = ", ".join(available_frameworks(registry)) or "(none installed)"
+        console.print(f"[red]No exporter registered for framework {framework!r}.[/red]")
+        console.print(f"[yellow]Available frameworks: {available}[/yellow]")
+        return 1
+    console.print(f"[green]Exported {result.plugin_name} to {output}[/green]")
+    for relative in result.created:
+        console.print(f"  [dim]{relative}[/dim]")
+    if result.notes:
+        console.print(f"[yellow]{result.notes}[/yellow]")
+    return 0
+
+
+@app.command()
+def export(
+    framework: str = typer.Option(
+        ..., "--framework", "-f", help="Target chatbot framework (e.g. nonebot, astrbot)"
+    ),
+    output: str = typer.Option(
+        ..., "--output", "-o", help="Output directory for the generated plugin package"
+    ),
+    config_path: str | None = typer.Option(
+        None, "--config", "-c", help="Path to the TOML config file (defaults used when omitted)"
+    ),
+) -> None:
+    """Export MailFlow as a plugin for a chatbot framework (via exporter plugins)."""
+    raise typer.Exit(run_export(config_path, framework, output))
 
 
 def service_doctor(config: MailFlowConfig, manager: PluginManager, registry: Any) -> Text:

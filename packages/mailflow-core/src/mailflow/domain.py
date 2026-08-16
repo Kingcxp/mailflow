@@ -305,6 +305,7 @@ class ComponentKind(StrEnum):
     LLM_BACKEND = "llm_backend"
     NOTIFIER = "notifier"
     STORAGE = "storage"
+    BOT_EXPORTER = "bot_exporter"
 
 
 class PluginSnapshot(BaseModel):
