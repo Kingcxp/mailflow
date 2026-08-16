@@ -47,6 +47,10 @@ Install this package into a NoneBot2 project and load it (add it to
 ``NONEBOT_PLUGINS`` or call ``load_plugin``); the MailFlow service starts
 with the bot and stops on shutdown. Configure it by editing
 ``config.toml`` next to this module.
+
+Chat commands are prefixed with ``mailflow`` (``mailflow mail list``,
+``mailflow help``) so they never collide with other plugins\' commands.
+Long replies and the daily digest are split into separate messages.
 """
 
 from __future__ import annotations
@@ -54,18 +58,40 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from nonebot import get_driver
+from nonebot import get_driver, on_message
 
 driver = get_driver()
 _service: Any = None
+_router: Any = None
+
+_PAGE_CHARS = 3500
+_PAGE_ROWS = 10
+
+
+def _chunk(text: str, limit: int = _PAGE_CHARS) -> list[str]:
+    """Split a reply into messages that stay under ``limit`` characters,
+    preferring line boundaries (each row is one chat-friendly line)."""
+    lines = text.splitlines() or [""]
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        if current and len(current) + len(line) + 1 > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = f"{current}\\n{line}" if current else line
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 @driver.on_startup
 async def _start_mailflow() -> None:
-    """Boot the MailFlow service when NoneBot starts."""
-    global _service
+    """Boot the MailFlow service and the command router when NoneBot starts."""
+    global _service, _router
     if _service is not None:
         return
+    from mailflow.commands import CommandRouter
     from mailflow.config import load_config
     from mailflow.service import start_service
     from mailflow_bundled import create_plugin_manager
@@ -73,15 +99,50 @@ async def _start_mailflow() -> None:
     config = load_config(Path(__file__).resolve().parent / "config.toml")
     _service = await start_service(config, plugin_manager=create_plugin_manager(config))
     await _service.start()
+    _router = CommandRouter(_service)
+    _service.on("mailflow.action.digest", _send_digest)
 
 
 @driver.on_shutdown
 async def _stop_mailflow() -> None:
     """Stop the MailFlow service when NoneBot shuts down."""
-    global _service
+    global _service, _router
     if _service is not None:
         await _service.stop()
         _service = None
+        _router = None
+
+
+_mailflow_matcher = on_message(priority=10, block=False)
+
+
+@_mailflow_matcher.handle()
+async def _handle_mailflow(event: Any) -> None:
+    """Dispatch ``mailflow ...`` chat messages to the shared command router."""
+    text = str(event.get_plaintext() or "").strip()
+    if not text.startswith("mailflow ") or _router is None:
+        return
+    response = await _router.execute(text[len("mailflow "):].strip())
+    for chunk in _chunk(response.text):
+        await _mailflow_matcher.send(chunk)
+
+
+async def _send_digest(event: str, **payload: Any) -> None:
+    """Forward the daily digest as paginated chat messages."""
+    items = payload.get("items") or []
+    lines = [
+        f"{i.due_at:%m-%d %H:%M} [{i.action_type}] {i.summary}"
+        for i in items
+    ]
+    if not lines:
+        return
+    for page in range(0, len(lines), _PAGE_ROWS):
+        block = lines[page : page + _PAGE_ROWS]
+        await _mailflow_matcher.send(
+            "\\n".join(block)
+            + f"\\n— {payload.get('today_count', 0)} due today, "
+            + f"{payload.get('upcoming_count', 0)} approaching —"
+        )
 '''
 
 _README = """# {name}

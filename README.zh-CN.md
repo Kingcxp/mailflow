@@ -169,7 +169,9 @@ MailFlow 生成完整可加载的模板。内嵌核心的宿主也可通过 `mai
 **把 MailFlow 导出为机器人插件** —— Market 标签的 Export 按钮打开同一个目录树向导，
 选择框架（NoneBot、AstrBot 等）后从你的配置实例导出可安装的框架插件。
 命令行等价物是 `mailflow export --framework <id> --output <dir>`；导出器是插件，
-新框架只需安装一次。参见 [docs/architecture/bot-export.md](docs/architecture/bot-export.md)。
+新框架只需安装一次。导出的插件内置完整聊天命令面：以 `mailflow`（NoneBot）或
+`/mailflow`（AstrBot）开头的消息会分发到共享命令路由器，长回复自动拆分为多条消息，
+每日日程摘要也会分页推送到聊天。参见 [docs/architecture/bot-export.md](docs/architecture/bot-export.md)。
 
 **本地化与样式** —— 插件可在 plugin.json 中提供多语言一句话简介与 markdown readme
 （`descriptions` / `readmes`）；CLI 与 TUI 自动使用与应用语言匹配的版本，

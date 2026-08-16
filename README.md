@@ -194,7 +194,11 @@ same folder-tree wizard, now selecting a framework (NoneBot, AstrBot, ...)
 and exporting a ready-to-install framework plugin from your configured
 instance. The command-line equivalent is `mailflow export --framework <id>
 --output <dir>`; exporters are plugins, so a new framework is one install
-away. See [docs/architecture/bot-export.md](docs/architecture/bot-export.md).
+away. The exported plugin embeds the full chat command surface: messages
+starting with `mailflow` (NoneBot) or `/mailflow` (AstrBot) are dispatched
+to the shared command router, long replies are split into several messages,
+and the daily digest is paginated into chat. See
+[docs/architecture/bot-export.md](docs/architecture/bot-export.md).
 
 **Localized and styled** — plugins can ship translated one-line
 descriptions and markdown readmes (`descriptions` / `readmes` in
