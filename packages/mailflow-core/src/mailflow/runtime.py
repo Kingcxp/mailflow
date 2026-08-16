@@ -208,7 +208,10 @@ class MailFlowRuntime:
             logger.info("duplicate mail skipped (already stored): %s", record_id)
             return
         analysis, notes, _, _ = await self._pipeline.process(
-            mail, mail.account_id, timezone=self._config.general.timezone
+            mail,
+            mail.account_id,
+            timezone=self._config.general.timezone,
+            feedback_guidelines=(await self._storage.get_preference("feedback.guidelines") or ""),
         )
         record = MailRecord(
             record_id=record_id,
@@ -312,7 +315,60 @@ class MailFlowRuntime:
                 fired += await self._fire_reminder(item, record, now, config)
         for item in await self._storage.list_custom_actions():
             fired += await self._fire_reminder(item, None, now, config)
+        await self._fire_daily_digest(now, config)
         return fired
+
+    async def _fire_daily_digest(self, now: datetime, config: GeneralConfig) -> int:
+        """Once per day, after the configured reminder hour, emit a digest of
+        approaching actions: how many are due today and how many are coming
+        up, plus the items themselves — the host paginates them into chat
+        messages."""
+        local_now = now.astimezone(ZoneInfo(config.timezone))
+        if (local_now.hour, local_now.minute) < (
+            config.reminder_hour,
+            config.reminder_minute,
+        ):
+            return 0
+        today_key = local_now.date().isoformat()
+        if await self._storage.get_preference(f"digest.{today_key}"):
+            return 0
+        day_start = to_utc(local_now.replace(hour=0, minute=0, second=0, microsecond=0))
+        soon = await self._approaching_actions(day_start, config.reminder_days_before)
+        if not soon:
+            # nothing approaching today: mark the day as digested anyway
+            await self._storage.set_preference(f"digest.{today_key}", "fired")
+            return 0
+        today_count = sum(1 for item in soon if item.due_at < day_start + timedelta(days=1))
+        await self._events.emit(
+            f"{_EVENT_PREFIX}action.digest",
+            date=today_key,
+            today_count=today_count,
+            upcoming_count=len(soon) - today_count,
+            items=soon,
+        )
+        reminder_logger.warning(
+            "DIGEST %s: %d due today, %d approaching in %d days",
+            today_key,
+            today_count,
+            len(soon) - today_count,
+            config.reminder_days_before,
+        )
+        await self._storage.set_preference(f"digest.{today_key}", "fired")
+        return 1
+
+    async def _approaching_actions(self, day_start: datetime, days_before: int) -> list[ActionItem]:
+        """Actions due within ``days_before`` days from ``day_start``, soonest first."""
+        horizon = day_start + timedelta(days=days_before)
+        items: list[ActionItem] = []
+        for record in await self._storage.list_mails():
+            items.extend(item for item in record.action_items if day_start <= item.due_at < horizon)
+        items.extend(
+            item
+            for item in await self._storage.list_custom_actions()
+            if day_start <= item.due_at < horizon
+        )
+        items.sort(key=lambda item: item.due_at)
+        return items
 
     async def _fire_reminder(
         self,

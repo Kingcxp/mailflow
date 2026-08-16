@@ -93,6 +93,7 @@ class ProcessingContext(BaseModel):
     timezone: str = "UTC"
     options: dict[str, Any] = Field(default_factory=lambda: {})
     now: datetime | None = None  # injected clock for deterministic processors
+    feedback_guidelines: str = ""  # user notes on what to ignore, for the LLM
 
 
 class ProcessorDecision(StrEnum):

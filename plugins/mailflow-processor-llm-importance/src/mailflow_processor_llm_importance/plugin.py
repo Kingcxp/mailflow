@@ -141,6 +141,12 @@ class LLMImportanceProcessor:
             f"Subject: {mail.subject}\n"
             f"Body:\n{body}\n"
         )
+        if context.feedback_guidelines:
+            user += (
+                "\nUser feedback on previously received mail (treat as strong "
+                "priorities; e.g. mark matching mail lower importance):\n"
+                f"{context.feedback_guidelines}\n"
+            )
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user},

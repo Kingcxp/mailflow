@@ -237,6 +237,29 @@ class MailFlowService:
         stored here and are left untouched."""
         return await self.storage.delete_custom_action(item_id)
 
+    # -- user feedback (filter tuning) -------------------------------------------
+
+    async def record_feedback(self, mail_id: str, reason: str) -> None:
+        """Store a user note on why a mail was irrelevant or unwanted.
+
+        The note joins the rolling guidelines that are injected into every
+        LLM analysis, so the model adjusts its filtering strategy with a
+        grounded rationale (kept to the most recent entries).
+        """
+        if not reason.strip():
+            raise ValueError("feedback reason must not be empty")
+        await self.storage.set_preference(f"feedback.{mail_id}", reason.strip())
+        guidelines = await self.storage.get_preference("feedback.guidelines") or ""
+        lines = [line for line in guidelines.splitlines() if line.strip()][-19:]
+        lines.append(f"{mail_id}: {reason.strip()}")
+        await self.storage.set_preference("feedback.guidelines", "\n".join(lines))
+
+    async def get_feedback(self, mail_id: str) -> str | None:
+        return await self.storage.get_preference(f"feedback.{mail_id}")
+
+    async def feedback_guidelines(self) -> str:
+        return await self.storage.get_preference("feedback.guidelines") or ""
+
     async def list_trash(self) -> list[TrashRecord]:
         return await self.storage.list_trash()
 

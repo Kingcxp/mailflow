@@ -119,6 +119,7 @@ class PipelineEngine:
         *,
         timezone: str = "UTC",
         now: datetime | None = None,
+        feedback_guidelines: str = "",
     ) -> tuple[MailAnalysis, list[ProcessorNote], str, str]:
         """Returns ``(analysis, notes, llm_used, llm_backend)``."""
         accumulated = MailAnalysis(summary="", urgency=Urgency.INFO)
@@ -136,6 +137,7 @@ class PipelineEngine:
                 timezone=timezone,
                 options=binding.options,
                 now=started_at,
+                feedback_guidelines=feedback_guidelines,
             )
             try:
                 result = await self._run_with_retries(binding, mail, context)

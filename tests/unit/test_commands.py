@@ -699,3 +699,87 @@ class TestMarketLocalization:
         red_runs = [s for s in spans if s.style == "red"]
         assert len(red_runs) == 1
         assert red_runs[0].text.strip() == "red"
+
+
+class TestPaginationAndFeedback:
+    async def _many_mails_router(self) -> tuple[CommandRouter, MemoryStorage]:
+        storage = MemoryStorage()
+        for index in range(12):
+            await storage.save_mail(
+                make_record(
+                    record_id=f"mail-{index:02d}-abcdef123456",
+                    subject=f"Subject {index:02d}",
+                )
+            )
+        service = MailFlowService(
+            config=MailFlowConfig(),
+            registry=ComponentRegistry(),
+            plugin_manager=cast(Any, FakePluginManager()),
+            storage=cast(Any, storage),
+            sources={},
+            router=cast(LLMRouter, None),
+            pipeline=PipelineEngine([]),
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            i18n=I18n(),
+        )
+        return CommandRouter(service), storage
+
+    async def test_mail_list_pagination_and_query(self) -> None:
+        commands, _ = await self._many_mails_router()
+        page1 = await commands.execute("mail list --page 1")
+        assert page1.ok
+        assert "1/2" in page1.text
+        assert "mail-00-abcdef123456" in page1.text
+        assert "mail-11-abcdef123456" not in page1.text  # page 2 content
+        page2 = await commands.execute("mail list --page 2")
+        assert page2.ok
+        assert "2/2" in page2.text
+        assert "mail-11-abcdef123456" in page2.text
+        filtered = await commands.execute("mail list --query 'subject 05'")
+        assert filtered.ok
+        assert "mail-05-abcdef123456" in filtered.text
+        assert "mail-00-abcdef123456" not in filtered.text
+
+    async def test_mail_commands_accept_prefix_ids(self) -> None:
+        commands, storage = await self._many_mails_router()
+        shown = await commands.execute("mail show mail-00")  # unique prefix
+        assert shown.ok
+        assert "Subject 00" in shown.text
+        updated = await commands.execute("mail urgency mail-11-abcdef urgent")  # unique prefix
+        assert updated.ok
+        assert storage.mails["mail-11-abcdef123456"].manual_urgency is Urgency.URGENT
+
+    async def test_action_and_plugin_list_pagination(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, _ = router
+        assert (await commands.execute("action list --page 1")).ok
+        assert (await commands.execute("plugin list --page 1")).ok
+        assert (await commands.execute("plugin list --page 99")).ok  # clamps to last page
+
+    async def test_help_pagination(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
+        commands, _ = router
+        page1 = await commands.execute("help")
+        assert page1.ok
+        assert "1/2" in page1.text  # 12 topics, 10 per page
+        page2 = await commands.execute("help --page 2")
+        assert page2.ok
+        assert "2/2" in page2.text
+
+    async def test_feedback_records_and_guidelines(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        response = await commands.execute("feedback m1 'Promotions are noise; I never need them'")
+        assert response.ok
+        assert storage.preferences["feedback.m1"] == "Promotions are noise; I never need them"
+        guidelines = storage.preferences["feedback.guidelines"]
+        assert "m1: Promotions are noise" in guidelines
+        # shown in mail detail
+        shown = await commands.execute("mail show m1")
+        assert shown.ok
+        assert "Promotions are noise" in shown.text
+        # unknown mail rejected
+        assert not (await commands.execute("feedback ghost reason")).ok

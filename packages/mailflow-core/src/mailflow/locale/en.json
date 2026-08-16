@@ -67,7 +67,8 @@
       "header_deleted": "DELETED",
       "trash_usage": "trash <list|restore <id>>",
       "trash_not_found": "Trash item {mail_id} not found",
-      "trash_empty": "Trash is empty"
+      "trash_empty": "Trash is empty",
+      "field_feedback": "Feedback"
     },
     "action": {
       "title": "Action items ({count})",
@@ -329,6 +330,10 @@
     "tui.export_pick_folder": "Pick the target folder in the tree",
     "tui.export_created": "Exported {count} file(s) to {path}",
     "tui.export_failed": "Export failed: {message}",
-    "tui.export_no_framework": "No bot-framework exporter plugin installed"
+    "tui.export_no_framework": "No bot-framework exporter plugin installed",
+    "feedback": {
+      "usage": "feedback <mail_id> <reason...>",
+      "added": "Feedback recorded for {mail_id}; the LLM will adjust its filtering strategy"
+    }
   }
 }

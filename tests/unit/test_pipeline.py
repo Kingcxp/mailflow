@@ -364,3 +364,52 @@ class TestMergeAnalysis:
         assert merged.summary == "keep"
         assert merged.reason == "why"
         assert merged.notes == "note"
+
+
+class TestFeedbackGuidelines:
+    async def test_guidelines_reach_processor_context(self) -> None:
+        """User feedback guidelines are threaded into every processor context."""
+
+        class CapturingProcessor:
+            processor_id = "cap"
+
+            def __init__(self) -> None:
+                self.seen: list[str] = []
+
+            async def process(
+                self, mail: MailMessage, context: ProcessingContext
+            ) -> ProcessorResult:
+                self.seen.append(context.feedback_guidelines)
+                return ProcessorResult(analysis=MailAnalysis(summary="s", urgency=Urgency.INFO))
+
+        capturing = CapturingProcessor()
+        engine = PipelineEngine(
+            [ProcessorBinding(processor_id="cap", plugin_id="t", processor=capturing)]
+        )
+        mail = make_mail()
+        await engine.process(
+            mail,
+            "acct-1",
+            feedback_guidelines="m1: promotions are noise",
+        )
+        assert capturing.seen == ["m1: promotions are noise"]
+
+    async def test_default_guidelines_empty(self) -> None:
+        class CapturingProcessor:
+            processor_id = "cap"
+
+            def __init__(self) -> None:
+                self.seen: list[str] = []
+
+            async def process(
+                self, mail: MailMessage, context: ProcessingContext
+            ) -> ProcessorResult:
+                self.seen.append(context.feedback_guidelines)
+                return ProcessorResult(analysis=MailAnalysis(summary="s", urgency=Urgency.INFO))
+
+        capturing = CapturingProcessor()
+        engine = PipelineEngine(
+            [ProcessorBinding(processor_id="cap", plugin_id="t", processor=capturing)]
+        )
+        await engine.process(make_mail(), "acct-1")
+        assert capturing.seen == [""]

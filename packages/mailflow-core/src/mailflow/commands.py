@@ -57,7 +57,44 @@ _TOPICS = (
     "trash",
     "runtime",
     "config",
+    "feedback",
 )
+
+_PAGE_SIZE = 10
+"""Rows per page for chat-friendly listings (chat messages are length-limited)."""
+
+
+def _split_flags(args: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Split ``--flag value`` pairs from positional arguments."""
+    positionals: list[str] = []
+    flags: dict[str, str] = {}
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg.startswith("--") and index + 1 < len(args):
+            flags[arg[2:]] = args[index + 1]
+            index += 2
+            continue
+        positionals.append(arg)
+        index += 1
+    return positionals, flags
+
+
+def _page_number(flags: dict[str, str]) -> int:
+    raw = flags.get("page", "1")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 1
+
+
+def _paginate(items: list[Any], page: int) -> tuple[list[Any], int]:
+    """Return (page slice, total pages) for 1-based ``page``."""
+    total = len(items)
+    pages = max(1, -(-total // _PAGE_SIZE))
+    page = min(max(1, page), pages)
+    start = (page - 1) * _PAGE_SIZE
+    return items[start : start + _PAGE_SIZE], pages
 
 
 _SPAN_OPEN = re.compile(r"<span\b[^>]*?\bstyle\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))[^>]*>")
@@ -196,6 +233,7 @@ class CommandRouter:
             "trash": self._cmd_trash,
             "runtime": self._cmd_runtime,
             "config": self._cmd_config,
+            "feedback": self._cmd_feedback,
         }
 
     # -- helpers ----------------------------------------------------------------------
@@ -256,17 +294,23 @@ class CommandRouter:
     # -- help -------------------------------------------------------------------------------
 
     async def _cmd_help(self, args: list[str]) -> CommandResponse:
-        if not args:
+        positionals, flags = _split_flags(args)
+        if not positionals:
+            page = _page_number(flags)
+            topics, pages = _paginate(list(_TOPICS), page)
             spans: list[StyleSpan] = [
                 StyleSpan(text=self._t("command.help.title"), style=_STYLE_TITLE),
                 StyleSpan(text="\n" + self._t("command.help.intro"), style=_STYLE_MUTED),
-                StyleSpan(text=f"\n\n{self._t('command.help.available')}\n", style=_STYLE_HEADER),
+                StyleSpan(
+                    text=f"\n\n{self._t('command.help.available')} — {page}/{pages}\n",
+                    style=_STYLE_HEADER,
+                ),
             ]
-            for topic in _TOPICS:
+            for topic in topics:
                 spans.append(StyleSpan(text=f"  {topic:<10}", style=_STYLE_USAGE))
                 spans.append(StyleSpan(text=f"{self._topic_line(topic)}\n", style=_STYLE_MUTED))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
-        topic = args[0]
+        topic = positionals[0]
         if topic not in self._handlers:
             return self._err(self._t("command.help.topic_missing", topic=topic))
         return self._topic_help(topic)
@@ -291,8 +335,9 @@ class CommandRouter:
 
     async def _cmd_mail(self, args: list[str]) -> CommandResponse:
         if not args or args[0] == "list":
-            limit = int(args[1]) if len(args) > 1 and args[1].isdigit() else 50
-            return await self._mail_list(limit)
+            _positionals, flags = _split_flags(args[1:])
+            query = flags.get("query", "").strip().lower()
+            return await self._mail_list(page=_page_number(flags), query=query)
         sub, rest = args[0], args[1:]
         if sub == "show":
             return await self._mail_show(rest)
@@ -302,40 +347,60 @@ class CommandRouter:
             return await self._mail_urgency(rest)
         return self._err(self._t("mail.usage"))
 
-    async def _mail_list(self, limit: int) -> CommandResponse:
-        records = await self.service.list_mails(limit=limit)
+    async def _mail_list(self, *, page: int = 1, query: str = "") -> CommandResponse:
+        records = await self.service.list_mails()
+        if query:
+            records = [
+                record
+                for record in records
+                if query
+                in (f"{record.mail.subject} {record.mail.sender.address} {record.summary}").lower()
+            ]
+        page_records, pages = _paginate(records, page)
         spans: list[StyleSpan] = [
-            StyleSpan(text=self._t("mail.list_title", count=len(records)), style=_STYLE_TITLE),
+            StyleSpan(
+                text=self._t("mail.list_title", count=len(records)) + f" — {page}/{pages}",
+                style=_STYLE_TITLE,
+            ),
         ]
         if not records:
             spans.append(StyleSpan(text=f"\n{self._t('tui.empty')}", style=_STYLE_MUTED))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
-        header = f"{'ID':<26} {'':<2} {'URGENCY':<10} {'SUBJECT':<40} {'FROM':<28} {'DATE':<16}"
-        spans.append(StyleSpan(text=f"\n{header}\n", style=_STYLE_HEADER))
-        for record in records:
-            spans.append(StyleSpan(text=f"{record.record_id:<26} ", style=_STYLE_MUTED))
+        for record in page_records:
+            # compact two-line layout: wraps cleanly on narrow chat screens
+            spans.append(StyleSpan(text="  "))
             spans.extend(self._urgency_span(record.effective_urgency))
-            subject = record.mail.subject or "(no subject)"
-            spans.append(StyleSpan(text=f"{subject[:38]:<40} "))
-            spans.append(StyleSpan(text=f"{record.mail.sender.address[:26]:<28} "))
+            spans.append(StyleSpan(text=f" {record.mail.subject or '(no subject)'}"))
+            spans.append(StyleSpan(text="\n"))
             spans.append(
                 StyleSpan(
-                    text=self._fmt_time(record.mail.received_at),
+                    text=f"  {record.record_id} · {record.mail.sender.address} · "
+                    f"{self._fmt_time(record.mail.received_at)}",
                     style=_STYLE_MUTED,
                 )
             )
             spans.append(StyleSpan(text="\n"))
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
+    async def _find_mail(self, mail_id: str) -> MailRecord | None:
+        """Exact id wins; otherwise a unique prefix (ids shown by the list)."""
+        matches = [
+            record
+            for record in await self.service.list_mails()
+            if record.record_id == mail_id or record.record_id.startswith(mail_id)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
     async def _mail_show(self, args: list[str]) -> CommandResponse:
         if not args:
             return self._err(self._t("mail.usage"))
-        record = await self.service.get_mail(args[0])
+        record = await self._find_mail(args[0])
         if record is None:
             return self._err(self._t("mail.not_found", mail_id=args[0]))
-        return self._render_mail(record)
+        feedback = await self.service.get_feedback(record.record_id)
+        return self._render_mail(record, feedback=feedback)
 
-    def _render_mail(self, record: MailRecord) -> CommandResponse:
+    def _render_mail(self, record: MailRecord, feedback: str | None = None) -> CommandResponse:
         mail = record.mail
         spans: list[StyleSpan] = [
             StyleSpan(
@@ -396,6 +461,13 @@ class CommandRouter:
                     )
             if analysis.notes:
                 spans.append(StyleSpan(text=f"\n{self._t('mail.field_notes')}: {analysis.notes}"))
+        if feedback:
+            spans.append(
+                StyleSpan(
+                    text=f"\n{self._t('mail.field_feedback')}: {feedback}",
+                    style=_STYLE_ACCENT,
+                )
+            )
         body = mail.body_text.strip() or "(no text body)"
         spans.append(StyleSpan(text=f"\n\n{self._t('mail.field_body')}:\n{body}"))
         for note in record.processor_notes:
@@ -410,32 +482,42 @@ class CommandRouter:
     async def _mail_delete(self, args: list[str]) -> CommandResponse:
         if not args:
             return self._err(self._t("mail.usage"))
-        deleted = await self.service.delete_mail(args[0])
+        record = await self._find_mail(args[0])
+        if record is None:
+            return self._err(self._t("mail.not_found", mail_id=args[0]))
+        deleted = await self.service.delete_mail(record.record_id)
         if not deleted:
             return self._err(self._t("mail.not_found", mail_id=args[0]))
-        return self._ok(self._t("mail.deleted", mail_id=args[0]))
+        return self._ok(self._t("mail.deleted", mail_id=record.record_id))
 
     async def _mail_urgency(self, args: list[str]) -> CommandResponse:
         if len(args) != 2:
             return self._err(self._t("mail.urgency_usage"))
         mail_id, level = args
-        urgency = None if level == "auto" else parse_urgency(level)
-        record = await self.service.set_mail_urgency(mail_id, urgency)
+        record = await self._find_mail(mail_id)
         if record is None:
+            return self._err(self._t("mail.not_found", mail_id=mail_id))
+        urgency = None if level == "auto" else parse_urgency(level)
+        updated = await self.service.set_mail_urgency(record.record_id, urgency)
+        if updated is None:
             return self._err(self._t("mail.not_found", mail_id=mail_id))
         if urgency is None:
             return self._ok(
                 self._t(
-                    "mail.urgency_reset", mail_id=mail_id, urgency=record.effective_urgency.value
+                    "mail.urgency_reset",
+                    mail_id=record.record_id,
+                    urgency=updated.effective_urgency.value,
                 )
             )
-        return self._ok(self._t("mail.urgency_updated", mail_id=mail_id, urgency=urgency.value))
+        return self._ok(
+            self._t("mail.urgency_updated", mail_id=record.record_id, urgency=urgency.value)
+        )
 
     # -- action items -------------------------------------------------------------------------
 
     async def _cmd_action(self, args: list[str]) -> CommandResponse:
         if not args or args[0] == "list":
-            return await self._action_list()
+            return await self._action_list(args[1:])
         if args[0] == "show" and len(args) == 2:
             action = await self._find_action(args[1])
             if action is None:
@@ -471,25 +553,30 @@ class CommandRouter:
             return self._err(self._t("action.not_found", item_id=args[1]))
         return self._err(self._t("action.usage"))
 
-    async def _action_list(self) -> CommandResponse:
+    async def _action_list(self, args: list[str] | None = None) -> CommandResponse:
+        _, flags = _split_flags(args or [])
+        page = _page_number(flags)
         items = await self.service.list_actions()
+        page_items, pages = _paginate(items, page)
         spans: list[StyleSpan] = [
-            StyleSpan(text=self._t("action.title", count=len(items)), style=_STYLE_TITLE),
+            StyleSpan(
+                text=self._t("action.title", count=len(items)) + f" — {page}/{pages}",
+                style=_STYLE_TITLE,
+            ),
         ]
         if not items:
             spans.append(StyleSpan(text=f"\n{self._t('action.empty')}", style=_STYLE_MUTED))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
-        header = f"{'ID':<12} {'TIME':<18} {'TYPE':<10} {'CONTENT':<32} {'NOTES':<20} {'SOURCE MAIL':<26}"
-        spans.append(StyleSpan(text=f"\n{header}\n", style=_STYLE_HEADER))
-        for item in items:
-            spans.append(StyleSpan(text=f"{item.item_id[:10]:<12} ", style=_STYLE_MUTED))
-            spans.append(StyleSpan(text=f"{self._fmt_time(item.due_at):<18} "))
-            spans.append(StyleSpan(text=f"{item.action_type:<10} ", style=_STYLE_ACCENT))
-            spans.append(StyleSpan(text=f"{item.summary[:30]:<32} "))
-            spans.append(StyleSpan(text=f"{item.notes[:18]:<20} ", style=_STYLE_MUTED))
+        for item in page_items:
             spans.append(
                 StyleSpan(
-                    text=f"{(item.mail_id or self._t('action.source_user')):<26}",
+                    text=f"  {self._fmt_time(item.due_at)} [{item.action_type}] {item.summary}"
+                )
+            )
+            spans.append(
+                StyleSpan(
+                    text=f"  {item.item_id} · {(item.mail_id or self._t('action.source_user'))}"
+                    + (f" · {item.notes}" if item.notes else ""),
                     style=_STYLE_MUTED,
                 )
             )
@@ -757,22 +844,24 @@ class CommandRouter:
             return await self._cmd_plugin_disable(args[1:])
         snapshot = self.service.snapshot()
         if not args or args[0] == "list":
+            _, flags = _split_flags(args[1:])
+            page = _page_number(flags)
+            plugins, pages = _paginate(snapshot.plugins, page)
             spans = [
                 StyleSpan(
-                    text=self._t("plugin.title", count=len(snapshot.plugins)), style=_STYLE_TITLE
-                ),
-                StyleSpan(
-                    text=f"\n{self._t('plugin.header_id'):<30} {self._t('plugin.header_name'):<24} "
-                    f"{self._t('plugin.header_version'):<10} {self._t('plugin.header_provides')}\n",
-                    style=_STYLE_HEADER,
+                    text=self._t("plugin.title", count=len(snapshot.plugins))
+                    + f" — {page}/{pages}",
+                    style=_STYLE_TITLE,
                 ),
             ]
-            for plugin in snapshot.plugins:
+            if not snapshot.plugins:
+                spans.append(StyleSpan(text=f"\n{self._t('tui.empty')}", style=_STYLE_MUTED))
+                return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+            for plugin in plugins:
                 kinds = ",".join(k.value for k in plugin.kinds)
-                spans.append(StyleSpan(text=f"{plugin.plugin_id:<30} "))
-                spans.append(StyleSpan(text=f"{plugin.name:<24} "))
-                spans.append(StyleSpan(text=f"{plugin.version:<10} ", style=_STYLE_MUTED))
-                spans.append(StyleSpan(text=f"{kinds}\n", style=_STYLE_ACCENT))
+                spans.append(StyleSpan(text=f"  {plugin.plugin_id} ({plugin.version})"))
+                spans.append(StyleSpan(text=f"\n  {plugin.name} · {kinds}", style=_STYLE_MUTED))
+                spans.append(StyleSpan(text="\n"))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         if args[0] == "show" and len(args) == 2:
             plugin_info = snapshot.plugin(args[1])
@@ -948,7 +1037,22 @@ class CommandRouter:
         ]
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
-    # -- language -------------------------------------------------------------------------------------
+    # -- feedback -------------------------------------------------------------------------------------
+
+    async def _cmd_feedback(self, args: list[str]) -> CommandResponse:
+        """``feedback <mail_id> <reason...>`` — teach the LLM what to ignore."""
+        if len(args) < 2:
+            return self._err(self._t("feedback.usage"))
+        mail_id = args[0]
+        record = await self._find_mail(mail_id)
+        if record is None:
+            return self._err(self._t("mail.not_found", mail_id=mail_id))
+        reason = " ".join(args[1:]).strip()
+        try:
+            await self.service.record_feedback(record.record_id, reason)
+        except ValueError as exc:
+            return self._err(str(exc))
+        return self._ok(self._t("feedback.added", mail_id=record.record_id))
 
     async def _cmd_lang(self, args: list[str]) -> CommandResponse:
         if not args or args[0] == "get":

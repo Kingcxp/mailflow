@@ -67,7 +67,8 @@
       "header_deleted": "删除时间",
       "trash_usage": "trash <list|restore <id>>",
       "trash_not_found": "回收站中未找到 {mail_id}",
-      "trash_empty": "回收站为空"
+      "trash_empty": "回收站为空",
+      "field_feedback": "反馈"
     },
     "action": {
       "title": "待办事项（{count}）",
@@ -329,6 +330,10 @@
     "tui.export_pick_folder": "在树中选择目标文件夹",
     "tui.export_created": "已导出 {count} 个文件到 {path}",
     "tui.export_failed": "导出失败：{message}",
-    "tui.export_no_framework": "未安装机器人框架导出插件"
+    "tui.export_no_framework": "未安装机器人框架导出插件",
+    "feedback": {
+      "usage": "feedback <mail_id> <原因...>",
+      "added": "已记录对 {mail_id} 的反馈；LLM 将据此调整筛选策略"
+    }
   }
 }

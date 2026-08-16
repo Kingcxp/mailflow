@@ -600,11 +600,96 @@ class TestDeduplication:
         # pre-seed the stored copy, then let the source emit the same mail again
         from mailflow.domain import MailRecord
 
-        await storage.save_mail(
-            MailRecord(record_id=mail.normalized_message_id(), mail=mail)
-        )
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
         await runtime.start()
         await asyncio.sleep(0.3)
         await runtime.stop()
         assert len(storage.saved) == 1
         assert notifiers[0].notified == []
+
+
+class TestDailyDigest:
+    async def test_digest_fires_once_after_reminder_hour(self) -> None:
+        """At 08:00 (configurable) the runtime emits one digest per day with
+        today/upcoming counts and the approaching items."""
+        from mailflow.domain import ActionItem
+
+        storage = FakeStorage()
+        now = datetime(2026, 8, 16, 9, 0, tzinfo=UTC)  # after the 08:00 hour
+        today_item = ActionItem(
+            item_id="due-today",
+            mail_id="",
+            summary="Submit report",
+            action_type="errand",
+            due_at=datetime(2026, 8, 16, 15, 0, tzinfo=UTC),
+            notes="",
+        )
+        soon_item = ActionItem(
+            item_id="due-soon",
+            mail_id="",
+            summary="Prepare slides",
+            action_type="meeting",
+            due_at=datetime(2026, 8, 17, 10, 0, tzinfo=UTC),
+            notes="",
+        )
+        await storage.save_custom_action(today_item)
+        await storage.save_custom_action(soon_item)
+        events = EventBus()
+        config = MailFlowConfig.model_validate(
+            {"general": {"workers": 1, "reminder_interval_seconds": 10, "reminder_hour": 8}}
+        )
+        runtime = MailFlowRuntime(
+            config,
+            sources={},
+            pipeline=PipelineEngine([]),
+            storage=storage,
+            notifiers=[],
+            notifier_configs=[],
+            events=events,
+            account_configs=[],
+        )
+        digests: list[dict[str, Any]] = []
+
+        async def capture(event: str, **payload: Any) -> None:
+            digests.append(payload)
+
+        events.subscribe("mailflow.action.digest", capture)
+        assert await runtime._fire_daily_digest(now, config.general) == 1  # pyright: ignore[reportPrivateUsage]
+        assert len(digests) == 1
+        assert digests[0]["today_count"] == 1
+        assert digests[0]["upcoming_count"] == 1
+        assert [i.item_id for i in digests[0]["items"]] == ["due-today", "due-soon"]
+        # once per day
+        assert await runtime._fire_daily_digest(now, config.general) == 0  # pyright: ignore[reportPrivateUsage]
+        assert len(digests) == 1
+
+    async def test_digest_before_reminder_hour_silent(self) -> None:
+        from mailflow.domain import ActionItem
+
+        storage = FakeStorage()
+        early = datetime(2026, 8, 16, 7, 0, tzinfo=UTC)  # before 08:00
+        await storage.save_custom_action(
+            ActionItem(
+                item_id="a",
+                mail_id="",
+                summary="X",
+                action_type="errand",
+                due_at=datetime(2026, 8, 16, 15, 0, tzinfo=UTC),
+                notes="",
+            )
+        )
+        events = EventBus()
+        config = MailFlowConfig.model_validate(
+            {"general": {"workers": 1, "reminder_interval_seconds": 10, "reminder_hour": 8}}
+        )
+        runtime = MailFlowRuntime(
+            config,
+            sources={},
+            pipeline=PipelineEngine([]),
+            storage=storage,
+            notifiers=[],
+            notifier_configs=[],
+            events=events,
+            account_configs=[],
+        )
+        assert await runtime._fire_daily_digest(early, config.general) == 0  # pyright: ignore[reportPrivateUsage]
