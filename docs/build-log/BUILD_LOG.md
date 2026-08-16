@@ -140,3 +140,15 @@ Final phase-2 gate: 144 tests passed, mypy/pyright strict clean, ruff clean.
 | Chat bridge in exported nonebot/astrbot templates (mailflow prefix, chunked replies, digest paging); marketplace copies synced | templates compile-checked; export tests |
 | `mailflow.plugin_api` declarative decorators; scaffold templates generate this style with dev dependency group + uv install docs | plugin_api tests; all six template categories compile/load/register |
 | docs/development/deployment.md (3 platforms) + overview decorator style; docs gate now 37 | docs gate OK |
+
+## Processor rework + built-in mail/LLM plugins round
+
+| Change | Verification |
+| ------ | ------------ |
+| Core classification built in: `mailflow.processors` (RulesProcessor, LLMImportanceProcessor, `register_builtin_processors`, enhancer aggregation); default chain `rules@10, llm-importance@20`; `LLMEnhancer` protocol + `ComponentKind.LLM_ENHANCER` + `add_llm_enhancer`/`llm_enhancer` decorator | make check green (259 tests); template factories instantiate for all 7 categories |
+| Removed `mailflow-processor-rules` / `mailflow-processor-llm-importance` plugins; bundled/pyroot deps, uv.sources, mypy/pyright paths, tests migrated | make check green (plugin_id now "mailflow-core") |
+| `plugins/mailflow-llm-anthropic`: Messages API backend (x-api-key, sanitized errors, bounded retries, `_parse` content blocks) | pyright 0 errors, ruff clean, mypy clean; FakeClient test verifies system/messages payload |
+| `plugins/mailflow-mail-imap`: stdlib imaplib/smtplib, presets qq/163/outlook/gmail/generic, MIME→MailMessage pure `parse_mime`, SMTP replies, per-poll dedup | integration tests: MIME text/html, SMTP login/send, IMAP poll + dedup; make check 264 tests |
+| Both plugins registered in `mailflow-bundled` + workspace (uv.sources, mypy_path, pyright extraPaths); TestBundledRegistration updated | make check green |
+| Marketplace: mail_source/mailflow-mail-imap + llm_backend/mailflow-llm-anthropic copies, llm_enhancer category, processor docs, README/INDEX; validator now installs declared third-party deps | `validate_plugin.py --all` ok 10/10 |
+| Docs: deployment (presets table + anthropic config), plugin overview/processor (LLMEnhancer), plugin-system (LLM_ENHANCER kind, 8 bundled plugins), README en/zh-CN, CHANGELOG | docs gate OK |

@@ -71,7 +71,7 @@ mypy/pyright.
 
 ## Bundled composition and frozen builds
 
-`mailflow-bundled` imports the six official plugin singletons and registers
+`mailflow-bundled` imports the eight official plugin singletons and registers
 them **before** optional entry-point discovery. Static imports make frozen
 (Nuitka) executables independent of entry-point metadata; discovery dedupes
 by plugin id, so the same plugins are not registered twice in development.
@@ -83,7 +83,8 @@ Frozen mode does not promise arbitrary post-build plugin discovery.
 | ----------------- | -------------------------------------------------- | --------------------- |
 | `MAIL_SOURCE`     | `(MailAccountConfig) -> MailSource`                | `fake`                |
 | `LLM_BACKEND`     | `(LLMConfig) -> LLMBackend`                        | `openai-compatible`   |
-| `MAIL_PROCESSOR`  | `(ProcessorConfig, LLMRouter) -> MailProcessor`    | `rules`, `llm-importance` |
+| `MAIL_PROCESSOR`  | `(ProcessorConfig, LLMRouter) -> MailProcessor`    | `rules`, `llm-importance` (built into core) |
+| `LLM_ENHANCER`    | `(ProcessorConfig) -> LLMEnhancer`                 | `my-enhancer`         |
 | `NOTIFIER`        | `(NotifierConfig) -> Notifier`                     | `console`             |
 | `STORAGE`         | `(StorageConfig) -> StorageBackend`                | `sqlite`              |
 | `BOT_EXPORTER`    | `(BotExportContext) -> BotExportResult`            | `nonebot`, `astrbot`  |

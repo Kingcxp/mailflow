@@ -95,7 +95,8 @@ continues (the failure is logged).
 - Never log credentials; sanitize error text before it can reach persisted
   notes.
 - Keep processors deterministic where possible and fast; LLM work goes
-  through the injected `LLMRouter`.
+  through the injected `LLMRouter` (or through the built-in
+  `llm-importance` processor when you only need to shape its analysis).
 
 ## Guides
 

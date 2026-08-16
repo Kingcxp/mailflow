@@ -35,8 +35,9 @@ notifiers, storage — installed from a plugin marketplace.
   (useful) · `important #E6A23C` (read it) · `urgent #F56C6C` (act now).
   Colors are part of the public contract, reused by CLI, TUI and notifiers.
 - **LLM analysis** — OpenAI-compatible chat completions (works with OpenCode
-  relays, llama.cpp, vLLM); named LLMs with ordered fallback; structured
-  summaries, reasons, reply drafts and timed action items.
+  relays, llama.cpp, vLLM) plus an Anthropic Claude backend; named LLMs
+  with ordered fallback; structured summaries, reasons, reply drafts and
+  timed action items.
 - **Timed-action table + reminders** — exams/meetings/errands with time,
   type, content and preparation notes, drilling into the source mail;
   reminders fire at a configurable fixed time two days before the due date
@@ -221,6 +222,6 @@ docs/                        architecture, development, agent documentation
 
 ## License
 
-MIT. Real provider adapters (IMAP, Gmail, Outlook) are planned future
-plugins and are not part of the 0.1.0 baseline — see
+MIT. IMAP is built in with presets for QQ, 163, Outlook and Gmail (any
+generic server works too) — see
 [CHANGELOG.md](CHANGELOG.md).

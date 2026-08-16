@@ -1,7 +1,14 @@
 # Processor
 
-A processor is one step in the ordered chain. It sees the original mail and
-returns a partial analysis plus a decision.
+The classification chain is built into `mailflow-core`: the deterministic
+`rules` processor (priority 10) and the LLM `llm-importance` processor
+(priority 20) run by default, so filtering and importance analysis work
+with zero plugins. A plugin that registers the same component id replaces
+the built-in step.
+
+The plugin-facing extension point is the **LLM enhancer**: bounded
+customization of the built-in LLM analysis without reimplementing
+classification. This page documents both contracts.
 
 ## Contract
 
@@ -47,6 +54,54 @@ llm = "go"                    # optional named LLM
 fallback_llms = ["local"]
 [processors.options]          # read from context.options
 ```
+
+## LLM enhancers (the processor-plugin extension point)
+
+```python
+@PLUGIN.llm_enhancer("my-enhancer")
+class MyEnhancer:
+    def __init__(self, config: ProcessorConfig) -> None:
+        self._lang = str(config.options.get("lang", "zh-CN"))
+
+    def system_prompt(self, base: str) -> str:
+        return f"{base}\nSummaries must be written in {self._lang}."
+
+    def extra_messages(self, mail: MailMessage, context: ProcessingContext) -> list[dict[str, str]]:
+        return [{"role": "user", "content": "Be very concise."}]
+
+    def post_process(
+        self, analysis: MailAnalysis, mail: MailMessage, context: ProcessingContext
+    ) -> MailAnalysis | None:
+        if analysis.urgency == "low":
+            return analysis.model_copy(update={"notes": "low priority: skipped digest"})
+        return None
+```
+
+`system_prompt` results chain (the built-in prompt first, then each
+enhancer), `extra_messages` are appended after the user message, and
+`post_process` runs in order over the parsed analysis — returning `None`
+leaves the analysis unchanged. Every hook is optional; an enhancer that
+only appends guidance implements just `system_prompt`. Enhancers are
+configured as ordinary processors:
+
+```toml
+[[processors]]
+processor_id = "my-enhancer"
+provider = "my-enhancer"
+priority = 20
+[processors.options]
+lang = "zh-CN"
+```
+
+Use the `llm_enhancer` scaffold template to start one; `mailflow-core`
+implements the aggregation, so enhancers never talk to the LLM router
+directly.
+
+## Writing a full processor (advanced)
+
+The `MailProcessor` contract remains available for plugins that need a
+custom step in the chain (e.g. domain-specific filtering) — it runs
+alongside the built-in steps in priority order.
 
 ## Using the LLM router
 

@@ -65,14 +65,37 @@ All notable changes are recorded here; the format follows
   `docs/plugin-development/bot-exporter.md`, full Simplified Chinese README
   (`README.zh-CN.md`).
 
+### Added
+
+- Built-in `mailflow-mail-imap` mail source: IMAP polling + SMTP replies
+  with provider presets for QQ, 163, Outlook and Gmail (and generic
+  school/work servers via explicit hosts); MIME parsing (text/html bodies,
+  encoded subjects), credentials from `${ENV_VAR}` placeholders.
+- Built-in `mailflow-llm-anthropic` LLM backend: Claude Messages API
+  (`provider = "anthropic"`), registered alongside the OpenAI-compatible
+  backend in `mailflow-bundled`.
+- Marketplace defaults: the official `mailflow-repo` repository ships
+  configured (an explicit `repositories` list replaces it); TUI `ReposScreen`
+  manages remote repositories; plugin details show author and last-updated;
+  the Market tab buttons no longer overflow (two control rows).
+- `LLM_ENHANCER` component kind: processor plugins customize the built-in
+  LLM analysis through `system_prompt` chaining, `extra_messages` and
+  `post_process` — bounded customization without reimplementing
+  classification.
+- `llm_enhancer` scaffold template category and marketplace category.
+
 ### Changed
 
+- Classification pipeline is built into `mailflow-core`: `rules` (10) and
+  LLM `llm-importance` (20) processors run by default; the old
+  `mailflow-processor-rules` / `mailflow-processor-llm-importance` plugins
+  are removed. A plugin registering the same component id replaces the
+  built-in step.
 - Removed `MAILFLOW_FROM_ZERO.md` (reconstruction plan archived into the
   build log); all references updated.
 
 ### Planned provider phase (not implemented in 0.1.0)
 
-- Generic IMAP source adapter (incremental UID tracking, MIME normalization)
 - Gmail API source (OAuth, history sync, thread-aware replies)
 - Outlook / Microsoft Graph source (delta sync)
 - Production notification adapters (ntfy, Gotify, Telegram/QQ bridge callback)

@@ -29,7 +29,7 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
 - **多账户、多适配器** —— 提供商适配器合并成一条有界流；单账户故障隔离。
 - **四级紧急度契约** —— `ad #909399`（垃圾）· `info #67C23A`（有用）· `important #E6A23C`（值得读）· `urgent #F56C6C`（立即处理）。
   颜色是公开契约的一部分，CLI、TUI 与通知器共用。
-- **LLM 分析** —— OpenAI 兼容的 chat completions（可用于 OpenCode 中继、llama.cpp、vLLM）；具名 LLM 按序回退；
+- **LLM 分析** —— OpenAI 兼容的 chat completions（可用于 OpenCode 中继、llama.cpp、vLLM）与 Anthropic Claude 后端；具名 LLM 按序回退；
   结构化摘要、理由、回复草稿与带时间的待办项。
 - **带时间待办 + 提醒** —— 考试/会议/跑腿，含时间、类型、内容与准备备注，可下钻到源邮件；
   到期前两天固定时刻与到期日零点触发提醒。
@@ -39,7 +39,8 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
   绝不触碰宿主的根日志器。
 - **i18n** —— 内置英文（默认）与简体中文；其他语言以纯数据 JSON 包加载；语言选择持久化。
 - **插件商城**（VS Code 风格）—— 搜索、分类筛选、Markdown 详情，命令行与 TUI 均可安装/卸载/启用/禁用；
-  内置插件按类别组织（mail_source、processor、llm_backend、notifier、storage、bot_exporter）；
+  内置插件按类别组织（mail_source、processor、llm_backend、llm_enhancer、notifier、storage、bot_exporter）；
+  IMAP 邮件源内置 QQ、163、Outlook、Gmail 预设，LLM 内置 OpenAI 兼容与 Anthropic 两种格式；
   禁用插件绝不会导致启动失败（孤立配置项会跳过并告警）。
 - **机器人框架导出** —— 把配置好的实例导出为 NoneBot2、AstrBot 或任何其他聊天机器人框架的插件
   （`mailflow export --framework <id>`、带文件树的 TUI 导出向导、`make bot-plugin-*`）；

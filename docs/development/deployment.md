@@ -50,7 +50,48 @@ configured instance (shared storage + config), so you can manage a running
 service from the terminal at home and from chat on the phone — the command
 surface is identical everywhere.
 
-## 5. Install plugins
+## 5. Built-in capabilities
+
+MailFlow ships the common mailboxes and both major LLM formats built in —
+no plugin install is needed for these:
+
+**Mail sources** — `provider = "fake"` for tests, and `provider = "imap"`
+with `options.preset` for real mailboxes:
+
+| preset    | IMAP                       | SMTP                          | notes                          |
+| --------- | -------------------------- | ----------------------------- | ------------------------------ |
+| `qq`      | imap.qq.com:993            | smtp.qq.com:465 (SSL)         | authorization code as password |
+| `163`     | imap.163.com:993           | smtp.163.com:465 (SSL)        | authorization code as password |
+| `outlook` | outlook.office365.com:993  | smtp.office365.com:587 (TLS)  |                                |
+| `gmail`   | imap.gmail.com:993         | smtp.gmail.com:465 (SSL)      | app password                   |
+| *(none)*  | `options.imap_host/port`   | `options.smtp_host/port`      | generic school/work servers    |
+
+```toml
+[[accounts]]
+account_id = "school"
+provider = "imap"
+email = "student@university.edu"
+[accounts.options]
+preset = "qq"                        # or 163/outlook/gmail; omit for generic
+username = "student@university.edu"
+password = "${MAIL_PASSWORD}"        # authorization code / app password
+```
+
+**LLM backends** — `provider = "openai-compatible"` (OpenAI, OpenCode relay,
+llama.cpp, vLLM, …) and `provider = "anthropic"` (Claude Messages API):
+
+```toml
+[[llms]]
+llm_id = "claude"
+provider = "anthropic"
+model = "claude-3-5-sonnet-latest"
+api_key = "${ANTHROPIC_API_KEY}"
+```
+
+Both transports retry with bounded backoff and sanitize error text; keys
+enter via `${ENV_VAR}` placeholders, never the config file.
+
+## 6. Install plugins
 
 ```bash
 uv run mailflow plugin repo add mailflow-repo https://github.com/Kingcxp/mailflow-repo
@@ -65,7 +106,7 @@ installer (Market → 从文件夹安装) and an export wizard (Market → Expor
 `general.auto_update = true` (default) MailFlow checks daily and applies
 releases and plugin updates automatically.
 
-## 6. Export a chatbot-framework plugin
+## 7. Export a chatbot-framework plugin
 
 ```bash
 uv run mailflow export --framework nonebot --output dist/nonebot_plugin_mailflow -c configs/local.toml
@@ -88,7 +129,7 @@ Both plugins boot the MailFlow service with the bot and dispatch prefixed
 chat messages to the shared command router; long replies and the daily
 digest are paginated into separate messages.
 
-## 7. Verify
+## 8. Verify
 
 ```bash
 make check        # lint + format + mypy + pyright + pytest + docs gate
