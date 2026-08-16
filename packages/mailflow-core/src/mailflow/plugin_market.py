@@ -291,7 +291,7 @@ def detect_plugin_folders(root: str | Path) -> list[Path]:
     base = Path(root)
     if (base / "plugin.json").is_file():
         return [base]
-    candidates = [p for p in base.iterdir() if p.is_dir()]
+    candidates = sorted(p for p in base.iterdir() if p.is_dir())
     with_metadata = [p for p in candidates if (p / "plugin.json").is_file()]
     if with_metadata:
         return with_metadata
