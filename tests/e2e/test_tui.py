@@ -17,7 +17,7 @@ from mailflow.service import start_service
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import FakeMailSource, make_mail
 from mailflow_tui.app import MailFlowApp
-from textual.widgets import Button, DataTable, Input, Select
+from textual.widgets import Button, DataTable, Input, Select, TabbedContent
 
 AD_JSON = """{
   "summary": "Special promotion inside",
@@ -528,11 +528,13 @@ async def test_market_repos_screen(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
-    """Plugin details surface the author and the last-updated date."""
+    """Selecting a plugin row opens a full-screen detail modal with the
+    author, last-updated date and the markdown readme."""
     import json as jsonlib
 
     from mailflow.plugin_market import PluginMarket, Repository
-    from mailflow_tui.app import MarketPane
+    from mailflow_tui.app import MarketDetailScreen, MarketPane
+    from textual.widgets import Markdown
 
     repo_root = tmp_path / "market"
     plugin_dir = repo_root / "notifier" / "mailflow-demo-notify"
@@ -555,7 +557,7 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
                 "source": str(plugin_dir),
                 "author": "Test Author",
                 "updated": "2026-08-01",
-                "readme": "# Demo",
+                "readme": "# Demo\n\nFull markdown body.",
             }
         ),
         encoding="utf-8",
@@ -580,20 +582,113 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
             market_pane = app.query_one(MarketPane)
             await market_pane.refresh_market()
             market_table = cast(DataTable[Any], app.query_one("#market-table", DataTable))
-            # select the row -> detail pane shows author and updated date
+            # select the row -> full-screen detail modal
+            market_table.focus()
             market_table.move_cursor(row=0, animate=False)  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause(0.1)
-            await pilot.press("enter")  # select the row -> detail updates
+            market_table.action_select_cursor()  # equivalent of pressing Enter
             await pilot.pause(0.2)
-            # the detail path feeds metadata (author/updated) into the pane
-            entries = market_pane._entries  # pyright: ignore[reportPrivateUsage]
-            assert entries
-            market_pane._show_detail(entries[0][1])  # pyright: ignore[reportPrivateUsage]
+            assert isinstance(app.screen, MarketDetailScreen)
+            readme = app.screen.query_one("#market-detail-readme", Markdown)  # pyright: ignore[reportUnknownMemberType]
+            content = str(getattr(readme, "_markdown", ""))  # pyright: ignore[reportUnknownMemberType]
+            assert "Test Author" in content
+            assert "2026-08-01" in content
+            assert "Full markdown body" in content
+            # close returns to the tabbed screen
+            from textual.widgets import Button
+
+            app.screen.query_one("#detail-close", Button).press()  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, MarketDetailScreen)
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_config_edit_modal_saves_value(tmp_path: Path) -> None:
+    """A config row opens an edit form; saving persists through the service
+    and the table refreshes."""
+    from mailflow_tui.app import ConfigEditModal
+    from textual.widgets import Button, Input
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.config_path = tmp_path / "cfg.toml"
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-settings"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.2)
+            cfg = cast(DataTable[Any], app.query_one("#config-table", DataTable))
+            # locate the general.timezone row by its row key
+            row = cfg.get_row_index("general.timezone")  # pyright: ignore[reportUnknownMemberType]
+            cfg.focus()
+            cfg.move_cursor(row=row, animate=False)  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause(0.1)
-            selected = market_pane._selected  # pyright: ignore[reportPrivateUsage]
-            assert selected is not None
-            assert selected.author == "Test Author"
-            assert selected.updated == "2026-08-01"
+            cfg.action_select_cursor()  # equivalent of pressing Enter
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, ConfigEditModal)
+            # description is localized (en fallback: not the raw key)
+            desc = app.screen.query_one("#config-edit-desc").render()  # pyright: ignore[reportUnknownMemberType]
+            assert "config.desc." not in str(desc)
+            inp = app.screen.query_one("#config-edit-input", Input)
+            inp.value = "Asia/Shanghai"
+            app.screen.query_one("#config-edit-save", Button).press()  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.3)
+            assert not isinstance(app.screen, ConfigEditModal)
+            assert service.config.general.timezone == "Asia/Shanghai"
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_market_buttons_rendered_with_labels(tmp_path: Path) -> None:
+    """Every button keeps a visible label (regression: Textual 8 flat
+    buttons collapsed to zero height under the old fixed-height CSS)."""
+    from mailflow.plugin_market import PluginMarket
+    from textual.widgets import Button
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(110, 42)) as pilot:
+            await pilot.pause()
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-market"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.2)
+            market_buttons = [b for b in app.query(Button) if (b.id or "").startswith("market-")]
+            assert len(market_buttons) >= 5
+            for button in market_buttons:
+                assert button.size.height > 0, f"{button.id} collapsed"
+                assert str(button.label).strip(), f"{button.id} label missing"
             app.exit()
             await pilot.pause()
     finally:

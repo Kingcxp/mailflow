@@ -749,6 +749,8 @@ def _build_processors(
     config: MailFlowConfig,
     registry: ComponentRegistry,
     router: LLMRouter,
+    *,
+    language: str = "",
 ) -> PipelineEngine:
     processor_configs: list[ProcessorConfig] = []
     processors: dict[str, MailProcessor] = {}
@@ -765,6 +767,21 @@ def _build_processors(
             )
             continue
         factory = registry.processor_factory(processor_config.provider)
+        if (
+            processor_config.provider == "llm-importance"
+            and not processor_config.options.get("language")
+            and (language or "").strip()
+        ):
+            # Per-mail summary language: explicit config option wins, else
+            # the configured general.summary_language or the UI language.
+            processor_config = processor_config.model_copy(
+                update={
+                    "options": {
+                        **processor_config.options,
+                        "language": language,
+                    }
+                }
+            )
         if (
             processor_config.provider == "llm-importance"
             and enhancers
@@ -839,6 +856,7 @@ async def start_service(
             config.i18n.language or config.general.language,
             extra_dirs=config.i18n.extra_dirs,
         )
+        language = config.general.summary_language or i18n.language
         manager = plugin_manager or PluginManager(config)
         if discover_plugins and plugin_manager is None:
             manager.discover()
@@ -850,7 +868,7 @@ async def start_service(
         sources = _build_sources(config, registry)
         backends, llm_configs = _build_llms(config, registry)
         router = LLMRouterImpl(backends, llm_configs)
-        pipeline = _build_processors(config, registry, router)
+        pipeline = _build_processors(config, registry, router, language=language)
 
         notifiers: list[Notifier] = []
         notifier_configs: list[NotifierConfig] = []

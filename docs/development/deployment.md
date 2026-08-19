@@ -91,6 +91,19 @@ api_key = "${ANTHROPIC_API_KEY}"
 Both transports retry with bounded backoff and sanitize error text; keys
 enter via `${ENV_VAR}` placeholders, never the config file.
 
+**Summary language** — LLM summaries, reasons, suggested replies and
+action-item text follow `general.summary_language` (e.g. `zh-CN`, `en`);
+leave it empty to follow the interface language:
+
+```toml
+[general]
+summary_language = "zh-CN"
+```
+
+The Settings tab shows every option with its full localized description;
+select a row to edit its value in place (Cancel/Save), or edit the TOML
+file directly for list-valued options.
+
 ## 6. Install plugins
 
 ```bash

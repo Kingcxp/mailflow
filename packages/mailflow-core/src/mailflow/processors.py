@@ -214,6 +214,12 @@ class LLMImportanceProcessor:
                 "priorities; e.g. mark matching mail lower importance):\n"
                 f"{context.feedback_guidelines}\n"
             )
+        language = str(self._config.options.get("language") or "").strip()
+        if language:
+            user += (
+                "\nWrite the summary, reason, suggested reply, action-item "
+                f"summaries and notes in the following language: {language}.\n"
+            )
         system_prompt = SYSTEM_PROMPT
         for enhancer in self._enhancers:
             system_prompt = enhancer.system_prompt(system_prompt)

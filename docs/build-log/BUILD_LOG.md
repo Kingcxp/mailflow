@@ -152,3 +152,14 @@ Final phase-2 gate: 144 tests passed, mypy/pyright strict clean, ruff clean.
 | Both plugins registered in `mailflow-bundled` + workspace (uv.sources, mypy_path, pyright extraPaths); TestBundledRegistration updated | make check green |
 | Marketplace: mail_source/mailflow-mail-imap + llm_backend/mailflow-llm-anthropic copies, llm_enhancer category, processor docs, README/INDEX; validator now installs declared third-party deps | `validate_plugin.py --all` ok 10/10 |
 | Docs: deployment (presets table + anthropic config), plugin overview/processor (LLMEnhancer), plugin-system (LLM_ENHANCER kind, 8 bundled plugins), README en/zh-CN, CHANGELOG | docs gate OK |
+## TUI fixes round (post market round)
+
+| Change | Verification |
+| ------ | ------------ |
+| Textual 8 button regression: `height: 3` + tall border overflowed 3-row containers (labels collapsed to 0), and the stock variant palette draws on ansi_default (black-on-black). Flat high-contrast variants (`$primary/$success/$warning/$error/$surface-lighten-1` + dark text) with `height: auto`; container heights relaxed | probe: all buttons render labels, height > 0; `test_market_buttons_rendered_with_labels` |
+| Full-screen plugin detail modal (title, metadata author/updated/homepage, markdown readme, install/uninstall/enable/disable) on row select; row highlight previews in the pane | `test_market_detail_shows_author_and_updated` (modal assertion) |
+| Config edit modal: select a config row → form (value + cancel/save) → `service.set_config_value` persists and table refreshes; list-valued options show a TOML hint | `test_config_edit_modal_saves_value` (timezone → Asia/Shanghai persisted) |
+| `general.summary_language`: pins LLM summary/reason/reply language; empty follows the interface language; injected into the built-in llm-importance user message | `TestSummaryLanguage` (instruction injected / absent without config) |
+| Config descriptions localized via `config.desc.<key>` keys (en + zh-CN) with english fallback | TUI e2e checks description renders (not the raw key) |
+| `cursor_type: row` on every DataTable — row selection events never fired under the default `cell` cursor | all table interaction e2e green |
+| make check full suite | 268 tests + docs gate OK |

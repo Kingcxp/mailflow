@@ -4,6 +4,48 @@ Screen {
     background: #1e1e2e;
 }
 
+/* Textual 8 buttons: the stock theme draws every variant on ansi_default
+   (black-on-black on dark terminals) and its tall border makes fixed
+   height:3 buttons overflow their 3-row containers. Use flat, explicit
+   high-contrast variants with auto height (1 text row + line-pad). */
+Button {
+    height: auto;
+    min-width: 16;
+    border: none;
+    text-style: bold;
+    content-align: center middle;
+}
+
+Button.-default {
+    background: $surface-lighten-1;
+    color: $text;
+}
+
+Button.-primary {
+    background: $primary;
+    color: #11111b;
+}
+
+Button.-success {
+    background: $success;
+    color: #11111b;
+}
+
+Button.-warning {
+    background: $warning;
+    color: #11111b;
+}
+
+Button.-error {
+    background: $error;
+    color: #11111b;
+}
+
+Button:hover,
+Button:focus {
+    text-style: bold reverse;
+}
+
 #mail-search {
     dock: top;
     margin: 0 1 1 1;
@@ -24,16 +66,9 @@ Screen {
 
 #mail-controls {
     dock: bottom;
-    height: 3;
+    height: auto;
     padding: 0 1;
     align-vertical: middle;
-}
-
-#mail-controls Button,
-#market-actions Button,
-#runtime-plugin-actions Button {
-    height: 3;
-    content-align: center middle;
 }
 
 #mail-summary {
@@ -118,7 +153,7 @@ ReplyModal {
 }
 
 #reply-templates {
-    height: 3;
+    height: auto;
     margin: 0 1;
     align-vertical: middle;
 }
@@ -126,7 +161,6 @@ ReplyModal {
 #reply-templates Button {
     width: 12;
     margin-right: 1;
-    content-align: center middle;
 }
 
 #reply-tpl-hint {
@@ -141,16 +175,14 @@ ReplyModal {
 }
 
 #reply-toolbar {
-    height: 3;
+    height: auto;
     margin: 0 1;
     align-vertical: middle;
 }
 
 #reply-toolbar .reply-tool {
     width: 4;
-    height: 3;
     margin-right: 1;
-    content-align: center middle;
 }
 
 #reply-markup-hint {
@@ -159,7 +191,7 @@ ReplyModal {
 }
 
 #reply-actions {
-    height: 3;
+    height: auto;
     margin: 1;
 }
 
@@ -182,7 +214,6 @@ DataTable > .datatable--cursor {
 }
 
 #market-controls {
-    height: 3;
     padding: 0 1;
 }
 
@@ -217,7 +248,7 @@ DataTable > .datatable--cursor {
 }
 
 #market-actions {
-    height: 3;
+    height: auto;
     padding: 0 1;
     align-vertical: middle;
 }
@@ -238,7 +269,7 @@ DataTable > .datatable--cursor {
 }
 
 #runtime-plugin-actions {
-    height: 3;
+    height: auto;
     align-vertical: middle;
 }
 
@@ -285,7 +316,7 @@ PluginScaffoldScreen {
 }
 
 #scaffold-actions {
-    height: 3;
+    height: auto;
     align-vertical: middle;
     content-align: center middle;
 }
@@ -327,7 +358,7 @@ InstallScreen {
 }
 
 #install-actions {
-    height: 3;
+    height: auto;
     align-vertical: middle;
     content-align: center middle;
 }
@@ -340,31 +371,22 @@ InstallScreen {
 
 /* market: two control rows so every button stays on screen */
 #market-controls {
-    height: 6;
+    height: auto;
     padding: 0 1;
 }
 
 #market-controls-top {
-    height: 3;
+    height: auto;
     align-vertical: middle;
 }
 
 #market-controls-buttons {
-    height: 3;
+    height: auto;
     align-vertical: middle;
 }
 
 #market-controls-buttons Button {
-    height: 3;
     margin-right: 1;
-    content-align: center middle;
-    padding: 0 0 1 0;   /* lift the label one row (visual centering) */
-}
-
-/* plugin action buttons: same label lift */
-#market-actions Button {
-    content-align: center middle;
-    padding: 0 0 1 0;
 }
 
 /* remote repository manager */
@@ -401,7 +423,7 @@ ReposScreen {
 }
 
 #repos-actions {
-    height: 3;
+    height: auto;
     align-vertical: middle;
     content-align: center middle;
 }
@@ -410,4 +432,98 @@ ReposScreen {
     width: 16;
     margin: 0 1;
     content-align: center middle;
+}
+
+/* full-screen plugin detail */
+MarketDetailScreen {
+    align: center middle;
+}
+
+#market-detail-dialog {
+    width: 96;
+    height: 85%;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+
+#market-detail-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#market-detail-readme {
+    height: 1fr;
+    border: round $primary;
+    padding: 0 1;
+}
+
+#market-detail-status {
+    height: 1;
+    color: $text-muted;
+}
+
+#market-detail-actions {
+    height: auto;
+    align-vertical: middle;
+}
+
+#market-detail-actions Button {
+    margin-right: 1;
+}
+
+/* config edit modal */
+ConfigEditModal {
+    align: center middle;
+}
+
+#config-edit-dialog {
+    width: 76;
+    height: 20;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+
+#config-edit-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#config-edit-key {
+    margin-bottom: 1;
+}
+
+#config-edit-desc {
+    height: auto;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#config-edit-value-label {
+    margin-bottom: 1;
+}
+
+#config-edit-input {
+    margin-bottom: 1;
+}
+
+#config-edit-readonly {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#config-edit-status {
+    height: 1;
+    color: $error;
+}
+
+#config-edit-actions {
+    height: auto;
+    align-vertical: middle;
+}
+
+#config-edit-actions Button {
+    width: 16;
+    margin-right: 1;
 }

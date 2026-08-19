@@ -110,6 +110,11 @@ class GeneralConfig(BaseModel):
         default=True,
         description="Check daily for MailFlow releases and plugin updates, and apply them automatically",
     )
+    summary_language: str = Field(
+        default="",
+        description="Language for LLM mail summaries/reasons/replies (e.g. zh-CN, en); "
+        "empty follows the interface language",
+    )
 
     @model_validator(mode="after")
     def validate_timezone(self) -> GeneralConfig:

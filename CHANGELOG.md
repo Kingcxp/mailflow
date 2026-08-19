@@ -83,6 +83,13 @@ All notable changes are recorded here; the format follows
   `post_process` — bounded customization without reimplementing
   classification.
 - `llm_enhancer` scaffold template category and marketplace category.
+- Summary language: `general.summary_language` pins the language of LLM
+  summaries/reasons/replies (empty follows the interface language); the
+  built-in `llm-importance` processor injects the instruction per mail.
+- Config descriptions are localized (`config.desc.*` keys in en/zh-CN).
+- TUI: selecting a plugin row opens a full-screen VS Code-style detail
+  (title, metadata, markdown readme, install/uninstall/enable/disable);
+  selecting a config row opens an edit form (value, cancel/save).
 
 ### Changed
 
@@ -91,6 +98,10 @@ All notable changes are recorded here; the format follows
   `mailflow-processor-rules` / `mailflow-processor-llm-importance` plugins
   are removed. A plugin registering the same component id replaces the
   built-in step.
+- TUI buttons: Textual 8 renders button labels on ansi-default (black)
+  backgrounds and fixed `height: 3` overflowed the 3-row containers,
+  collapsing labels; buttons now use flat high-contrast variants and
+  auto height. All tables select whole rows (`cursor_type: row`).
 - Removed `MAILFLOW_FROM_ZERO.md` (reconstruction plan archived into the
   build log); all references updated.
 

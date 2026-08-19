@@ -197,3 +197,26 @@ class TestLLMEnhancers:
         assert result.analysis is not None
         assert "confirmed by enhancer" not in result.analysis.reason
         assert len(router.last_messages) == 2  # system + user only
+
+
+class TestSummaryLanguage:
+    async def test_language_option_injects_instruction(self) -> None:
+        router = StubRouter(CRITICAL_EXAM_JSON)
+        config = ProcessorConfig(
+            processor_id="p1",
+            provider="llm-importance",
+            llm="primary",
+            options={"language": "zh-CN"},
+        )
+        processor = LLMImportanceProcessor(config, router)
+        await processor.process(make_mail(), CONTEXT)
+        user_message = next(m for m in router.last_messages if m["role"] == "user")
+        assert "zh-CN" in user_message["content"]
+        assert "Write the summary" in user_message["content"]
+
+    async def test_no_language_leaves_messages_unchanged(self) -> None:
+        router = StubRouter(CRITICAL_EXAM_JSON)
+        processor = make_processor(router)
+        await processor.process(make_mail(), CONTEXT)
+        user_message = next(m for m in router.last_messages if m["role"] == "user")
+        assert "Write the summary" not in user_message["content"]
