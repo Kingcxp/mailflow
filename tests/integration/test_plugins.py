@@ -619,6 +619,97 @@ class TestIMAPMailSource:
         fetched_burst = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
         assert [m.subject for m in fetched_burst] == ["msg 3", "msg 4", "msg 5"]
 
+    async def test_failed_fetch_does_not_skip_the_mail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A transient FETCH failure must leave the UID watermark behind the
+        mail so the next poll retries it instead of losing it forever."""
+        from mailflow.config import MailAccountConfig
+        from mailflow_mail_imap.plugin import IMAPSource
+
+        state = {"fail_uid": 2}
+
+        class FlakyIMAP:
+            def __init__(self, host: str, port: int) -> None: ...
+
+            def login(self, user: str, password: str) -> None: ...
+
+            def select(self, folder: str) -> None: ...
+
+            def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+                if command == "search":
+                    return "OK", [b"1 2 3"]
+                uid = int(args[0])
+                if uid == state["fail_uid"]:
+                    return "NO", [None]  # server hiccup on this uid only
+                raw = (
+                    f"From: a@example.com\r\nSubject: msg {uid}\r\n"
+                    f"Message-ID: <x-{uid}@e>\r\n\r\nbody"
+                ).encode()
+                return "OK", [(b"1", raw)]
+
+            def logout(self) -> None: ...
+
+        monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", FlakyIMAP)
+        account = MailAccountConfig(
+            account_id="acct-1",
+            provider="imap",
+            options={"preset": "qq", "username": "u", "password": "p", "limit": 5},
+        )
+        source = IMAPSource(account)
+        first = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        assert [m.subject for m in first] == ["msg 1"]
+
+        state["fail_uid"] = 0  # server recovers
+        second = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        assert [m.subject for m in second] == ["msg 2", "msg 3"]
+
+    async def test_fetch_history_is_newest_first_and_independent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """History browsing must not consume the live stream watermark."""
+        from mailflow.config import MailAccountConfig
+        from mailflow_mail_imap.plugin import IMAPSource
+
+        class HistoryIMAP:
+            def __init__(self, host: str, port: int) -> None: ...
+
+            def login(self, user: str, password: str) -> None: ...
+
+            def select(self, folder: str) -> None: ...
+
+            def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+                if command == "search":
+                    return "OK", [b"1 2 3 4 5"]
+                uid = int(args[0])
+                raw = (
+                    f"From: a@example.com\r\nSubject: msg {uid}\r\n"
+                    f"Message-ID: <x-{uid}@e>\r\n\r\nbody"
+                ).encode()
+                return "OK", [(b"1", raw)]
+
+            def logout(self) -> None: ...
+
+        monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", HistoryIMAP)
+        account = MailAccountConfig(
+            account_id="acct-1",
+            provider="imap",
+            options={"preset": "qq", "username": "u", "password": "p", "limit": 2},
+        )
+        source = IMAPSource(account)
+        page = await source.fetch_history(limit=2)
+        assert [m.subject for m in page] == ["msg 5", "msg 4"]
+        assert [m.subject for m in await source.fetch_history(limit=2, offset=2)] == [
+            "msg 3",
+            "msg 2",
+        ]
+        # browsing left the poll watermark untouched: the live stream still
+        # delivers the most recent ``limit`` mails on its first poll
+        assert [m.subject for m in source._fetch_once()] == [  # pyright: ignore[reportPrivateUsage]
+            "msg 4",
+            "msg 5",
+        ]
+
 
 class TestAnthropicBackend:
     async def test_chat_uses_messages_api(self, monkeypatch: pytest.MonkeyPatch) -> None:

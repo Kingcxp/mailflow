@@ -234,3 +234,93 @@ class TestReplyWorkflow:
     async def test_create_reply_unknown_mail(self, service: MailFlowService) -> None:
         with pytest.raises(KeyError):
             await service.create_reply("ghost")
+
+
+class HistorySource(RecordingSource):
+    """A source that also implements the optional history capability."""
+
+    def __init__(self, mails: list[MailMessage]) -> None:
+        super().__init__()
+        self._mails = list(mails)
+        self.history_calls: list[tuple[int, int]] = []
+
+    async def fetch_history(self, limit: int = 50, offset: int = 0) -> list[MailMessage]:
+        self.history_calls.append((limit, offset))
+        newest = sorted(self._mails, key=lambda mail: mail.received_at, reverse=True)
+        return newest[offset : offset + limit]
+
+
+def make_mail(message_id: str, *, minute: int) -> MailMessage:
+    return MailMessage(
+        message_id=message_id,
+        account_id="acct-1",
+        subject=f"Subject {message_id}",
+        sender=ADDRESS,
+        recipients=[],
+        cc=[],
+        date=datetime(2026, 1, 1, 9, minute, tzinfo=UTC),
+        received_at=datetime(2026, 1, 1, 9, minute, tzinfo=UTC),
+        body_text="body",
+        provider="fake",
+    )
+
+
+class TestMailboxHistory:
+    """Browsing already-received mail and processing a user-picked subset."""
+
+    def _service(self, source: Any) -> MailFlowService:
+        storage = MemoryStorage()
+        return MailFlowService(
+            config=MailFlowConfig(),
+            registry=ComponentRegistry(),
+            plugin_manager=cast(Any, None),
+            storage=cast(Any, storage),
+            sources={"acct-1": source},
+            router=cast(LLMRouter, None),
+            pipeline=PipelineEngine([]),
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            i18n=I18n(),
+        )
+
+    async def test_history_accounts_lists_only_capable_sources(self) -> None:
+        capable = self._service(HistorySource([make_mail("h1", minute=0)]))
+        assert capable.history_accounts() == ["acct-1"]
+        plain = self._service(RecordingSource())
+        assert plain.history_accounts() == []
+
+    async def test_fetch_history_paginates_newest_first(self) -> None:
+        mails = [make_mail(f"h{i}", minute=i) for i in range(5)]
+        source = HistorySource(mails)
+        service = self._service(source)
+        page = await service.fetch_history("acct-1", limit=2)
+        assert [m.message_id for m in page] == ["h4", "h3"]
+        assert [m.message_id for m in await service.fetch_history("acct-1", limit=2, offset=2)] == [
+            "h2",
+            "h1",
+        ]
+        assert source.history_calls == [(2, 0), (2, 2)]
+
+    async def test_fetch_history_rejects_unknown_and_incapable(self) -> None:
+        service = self._service(RecordingSource())
+        with pytest.raises(KeyError):
+            await service.fetch_history("ghost")
+        with pytest.raises(NotImplementedError):
+            await service.fetch_history("acct-1")
+
+    async def test_process_mail_stores_and_dedups(self) -> None:
+        mail = make_mail("h1", minute=0)
+        service = self._service(HistorySource([mail]))
+        assert await service.is_mail_known(mail) is False
+
+        record = await service.process_mail(mail)
+        assert record is not None
+        assert record.record_id == mail.normalized_message_id()
+        # the fallback-summary guarantee holds for on-demand processing too
+        assert record.summary == "Subject h1"
+        assert await service.is_mail_known(mail) is True
+
+        # selecting the same mail again is a no-op, not a duplicate record
+        assert await service.process_mail(mail) is None
+        assert len(await service.list_mails()) == 1

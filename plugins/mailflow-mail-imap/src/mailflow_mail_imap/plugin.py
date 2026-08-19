@@ -192,26 +192,27 @@ class IMAPSource:
         client = self._imap_client()
         try:
             _status, data = client.uid("search", cast(Any, None), "ALL")
-            all_uids = (data[0] or b"").split()
+            all_uids = sorted(
+                {int(u) for u in (data[0] or b"").split() if u.isdigit()},
+            )
             if self._last_uid is not None:
                 # Incremental: only mails that arrived after the previous poll.
-                wanted = [u for u in all_uids if int(u) > self._last_uid]
+                wanted = [u for u in all_uids if u > self._last_uid]
             else:
                 # First poll: the most recent ``limit`` mails (avoid flooding).
                 wanted = all_uids[-self._limit :]
             messages: list[MailMessage] = []
-            for uid in wanted:
-                try:
-                    uid_int = int(uid)
-                except ValueError:
-                    continue
-                if self._last_uid is None or uid_int > self._last_uid:
-                    self._last_uid = uid_int
-                _status, fetch = client.uid("fetch", uid.decode(), "(RFC822)")
+            for uid_int in wanted:
+                _status, fetch = client.uid("fetch", str(uid_int), "(RFC822)")
                 if not fetch or fetch[0] is None:
-                    continue
+                    # Leave the watermark behind this uid so a transient
+                    # server error does not drop the mail permanently.
+                    break
                 raw = fetch[0][1]
                 mail = parse_mime(bytes(raw), self._account.account_id, provider="imap")
+                # Advance only once the mail is in hand: an exception above
+                # retries the same uid on the next poll instead of skipping it.
+                self._last_uid = uid_int
                 if mail.normalized_message_id() not in self._seen:
                     self._seen.add(mail.normalized_message_id())
                     messages.append(mail)
@@ -223,6 +224,31 @@ class IMAPSource:
         finally:
             with contextlib.suppress(Exception):
                 client.logout()
+
+    def _fetch_history(self, limit: int, offset: int) -> list[MailMessage]:
+        """Newest-first window over the mailbox, independent of the poll
+        watermark: browsing history must never consume the live stream."""
+        client = self._imap_client()
+        try:
+            _status, data = client.uid("search", cast(Any, None), "ALL")
+            all_uids = sorted({int(u) for u in (data[0] or b"").split() if u.isdigit()})
+            newest_first = list(reversed(all_uids))
+            window = newest_first[offset : offset + limit] if limit > 0 else []
+            messages: list[MailMessage] = []
+            for uid_int in window:
+                _status, fetch = client.uid("fetch", str(uid_int), "(RFC822)")
+                if not fetch or fetch[0] is None:
+                    continue
+                messages.append(
+                    parse_mime(bytes(fetch[0][1]), self._account.account_id, provider="imap")
+                )
+            return messages
+        finally:
+            with contextlib.suppress(Exception):
+                client.logout()
+
+    async def fetch_history(self, limit: int = 50, offset: int = 0) -> list[MailMessage]:
+        return await asyncio.to_thread(self._fetch_history, limit, offset)
 
     async def run(self, emit: MailEmitter, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():

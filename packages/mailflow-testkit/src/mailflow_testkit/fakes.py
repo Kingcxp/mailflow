@@ -78,6 +78,13 @@ class FakeMailSource:
                 await asyncio.sleep(self.delay)
         await stop_event.wait()
 
+    async def fetch_history(self, limit: int = 50, offset: int = 0) -> list[MailMessage]:
+        """Newest-first window over the same fixed list (history capability)."""
+        if self.fail:
+            raise RuntimeError("fake source failure")
+        newest_first = sorted(self.mails, key=lambda mail: mail.received_at, reverse=True)
+        return newest_first[offset : offset + limit] if limit > 0 else []
+
     async def send_reply(self, mail_id: str, draft: ReplyDraft) -> None:
         self.sent_replies.append((mail_id, draft))
 

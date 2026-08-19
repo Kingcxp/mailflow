@@ -196,17 +196,27 @@ class MailFlowRuntime:
             finally:
                 self._queue.task_done()
 
-    async def _process_one(self, mail: MailMessage) -> None:
+    async def process_mail_now(self, mail: MailMessage) -> MailRecord | None:
+        """Run one mail through the pipeline immediately, bypassing the queue.
+
+        Used by on-demand flows (the TUI mailbox browser) so a user-selected
+        historical mail follows exactly the same path as a streamed one:
+        dedup, persistence, ``mail.processed`` and notifier thresholds.
+        Returns the stored record, or ``None`` when it was a duplicate.
+        """
+        return await self._process_one(mail)
+
+    async def _process_one(self, mail: MailMessage) -> MailRecord | None:
         record_id = mail.normalized_message_id()
         if record_id in self._seen_ids:
             logger.info("duplicate mail skipped (already processed): %s", record_id)
-            return
+            return None
         self._seen_ids.add(record_id)  # no await: atomic across workers
         if await self._storage.get_mail(record_id) is not None:
             # Forwarded copies of the same mail (multiple accounts, restarts)
             # share the normalized id; process and store exactly one copy.
             logger.info("duplicate mail skipped (already stored): %s", record_id)
-            return
+            return None
         analysis, notes, _, _ = await self._pipeline.process(
             mail,
             mail.account_id,
@@ -224,6 +234,7 @@ class MailFlowRuntime:
         await self._persist_with_retry(record)
         await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
         await self._notify(record)
+        return record
 
     async def _persist_with_retry(self, record: MailRecord, attempts: int = 3) -> None:
         """Persist the record; a mail must not be lost to a transient storage error."""

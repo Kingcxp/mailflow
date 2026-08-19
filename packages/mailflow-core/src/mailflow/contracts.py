@@ -12,7 +12,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -32,6 +32,7 @@ MessageDict = dict[str, str]
 MailEmitter = Callable[[MailMessage], Awaitable[None]]
 
 
+@runtime_checkable
 class MailSource(Protocol):
     """A mail provider adapter: emits normalized messages, can reply."""
 
@@ -45,6 +46,21 @@ class MailSource(Protocol):
 
     async def close(self) -> None:
         """Release provider resources."""
+        ...
+
+
+@runtime_checkable
+class HistoryCapableSource(Protocol):
+    """A mail source that can list already-received mail on demand.
+
+    Optional capability: the TUI's mailbox browser offers a per-account
+    history view only for sources implementing it. ``run`` keeps owning the
+    live stream — ``fetch_history`` never emits, it just returns messages so
+    the caller can decide which ones to push through the pipeline.
+    """
+
+    async def fetch_history(self, limit: int = 50, offset: int = 0) -> list[MailMessage]:
+        """Return up to ``limit`` messages, newest first, skipping ``offset``."""
         ...
 
 
@@ -193,6 +209,7 @@ class StorageBackend(Protocol):
 
 
 __all__ = [
+    "HistoryCapableSource",
     "LLMBackend",
     "LLMCompletion",
     "LLMRouter",

@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 from mailflow import __version__
 from mailflow.config import LLMConfig, MailFlowConfig, NotifierConfig, ProcessorConfig, load_config
 from mailflow.contracts import (
+    HistoryCapableSource,
     LLMBackend,
     LLMRouter,
     MailProcessor,
@@ -35,6 +36,7 @@ from mailflow.domain import (
     ActionItem,
     ComponentKind,
     LLMSnapshot,
+    MailMessage,
     MailRecord,
     ProcessorBindingSnapshot,
     ReplyDraft,
@@ -205,6 +207,47 @@ class MailFlowService:
 
     async def count_mails(self) -> int:
         return await self.storage.count_mails()
+
+    # -- mailbox history (browse already-received mail on demand) -------------
+
+    def history_accounts(self) -> list[str]:
+        """Account ids whose source adapter can list received mail."""
+        return [
+            account_id
+            for account_id, source in self.sources.items()
+            if isinstance(source, HistoryCapableSource)
+        ]
+
+    async def fetch_history(
+        self, account_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[MailMessage]:
+        """Newest-first window of mail already sitting in the account.
+
+        Nothing is stored or analyzed: the caller picks which messages to run
+        through the pipeline via :meth:`process_mail`. Raises ``KeyError``
+        for an unknown account and ``NotImplementedError`` when the adapter
+        has no history capability.
+        """
+        source = self.sources.get(account_id)
+        if source is None:
+            raise KeyError(f"no mail source for account {account_id!r}")
+        if not isinstance(source, HistoryCapableSource):
+            raise NotImplementedError(
+                f"source for account {account_id!r} cannot list historical mail"
+            )
+        return await source.fetch_history(limit=limit, offset=offset)
+
+    async def process_mail(self, mail: MailMessage) -> MailRecord | None:
+        """Analyze and store one mail immediately (same path as live mail).
+
+        Returns the stored record, or ``None`` when the mail was already
+        processed (dedup by normalized message id).
+        """
+        return await self.runtime.process_mail_now(mail)
+
+    async def is_mail_known(self, mail: MailMessage) -> bool:
+        """True when this mail is already stored (so the UI can mark it)."""
+        return await self.storage.get_mail(mail.normalized_message_id()) is not None
 
     async def list_actions(self) -> list[ActionItem]:
         """All timed action items: mail-derived plus user-created, by due time."""
