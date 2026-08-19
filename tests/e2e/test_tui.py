@@ -693,3 +693,60 @@ async def test_market_buttons_rendered_with_labels(tmp_path: Path) -> None:
             await pilot.pause()
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_processed_mail_event_refreshes_panes(tmp_path: Path) -> None:
+    """The runtime emits ``mailflow.mail.processed``; the app must subscribe
+    to that exact name or mail processed after mount never shows up without
+    a manual refresh (regression: it subscribed to the unprefixed name)."""
+    from mailflow.domain import MailAnalysis
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_testkit.fakes import make_mail as make_test_mail
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test() as pilot:
+            for _ in range(100):
+                if await service.count_mails() == 3:
+                    break
+                await pilot.pause(0.05)
+            await pilot.pause()
+            table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
+            before = table.row_count
+
+            # store a fourth mail directly, then emit the runtime event the
+            # app is expected to react to — no manual refresh anywhere
+            extra = MailRecord(
+                record_id="m-late",
+                mail=make_test_mail(
+                    message_id="m-late", account_id="acct-1", subject="Arrived later"
+                ),
+                auto_urgency=Urgency.INFO,
+                analysis=MailAnalysis(summary="Arrived later", urgency=Urgency.INFO),
+            )
+            await service.storage.save_mail(extra)
+            await service.events.emit("mailflow.mail.processed", record=extra)
+
+            for _ in range(60):
+                if table.row_count > before:
+                    break
+                await pilot.pause(0.05)
+            assert table.row_count == before + 1, "app did not react to mailflow.mail.processed"
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()

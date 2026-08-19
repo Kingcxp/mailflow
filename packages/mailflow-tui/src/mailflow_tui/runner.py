@@ -48,6 +48,7 @@ def run_tui(config_path: str | None) -> None:
         log_queue: queue_module.Queue[Any] = queue_module.Queue()
         service = await start_service(
             config,
+            config_path=config_path,
             plugin_manager=manager,
             discover_plugins=False,
             extra_log_handlers=[TuiLogHandler(log_queue)],

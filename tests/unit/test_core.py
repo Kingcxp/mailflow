@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from mailflow.config import LoggingConfig, MailFlowConfig, load_config
+from mailflow.config import (
+    LoggingConfig,
+    MailFlowConfig,
+    load_config,
+    patch_config_value,
+    write_config,
+)
 from mailflow.domain import (
     MailAnalysis,
     MailMessage,
@@ -430,3 +436,67 @@ class TestDefaultMarketplace:
             {"plugins": {"repositories": [{"name": "x", "url": "https://example.com"}]}}
         )
         assert [r.name for r in config.plugins.repositories] == ["x"]
+
+
+class TestConfigPersistenceSecrets:
+    """Writing the config back must never materialize a resolved secret."""
+
+    def test_placeholder_restored_on_write(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MF_WRITE_TOKEN", "sk-live-value")
+        source = tmp_path / "in.toml"
+        source.write_text(
+            "[[llms]]\nllm_id = 'l1'\nmodel = 'm'\napi_key = '${MF_WRITE_TOKEN}'\n",
+            encoding="utf-8",
+        )
+        config = load_config(source)
+        assert config.llms[0].api_key == "sk-live-value"  # runtime sees the real key
+
+        target = tmp_path / "out.toml"
+        write_config(config, target)
+        written = target.read_text(encoding="utf-8")
+        assert "sk-live-value" not in written
+        assert "${MF_WRITE_TOKEN}" in written
+
+    def test_api_key_env_not_persisted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MF_ENV_TOKEN", "sk-env-value")
+        config = MailFlowConfig.model_validate(
+            {"llms": [{"llm_id": "l1", "api_key_env": "MF_ENV_TOKEN"}]}
+        )
+        assert config.llms[0].api_key == "sk-env-value"
+
+        target = tmp_path / "out.toml"
+        write_config(config, target)
+        written = target.read_text(encoding="utf-8")
+        assert "sk-env-value" not in written
+        assert 'api_key_env = "MF_ENV_TOKEN"' in written
+
+
+class TestPatchConfigValue:
+    """In-place patching is section-scoped: a same-named leaf elsewhere is safe."""
+
+    def test_patches_the_named_section(self, tmp_path: Path) -> None:
+        path = tmp_path / "c.toml"
+        path.write_text("[general]\nlanguage = 'en'\n\n[i18n]\nlanguage = 'en'\n", encoding="utf-8")
+        assert patch_config_value(path, "i18n.language", "zh-CN") is True
+        text = path.read_text(encoding="utf-8")
+        general, i18n = text.split("[i18n]")
+        assert "'en'" in general  # [general] untouched
+        assert '"zh-CN"' in i18n
+
+    def test_missing_section_is_not_patched_elsewhere(self, tmp_path: Path) -> None:
+        path = tmp_path / "c.toml"
+        path.write_text("[i18n]\nlanguage = 'en'\n", encoding="utf-8")
+        # [general] is absent: the caller must fall back to a full rewrite
+        # instead of clobbering [i18n].language
+        assert patch_config_value(path, "general.language", "zh-CN") is False
+        assert path.read_text(encoding="utf-8") == "[i18n]\nlanguage = 'en'\n"
+
+    def test_headerless_file_is_searched_whole(self, tmp_path: Path) -> None:
+        path = tmp_path / "c.toml"
+        path.write_text("language = 'en'\n", encoding="utf-8")
+        assert patch_config_value(path, "general.language", "zh-CN") is True
+        assert path.read_text(encoding="utf-8") == 'language = "zh-CN"\n'

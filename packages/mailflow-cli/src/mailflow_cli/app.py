@@ -61,7 +61,7 @@ def run(
 
     async def _run() -> None:
         config = _load_config(config_path)
-        service = await start_service(config)
+        service = await start_service(config, config_path=config_path)
         try:
             console.print(service.t("cli.started"))
             await service.wait()
@@ -116,7 +116,12 @@ def shell(
     async def _run() -> None:
         config = _load_config(config_path)
         manager = create_plugin_manager(config, discover_external=False)
-        service = await start_service(config, plugin_manager=manager, discover_plugins=False)
+        service = await start_service(
+            config,
+            config_path=config_path,
+            plugin_manager=manager,
+            discover_plugins=False,
+        )
         router = CommandRouter(service)
         try:
             console.print(service.t("cli.shell_welcome"))

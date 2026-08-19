@@ -1215,7 +1215,7 @@ class MailFlowApp(App[None]):
         self.sub_title = f"v{self._service.snapshot().version}"
         self._log_timer = self.set_interval(1.0, self._drain_logs)
         self._refresh_lock = asyncio.Lock()
-        self._service.on("mail.processed", self._on_mail_processed)
+        self._service.on("mailflow.mail.processed", self._on_mail_processed)
         self._service.on("language.changed", self._on_language_changed)
 
     async def _on_language_changed(self, event: str, **payload: Any) -> None:

@@ -28,14 +28,30 @@ _LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
 _FAILURE_POLICIES = {"continue", "stop"}
 
 
-def _interpolate(value: JsonValue, origin: str) -> JsonValue:
-    """Expand whole-string ``${VAR}`` placeholders recursively."""
+PlaceholderMap = dict[tuple[str | int, ...], str]
+
+
+def _interpolate(
+    value: JsonValue,
+    origin: str,
+    placeholders: PlaceholderMap | None = None,
+    path: tuple[str | int, ...] = (),
+) -> JsonValue:
+    """Expand whole-string ``${VAR}`` placeholders recursively.
+
+    Every expansion is recorded in ``placeholders`` under its config path so
+    ``write_config`` can restore the placeholder instead of persisting the
+    resolved secret.
+    """
     if isinstance(value, str):
-        return _expand_string(value, origin)
+        expanded = _expand_string(value, origin)
+        if placeholders is not None and expanded != value:
+            placeholders[path] = value
+        return expanded
     if isinstance(value, dict):
-        return _interpolate_mapping(value, origin)
+        return _interpolate_mapping(value, origin, placeholders, path)
     if isinstance(value, list):
-        return _interpolate_sequence(value, origin)
+        return _interpolate_sequence(value, origin, placeholders, path)
     return value
 
 
@@ -49,12 +65,24 @@ def _expand_string(value: str, origin: str) -> str:
     return value
 
 
-def _interpolate_mapping(value: dict[str, JsonValue], origin: str) -> dict[str, JsonValue]:
-    return {k: _interpolate(v, f"{origin}.{k}") for k, v in value.items()}
+def _interpolate_mapping(
+    value: dict[str, JsonValue],
+    origin: str,
+    placeholders: PlaceholderMap | None = None,
+    path: tuple[str | int, ...] = (),
+) -> dict[str, JsonValue]:
+    return {k: _interpolate(v, f"{origin}.{k}", placeholders, (*path, k)) for k, v in value.items()}
 
 
-def _interpolate_sequence(value: list[JsonValue], origin: str) -> list[JsonValue]:
-    return [_interpolate(v, f"{origin}[{i}]") for i, v in enumerate(value)]
+def _interpolate_sequence(
+    value: list[JsonValue],
+    origin: str,
+    placeholders: PlaceholderMap | None = None,
+    path: tuple[str | int, ...] = (),
+) -> list[JsonValue]:
+    return [
+        _interpolate(v, f"{origin}[{i}]", placeholders, (*path, i)) for i, v in enumerate(value)
+    ]
 
 
 class GeneralConfig(BaseModel):
@@ -357,6 +385,11 @@ class MailFlowConfig(BaseModel):
         default_factory=I18nConfig, description="Language and external language-pack directories"
     )
 
+    # Config paths whose value came from a ``${VAR}`` placeholder in the TOML
+    # file. Excluded from serialization so the placeholder — never the
+    # resolved secret — is written back by ``write_config``.
+    env_placeholders: PlaceholderMap = Field(default_factory=lambda: {}, exclude=True, repr=False)
+
     # -- cross-reference validation ------------------------------------------
 
     @model_validator(mode="after")
@@ -416,8 +449,11 @@ def load_config(path: str | Path | None = None) -> MailFlowConfig:
     else:
         with open(path, "rb") as handle:
             raw = tomllib.load(handle)
-    interpolated = _interpolate(raw, str(path) if path else "<memory>")
-    return MailFlowConfig.model_validate(interpolated)
+    placeholders: PlaceholderMap = {}
+    interpolated = _interpolate(raw, str(path) if path else "<memory>", placeholders)
+    config = MailFlowConfig.model_validate(interpolated)
+    config.env_placeholders = placeholders
+    return config
 
 
 # ---------------------------------------------------------------------------
@@ -552,8 +588,41 @@ def set_option_value(config: MailFlowConfig, key: str, raw_value: str) -> MailFl
     return MailFlowConfig.model_validate(data)
 
 
+def _restore_secret_placeholders(config: MailFlowConfig) -> MailFlowConfig:
+    """Copy of ``config`` with every resolved secret replaced by its source.
+
+    Values that came from a ``${VAR}`` placeholder get the placeholder back;
+    an ``api_key`` resolved from ``api_key_env`` is blanked (the loader
+    resolves it again on the next start). Persisting the copy therefore never
+    materializes a credential into the TOML file.
+    """
+    restored = config.model_copy(deep=True)
+    for path, placeholder in config.env_placeholders.items():
+        target: Any = restored
+        for part in path[:-1]:
+            target = target[part] if isinstance(part, int) else getattr(target, part, None)
+            if target is None:
+                break
+        leaf = path[-1]
+        if target is None:
+            continue
+        if isinstance(leaf, int) or isinstance(target, dict):
+            target[leaf] = placeholder
+        elif hasattr(target, leaf):
+            setattr(target, leaf, placeholder)
+    for llm in restored.llms:
+        if llm.api_key_env:
+            llm.api_key = ""
+    return restored
+
+
 def write_config(config: MailFlowConfig, path: str | Path) -> None:
-    """Persist the current config to a TOML file (tomli-w)."""
+    """Persist the current config to a TOML file (tomli-w).
+
+    Secrets that entered through ``${VAR}`` placeholders or ``api_key_env``
+    are written back as the placeholder / empty string, never as the
+    resolved value.
+    """
     import tomli_w
 
     def strip_none(value: Any) -> Any:
@@ -568,10 +637,11 @@ def write_config(config: MailFlowConfig, path: str | Path) -> None:
             return [strip_none(v) for v in value]  # pyright: ignore[reportUnknownVariableType]
         return value
 
+    data: dict[str, Any] = _restore_secret_placeholders(config).model_dump(mode="python")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as handle:
-        tomli_w.dump(strip_none(config.model_dump(mode="python")), handle)
+        tomli_w.dump(strip_none(data), handle)
 
 
 def patch_config_value(path: str | Path, key: str, value: Any) -> bool:
@@ -599,21 +669,31 @@ def patch_config_value(path: str | Path, key: str, value: Any) -> bool:
 
 
 def _patch_section_line(raw: str, group: str, leaf: str, value_repr: str) -> str | None:
-    """Replace ``leaf = ...`` inside the ``[group]`` section; None if absent."""
+    """Replace ``leaf = ...`` inside the ``[group]`` section; None if absent.
+
+    The scan is strictly section-scoped: when ``[group]`` is missing the
+    caller must fall back to a full rewrite, because a same-named leaf in
+    another section (``[i18n] language`` vs ``[general] language``) would
+    otherwise be silently overwritten. Only a file without any section
+    header at all is searched top to bottom.
+    """
     lines = raw.splitlines(keepends=True)
+    header_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip().startswith("[") and line.strip().endswith("]")
+    ]
     start = -1
     end = len(lines)
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            section = stripped[1:-1].strip()
-            if section == group and start == -1:
-                start = index
-            elif start != -1:
-                end = index
-                break
+    for position, index in enumerate(header_indexes):
+        section = lines[index].strip()[1:-1].strip()
+        if section == group:
+            start = index
+            end = header_indexes[position + 1] if position + 1 < len(header_indexes) else len(lines)
+            break
     if start == -1:
-        # no matching section header (e.g. group-less file): search the whole file
+        if header_indexes:
+            return None  # section absent: a full rewrite adds it in the right place
         start, end = 0, len(lines)
     for index in range(start, end):
         stripped = lines[index].strip()
