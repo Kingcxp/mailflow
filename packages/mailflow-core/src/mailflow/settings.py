@@ -22,6 +22,7 @@ from typing import Any, Union, cast, get_args, get_origin
 
 from pydantic import BaseModel, ValidationError
 from pydantic.fields import FieldInfo
+from pydantic_core import PydanticUndefined
 
 from mailflow.config import MailFlowConfig, is_secret_key
 
@@ -148,6 +149,17 @@ def _editor_for(annotation: Any) -> tuple[EditorKind, tuple[str, ...], Any]:
     return EditorKind.TEXT, (), None
 
 
+def _field_default(info: FieldInfo) -> Any:
+    """Schema default, or ``None`` for a required field.
+
+    ``FieldInfo.get_default`` yields the ``PydanticUndefined`` sentinel for
+    required fields; leaking it would render "PydanticUndefined" as a form
+    value and let an empty required field validate.
+    """
+    default = info.get_default(call_default_factory=True)
+    return None if default is PydanticUndefined else default
+
+
 def _spec_for_field(
     *,
     key: str,
@@ -159,7 +171,6 @@ def _spec_for_field(
     editor, choices, item_model = _editor_for(info.annotation)
     if editor is EditorKind.TEXT and is_secret_key(name):
         editor = EditorKind.SECRET
-    default = info.get_default(call_default_factory=True)
     item_fields: tuple[OptionSpec, ...] = ()
     if editor is EditorKind.STRUCT_LIST and item_model is not None:
         item_fields = tuple(entry_field_specs(item_model, section=section))
@@ -169,7 +180,7 @@ def _spec_for_field(
         label=name,
         editor=editor,
         description=info.description or "",
-        default=default,
+        default=_field_default(info),
         value=value,
         required=info.is_required(),
         choices=choices,
@@ -200,7 +211,7 @@ def entry_field_specs(model: type[BaseModel], *, section: str = "") -> list[Opti
             section=section,
             name=name,
             info=info,
-            value=info.get_default(call_default_factory=True),
+            value=_field_default(info),
         )
         for name, info in _fields_of(model).items()
     ]
@@ -367,8 +378,11 @@ def coerce_value(spec: OptionSpec, raw: Any) -> Any:
         return value
     if spec.editor in (EditorKind.TEXT, EditorKind.SECRET):
         text = "" if raw is None else str(raw)
-        if text == "" and spec.default is None:
-            return None  # optional string: empty means "unset"
+        if text == "":
+            if spec.required:
+                raise SettingsError(spec.key, f"{spec.label} is required")
+            if spec.default is None:
+                return None  # optional string: empty means "unset"
         return text
     return raw
 

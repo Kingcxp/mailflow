@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-201%20passed-67C23A)]()
+[![Tests](https://img.shields.io/badge/tests-310%20passed-67C23A)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -45,8 +45,16 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
 - **机器人框架导出** —— 把配置好的实例导出为 NoneBot2、AstrBot 或任何其他聊天机器人框架的插件
   （`mailflow export --framework <id>`、带文件树的 TUI 导出向导、`make bot-plugin-*`）；
   导出器本身也是插件，新框架只需安装一个插件，无需改动核心。
-- **完整配置管理** —— 每个选项在 TUI 与 `config` 命令中可见（必填/可选、默认值、说明、脱敏密钥）；`config set` 持久化。
-- **质量门槛** —— 144 项单元/集成/端到端测试，mypy 与 pyright 严格模式，ruff 检查 + 格式化，
+- **VS Code 风格的设置界面** —— TUI 设置标签页是一个可搜索的编辑器：左侧是分类侧边栏
+  （通用、日志、插件、存储、语言，以及每个拥有配置项的插件各占一节），右侧每个配置项
+  一张卡片，包含说明、默认值、与类型匹配的编辑控件、保存与恢复默认。输入不合法时会
+  指出哪一项、哪里不合法；整份配置校验不通过则不会写入。来自 `${环境变量}` 或
+  `api_key_env` 的密钥绝不会被写回配置文件。
+- **邮箱与大模型标签页** —— 通过表单新增、编辑、删除邮箱账户与大模型。大模型列表顺序
+  即路由策略：第一项为默认，其后每一项都是前面的后备。
+- **浏览并解析已有邮件** —— 新用户可以分页浏览 MailFlow 配置之前就已收到的邮件，只
+  勾选需要的进行解析；被选中的邮件走与实时邮件完全相同的处理流程，已解析过的会跳过。
+- **质量门槛** —— 310 项单元/集成/端到端测试，mypy 与 pyright 严格模式，ruff 检查 + 格式化，
   Nuitka standalone/onefile 可执行文件，文档门槛。
 
 ## 安装
@@ -105,7 +113,7 @@ service = await start_service(
 )
 snapshot = service.snapshot()  # 插件、账户、LLMs、绑定
 mails = await service.list_mails()  # 完整记录 + 分析 + 待办
-service.on("mail.processed", handler)  # 异步事件
+service.on("mailflow.mail.processed", handler)  # 异步事件
 await service.commands.execute("mail list")
 await service.stop()
 ```
@@ -184,7 +192,7 @@ MailFlow 生成完整可加载的模板。内嵌核心的宿主也可通过 `mai
 packages/mailflow-core      与宿主无关的领域、流水线、服务门面、机器人导出
 packages/mailflow-bundled   组合根：官方插件集
 packages/mailflow-cli       富 Typer 宿主（run/command/shell/export/...）
-packages/mailflow-tui       Textual UI（Mail/Actions/Runtime/Logs/Market/Settings + 导出向导）
+packages/mailflow-tui       Textual UI（邮件/邮箱/待办/大模型/运行时/日志/插件市场/设置）
 packages/mailflow-testkit   测试用确定性假件（mailflow-mail-fake 是仅用于开发的源插件）
 plugins/*                   可发现的适配器、处理器与机器人导出器
 configs/ · translations/    示例配置与语言包

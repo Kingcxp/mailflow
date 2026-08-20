@@ -163,3 +163,27 @@ Final phase-2 gate: 144 tests passed, mypy/pyright strict clean, ruff clean.
 | Config descriptions localized via `config.desc.<key>` keys (en + zh-CN) with english fallback | TUI e2e checks description renders (not the raw key) |
 | `cursor_type: row` on every DataTable — row selection events never fired under the default `cell` cursor | all table interaction e2e green |
 | make check full suite | 268 tests + docs gate OK |
+
+## Settings editor + mailbox history round (post TUI fixes round)
+
+Review of both repositories first (docs + all sources), then one commit per
+fix batch.
+
+| Change | Verification |
+| ------ | ------------ |
+| **Bug:** the TUI and CLI `run`/`shell` never forwarded `--config` to `start_service`, so `service.config_path` was `None` and every persisting action failed with "no config file loaded" | `test_config_path_forwarded_to_start_service` (runner stub asserts the kwarg) |
+| **Bug:** `write_config` wrote resolved secrets into the TOML file (a `${VAR}` value and an `api_key_env`-resolved key both became plaintext `api_key`). `load_config` now records placeholder paths in `env_placeholders` (excluded from serialization) and `write_config` restores them; env-backed keys are blanked | `TestConfigPersistenceSecrets` (placeholder restored, env key absent from the written file) |
+| **Bug:** `_patch_section_line` fell back to a whole-file scan when the section was missing, so `general.language` rewrote `[i18n].language`. Now strictly section-scoped, returning None so the caller rewrites | `TestPatchConfigValue` (3 cases incl. the cross-section regression) |
+| **Bug:** the app subscribed to `mail.processed` while the runtime emits `mailflow.mail.processed`, so panes never auto-refreshed | `test_processed_mail_event_refreshes_panes`; confirmed it fails when the name is reverted |
+| **Bug:** the IMAP source advanced `_last_uid` before fetching, so a transient FETCH error dropped that mail forever. The mark advances after parsing and the loop breaks on the first failure | `test_failed_fetch_does_not_skip_the_mail` (uid 2 fails, then is delivered) |
+| `mailflow.settings`: OptionSpec/EditorKind from the pydantic field type, per-plugin sections, apply/reset, list-entry add/update/remove/move, LLM chain derivation, SettingsError naming the option | `tests/unit/test_settings.py` (27 tests: editors, coercion, range/validator errors, reset, entry CRUD, chain reorder, reference scrubbing) |
+| Service facade: `settings_sections`, `settings_option`, `set_setting`, `reset_setting`, `add/update/remove/move_config_entry`, comment-preserving persist | exercised through the TUI e2e settings tests |
+| Optional history capability: `HistoryCapableSource` protocol, `service.history_accounts/fetch_history/process_mail/is_mail_known`, runtime `process_mail_now` returning the record (None on duplicate), IMAP + fake implementations | `TestMailboxHistory` (5 tests) + `test_fetch_history_is_newest_first_and_independent` (browsing leaves the poll water-mark alone) |
+| TUI Settings tab rewritten: search box, section sidebar, one card per option (description, default, typed editor, Save/Restore default), ListEditScreen, EntryFormScreen; render serialized under a lock (duplicate widget ids otherwise) | `test_settings_card_saves_resets_and_rejects`, `test_tui_compose_and_data` (sidebar + search filter + no secret in the rendering) |
+| New Mailboxes and LLMs tabs | `test_mailbox_history_analyzes_selected_mail` (known mail skipped, unseen mail analyzed with a summary), `test_llm_tab_orders_the_fallback_chain` (move up → default/fallback rederived) |
+| Market refresh no longer blocks: exclusive worker for the fetch, local render for search/category; install state cached | market e2e tests green; measured fetch of the official repo at ~8s off the UI thread |
+| Buttons: explicit variants everywhere, opaque base `Button` background, Back button in the repository dialog | `test_market_repos_screen` asserts the Back button label, non-default variant and that it closes the screen |
+| 70 localized option descriptions (en + zh-CN) via `tools/gen_option_descriptions.py`; 8 English keys that held Chinese text fixed; `t()` skips formatting without params | i18n parity test; `config.desc.<key>` resolved for all 70 keys in both packs |
+| Marketplace repo: every plugin.json readme rewritten with option tables, urgency mappings and troubleshooting (en + zh-CN) | `validate_plugin.py` metadata checks 10/10; all readmes loaded through `PluginMarket` from a `file://` copy |
+| Docs: configuration/overview (settings editor, secret write-back), architecture/tui (new tabs), architecture/domain-and-mail (history capability), agent/invariants (+12 contracts), agent/module-map, pipeline/overview/embedding event names, README en+zh, CHANGELOG | docs gate OK (37 documents) |
+| make check, round 1 and round 2 | 310 tests + lint + format + mypy + pyright + docs gate green |

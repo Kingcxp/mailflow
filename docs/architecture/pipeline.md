@@ -36,7 +36,7 @@ and appends a `pipeline` note — a mail is never stored without a summary.
 
 `process()` returns `(analysis, notes, llm_used, llm_backend)`; the runtime
 builds a `MailRecord` with `auto_urgency = analysis.urgency`, persists it,
-emits `mail.processed`, and runs notifiers whose threshold the effective
+emits `mailflow.mail.processed`, and runs notifiers whose threshold the effective
 urgency meets.
 
 ## Failure isolation

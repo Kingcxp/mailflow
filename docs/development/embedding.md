@@ -43,9 +43,12 @@ wrapper around `asyncio.run` for non-embedding use.
 - `service.commands.execute("mail list")` — the shared command router returns
   transport-neutral `CommandResponse` (plain text + style spans), so chat
   platforms can render the same management commands as the CLI.
-- `service.on("mail.processed", handler)` — async event subscription
-  (also `mail.received`, `mail.deleted`, `reply.sent`, `cleanup.done`,
-  `language.changed`, ...).
+- `service.on("mailflow.mail.processed", handler)` — async event
+  subscription. Runtime events carry the `mailflow.` prefix
+  (`mailflow.mail.received`, `mailflow.cleanup.done`,
+  `mailflow.action.reminder`, `mailflow.action.digest`); service-level
+  events do not (`mail.deleted`, `reply.sent`, `language.changed`,
+  `config.changed`, `plugin.enabled`/`plugin.disabled`).
 - The confirmed reply workflow (`create_reply` → `prepare_reply` → token →
   `confirm_reply`).
 

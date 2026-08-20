@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-201%20passed-67C23A)]()
+[![Tests](https://img.shields.io/badge/tests-310%20passed-67C23A)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -61,10 +61,21 @@ notifiers, storage — installed from a plugin marketplace.
   --framework <id>`, TUI export wizard with folder tree, `make
   bot-plugin-*`); exporters are plugins themselves, so new frameworks are a
   marketplace install, not a core change.
-- **Full config management** — every option visible in the TUI and the
-  `config` command (required/optional, defaults, descriptions, redacted
-  secrets); `config set` persists.
-- **Quality gates** — 144 unit/integration/e2e tests, mypy & pyright strict,
+- **VS Code-style settings** — the TUI Settings tab is a searchable editor: a
+  sidebar of sections (general, logging, plugins, storage, language, plus one
+  per plugin that owns options) and one card per option with its description,
+  default, an editor matching its type, Save and Restore-default. Invalid
+  input says which option is wrong and why; nothing persists unless the whole
+  config re-validates. Secrets that came from `${ENV_VAR}` or `api_key_env`
+  are never written back into the file.
+- **Mailboxes and LLMs tabs** — add, edit and delete accounts and LLMs from
+  forms. The LLM list order *is* the routing policy: first entry is the
+  default, each entry falls back to the ones below it.
+- **Browse and analyze existing mail** — new users can page through mail that
+  arrived before MailFlow was configured and analyze only the messages they
+  pick; picked mails take the same pipeline path as live mail, and
+  already-analyzed mail is skipped.
+- **Quality gates** — 310 unit/integration/e2e tests, mypy & pyright strict,
   ruff lint + format, Nuitka standalone/onefile executables, docs gate.
 
 ## Install
@@ -123,7 +134,7 @@ service = await start_service(
 )
 snapshot = service.snapshot()  # plugins, accounts, LLMs, bindings
 mails = await service.list_mails()  # full records + analysis + actions
-service.on("mail.processed", handler)  # async events
+service.on("mailflow.mail.processed", handler)  # async events
 await service.commands.execute("mail list")
 await service.stop()
 ```
@@ -213,7 +224,7 @@ language, and `market show` renders the readme with rich markdown effects
 packages/mailflow-core       host-agnostic domain, pipeline, service facade, bot export
 packages/mailflow-bundled    composition root: the official plugin set
 packages/mailflow-cli        rich Typer host (run/command/shell/export/...)
-packages/mailflow-tui        Textual UI (Mail/Actions/Runtime/Logs/Market/Settings + export wizard)
+packages/mailflow-tui        Textual UI (Mail/Mailboxes/Actions/LLMs/Runtime/Logs/Market/Settings)
 packages/mailflow-testkit    deterministic fakes for tests (mailflow-mail-fake is a dev-only source plugin)
 plugins/*                    discoverable adapters, processors and bot exporters
 configs/ · translations/     example configs and language packs

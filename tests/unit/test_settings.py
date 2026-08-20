@@ -10,6 +10,7 @@ from mailflow.settings import (
     add_entry,
     apply_value,
     build_sections,
+    coerce_value,
     entry_field_specs,
     entry_model,
     find_spec,
@@ -80,6 +81,32 @@ class TestSections:
         urgency = specs["minimum_urgency"]
         assert urgency.editor is EditorKind.CHOICE
         assert urgency.choices == ("ad", "info", "important", "urgent")
+
+    def test_required_fields_have_no_sentinel_default(self) -> None:
+        """A required field's default must be None, never pydantic's
+        PydanticUndefined sentinel — a form would render it as a value and let
+        an empty required field validate."""
+        for group in ("accounts", "llms", "processors", "notifiers"):
+            for spec in entry_field_specs(entry_model(group)):
+                if spec.required:
+                    assert spec.default is None, f"{group}[].{spec.label}"
+                assert "PydanticUndefined" not in str(spec.default)
+
+    def test_blank_required_text_is_rejected(self) -> None:
+        spec = next(
+            item for item in entry_field_specs(entry_model("llms")) if item.label == "llm_id"
+        )
+        assert spec.required is True
+        with pytest.raises(SettingsError) as info:
+            coerce_value(spec, "")
+        assert "required" in info.value.message
+
+    def test_blank_optional_text_clears_the_value(self) -> None:
+        spec = next(
+            item for item in entry_field_specs(entry_model("processors")) if item.label == "llm"
+        )
+        assert spec.required is False
+        assert coerce_value(spec, "") is None
 
 
 class TestApplyValue:

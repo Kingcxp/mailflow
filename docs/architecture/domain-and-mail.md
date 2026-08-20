@@ -32,6 +32,31 @@ sender/subject/date/body — it is the record identity in storage and is
 through several accounts deduplicate to one record (the runtime skips
 already-known ids before processing/notifying).
 
+## Mail sources and the optional history capability
+
+`MailSource` (in `mailflow/contracts.py`) owns the live stream: `run(emit,
+stop_event)`, `send_reply` and `close`. A source **may** additionally
+implement `HistoryCapableSource`:
+
+```python
+async def fetch_history(self, limit: int = 50, offset: int = 0) -> list[MailMessage]: ...
+```
+
+Both are runtime-checkable protocols, so the capability is discovered with
+`isinstance` and existing sources stay valid without changes.
+
+`fetch_history` returns already-received mail newest-first and **never emits**:
+the caller decides what to do with it. The service exposes
+`history_accounts()`, `fetch_history(account_id, limit=, offset=)`,
+`is_mail_known(mail)` and `process_mail(mail)`; the last one routes through the
+runtime, so a user-picked historical mail follows exactly the same path as a
+streamed one — dedup by normalized id, persistence retry,
+`mailflow.mail.processed`, notifier thresholds — and returns `None` when the
+mail was already stored.
+
+Browsing must not disturb the live stream: the built-in IMAP source pages over
+UIDs for history without touching the incremental poll water-mark.
+
 ## MailAnalysis
 
 The structured interpretation produced by the processor chain: `summary`,

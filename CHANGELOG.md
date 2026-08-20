@@ -7,6 +7,31 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- VS Code-style settings editor: `mailflow.settings` turns the typed schema
+  into sections (MailFlow's own groups plus one per plugin that owns
+  configured components), per-option editors derived from the field type,
+  schema defaults, restore-to-default, and validation errors that name the
+  offending option. The TUI Settings tab is a search box, a section sidebar
+  and one card per option (name, localized description, inline editor,
+  Save / Restore default); list and mapping values open a line editor and
+  structured entries open a real form window.
+- Dedicated **Mailboxes** and **LLMs** tabs: add, edit and delete mail
+  accounts and LLMs from forms instead of hand-editing TOML. For LLMs the
+  list order *is* the fallback chain — the first entry is the default and
+  each entry falls back to the ones below it, so `default`/`fallback` are
+  derived; deleting an LLM scrubs every reference to it.
+- Mailbox history browsing: a mail source may implement the optional
+  `HistoryCapableSource` capability (`fetch_history(limit, offset)`), and the
+  Mailboxes tab pages through mail that arrived before MailFlow was
+  configured. Selected mails run through the pipeline via
+  `service.process_mail`, taking the same path as live mail (dedup,
+  persistence retry, `mailflow.mail.processed`, notifier thresholds);
+  already-stored mail is marked and skipped. Implemented for IMAP without
+  disturbing the incremental poll water-mark.
+- 70 localized option descriptions (English + Simplified Chinese) generated
+  by `tools/gen_option_descriptions.py`, so every setting documents itself in
+  the Settings UI and in `config list`.
+
 - Mail deduplication: `normalized_message_id` is account-independent
   (provider id → RFC message id → content digest) and the runtime skips
   already-stored or in-flight copies, so a mail forwarded to several
@@ -64,9 +89,6 @@ All notable changes are recorded here; the format follows
 - Documentation: `docs/architecture/bot-export.md`,
   `docs/plugin-development/bot-exporter.md`, full Simplified Chinese README
   (`README.zh-CN.md`).
-
-### Added
-
 - Built-in `mailflow-mail-imap` mail source: IMAP polling + SMTP replies
   with provider presets for QQ, 163, Outlook and Gmail (and generic
   school/work servers via explicit hosts); MIME parsing (text/html bodies,
@@ -90,6 +112,37 @@ All notable changes are recorded here; the format follows
 - TUI: selecting a plugin row opens a full-screen VS Code-style detail
   (title, metadata, markdown readme, install/uninstall/enable/disable);
   selecting a config row opens an edit form (value, cancel/save).
+
+### Fixed
+
+- The TUI and the CLI `run`/`shell` commands never forwarded `--config` to
+  `start_service`, so `service.config_path` stayed `None` and every
+  persisting action (`config set`, plugin enable/disable, repository
+  management) failed with "no config file loaded".
+- `write_config` materialized credentials into the TOML file: a value that
+  came from a `${VAR}` placeholder and an `api_key` resolved from
+  `api_key_env` were both written back as plaintext. Placeholders are now
+  recorded at load time and restored on write; env-backed keys are blanked.
+- `patch_config_value` fell back to a whole-file scan when the target section
+  was missing, so patching `general.language` rewrote `[i18n].language`
+  instead. The scan is section-scoped and reports failure so the caller does
+  a full rewrite.
+- The TUI subscribed to `mail.processed` while the runtime emits
+  `mailflow.mail.processed`, so panes never auto-refreshed after a mail was
+  processed. Docs and README examples advertised the same wrong name.
+- The IMAP source advanced its UID water-mark *before* fetching a message, so
+  a transient FETCH error skipped that mail permanently. The mark now moves
+  only after the message is parsed, and the loop stops at the first failing
+  UID so the next poll retries it.
+- Marketplace refresh blocked the UI and re-fetched over the network on every
+  search keystroke; the fetch now runs in an exclusive worker and filtering
+  renders from cached entries.
+- Buttons drawn on Textual's `ansi_default` variant (black-on-black in dark
+  terminals) now carry explicit variants, and modal dialogs — including the
+  repository manager — have a visible Back button instead of escape-only.
+- `i18n.t()` ran `str.format` even without parameters, so a message
+  containing literal braces (a `${ENV_VAR}` example) logged a format error;
+  eight English keys that contained Chinese text are now English.
 
 ### Changed
 

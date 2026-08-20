@@ -5,8 +5,9 @@
 | Module | Owns |
 | ------ | ---- |
 | `domain.py` | Urgency + colors, MailMessage, MailAnalysis, ActionItem, MailRecord (effective_urgency), TrashRecord, ReplyDraft/ReplyState, snapshot models, CommandResponse/StyleSpan |
-| `config.py` | typed TOML config, `${ENV}` interpolation, cross-reference validation |
-| `contracts.py` | Protocols (MailSource, MailProcessor, LLMBackend, Notifier, StorageBackend, LLMRouter), ProcessorResult, ProcessingContext, LLMCompletion |
+| `config.py` | typed TOML config, `${ENV}` interpolation (recording placeholders so secrets are never written back), cross-reference validation |
+| `settings.py` | editor-shaped view of the schema: sections per plugin, `OptionSpec`/`EditorKind`, `apply_value`/`reset_value`, list-entry add/update/remove/move, LLM fallback-chain derivation, `SettingsError` |
+| `contracts.py` | Protocols (MailSource, HistoryCapableSource, MailProcessor, LLMBackend, Notifier, StorageBackend, LLMRouter), ProcessorResult, ProcessingContext, LLMCompletion |
 | `registry.py` | ComponentRegistry (typed factories + ownership snapshots), PluginRegistrar |
 | `plugins.py` | PluginInfo, hookspecs, PluginManager (discovery, allow/deny, registry build) |
 | `events.py` | async EventBus with wildcard subscriptions |
@@ -28,7 +29,7 @@
 | ------- | ---- |
 | `mailflow-bundled` | composition root: static registration of the official plugins, optional discovery |
 | `mailflow-cli` | Typer host: run/command/shell/config-check/snapshot/doctor/export/tui; renders CommandResponse with rich |
-| `mailflow-tui` | Textual app (Mail/Actions/Runtime/Logs/Market/Settings), export wizard (export.py), runner with injected log handler, app.tcss |
+| `mailflow-tui` | Textual app (Mail/Mailboxes/Actions/LLMs/Runtime/Logs/Market/Settings), settings editor (settings.py), export wizard (export.py), runner with injected log handler, app.tcss |
 | `mailflow-testkit` | FakeMailSource, FakeLLMBackend, FakeNotifier, make_mail/fixed_timestamps |
 
 ## plugins/

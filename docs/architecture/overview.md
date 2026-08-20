@@ -47,7 +47,8 @@ Everything a host needs lives on `MailFlowService`:
   `set_config_value` (persisted, comment-preserving), `config_path`.
 - Marketplace — `service.market` (fetch indexes, browse, install) and
   `plugin_repo_add/remove`.
-- Events — `service.on("mail.processed" | "mailflow.action.reminder" | ...)`.
+- Events — `service.on("mailflow.mail.processed" | "mailflow.action.reminder"
+  | "mail.deleted" | ...)`; runtime events are `mailflow.`-prefixed.
 
 `start_service(config, ...)` is the single entry point that composes
 configuration, plugins, storage, LLMs, processors, sources, notifiers, events

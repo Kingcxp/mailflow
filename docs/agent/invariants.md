@@ -57,19 +57,46 @@ if all tests pass — update the test, not the contract.
 19. Restore returns the identical record (original `received_at`).
 20. The first deletion timestamp is preserved across re-sync cleanup cycles.
 
+## Configuration
+
+21. Writing the config back never materializes a resolved secret: a value that
+    came from a `${VAR}` placeholder is written back as the placeholder, and an
+    `api_key` resolved from `api_key_env` is written back empty.
+22. `patch_config_value` is section-scoped: when the target section is absent
+    it must report failure so the caller does a full rewrite, never patch a
+    same-named leaf in a different section.
+23. Every settings mutation re-validates the whole config and, on failure,
+    raises `SettingsError` naming the offending option. Nothing is persisted
+    from a config that does not validate.
+24. For `[[llms]]` the list order is the routing policy: first entry is the
+    default, each entry falls back to the ones after it. `default`/`fallback`
+    are derived, and deleting an LLM scrubs every reference to it.
+
+## Events
+
+25. Runtime events are emitted under the `mailflow.` prefix
+    (`mailflow.mail.processed`, `mailflow.action.reminder`, ...). Subscribers
+    must use the emitted name; hosts and docs may not invent an unprefixed
+    alias.
+
 ## Logging
 
-21. Core never calls `basicConfig()` and never touches the root logger;
+26. Core never calls `basicConfig()` and never touches the root logger;
     `propagate=False` is scoped to `mailflow`.
-22. Secrets are redacted from formatted messages, `exc_text` and exception
+27. Secrets are redacted from formatted messages, `exc_text` and exception
     args; persisted `ProcessorNote` text is sanitized too.
 
 ## i18n
 
-23. `en` is the complete baseline; `zh-CN` keeps key parity (test-enforced).
-24. External packs are data-only JSON; missing keys fall back to English.
+28. `en` is the complete baseline; `zh-CN` keeps key parity (test-enforced).
+29. External packs are data-only JSON; missing keys fall back to English.
+30. `t()` interpolates only when parameters are passed, so a message
+    containing literal braces (e.g. a `${ENV_VAR}` example) is returned
+    verbatim.
+31. The English pack contains English text: a translated string in `en.json`
+    is a bug, not a shortcut.
 
 ## Docs
 
-25. Behavioral changes update the relevant `docs/architecture` or
+32. Behavioral changes update the relevant `docs/architecture` or
     `docs/agent` page in the same change. No `docs/ai` directory.
