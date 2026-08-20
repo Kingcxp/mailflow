@@ -51,7 +51,7 @@ class BotExportScreen(ModalScreen[Path | None]):
             )
             with Horizontal(id="export-actions"):
                 yield Button(self._t("tui.btn_generate"), id="export-run", variant="success")
-                yield Button(self._t("tui.btn_cancel"), id="export-cancel")
+                yield Button(self._t("tui.btn_cancel"), id="export-cancel", variant="primary")
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)

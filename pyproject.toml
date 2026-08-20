@@ -50,7 +50,7 @@ src = ["packages", "plugins", "tests", "tools"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "RUF"]
 ignore = ["E501"]
-allowed-confusables = ["（", "）", "：", "！", "。", "，"]
+allowed-confusables = ["（", "）", "：", "！", "。", "，", "；", "“", "”"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -17,7 +17,15 @@ from mailflow.service import start_service
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import FakeMailSource, make_mail
 from mailflow_tui.app import MailFlowApp
-from textual.widgets import Button, DataTable, Input, Select, TabbedContent
+from textual.widgets import (
+    Button,
+    DataTable,
+    Input,
+    ListView,
+    Select,
+    Static,
+    TabbedContent,
+)
 
 AD_JSON = """{
   "summary": "Special promotion inside",
@@ -248,20 +256,29 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             tabs = app.query_one(TabbedContent)
             tab_label = tabs.get_tab("tab-mail")  # pyright: ignore[reportUnknownMemberType]
             assert str(tab_label.label) == "邮件"  # pyright: ignore[reportUnknownMemberType]
-            # settings tab lists every config option; secrets are redacted
-            from mailflow_tui.app import SettingsPane
+            # settings tab: sidebar sections plus one card per option
+            from mailflow_tui.settings import OptionCard, SettingsPane
 
             settings = app.query_one(SettingsPane)
-            await settings.refresh_config()
-            config_table = cast(DataTable[Any], app.query_one("#config-table", DataTable))
-            assert config_table.row_count > 30
-            all_rows = "\n".join(
-                " ".join(str(cell) for cell in config_table.get_row_at(i))
-                for i in range(config_table.row_count)
-            )
-            assert "general.reminder_hour" in all_rows
-            assert "sk-tui-secret" not in all_rows
-            assert "llms[].api_key*" in all_rows
+            await settings.reload()
+            await pilot.pause(0.05)
+            sections = app.query_one("#settings-sections", ListView)
+            assert len(sections.children) >= 5  # general/logging/plugins/storage/i18n
+            cards = list(app.query(OptionCard))
+            assert cards, "no option cards rendered"
+            keys = {card.spec.key for card in cards}
+            assert "general.reminder_hour" in keys
+            # searching filters across every section
+            search = app.query_one("#settings-search", Input)
+            search.value = "reminder_hour"
+            await pilot.pause(0.1)
+            filtered = {card.spec.key for card in app.query(OptionCard)}
+            assert filtered == {"general.reminder_hour"}
+            search.value = ""
+            await pilot.pause(0.1)
+            # secrets never reach the rendered value
+            rendered = "\n".join(str(node.render()) for node in app.query(Static))
+            assert "sk-tui-secret" not in rendered
             # market tab browses the local repository
             from mailflow_tui.app import MarketPane
 
@@ -520,6 +537,14 @@ async def test_market_repos_screen(tmp_path: Path) -> None:
             assert "third-party" in names
             # the service config now carries the repository
             assert any(repo.name == "third-party" for repo in service.config.plugins.repositories)
+            # a visible Back button closes the form: escape must not be the
+            # only way out (regression: the dialog had no return control)
+            back = cast(Button, app.screen.query_one("#repos-cancel"))
+            assert str(back.label).strip()
+            assert back.variant != "default"  # never the black default variant
+            back.press()
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, ReposScreen)
             app.exit()
             await pilot.pause()
     finally:
@@ -607,11 +632,10 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_config_edit_modal_saves_value(tmp_path: Path) -> None:
-    """A config row opens an edit form; saving persists through the service
-    and the table refreshes."""
-    from mailflow_tui.app import ConfigEditModal
-    from textual.widgets import Button, Input
+async def test_settings_card_saves_resets_and_rejects(tmp_path: Path) -> None:
+    """An option card saves a valid value, reports an invalid one, and can
+    restore the schema default — all persisted through the service."""
+    from mailflow_tui.settings import OptionCard
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
@@ -628,29 +652,40 @@ async def test_config_edit_modal_saves_value(tmp_path: Path) -> None:
 
     app = MailFlowApp(service, queue.Queue())
     try:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
             tabs = app.query_one(TabbedContent)
             tabs.active = "tab-settings"  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause(0.2)
-            cfg = cast(DataTable[Any], app.query_one("#config-table", DataTable))
-            # locate the general.timezone row by its row key
-            row = cfg.get_row_index("general.timezone")  # pyright: ignore[reportUnknownMemberType]
-            cfg.focus()
-            cfg.move_cursor(row=row, animate=False)  # pyright: ignore[reportUnknownMemberType]
-            await pilot.pause(0.1)
-            cfg.action_select_cursor()  # equivalent of pressing Enter
-            await pilot.pause(0.2)
-            assert isinstance(app.screen, ConfigEditModal)
-            # description is localized (en fallback: not the raw key)
-            desc = app.screen.query_one("#config-edit-desc").render()  # pyright: ignore[reportUnknownMemberType]
-            assert "config.desc." not in str(desc)
-            inp = app.screen.query_one("#config-edit-input", Input)
-            inp.value = "Asia/Shanghai"
-            app.screen.query_one("#config-edit-save", Button).press()  # pyright: ignore[reportUnknownMemberType]
+
+            def card_for(key: str) -> OptionCard:
+                match = next(c for c in app.query(OptionCard) if c.spec.key == key)
+                return match
+
+            card = card_for("general.timezone")
+            # the description is localized, never the raw lookup key
+            descriptions = [str(node.render()) for node in card.query(Static)]
+            assert not any("config.desc." in text for text in descriptions)
+
+            card.query_one(Input).value = "Asia/Shanghai"
+            card.query_one("#save-general-timezone", Button).press()
             await pilot.pause(0.3)
-            assert not isinstance(app.screen, ConfigEditModal)
             assert service.config.general.timezone == "Asia/Shanghai"
+
+            # an invalid value is rejected with a message naming the option
+            hour = card_for("general.cleanup_hour")
+            hour.query_one(Input).value = "99"
+            hour.query_one("#save-general-cleanup-hour", Button).press()
+            await pilot.pause(0.3)
+            assert service.config.general.cleanup_hour == 4  # unchanged
+            status = str(app.query_one("#settings-status", Static).render())
+            assert "cleanup_hour" in status
+
+            # restore-default puts the schema default back
+            card = card_for("general.timezone")
+            card.query_one("#reset-general-timezone", Button).press()
+            await pilot.pause(0.3)
+            assert service.config.general.timezone == "UTC"
             app.exit()
             await pilot.pause()
     finally:
@@ -746,6 +781,133 @@ async def test_processed_mail_event_refreshes_panes(tmp_path: Path) -> None:
                     break
                 await pilot.pause(0.05)
             assert table.row_count == before + 1, "app did not react to mailflow.mail.processed"
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_llm_tab_orders_the_fallback_chain(tmp_path: Path) -> None:
+    """The LLM tab's order *is* the chain: first entry default, rest fallbacks."""
+    from mailflow.plugin_market import PluginMarket
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    config = build_config(tmp_path / "tui.db")
+    config.llms.append(
+        LLMConfig(llm_id="llm2", provider="test-llm", model="m2")  # second, so a fallback
+    )
+    service = await start_service(
+        config, plugin_manager=manager, discover_plugins=False, enable_logging=False
+    )
+    service.market = PluginMarket([])
+    service.config_path = tmp_path / "cfg.toml"
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-llms"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.2)
+            table = cast(DataTable[Any], app.query_one("#llms-table", DataTable))
+            assert table.row_count == 2
+            assert [str(table.get_row_at(i)[1]) for i in range(2)] == ["llm1", "llm2"]
+
+            # moving the second entry up makes it the default; the chain follows
+            from mailflow_tui.settings import LLMPane
+
+            pane = app.query_one(LLMPane)
+            pane._selected = 1  # pyright: ignore[reportPrivateUsage]
+            app.query_one("#llm-up", Button).press()
+            await pilot.pause(0.4)
+            assert [llm.llm_id for llm in service.config.llms] == ["llm2", "llm1"]
+            assert service.config.llms[0].default is True
+            assert service.config.llms[0].fallback == ["llm1"]
+            assert service.config.llms[1].default is False
+            assert service.config.llms[1].fallback == []
+            assert service.config.default_llm() is not None
+            assert service.config.default_llm().llm_id == "llm2"  # pyright: ignore[reportOptionalMemberAccess]
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
+    """The mailbox tab lists already-received mail and only the picked ones
+    are pushed through the pipeline."""
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.settings import AccountsPane
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    service.config_path = tmp_path / "cfg.toml"
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            # let the live stream settle first so the dedup path is realistic
+            for _ in range(100):
+                if await service.count_mails() == 3:
+                    break
+                await pilot.pause(0.05)
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-mailboxes"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.2)
+            accounts = cast(DataTable[Any], app.query_one("#accounts-table", DataTable))
+            assert accounts.row_count == 1
+
+            pane = app.query_one(AccountsPane)
+            pane._selected = 0  # pyright: ignore[reportPrivateUsage]
+            app.query_one("#account-history", Button).press()
+            await pilot.pause(0.5)
+            history = cast(DataTable[Any], app.query_one("#history-table", DataTable))
+            assert history.row_count == 3
+            # every one of them is already stored, so the browser marks them
+            states = {str(history.get_row_at(i)[4]) for i in range(history.row_count)}
+            assert states == {service.t("tui.history_marked_known")}
+
+            # analyzing an already-known mail is a no-op, never a duplicate
+            known_id = str(next(iter(history.rows)).value)
+            pane._picked = {known_id}  # pyright: ignore[reportPrivateUsage]
+            app.query_one("#history-analyze", Button).press()
+            await pilot.pause(0.5)
+            assert await service.count_mails() == 3
+
+            # a mail that never came through the live stream *is* analyzed
+            from mailflow_testkit.fakes import make_mail as make_test_mail
+
+            unseen = make_test_mail(
+                message_id="m-archived",
+                account_id="acct-1",
+                subject="Optional Friday lecture from the archive",
+                body_text="The guest lecture is optional.",
+            )
+            pane._history = [*pane._history, unseen]  # pyright: ignore[reportPrivateUsage]
+            pane._picked = {unseen.normalized_message_id()}  # pyright: ignore[reportPrivateUsage]
+            app.query_one("#history-analyze", Button).press()
+            await pilot.pause(0.6)
+            assert await service.count_mails() == 4
+            stored = await service.get_mail(unseen.normalized_message_id())
+            assert stored is not None
+            assert stored.summary, "on-demand analysis must keep the summary guarantee"
+            assert stored.analysis is not None  # the pipeline really ran
             app.exit()
             await pilot.pause()
     finally:

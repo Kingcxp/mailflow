@@ -37,7 +37,7 @@ class InstallScreen(ModalScreen[list[str] | None]):
             yield DirectoryTree(Path.cwd(), id="install-tree")
             with Horizontal(id="install-actions"):
                 yield Button(self._t("tui.btn_install"), id="install-run", variant="success")
-                yield Button(self._t("tui.btn_cancel"), id="install-cancel")
+                yield Button(self._t("tui.btn_cancel"), id="install-cancel", variant="primary")
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)

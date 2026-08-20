@@ -110,6 +110,10 @@ class I18n:
             message = self._packs.get(_DEFAULT_LANGUAGE, {}).get(key)
         if message is None:
             message = key
+        if not params:
+            # Nothing to interpolate: return the text as-is so literal braces
+            # (e.g. a ``${ENV_VAR}`` example in an option description) survive.
+            return message
         try:
             return message.format(**params)
         except (KeyError, IndexError, ValueError):

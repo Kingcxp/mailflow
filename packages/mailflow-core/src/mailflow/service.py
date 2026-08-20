@@ -21,7 +21,15 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from mailflow import __version__
-from mailflow.config import LLMConfig, MailFlowConfig, NotifierConfig, ProcessorConfig, load_config
+from mailflow.config import (
+    LLMConfig,
+    MailFlowConfig,
+    NotifierConfig,
+    ProcessorConfig,
+    load_config,
+    patch_config_value,
+    write_config,
+)
 from mailflow.contracts import (
     HistoryCapableSource,
     LLMBackend,
@@ -57,6 +65,19 @@ from mailflow.processors import LLMImportanceProcessor as _BUILTIN_LLM_IMPORTANC
 from mailflow.processors import register_builtin_processors
 from mailflow.registry import ComponentRegistry
 from mailflow.runtime import MailFlowRuntime
+from mailflow.settings import (
+    OptionSpec,
+    SettingsSection,
+    add_entry,
+    apply_value,
+    build_sections,
+    find_spec,
+    move_entry,
+    normalize_llm_chain,
+    remove_entry,
+    reset_value,
+    update_entry,
+)
 from mailflow.updates import UpdateReport
 
 logger = logging.getLogger("mailflow.service")
@@ -484,6 +505,79 @@ class MailFlowService:
         self.config = updated
         await self.events.emit("config.changed", key=key)
         return self.get_config_option(key)
+
+    # -- settings editor (sections, typed edits, list entries) -----------------
+
+    def _settings_context(self) -> dict[str, Any]:
+        """Registry + plugin titles so options land in their owner's section."""
+        titles = {info.plugin_id: info.name for info in self.plugin_manager.enabled_infos()}
+        return {"registry": self.registry, "plugin_titles": titles}
+
+    def settings_sections(self) -> list[SettingsSection]:
+        """Sidebar model: MailFlow's own sections plus one per owning plugin."""
+        return build_sections(self.config, **self._settings_context())
+
+    def settings_option(self, key: str) -> OptionSpec | None:
+        return find_spec(self.config, key, **self._settings_context())
+
+    async def _persist_config(self, updated: MailFlowConfig, key: str) -> None:
+        """Write ``updated`` back, preferring a comment-preserving patch."""
+        if self.config_path is None:
+            raise ValueError("no config file loaded; start with --config to persist changes")
+        patched = False
+        if "[" not in key and key.count(".") == 1:
+            with contextlib.suppress(AttributeError, KeyError):
+                patched = patch_config_value(self.config_path, key, _config_value_of(updated, key))
+        if not patched:
+            write_config(updated, self.config_path)
+        self.config = updated
+        await self.events.emit("config.changed", key=key)
+
+    async def set_setting(self, key: str, raw_value: Any) -> OptionSpec | None:
+        """Coerce, validate and persist one option (scalar, list or mapping).
+
+        Raises :class:`mailflow.settings.SettingsError` naming the offending
+        option when the value is invalid, so a host can point at the field.
+        """
+        updated = apply_value(self.config, key, raw_value, **self._settings_context())
+        await self._persist_config(updated, key)
+        return self.settings_option(key)
+
+    async def reset_setting(self, key: str) -> OptionSpec | None:
+        """Restore one option to its schema default and persist."""
+        updated = reset_value(self.config, key, **self._settings_context())
+        await self._persist_config(updated, key)
+        return self.settings_option(key)
+
+    async def add_config_entry(self, group: str, values: dict[str, Any]) -> MailFlowConfig:
+        """Append a validated entry to accounts/llms/processors/notifiers."""
+        updated = add_entry(self.config, group, values)
+        if group == "llms":
+            updated = normalize_llm_chain(updated)
+        await self._persist_config(updated, group)
+        return updated
+
+    async def update_config_entry(
+        self, group: str, index: int, values: dict[str, Any]
+    ) -> MailFlowConfig:
+        updated = update_entry(self.config, group, index, values)
+        if group == "llms":
+            updated = normalize_llm_chain(updated)
+        await self._persist_config(updated, group)
+        return updated
+
+    async def remove_config_entry(self, group: str, index: int) -> MailFlowConfig:
+        updated = remove_entry(self.config, group, index)
+        if group == "llms":
+            updated = normalize_llm_chain(updated)
+        await self._persist_config(updated, group)
+        return updated
+
+    async def move_config_entry(self, group: str, index: int, offset: int) -> MailFlowConfig:
+        """Reorder one entry; for LLMs the order *is* the fallback chain."""
+        updated = move_entry(self.config, group, index, offset)
+        await self._persist_config(updated, group)
+        return updated
 
     # -- plugin marketplace ------------------------------------------------------------
 

@@ -38,6 +38,7 @@ from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
+from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 
 _URGENCY_OPTIONS = [
     ("ad (gray: ads)", "ad"),
@@ -100,22 +101,33 @@ class ReplyModal(ModalScreen[Any]):
             )
             with Horizontal(id="reply-toolbar"):
                 yield Button(
-                    self._t("tui.reply_toolbar_bold"), id="reply-bold", classes="reply-tool"
+                    self._t("tui.reply_toolbar_bold"),
+                    id="reply-bold",
+                    variant="primary",
+                    classes="reply-tool",
                 )
                 yield Button(
-                    self._t("tui.reply_toolbar_italic"), id="reply-italic", classes="reply-tool"
+                    self._t("tui.reply_toolbar_italic"),
+                    id="reply-italic",
+                    variant="primary",
+                    classes="reply-tool",
                 )
                 yield Button(
-                    self._t("tui.reply_toolbar_left"), id="reply-align-left", classes="reply-tool"
+                    self._t("tui.reply_toolbar_left"),
+                    id="reply-align-left",
+                    variant="primary",
+                    classes="reply-tool",
                 )
                 yield Button(
                     self._t("tui.reply_toolbar_center"),
                     id="reply-align-center",
+                    variant="primary",
                     classes="reply-tool",
                 )
                 yield Button(
                     self._t("tui.reply_toolbar_right"),
                     id="reply-align-right",
+                    variant="primary",
                     classes="reply-tool",
                 )
                 yield Static(self._t("tui.reply_markup_hint"), id="reply-markup-hint")
@@ -128,7 +140,7 @@ class ReplyModal(ModalScreen[Any]):
                     variant="success",
                     disabled=True,
                 )
-                yield Button(self._t("tui.reply_cancel"), id="reply-cancel", variant="default")
+                yield Button(self._t("tui.reply_cancel"), id="reply-cancel", variant="error")
             yield Static(self._t("tui.reply_confirm_hint"), id="reply-status")
 
     async def on_mount(self) -> None:
@@ -256,7 +268,7 @@ class ActionModal(ModalScreen[Any]):
             yield Label(f"{self._service.t('tui.action_content')}: {item.summary}")
             yield Label(f"{self._service.t('tui.action_notes')}: {item.notes or '-'}")
             yield Label(f"{self._service.t('tui.action_source')}: {item.mail_id}")
-            yield Button(self._service.t("tui.btn_close"), id="action-close")
+            yield Button(self._service.t("tui.btn_close"), id="action-close", variant="primary")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "action-close":
@@ -668,109 +680,6 @@ class LogsPane(Vertical):
             log_view.write(line)
 
 
-class SettingsPane(Vertical):
-    def __init__(self, service: MailFlowService) -> None:
-        super().__init__()
-        self._service = service
-
-    def compose(self) -> ComposeResult:
-        yield Label(self._service.t("tui.settings_language"), id="settings-label")
-        yield Select([], id="language-select")
-        yield Static(self._service.t("tui.settings_language_help"), id="settings-help")
-        yield Static(self._service.t("tui.settings_config_title"), id="settings-config-title")
-        with ScrollableContainer(id="settings-config-scroll"):
-            yield DataTable(id="config-table")
-
-    async def on_mount(self) -> None:
-        await self.refresh_languages()
-        await self.refresh_config()
-
-    async def relabel(self) -> None:
-        await self.refresh_config()
-        await self.refresh_languages()
-
-    async def refresh_languages(self) -> None:
-        options = [
-            (f"{info.name} ({info.code})", info.code)
-            for info in self._service.i18n.available_languages()
-        ]
-        select = self.query_one_optional("#language-select", Select)  # pyright: ignore[reportUnknownVariableType]
-        if select is None:
-            return
-        select.set_options(options)  # pyright: ignore[reportUnknownMemberType]
-        if select.value != self._service.i18n.language:  # pyright: ignore[reportUnknownMemberType]
-            select.value = self._service.i18n.language
-
-    def _config_table(self) -> DataTable[Any] | None:
-        return self.query_one_optional("#config-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
-
-    async def refresh_config(self) -> None:
-        """List every configurable option (required/optional, default, value)."""
-        table = self._config_table()
-        if table is None:
-            return
-        if not table.columns:
-            table.add_column(self._service.t("config.option"), key="option")
-            table.add_column(self._service.t("config.type"), key="type")
-            table.add_column(self._service.t("config.required"), key="required")
-            table.add_column(self._service.t("config.value"), key="value")
-            table.add_column(self._service.t("config.description"), key="description")
-            table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
-        table.clear()
-        for option in self._service.list_config_options():
-            value = option.value
-            if isinstance(value, (list, dict)):
-                value_text = f"{len(value)} items"  # pyright: ignore[reportUnknownArgumentType]
-            elif isinstance(value, bool):
-                value_text = "true" if value else "false"
-            elif value is None:
-                value_text = "-"
-            elif not isinstance(value, (str, int, float)):
-                value_text = "..."
-            else:
-                value_text = str(value)[:24]
-            key = option.key + ("*" if option.is_secret() else "")
-            required = self._service.t("common.yes") if option.required else ""
-            desc_key = f"config.desc.{option.key}"
-            desc = self._service.t(desc_key)
-            if desc == desc_key:
-                desc = option.description or ""
-            table.add_row(
-                key,
-                option.type_name,
-                required,
-                value_text,
-                desc[:60],
-                key=option.key,
-            )
-
-    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        option = next(
-            (o for o in self._service.list_config_options() if o.key == event.row_key.value),
-            None,
-        )
-        if option is None:
-            return
-        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-            ConfigEditModal(self._service, option),
-            callback=self._after_config_edit,
-        )
-
-    async def _after_config_edit(self, result: Any) -> None:
-        if result is not None:
-            await self.refresh_config()
-
-    async def on_select_changed(self, event: Select.Changed) -> None:
-        if (
-            event.select.id == "language-select"
-            and event.value not in (Select.BLANK, Select.NULL)
-            and event.value is not None
-            and str(event.value) != self._service.i18n.language
-        ):
-            await self._service.set_language(str(event.value))
-            await self.refresh_config()
-
-
 class MarketDetailScreen(ModalScreen[Any]):
     """VS Code-style full-screen plugin detail: metadata, markdown readme
     and install/uninstall/enable/disable actions."""
@@ -809,11 +718,13 @@ class MarketDetailScreen(ModalScreen[Any]):
                     id="detail-uninstall",
                     variant="warning",
                 )
-                yield Button(self._service.t("tui.btn_enable"), id="detail-enable")
+                yield Button(
+                    self._service.t("tui.btn_enable"), id="detail-enable", variant="primary"
+                )
                 yield Button(
                     self._service.t("tui.btn_disable"), id="detail-disable", variant="error"
                 )
-                yield Button(self._service.t("tui.btn_close"), id="detail-close")
+                yield Button(self._service.t("tui.btn_close"), id="detail-close", variant="primary")
 
     def _set_status(self, text: str) -> None:
         status = self.query_one_optional("#market-detail-status", Static)
@@ -860,77 +771,6 @@ class MarketDetailScreen(ModalScreen[Any]):
         self.dismiss(button_id)
 
 
-class ConfigEditModal(ModalScreen[Any]):
-    """Edit one scalar configuration option; the caller persists via the
-    service and refreshes after a successful save."""
-
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
-
-    def __init__(self, service: MailFlowService, option: Any) -> None:
-        super().__init__()
-        self._service = service
-        self._option = option
-
-    def _description(self) -> str:
-        key = f"config.desc.{self._option.key}"
-        translated = self._service.t(key)
-        if translated != key:
-            return translated
-        return self._option.description or ""
-
-    def compose(self) -> ComposeResult:
-        option = self._option
-        secret = option.is_secret()
-        with Vertical(id="config-edit-dialog"):
-            yield Static(self._service.t("tui.config_edit_title"), id="config-edit-title")
-            yield Static(
-                f"[bold]{option.key}[/bold]  ({option.type_name})",
-                id="config-edit-key",
-            )
-            yield Static(self._description(), id="config-edit-desc")
-            yield Static(self._service.t("tui.config_edit_value"), id="config-edit-value-label")
-            current = option.value
-            if isinstance(current, (list, dict)):
-                yield Static(self._service.t("tui.config_edit_readonly"), id="config-edit-readonly")
-            else:
-                yield Input(
-                    value=str(current) if current is not None else "",
-                    id="config-edit-input",
-                    password=secret,
-                )
-            yield Static("", id="config-edit-status")
-            with Horizontal(id="config-edit-actions"):
-                yield Button(
-                    self._service.t("tui.config_edit_cancel"),
-                    id="config-edit-cancel",
-                    variant="default",
-                )
-                yield Button(
-                    self._service.t("tui.config_edit_save"),
-                    id="config-edit-save",
-                    variant="success",
-                )
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "config-edit-cancel":
-            self.dismiss(None)
-            return
-        if event.button.id != "config-edit-save":
-            return
-        option = self._option
-        if isinstance(option.value, (list, dict)):
-            self.dismiss(None)
-            return
-        raw = self.query_one("#config-edit-input", Input).value
-        try:
-            await self._service.set_config_value(option.key, raw)
-        except (KeyError, ValueError, TypeError) as exc:
-            status = self.query_one("#config-edit-status", Static)
-            status.update(f"[red]{exc}[/red]")
-            return
-        self.dismiss(option.key)
-
-
 class MarketPane(Vertical):
     """VS Code-style marketplace: search, category filter, list, markdown
     detail with install/uninstall/enable/disable."""
@@ -940,7 +780,8 @@ class MarketPane(Vertical):
         self._service = service
         self._entries: list[tuple[Repository, MarketPlugin]] = []
         self._selected: MarketPlugin | None = None
-        self._refresh_lock = asyncio.Lock()
+        self._installed: dict[str, bool] = {}
+        self._loading = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="market-controls"):
@@ -954,16 +795,18 @@ class MarketPane(Vertical):
                 yield Button(
                     self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary"
                 )
-                yield Button(self._service.t("tui.btn_new_plugin"), id="market-create")
+                yield Button(
+                    self._service.t("tui.btn_new_plugin"), id="market-create", variant="primary"
+                )
                 yield Button(
                     self._service.t("tui.btn_export"), id="market-export", variant="success"
                 )
                 yield Button(
                     self._service.t("tui.btn_install_local"),
                     id="market-install-local",
-                    variant="default",
+                    variant="primary",
                 )
-                yield Button(self._service.t("tui.btn_repos"), id="market-repos", variant="default")
+                yield Button(self._service.t("tui.btn_repos"), id="market-repos", variant="primary")
         yield DataTable(id="market-table")
         with Vertical(id="market-detail"):
             yield Markdown("", id="market-readme")
@@ -975,7 +818,9 @@ class MarketPane(Vertical):
                 yield Button(
                     self._service.t("tui.btn_uninstall"), id="market-uninstall", variant="warning"
                 )
-                yield Button(self._service.t("tui.btn_enable"), id="market-enable")
+                yield Button(
+                    self._service.t("tui.btn_enable"), id="market-enable", variant="primary"
+                )
                 yield Button(
                     self._service.t("tui.btn_disable"), id="market-disable", variant="error"
                 )
@@ -1007,13 +852,15 @@ class MarketPane(Vertical):
         self._columns_done = True
 
     async def relabel(self) -> None:
-        async with self._refresh_lock:
-            self._columns_done = False
-            await self._refresh_market_impl()
+        self._columns_done = False
+        self._render_entries()
 
     def _market_status_of(self, plugin: MarketPlugin) -> str:
-        market = self._service.market
-        if not market.is_installed(plugin.id, package=plugin.package):
+        installed = self._installed.get(plugin.id)
+        if installed is None:
+            installed = self._service.market.is_installed(plugin.id, package=plugin.package)
+            self._installed[plugin.id] = installed
+        if not installed:
             return self._service.t("plugin.not_installed_yet")
         config_status = self._service.plugin_status(plugin.id)
         if config_status == "disabled":
@@ -1023,25 +870,37 @@ class MarketPane(Vertical):
         return self._service.t("plugin.installed")
 
     async def refresh_market(self) -> None:
-        async with self._refresh_lock:
-            await self._refresh_market_impl()
+        """Fetch the marketplace in a worker; the UI stays interactive.
 
-    async def _refresh_market_impl(self) -> None:
+        Only the network fetch is deferred — filtering and rendering run from
+        the cached entries, so typing in the search box never re-fetches.
+        """
+        if self._loading:
+            return  # a fetch is already in flight; its result will render
+        self._loading = True
+        self._set_status(self._service.t("tui.loading"))
+        self.run_worker(self._fetch_entries(), exclusive=True, group="market-fetch")
+
+    async def _fetch_entries(self) -> None:
+        market = self._service.market
+        try:
+            entries = await asyncio.to_thread(market.list_plugins)
+        except Exception as exc:
+            self._loading = False
+            self._set_status(str(exc))
+            return
+        self._entries = entries
+        self._installed = {}  # re-derive install state for the new metadata
+        self._loading = False
+        self._render_entries()
+
+    def _render_entries(self) -> None:
+        """Render the cached entries through the current search/category."""
         table = self._market_table()
         if table is None:
             return
         table.clear()
         self._ensure_columns()
-        market = self._service.market
-        self._set_status(self._service.t("tui.loading"))
-        try:
-            self._entries = await asyncio.to_thread(market.list_plugins)
-        except Exception as exc:
-            self._set_status(str(exc))
-            return
-        table = self._market_table()
-        if table is None:
-            return
         category = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
         filter_value = cast(str, category.value or "all") if category is not None else "all"  # pyright: ignore[reportUnknownMemberType]
         search = self.query_one_optional("#market-search", Input)
@@ -1097,7 +956,8 @@ class MarketPane(Vertical):
 
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "market-search":
-            await self.refresh_market()
+            # filter the cached entries; no network round-trip per keystroke
+            self._render_entries()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         plugin = next((p for _r, p in self._entries if p.id == event.row_key.value), None)
@@ -1114,7 +974,7 @@ class MarketPane(Vertical):
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "market-category":
-            await self.refresh_market()
+            self._render_entries()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -1166,11 +1026,12 @@ class MarketPane(Vertical):
         except (KeyError, ValueError, RuntimeError) as exc:
             self.query_one("#market-status", Static).update(str(exc))
             return
+        self._installed.pop(plugin.id, None)  # install state changed
+        self._render_entries()
         self.query_one("#market-status", Static).update(
             self._service.t(message_key, plugin_id=plugin.id)
             + f" ({self._service.t('plugin.restart_note')})"
         )
-        await self.refresh_market()
 
     async def service_uninstall(self, plugin: MarketPlugin) -> str:
         if not plugin.package:
@@ -1179,7 +1040,7 @@ class MarketPane(Vertical):
 
 
 class MailFlowApp(App[None]):
-    """Five-tab administration UI."""
+    """Eight-tab administration UI."""
 
     CSS_PATH = "app.tcss"
     BINDINGS: ClassVar[list[Any]] = [
@@ -1198,8 +1059,12 @@ class MailFlowApp(App[None]):
         with TabbedContent(initial="tab-mail"):
             with TabPane(self._service.t("tui.tab_mail"), id="tab-mail"):
                 yield MailPane(self._service)
+            with TabPane(self._service.t("tui.tab_mailboxes"), id="tab-mailboxes"):
+                yield AccountsPane(self._service)
             with TabPane(self._service.t("tui.tab_actions"), id="tab-actions"):
                 yield ActionsPane(self._service)
+            with TabPane(self._service.t("tui.tab_llms"), id="tab-llms"):
+                yield LLMPane(self._service)
             with TabPane(self._service.t("tui.tab_runtime"), id="tab-runtime"):
                 yield RuntimePane(self._service)
             with TabPane(self._service.t("tui.tab_logs"), id="tab-logs"):
@@ -1228,7 +1093,9 @@ class MailFlowApp(App[None]):
         tabs = self.query_one(TabbedContent)
         for pane_id, key in (
             ("tab-mail", "tui.tab_mail"),
+            ("tab-mailboxes", "tui.tab_mailboxes"),
             ("tab-actions", "tui.tab_actions"),
+            ("tab-llms", "tui.tab_llms"),
             ("tab-runtime", "tui.tab_runtime"),
             ("tab-logs", "tui.tab_logs"),
             ("tab-market", "tui.tab_market"),
@@ -1243,7 +1110,15 @@ class MailFlowApp(App[None]):
             await self._relabel_panes()
 
     async def _relabel_panes(self) -> None:
-        for pane_type in (MailPane, ActionsPane, RuntimePane, SettingsPane, MarketPane):
+        for pane_type in (
+            MailPane,
+            AccountsPane,
+            ActionsPane,
+            LLMPane,
+            RuntimePane,
+            SettingsPane,
+            MarketPane,
+        ):
             query = self.query(pane_type)
             if not query:
                 continue

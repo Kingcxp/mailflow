@@ -37,7 +37,7 @@ class ReposScreen(ModalScreen[bool | None]):
             with Horizontal(id="repos-actions"):
                 yield Button(self._t("tui.btn_add"), id="repos-add", variant="success")
                 yield Button(self._t("tui.btn_remove"), id="repos-remove", variant="warning")
-                yield Button(self._t("tui.btn_cancel"), id="repos-cancel")
+                yield Button(self._t("tui.btn_back"), id="repos-cancel", variant="primary")
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)

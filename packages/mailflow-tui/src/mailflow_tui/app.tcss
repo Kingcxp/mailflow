@@ -14,10 +14,14 @@ Button {
     border: none;
     text-style: bold;
     content-align: center middle;
+    /* Fallback for any variant Textual leaves on ansi_default (black on
+       black in dark terminals): an explicit surface with readable text. */
+    background: $surface-lighten-2;
+    color: $text;
 }
 
 Button.-default {
-    background: $surface-lighten-1;
+    background: $surface-lighten-2;
     color: $text;
 }
 
@@ -39,6 +43,11 @@ Button.-warning {
 Button.-error {
     background: $error;
     color: #11111b;
+}
+
+Button:disabled {
+    background: $surface;
+    color: $text-disabled;
 }
 
 Button:hover,
@@ -472,58 +481,223 @@ MarketDetailScreen {
     margin-right: 1;
 }
 
-/* config edit modal */
-ConfigEditModal {
+/* ---------------------------------------------------------------------------
+   Settings editor (VS Code style): sidebar + searchable option cards
+   --------------------------------------------------------------------------- */
+
+#settings-search {
+    dock: top;
+    margin: 0 1 1 1;
+}
+
+#settings-body {
+    height: 1fr;
+}
+
+#settings-sidebar {
+    width: 28;
+    border: round $primary;
+    margin: 0 1 0 1;
+}
+
+#settings-sidebar-title {
+    text-style: bold;
+    padding: 0 1;
+}
+
+#settings-sections {
+    height: 1fr;
+    background: #181825;
+}
+
+#settings-main {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#settings-language-row {
+    height: auto;
+    align-vertical: middle;
+}
+
+#settings-language-label {
+    width: 12;
+    padding: 1 1 0 0;
+}
+
+#language-select {
+    width: 36;
+}
+
+#settings-status {
+    height: auto;
+    color: $text-muted;
+}
+
+#settings-options {
+    height: 1fr;
+    border: round $secondary;
+}
+
+.settings-empty {
+    padding: 1 2;
+    color: $text-muted;
+}
+
+.option-card {
+    height: auto;
+    padding: 0 1 1 1;
+    border-bottom: solid $panel;
+}
+
+.option-key {
+    text-style: bold;
+}
+
+.option-desc {
+    height: auto;
+    color: $text-muted;
+}
+
+.option-default {
+    height: auto;
+    color: $text-disabled;
+}
+
+.option-row {
+    height: auto;
+    align-vertical: middle;
+}
+
+.option-input {
+    width: 1fr;
+    margin-right: 1;
+}
+
+.option-summary {
+    width: 1fr;
+    margin-right: 1;
+    color: $text-muted;
+}
+
+.option-button {
+    min-width: 14;
+    margin-right: 1;
+}
+
+/* structured entry form + list editor windows */
+ListEditScreen, EntryFormScreen {
     align: center middle;
 }
 
-#config-edit-dialog {
-    width: 76;
-    height: 20;
+#list-edit-dialog {
+    width: 84;
+    height: 26;
     border: round $accent;
     background: $surface;
     padding: 1 2;
 }
 
-#config-edit-title {
+#list-edit-text {
+    height: 1fr;
+    border: round $primary;
+}
+
+#entry-form-dialog {
+    width: 88;
+    height: 85%;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+
+#entry-form-fields {
+    height: 1fr;
+    border: round $primary;
+    padding: 0 1;
+}
+
+#entry-form-status {
+    height: auto;
+    color: $error;
+}
+
+.dialog-title {
+    content-align: center middle;
     text-style: bold;
     margin-bottom: 1;
 }
 
-#config-edit-key {
-    margin-bottom: 1;
-}
-
-#config-edit-desc {
+.dialog-hint {
     height: auto;
     color: $text-muted;
-    margin-bottom: 1;
 }
 
-#config-edit-value-label {
-    margin-bottom: 1;
-}
-
-#config-edit-input {
-    margin-bottom: 1;
-}
-
-#config-edit-readonly {
-    color: $text-muted;
-    margin-bottom: 1;
-}
-
-#config-edit-status {
-    height: 1;
-    color: $error;
-}
-
-#config-edit-actions {
+.dialog-actions {
     height: auto;
+    align-vertical: middle;
+    content-align: center middle;
+}
+
+.dialog-actions Button {
+    min-width: 16;
+    margin: 0 1;
+}
+
+.field-label {
+    text-style: bold;
+    margin-top: 1;
+}
+
+.field-desc {
+    height: auto;
+    color: $text-muted;
+}
+
+.field-multiline {
+    height: 5;
+    border: round $primary;
+}
+
+/* ---------------------------------------------------------------------------
+   Mailboxes and LLM chain tabs
+   --------------------------------------------------------------------------- */
+
+#accounts-title, #llms-title, #history-title {
+    text-style: bold;
+    padding: 0 1;
+}
+
+#accounts-help, #llms-help, #history-help {
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+#accounts-table, #llms-table {
+    height: 30%;
+    margin: 0 1;
+    border: round $primary;
+}
+
+#history-table {
+    height: 1fr;
+    margin: 0 1;
+    border: round $secondary;
+}
+
+#accounts-actions, #llms-actions, #history-actions {
+    height: auto;
+    padding: 0 1;
     align-vertical: middle;
 }
 
-#config-edit-actions Button {
-    width: 16;
+#accounts-actions Button, #llms-actions Button, #history-actions Button {
     margin-right: 1;
+}
+
+#accounts-status, #llms-status {
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
 }
