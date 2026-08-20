@@ -112,6 +112,14 @@ All notable changes are recorded here; the format follows
 - TUI: selecting a plugin row opens a full-screen VS Code-style detail
   (title, metadata, markdown readme, install/uninstall/enable/disable);
   selecting a config row opens an edit form (value, cancel/save).
+- The docs gate (`tools/check_docs.py`, `make docs`) now verifies that
+  documentation matches the code, not just that files exist: quoted
+  repository paths, `make` targets, `mailflow.*` event names,
+  `service.<method>(` references and `mailflow-*` plugin ids must all resolve.
+  `CHANGELOG.md` and the build log are exempt as historical records.
+- Locale hygiene is test-enforced: en/zh-CN key parity, no duplicate lookup
+  paths, no Chinese text left in `en.json`, and a `config.desc.<key>` entry
+  for every configurable option in both packs.
 
 ### Fixed
 
@@ -143,6 +151,18 @@ All notable changes are recorded here; the format follows
 - `i18n.t()` ran `str.format` even without parameters, so a message
   containing literal braces (a `${ENV_VAR}` example) logged a format error;
   eight English keys that contained Chinese text are now English.
+- Locale packs defined 21 keys as literal dotted strings (`"tui.btn_cancel"`)
+  instead of nested objects, and one of them duplicated an existing nested
+  key. Both spellings flatten to the same lookup path, so iteration order
+  decided which value won and editing the other silently did nothing; all of
+  them are now properly nested.
+- Documentation named things that no longer exist: the module map and change
+  playbook still listed the two processor plugins as plugins (they moved into
+  core), `llm.md` pointed at a deleted plugin path, `deployment.md`
+  documented a `make doctor` target that never existed, and `tests.md`
+  described a layout missing 9 of the 19 test files.
+- Two leftover `plugins/mailflow-processor-*` directories held only orphaned
+  `.pyc` files, making deleted plugins look installed on disk.
 
 ### Changed
 

@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-310%20passed-67C23A)]()
+[![Tests](https://img.shields.io/badge/tests-317%20passed-67C23A)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -54,7 +54,7 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
   即路由策略：第一项为默认，其后每一项都是前面的后备。
 - **浏览并解析已有邮件** —— 新用户可以分页浏览 MailFlow 配置之前就已收到的邮件，只
   勾选需要的进行解析；被选中的邮件走与实时邮件完全相同的处理流程，已解析过的会跳过。
-- **质量门槛** —— 310 项单元/集成/端到端测试，mypy 与 pyright 严格模式，ruff 检查 + 格式化，
+- **质量门槛** —— 317 项单元/集成/端到端测试，mypy 与 pyright 严格模式，ruff 检查 + 格式化，
   Nuitka standalone/onefile 可执行文件，文档门槛。
 
 ## 安装

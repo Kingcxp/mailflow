@@ -55,6 +55,36 @@ two-step confirmation. The draft carries the recipient, subject, body and
 the account. Record calls if you are a fake (the testkit source appends to
 `sent_replies` for E2E assertions).
 
+## Optional: browsable history
+
+Implement `fetch_history` and your source also satisfies
+`HistoryCapableSource`, which unlocks the TUI **Mailboxes** history browser
+(and `service.fetch_history`) for accounts using it:
+
+```python
+class MySource:
+    async def fetch_history(self, limit: int = 50, offset: int = 0) -> list[MailMessage]:
+        """Up to `limit` already-received messages, newest first, skipping `offset`."""
+```
+
+Rules that make the capability safe:
+
+- **Never emit** from `fetch_history` — return the messages and let the caller
+  decide. The host calls `service.process_mail(mail)` for the ones the user
+  picked, which reuses the normal pipeline path (dedup, persistence,
+  `mailflow.mail.processed`, notifiers).
+- **Newest first**, and `offset` pages further back, so the UI can append.
+- **Do not disturb the live stream.** Keep whatever incremental state `run()`
+  uses untouched: the IMAP source pages over UIDs for history while leaving
+  its poll water-mark alone.
+- Normalize exactly like `run()` does — the same message must produce the same
+  `normalized_message_id()`, otherwise browsing would create duplicates of
+  mail you already stored.
+
+The capability is discovered with `isinstance` (both protocols are
+`runtime_checkable`), so omitting it is fine: the browser reports that the
+source cannot list history instead of failing.
+
 ## Failure isolation
 
 Raise from `run()` to mark the account `error` (captured in the snapshot);

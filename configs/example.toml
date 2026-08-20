@@ -43,20 +43,29 @@ provider = "sqlite"
 path = "data/mailflow.db"
 
 # --- Mail accounts ----------------------------------------------------------
-# Each account references a mail source adapter component (see
-# `mailflow plugin market list` for available adapters).
+# Each account references a mail source component id. `imap` is built in
+# (presets: qq / 163 / outlook / gmail, or explicit hosts); `mailflow adapter
+# list` shows every loaded source, and the TUI's Mailboxes tab can add one
+# through a form and then browse the mailbox's existing mail.
 #
 # [[accounts]]
 # account_id = "my-mailbox"
-# provider = "<your-mail-source-adapter>"
+# provider = "imap"
 # email = "you@example.com"
 # enabled = true
 # [accounts.options]
-# ...adapter-specific options...
+# preset = "qq"                  # or imap_host / imap_port / imap_ssl
+# username = "you@qq.com"
+# password = "${MAIL_PASSWORD}"  # QQ/163: an authorization code, not the password
+# imap_folder = "INBOX"
+# interval_seconds = 300
+# limit = 20                     # newest mails ingested on the first poll
 
 # --- LLMs -------------------------------------------------------------------
-# provider selects the backend adapter component; the rest of the fields are
-# the OpenAI-compatible request configuration.
+# provider selects the backend adapter component (`openai-compatible` and
+# `anthropic` are built in); the rest of the fields are the request
+# configuration. In the TUI's LLMs tab the list order is the fallback chain:
+# the first entry is the default and each entry falls back to the ones below.
 #
 # [[llms]]
 # llm_id = "my-llm"

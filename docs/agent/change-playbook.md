@@ -5,28 +5,71 @@ run `make check` before committing.
 
 ## Add a processor
 
-1. Create `plugins/mailflow-<name>/` following `mailflow-processor-rules`
-   (pyproject with entry point, `plugin.py`, `__init__.py`).
-2. Implement `MailProcessor.process`; use `context.options` and the
-   injected `now` clock. Return a partial `MailAnalysis` overlay.
-3. Register `registrar.add_processor("<component-id>", factory)` and declare
+The two default processors (`rules`, `llm-importance`) are **built into the
+core** — `mailflow/processors.py`, registered by `register_builtin_processors`
+under the plugin id `mailflow-core`. Pick the smallest option that fits:
+
+**A. Tune the built-in LLM analysis** — implement `LLMEnhancer`
+(`contracts.py`) and register it with `registrar.add_llm_enhancer(...)`. You
+get three optional hooks (`system_prompt`, `extra_messages`, `post_process`)
+without reimplementing classification. This is the right seam for
+"same four levels, extra domain knowledge".
+
+**B. Add a new processor** — when you need your own decision:
+
+1. Create `plugins/mailflow-<name>/` (pyproject with a `mailflow.plugins`
+   entry point, `plugin.py`, `__init__.py`). Use the marketplace's
+   `processor/mailflow-processor-blocklist` as the reference implementation,
+   or scaffold one (`mailflow.plugin_template`, or the TUI Market → New
+   wizard) which also emits the declarative `plugin_api` style.
+2. Implement `MailProcessor.process`; use `context.options`, the injected
+   `now` clock and `context.feedback_guidelines`. Return a **partial**
+   `MailAnalysis` overlay — the pipeline merges overlays in priority order,
+   so contribute only the fields you decided.
+3. Register `registrar.add_processor("<component-id>", factory)`; the factory
+   takes `(ProcessorConfig, LLMRouter)`. Declare
    `kinds=[ComponentKind.MAIL_PROCESSOR]` in `PluginInfo`.
 4. Add a unit test with a canned completion (see
-   `tests/unit/test_llm_processor.py`).
-5. Reference it in config by component id; add an entry to
-   `packages/mailflow-bundled` ONLY if it belongs to the official set.
-6. Update `docs/plugin-development/processor.md` if behavior is generic.
+   `tests/unit/test_llm_processor.py`) or a pure input/output test for a
+   deterministic processor.
+5. Reference it in config by component id and give it a `priority` that puts
+   it where it belongs in the chain (cheap deterministic filters before the
+   LLM). Add it to `packages/mailflow-bundled` ONLY if it joins the official
+   set.
+6. Update `docs/plugin-development/processor.md` if the behavior is generic.
+
+A plugin that registers an existing component id **wins**: the built-in is
+skipped (`register_builtin_processors` checks `registry.has` first), so a
+third-party `rules` replaces the default without a core change.
 
 ## Add a mail source adapter
 
 1. Implement `MailSource.run` (normalized UTC mails via `emit`) +
    `send_reply` + `close`.
-2. Register `add_source("<component-id>", factory)`; the factory reads
+2. Optionally implement `fetch_history(limit, offset)` to satisfy
+   `HistoryCapableSource`: the TUI Mailboxes tab can then browse mail that
+   arrived before MailFlow was configured. Return newest-first and **never**
+   emit; browsing must not disturb the live stream's incremental state (see
+   `plugins/mailflow-mail-imap` for the UID handling).
+3. Register `add_source("<component-id>", factory)`; the factory reads
    `MailAccountConfig.options`.
-3. Test normalization and `send_reply` recording; for a fake, reuse
-   `mailflow-testkit`.
-4. Real providers are later-stage work: keep them out of the 0.1.0 baseline
-   and mark them "planned" in `CHANGELOG.md`.
+4. Test normalization, `send_reply` recording and — if implemented — that
+   `fetch_history` pages newest-first without moving the poll water-mark. For
+   a fake, reuse `mailflow-testkit`.
+
+## Add a configurable option
+
+1. Add the field to the right model in `config.py` with a `description` and
+   validation constraints (`ge`/`le`, a model validator for cross-field
+   rules). The editor kind is derived from the annotation, so no UI change is
+   needed.
+2. Add `config.desc.<dotted.key>` to **both** locale packs via
+   `tools/gen_option_descriptions.py` (it fails when the en/zh key sets
+   differ).
+3. If the option is a secret, make sure its name matches `_SECRET_MARKERS` so
+   it is redacted and rendered as a password field.
+4. Extend `tests/unit/test_settings.py` when the option needs a new editor
+   kind or coercion rule.
 
 ## Change the reply flow
 

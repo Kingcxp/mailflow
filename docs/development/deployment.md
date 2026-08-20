@@ -146,7 +146,7 @@ digest are paginated into separate messages.
 
 ```bash
 make check        # lint + format + mypy + pyright + pytest + docs gate
-make doctor -c configs/local.toml   # registrations and configuration summary
+uv run mailflow doctor -c configs/local.toml   # registrations and configuration summary
 ```
 
 ## Troubleshooting

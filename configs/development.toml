@@ -39,19 +39,27 @@ provider = "sqlite"
 path = "data/development.db"
 
 # --- Mail accounts ----------------------------------------------------------
-# Add one block per mailbox. `provider` is the mail source adapter component
-# id (mail sources ship as plugins; see `mailflow plugin market list`).
+# Add one block per mailbox, or add them from the TUI's Mailboxes tab.
+# `provider` is a mail source component id; `imap` is built in (presets for
+# qq / 163 / outlook / gmail, or explicit hosts for a school/work server).
+# `mailflow adapter list` shows every loaded source.
 #
 # [[accounts]]
 # account_id = "my-mailbox"
-# provider = "<your-mail-source-adapter>"
+# provider = "imap"
 # email = "you@example.com"
 # enabled = true
 # [accounts.options]
-# ...adapter-specific options...
+# preset = "qq"                    # qq | 163 | outlook | gmail
+# username = "you@qq.com"
+# password = "${MAIL_PASSWORD}"    # QQ/163 need an authorization code
+# interval_seconds = 300
+# limit = 20                       # newest mails ingested on the first poll
 
 # --- LLMs -------------------------------------------------------------------
-# Add one block per model endpoint (OpenAI-compatible chat completions).
+# Add one block per model endpoint, or use the TUI's LLMs tab (there the list
+# order is the fallback chain: first entry is the default). `openai-compatible`
+# and `anthropic` are both built in.
 #
 # [[llms]]
 # llm_id = "my-llm"

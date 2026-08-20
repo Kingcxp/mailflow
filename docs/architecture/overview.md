@@ -17,9 +17,10 @@ Hosts (mailflow-cli, mailflow-tui, chat bots)
         │  command router / service facade (snapshots, queries, mutations)
         │  bot export (mailflow.bot_export — CLI export / TUI wizard / make)
         ▼
-mailflow-core          domain · config · contracts · registry · plugins
-                       events · llm router · pipeline · logging · i18n
-                       runtime · service · commands · bot_export
+mailflow-core          domain · config · settings · contracts · registry
+                       plugins · events · llm router · pipeline · processors
+                       logging · i18n · runtime · service · commands
+                       bot_export · plugin_market · plugin_template · updates
         ▲  component factories (ownership stamped at registration)
         │
 plugins/*              mail sources · storage · llm backends · processors
@@ -45,10 +46,18 @@ Everything a host needs lives on `MailFlowService`:
 - `commands.execute(line)` — transport-neutral command responses.
 - Configuration — `list_config_options`, `get_config_option`,
   `set_config_value` (persisted, comment-preserving), `config_path`.
+- Settings editor — `settings_sections`, `settings_option`, `set_setting`,
+  `reset_setting`, and `add/update/remove/move_config_entry` for the list
+  groups (see `../configuration/overview.md`).
+- Mailbox history — `history_accounts`, `fetch_history` (browse mail that
+  arrived before MailFlow was configured), `is_mail_known`, `process_mail`
+  (analyze a user-picked mail through the normal pipeline path).
 - Marketplace — `service.market` (fetch indexes, browse, install) and
   `plugin_repo_add/remove`.
+- Updates — `check_updates`, `apply_updates`, `installed_plugin_versions`.
 - Events — `service.on("mailflow.mail.processed" | "mailflow.action.reminder"
-  | "mail.deleted" | ...)`; runtime events are `mailflow.`-prefixed.
+  | "mail.deleted" | ...)`; runtime events are `mailflow.`-prefixed. The full
+  table with payloads is in `../development/embedding.md`.
 
 `start_service(config, ...)` is the single entry point that composes
 configuration, plugins, storage, LLMs, processors, sources, notifiers, events

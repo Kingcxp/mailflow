@@ -53,13 +53,44 @@ model and credentials), keyed by `llm_id`.
 **Secrets**: raised error text never contains the request URL or query
 (strings may carry credentials); the router additionally redacts keys.
 
-## LLM importance processor
+## Anthropic backend
 
-`plugins/mailflow-processor-llm-importance` prompts with the exact four-level
-semantics, injects the mail content, current time and timezone, and parses a
-structured JSON answer (summary, urgency, reason, reply_required,
-suggested_reply, action_items with due windows and preparation notes).
-Fenced or prose-wrapped JSON is tolerated; urgency synonyms and case
-variants are normalized; action items carry a `mail_id` backlink and
-timezone-aware dates. The result records which backend/LLM actually served
-the request.
+`plugins/mailflow-llm-anthropic` (`provider = "anthropic"`) speaks the
+Messages API: the system prompt travels in the top-level `system` field, the
+remaining messages keep their roles, and the key goes in `x-api-key` next to
+`anthropic-version: 2023-06-01`. `[llms.options]` adds `base_url` (a full
+messages endpoint, not a prefix) and `max_tokens` (default 1024, required by
+the API). Three attempts with exponential backoff; any error text containing a
+URL is reduced to `transport error` before it can reach a persisted note.
+
+## Built-in processors
+
+`mailflow/processors.py` (registered under plugin id `mailflow-core`, **not**
+a plugin) holds both defaults:
+
+- `rules` — deterministic pre-filter: advertising keywords (word-boundary
+  matches) and an important-senders allowlist, so obvious junk never reaches
+  the model.
+- `llm-importance` — prompts with the exact four-level semantics, injects the
+  mail content, current time, timezone and the rolling feedback guidelines,
+  and parses a structured JSON answer (summary, urgency, reason,
+  reply_required, suggested_reply, action_items with due windows and
+  preparation notes). Fenced or prose-wrapped JSON is tolerated; urgency
+  synonyms and case variants are normalized; action items carry a `mail_id`
+  backlink and timezone-aware dates. The result records which backend/LLM
+  actually served the request.
+
+The default chain when `[[processors]]` is absent is `rules` at priority 10
+and `llm-importance` at 20. `general.summary_language` (or the interface
+language) is injected as the output language unless the processor's
+`options.language` already sets one.
+
+## Extending the analysis: LLMEnhancer
+
+A plugin may register an `LLMEnhancer` (`add_llm_enhancer`) instead of
+replacing the processor. Three optional hooks — `system_prompt(base)`,
+`extra_messages(mail, context)` and `post_process(analysis, mail, context)` —
+let it extend the prompt and adjust the parsed result within the same
+four-level contract. Enhancers are active as soon as they are installed; an
+explicit `[[processors]]` section with `enabled = false` for that component id
+turns one off.
