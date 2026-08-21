@@ -90,7 +90,6 @@ class Main(Star):
 
         config = load_config(Path(__file__).resolve().parent / "config.toml")
         _service = await start_service(config, plugin_manager=create_plugin_manager(config))
-        await _service.start()
         _router = CommandRouter(_service)
         _service.on("mailflow.action.digest", self._on_digest)
 
@@ -151,8 +150,9 @@ placeholders before sharing the plugin.
 - Every enabled MailFlow plugin is declared as a dependency and discovered
   at startup; disable plugins through the MailFlow config `[plugins]`
   section instead of removing packages.
-- Chat commands are not part of this plugin; use the MailFlow CLI/TUI for
-  management.
+- Management commands (plugin install/uninstall, config writes) belong to
+  the MailFlow CLI/TUI; chat commands are read/admin surfaces bridged to the
+  same router.
 """
 
 

@@ -56,6 +56,8 @@ Long replies and the daily digest are split into separate messages.
 from __future__ import annotations
 
 from pathlib import Path
+from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from nonebot import get_driver, on_message
@@ -98,7 +100,6 @@ async def _start_mailflow() -> None:
 
     config = load_config(Path(__file__).resolve().parent / "config.toml")
     _service = await start_service(config, plugin_manager=create_plugin_manager(config))
-    await _service.start()
     _router = CommandRouter(_service)
     _service.on("mailflow.action.digest", _send_digest)
 
@@ -131,7 +132,8 @@ async def _send_digest(event: str, **payload: Any) -> None:
     """Forward the daily digest as paginated chat messages."""
     items = payload.get("items") or []
     lines = [
-        f"{i.due_at:%m-%d %H:%M} [{i.action_type}] {i.summary}"
+                f"{i.due_at.astimezone(ZoneInfo(_service.config.general.timezone)):%m-%d %H:%M}"
+        f" ({i.action_type}) {i.summary}"
         for i in items
     ]
     if not lines:
@@ -172,8 +174,9 @@ placeholders before sharing the plugin.
 - Every enabled MailFlow plugin is declared as a dependency and discovered
   at startup; disable plugins through the MailFlow config `[plugins]`
   section instead of uninstalling packages.
-- Chat commands are not part of this plugin; use the MailFlow CLI/TUI for
-  management.
+- Management commands (plugin install/uninstall, config writes) belong to
+  the MailFlow CLI/TUI; chat commands are read/admin surfaces bridged to the
+  same router.
 """
 
 
