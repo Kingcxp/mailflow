@@ -395,6 +395,17 @@ class MailFlowConfig(BaseModel):
     @model_validator(mode="after")
     def validate_references(self) -> MailFlowConfig:
         llm_ids = {llm.llm_id for llm in self.llms}
+        if len(llm_ids) != len(self.llms):
+            raise ValueError("duplicate llm_id in [[llms]]: ids must be unique")
+        processor_ids = [p.processor_id for p in self.processors]
+        if len(set(processor_ids)) != len(processor_ids):
+            raise ValueError("duplicate processor_id in [[processors]]: ids must be unique")
+        notifier_ids = [n.notifier_id for n in self.notifiers]
+        if len(set(notifier_ids)) != len(notifier_ids):
+            raise ValueError("duplicate notifier_id in [[notifiers]]: ids must be unique")
+        account_ids = [a.account_id for a in self.accounts]
+        if len(set(account_ids)) != len(account_ids):
+            raise ValueError("duplicate account_id in [[accounts]]: ids must be unique")
 
         for llm in self.llms:
             for fallback in llm.fallback:
@@ -585,7 +596,16 @@ def set_option_value(config: MailFlowConfig, key: str, raw_value: str) -> MailFl
     for part in parts[:-1]:
         node = cast(dict[str, Any], node[part])
     node[parts[-1]] = parsed
-    return MailFlowConfig.model_validate(data)
+    updated = MailFlowConfig.model_validate(data)
+    # Carry the placeholder map over so a later full rewrite (patch_config_value
+    # returning False) cannot materialize resolved secrets; the patched leaf
+    # itself intentionally loses its placeholder — the user just set a literal.
+    updated.env_placeholders = {
+        path: placeholder
+        for path, placeholder in config.env_placeholders.items()
+        if path != tuple(parts)
+    }
+    return updated
 
 
 def _restore_secret_placeholders(config: MailFlowConfig) -> MailFlowConfig:
@@ -600,12 +620,19 @@ def _restore_secret_placeholders(config: MailFlowConfig) -> MailFlowConfig:
     for path, placeholder in config.env_placeholders.items():
         target: Any = restored
         for part in path[:-1]:
-            target = target[part] if isinstance(part, int) else getattr(target, part, None)
+            # dict/list intermediates (options/extra_body/logger_levels and
+            # [[llms]] entries) must be indexed — getattr on them is always
+            # None, which silently dropped the placeholder and materialized
+            # the secret on write.
+            if isinstance(target, (dict, list)):
+                target = target[part]
+            else:
+                target = getattr(target, part, None)
             if target is None:
                 break
-        leaf = path[-1]
         if target is None:
             continue
+        leaf = path[-1]
         if isinstance(leaf, int) or isinstance(target, dict):
             target[leaf] = placeholder
         elif hasattr(target, leaf):

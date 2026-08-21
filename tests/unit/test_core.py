@@ -11,6 +11,7 @@ from mailflow.config import (
     MailFlowConfig,
     load_config,
     patch_config_value,
+    set_option_value,
     write_config,
 )
 from mailflow.domain import (
@@ -474,6 +475,90 @@ class TestConfigPersistenceSecrets:
         assert "sk-env-value" not in written
         assert 'api_key_env = "MF_ENV_TOKEN"' in written
 
+
+    def test_scalar_set_keeps_placeholders_for_full_rewrites(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`config set` builds a new config via model_validate; the
+        placeholder map must survive so a later full rewrite (the section
+        being absent from the file) still restores ${VAR}, not the secret."""
+        monkeypatch.setenv("MF_SET_TOKEN", "sk-set-value")
+        source = tmp_path / "in.toml"
+        source.write_text(
+            "[[llms]]\nllm_id = 'l1'\nmodel = 'm'\napi_key = '${MF_SET_TOKEN}'\n",
+            encoding="utf-8",
+        )
+        config = load_config(source)
+        updated = set_option_value(config, "general.timezone", "Asia/Shanghai")
+        target = tmp_path / "out.toml"
+        write_config(updated, target)
+        written = target.read_text(encoding="utf-8")
+        assert "sk-set-value" not in written
+        assert "${MF_SET_TOKEN}" in written
+
+    def test_scalar_set_drops_placeholder_of_the_patched_leaf(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Replacing a ${VAR} leaf with a literal must persist the literal;
+        the stale placeholder entry would otherwise resurrect ${VAR}."""
+        monkeypatch.setenv("MF_TZ", "Asia/Shanghai")
+        source = tmp_path / "in.toml"
+        source.write_text(
+            '[general]\ntimezone = "${MF_TZ}"\n',
+            encoding="utf-8",
+        )
+        config = load_config(source)
+        assert config.general.timezone == "Asia/Shanghai"
+        updated = set_option_value(config, "general.timezone", "UTC")
+        target = tmp_path / "out.toml"
+        write_config(updated, target)
+        written = target.read_text(encoding="utf-8")
+        assert 'timezone = "UTC"' in written
+        assert "MF_TZ" not in written
+
+    def test_nested_dict_intermediate_placeholder_restored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MF_NESTED_TOKEN", "sk-nested-value")
+        source = tmp_path / "in.toml"
+        source.write_text(
+            "[[llms]]\nllm_id = 'l1'\nmodel = 'm'\n"
+            '[llms.extra_body.auth]\ntoken = "${MF_NESTED_TOKEN}"\n',
+            encoding="utf-8",
+        )
+        config = load_config(source)
+        target = tmp_path / "out.toml"
+        write_config(config, target)
+        written = target.read_text(encoding="utf-8")
+        assert "sk-nested-value" not in written
+        assert "${MF_NESTED_TOKEN}" in written
+
+
+class TestUniqueIdValidation:
+    def test_duplicate_llm_ids_rejected(self) -> None:
+        with pytest.raises(ValueError, match="duplicate llm_id"):
+            MailFlowConfig.model_validate(
+                {"llms": [{"llm_id": "a"}, {"llm_id": "a"}]}
+            )
+
+    def test_duplicate_processor_ids_rejected(self) -> None:
+        with pytest.raises(ValueError, match="duplicate processor_id"):
+            MailFlowConfig.model_validate(
+                {"processors": [{"processor_id": "p", "provider": "rules"},
+                                 {"processor_id": "p", "provider": "rules"}]}
+            )
+
+    def test_duplicate_account_and_notifier_ids_rejected(self) -> None:
+        with pytest.raises(ValueError, match="duplicate account_id"):
+            MailFlowConfig.model_validate(
+                {"accounts": [{"account_id": "x", "provider": "fake"},
+                               {"account_id": "x", "provider": "fake"}]}
+            )
+        with pytest.raises(ValueError, match="duplicate notifier_id"):
+            MailFlowConfig.model_validate(
+                {"notifiers": [{"notifier_id": "n", "provider": "console"},
+                                {"notifier_id": "n", "provider": "console"}]}
+            )
 
 class TestPatchConfigValue:
     """In-place patching is section-scoped: a same-named leaf elsewhere is safe."""
