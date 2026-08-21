@@ -47,17 +47,18 @@ class TestMarketplaceMetadataTolerance:
         return PluginMarket([Repository(name="repo", url="https://example.com/mirror")])
 
     def test_github_web_url_fetches_files_from_raw(self) -> None:
+        file_base = PluginMarket._file_base  # pyright: ignore[reportPrivateUsage]
         assert (
-            PluginMarket._file_base("https://github.com/Kingcxp/mailflow-repo")
+            file_base("https://github.com/Kingcxp/mailflow-repo")
             == "https://raw.githubusercontent.com/Kingcxp/mailflow-repo/main"
         )
         assert (
-            PluginMarket._file_base("https://github.com/o/r/tree/dev")
+            file_base("https://github.com/o/r/tree/dev")
             == "https://raw.githubusercontent.com/o/r/dev"
         )
         # non-github URLs pass through untouched (raw/INDEX.json mirrors)
         assert (
-            PluginMarket._file_base("https://raw.githubusercontent.com/o/r/main")
+            file_base("https://raw.githubusercontent.com/o/r/main")
             == "https://raw.githubusercontent.com/o/r/main"
         )
 
@@ -77,11 +78,15 @@ class TestMarketplaceMetadataTolerance:
             return payloads[url]
 
         market = self._market()
-        monkeypatch.setattr("mailflow.plugin_market._fetch_json", fake_fetch)
+        monkeypatch.setattr("mailflow.plugin_market._fetch_json", fake_fetch)  # pyright: ignore[reportPrivateUsage]
+
+        def fake_dirs(base: str, category: str, timeout: float) -> list[str]:
+            return ["mailflow-bad", "mailflow-good"]
+
         monkeypatch.setattr(
             market,
             "_list_plugin_dirs",
-            lambda base, category, timeout: ["mailflow-bad", "mailflow-good"],
-        )
+            fake_dirs,
+        )  # pyright: ignore[reportPrivateUsage]
         entries = [plugin.id for _repo, plugin in market.list_plugins()]
         assert entries == ["mailflow-good"]

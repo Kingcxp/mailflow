@@ -349,25 +349,26 @@ def _carried_placeholders(
     for path, placeholder in config.env_placeholders.items():
         if drop is not None and path == drop:
             continue
-        if group_removed is not None and path[:2] == (
-            group_removed[0],
-            group_removed[1],
-        ):
-            continue
-        if group_removed is not None and path[0] == group_removed[0] and len(path) > 1:
-            index = path[1]
-            if isinstance(index, int) and index > group_removed[1]:
-                carried[(group_removed[0], index - 1, *path[2:])] = placeholder
-                continue
-        if group_swapped is not None and path[0] == group_swapped[0] and len(path) > 1:
-            group, source, destination = group_swapped
-            index = path[1]
-            if index == source:
-                carried[(group, destination, *path[2:])] = placeholder
-                continue
-            if index == destination:
-                carried[(group, source, *path[2:])] = placeholder
-                continue
+        group = path[0] if path else None
+        entry_index = path[1] if len(path) >= 2 else None
+        if isinstance(group, str):
+            if group_removed is not None:
+                removed_group, removed_index = group_removed
+                if group == removed_group and isinstance(entry_index, int):
+                    if entry_index == removed_index:
+                        continue  # placeholder belongs to the removed entry
+                    if entry_index > removed_index:
+                        carried[(removed_group, entry_index - 1, *path[2:])] = placeholder
+                        continue
+            if group_swapped is not None:
+                swapped_group, source, destination = group_swapped
+                if group == swapped_group and isinstance(entry_index, int):
+                    if entry_index == source:
+                        carried[(swapped_group, destination, *path[2:])] = placeholder
+                        continue
+                    if entry_index == destination:
+                        carried[(swapped_group, source, *path[2:])] = placeholder
+                        continue
         carried[path] = placeholder
     return carried
 

@@ -625,9 +625,10 @@ def _restore_secret_placeholders(config: MailFlowConfig) -> MailFlowConfig:
             # None, which silently dropped the placeholder and materialized
             # the secret on write.
             if isinstance(target, (dict, list)):
-                target = target[part]
+                container = cast(Any, target)
+                target = container[part]
             else:
-                target = getattr(target, part, None)
+                target = getattr(target, str(part), None)
             if target is None:
                 break
         if target is None:

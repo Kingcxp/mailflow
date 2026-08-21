@@ -127,8 +127,10 @@ class LoggingRuntime:
         from contextlib import suppress
 
         self._logger.removeHandler(self._queue_handler)
-        with suppress(Exception):
-            self._logger.removeFilter(self.redaction_filter)
+        redactor = self.redaction_filter
+        if redactor is not None:
+            with suppress(Exception):
+                self._logger.removeFilter(redactor)
         for handler in self._extra_handlers:
             self._logger.removeHandler(handler)
         with suppress(Exception):

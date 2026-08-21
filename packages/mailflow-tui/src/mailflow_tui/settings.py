@@ -110,9 +110,11 @@ def default_text(spec: OptionSpec) -> str:
     if default is None or default == "" or default == [] or default == {}:
         return "-"
     if isinstance(default, list):
-        return escape(f"{len(default)} entries")
+        # pyright: ignore[reportUnknownVariableType] — element types are
+        # irrelevant; only the entry count is rendered
+        return escape(f"{len(default)} entries")  # pyright: ignore[reportUnknownArgumentType]
     if isinstance(default, dict):
-        return escape(f"{len(default)} keys")
+        return escape(f"{len(default)} keys")  # pyright: ignore[reportUnknownArgumentType]
     text = str(default)
     # model defaults repr as ClassName(...): summarize instead of dumping,
     # the brackets would otherwise be parsed as markup and crash rendering

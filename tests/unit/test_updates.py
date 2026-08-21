@@ -9,9 +9,9 @@ from typing import Any, cast
 import pytest
 from mailflow.commands import CommandRouter
 from mailflow.plugin_market import MarketPlugin, PluginMarket, Repository
-from mailflow.updates import (
+from mailflow.updates import (  # pyright: ignore[reportPrivateUsage]
     UpdateReport,
-    _version_newer,
+    _version_newer,  # pyright: ignore[reportPrivateUsage]
     apply_plugin_updates,
     check_plugin_updates,
     check_updates,
