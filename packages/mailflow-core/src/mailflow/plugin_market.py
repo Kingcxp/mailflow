@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import subprocess
 import urllib.request
@@ -41,6 +42,9 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger("mailflow.market")
 
+_UV_TIMEOUT = 600.0
+"""Seconds before a hung uv install/uninstall is killed instead of blocking
+the update loop forever."""
 _FETCH_TIMEOUT = 15.0
 
 
@@ -101,10 +105,26 @@ class PluginMarket:
     def _join(base: str, *parts: str) -> str:
         return "/".join([base.rstrip("/"), *parts])
 
+    @staticmethod
+    def _file_base(url: str) -> str:
+        """Base URL for fetching raw files from a repository.
+
+        A ``github.com`` web URL serves HTML pages, not file contents, so
+        index.json/plugin.json must come from the matching raw host; the
+        Contents API stays responsible only for directory listings.
+        """
+        match = re.search(r"github\.com/([^/]+)/([^/]+)", url)
+        if match is None:
+            return url
+        branch = "main"
+        branch_match = re.search(r"(?:/tree/|@)([^/]+)", url)
+        if branch_match:
+            branch = branch_match.group(1)
+        return f"https://raw.githubusercontent.com/{match.group(1)}/{match.group(2)}/{branch}"
+
     def _list_plugin_dirs(self, base: str, category_path: str, timeout: float) -> list[str]:
         """Return the plugin directory names inside one category folder."""
         if base.startswith("file://"):
-            import re
             from pathlib import Path
             from urllib.parse import unquote, urlparse
 
@@ -115,12 +135,8 @@ class PluginMarket:
             if not directory.is_dir():
                 return []
             return sorted(item.name for item in directory.iterdir() if item.is_dir())
-        if "github.com" in base:
-            import re
-
-            match = re.search(r"github\.com/([^/]+)/([^/]+)", base)
-            if match is None:
-                return []
+        match = re.search(r"github\.com/([^/]+)/([^/]+)", base)
+        if match is not None:
             owner, repo = match.group(1), match.group(2)
             branch = "main"
             branch_match = re.search(r"(?:/tree/|@)([^/]+)", base)
@@ -141,11 +157,12 @@ class PluginMarket:
         mapping = cast(dict[str, Any], manifest)
         return sorted(str(name) for name in mapping.get("plugins", []))
 
+
     def fetch_index(
         self, repository: Repository, timeout: float = _FETCH_TIMEOUT
     ) -> list[MarketPlugin]:
         """Fetch every per-plugin metadata file; a broken file is skipped."""
-        root = _fetch_json(self._join(repository.url, "index.json"), timeout)
+        root = _fetch_json(self._join(self._file_base(repository.url), "index.json"), timeout)
         if not isinstance(root, dict):
             raise ValueError("marketplace index.json is not a JSON object")
         root_map = cast(dict[str, Any], root)
@@ -160,16 +177,18 @@ class PluginMarket:
             category_path = str(category_map.get("path", ""))
             if not category_path:
                 continue
+            file_base = self._file_base(repository.url)
             for plugin_dir in self._list_plugin_dirs(repository.url, category_path, timeout):
-                metadata_url = self._join(repository.url, category_path, plugin_dir, "plugin.json")
+                metadata_url = self._join(file_base, category_path, plugin_dir, "plugin.json")
                 try:
                     payload = _fetch_json(metadata_url, timeout)
+                    # one broken plugin.json must not hide the whole repository
+                    plugins.append(MarketPlugin.model_validate(payload))
                 except (URLError, ValueError, json.JSONDecodeError) as exc:
                     logger.error(
                         "invalid plugin metadata %s/%s: %s", category_path, plugin_dir, exc
                     )
                     continue
-                plugins.append(MarketPlugin.model_validate(payload))
         return plugins
 
     def list_plugins(
@@ -253,6 +272,7 @@ class PluginMarket:
             command,
             capture_output=True,
             text=True,
+            timeout=_UV_TIMEOUT,
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -274,6 +294,7 @@ class PluginMarket:
             command,
             capture_output=True,
             text=True,
+            timeout=_UV_TIMEOUT,
         )
         if result.returncode != 0:
             raise RuntimeError(

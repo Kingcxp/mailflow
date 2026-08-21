@@ -89,8 +89,10 @@ class PluginManager:
         """Register one plugin object (module or instance); returns its id."""
         try:
             info = plugin.mailflow_plugin_info()
-        except AttributeError:
-            logger.error("plugin %r lacks mailflow_plugin_info hook", plugin)
+        except Exception as exc:
+            # a broken info hook must not kill startup (one broken plugin
+            # may cost itself, never the host)
+            logger.error("plugin %r failed mailflow_plugin_info: %s", plugin, exc)
             return None
         plugin_id = str(info.plugin_id)
         if plugin_id in self._plugin_objects:
