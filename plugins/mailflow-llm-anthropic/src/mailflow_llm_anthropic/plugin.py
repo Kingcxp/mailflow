@@ -24,6 +24,21 @@ logger = logging.getLogger("mailflow.llm.anthropic")
 _DEFAULT_URL = "https://api.anthropic.com/v1/messages"
 _VERSION_HEADER = "2023-06-01"
 _MAX_BACKOFF_SECONDS = 5.0
+_RETRYABLE_STATUS = {408, 429, *range(500, 600)}
+
+
+def _retryable(exc: Exception) -> bool:
+    """Only transient failures deserve another attempt: timeouts, transport
+    errors, 408/429 and 5xx. A 400/401 will fail identically forever."""
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+        return True
+    text = str(exc)
+    if text.startswith("anthropic api error "):
+        try:
+            return int(text.split(":")[0].rsplit(" ", 1)[1]) in _RETRYABLE_STATUS
+        except (IndexError, ValueError):
+            return False
+    return False
 
 
 class AnthropicBackend:
@@ -97,13 +112,27 @@ class AnthropicBackend:
     ) -> LLMCompletion:
         body = self._body(messages, temperature)
         if options:
-            body.update({k: v for k, v in options.items() if k not in body})
+            # only known Anthropic body fields pass through; the
+            # openai-compatible option convention (body/headers/query/path)
+            # must not leak unknown top-level keys into the Messages API
+            allowed = (
+                "system",
+                "max_tokens",
+                "metadata",
+                "stop_sequences",
+                "top_p",
+                "top_k",
+                "tools",
+                "tool_choice",
+            )
+            body.update({k: v for k, v in options.items() if k in allowed and k not in body})
         headers = self._headers()
         url = self._url()
+        max_retries = max(0, min(self._config.max_retries, 20))
         last_error: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(max_retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
+                async with httpx.AsyncClient(timeout=self._config.timeout_seconds) as client:
                     response = await client.post(url, json=body, headers=headers)
                     if response.status_code >= 400:
                         raise RuntimeError(
@@ -112,8 +141,9 @@ class AnthropicBackend:
                     return self._parse(response.json())
             except Exception as exc:
                 last_error = exc
-                if attempt < 2:
-                    await asyncio.sleep(min(2**attempt, _MAX_BACKOFF_SECONDS))
+                if attempt >= max_retries or not _retryable(exc):
+                    break
+                await asyncio.sleep(min(2**attempt, _MAX_BACKOFF_SECONDS))
         raise RuntimeError(
             f"llm request failed: {self._sanitize(last_error or RuntimeError('unknown'))}"
         )

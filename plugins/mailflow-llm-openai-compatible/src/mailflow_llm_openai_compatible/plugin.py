@@ -23,6 +23,16 @@ logger = logging.getLogger("mailflow.llm.openai")
 
 DEFAULT_PATH = "chat/completions"
 _MAX_BACKOFF_SECONDS = 5.0
+_RETRYABLE_STATUS = {408, 429, *range(500, 600)}
+
+
+def _retryable(exc: Exception) -> bool:
+    """Only transient failures deserve another attempt: timeouts, transport
+    errors, 408/429 and 5xx. A 400/401/404 will fail identically forever."""
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+        return True
+    response = getattr(exc, "response", None)
+    return response is not None and response.status_code in _RETRYABLE_STATUS
 
 
 class OpenAICompatibleBackend:
@@ -104,7 +114,7 @@ class OpenAICompatibleBackend:
                 return self._parse(response.json())
             except Exception as exc:
                 last_error = exc
-                if attempt >= max_retries:
+                if attempt >= max_retries or not _retryable(exc):
                     break
                 backoff = min(2**attempt, _MAX_BACKOFF_SECONDS)
                 logger.debug(
