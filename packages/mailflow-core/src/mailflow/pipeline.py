@@ -174,7 +174,7 @@ class PipelineEngine:
                 llm_used = result.llm_used
             if result.llm_backend:
                 llm_backend = result.llm_backend
-            message = "; ".join(result.notes) if result.notes else "ok"
+            message = self._sanitize("; ".join(result.notes)) if result.notes else "ok"
             notes.append(
                 ProcessorNote(
                     processor_id=binding.processor_id,
@@ -189,7 +189,7 @@ class PipelineEngine:
                 logger.debug("processor %r requested pipeline stop", binding.processor_id)
                 stop_requested = True
 
-        if not accumulated.summary:
+        if not accumulated.summary.strip():
             accumulated.summary = mail.subject or "(no subject)"
             notes.append(
                 ProcessorNote(

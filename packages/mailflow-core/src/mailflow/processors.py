@@ -43,6 +43,15 @@ _DEFAULT_KEYWORDS = (
     "click here",
 )
 
+def _plain_body(mail: MailMessage) -> str:
+    """Best-effort text body; HTML-only mails are tag-stripped so keyword
+    scanning and the LLM prompt both see usable content."""
+    if mail.body_text:
+        return mail.body_text
+    if mail.body_html:
+        return re.sub(r"<[^>]+>", " ", mail.body_html)
+    return ""
+
 
 class RulesProcessor:
     """Deterministic ad/sender pre-filter before any LLM work."""
@@ -65,7 +74,7 @@ class RulesProcessor:
         return any(normalized == important for important in self._important_senders)
 
     async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
-        haystack = f"{mail.subject}\n{mail.body_text}".lower()
+        haystack = f"{mail.subject}\n{_plain_body(mail)}".lower()
         if self._is_advertisement(haystack):
             return ProcessorResult(
                 analysis=MailAnalysis(
@@ -197,8 +206,7 @@ class LLMImportanceProcessor:
         self, mail: MailMessage, context: ProcessingContext
     ) -> list[dict[str, str]]:
         now = context.now or datetime.now()
-        body = mail.body_text or mail.body_html or ""
-        body = body[: self._max_body_chars]
+        body = _plain_body(mail)
         user = (
             f"Current time (UTC): {now.isoformat()}\n"
             f"Timezone: {context.timezone}\n"
@@ -245,19 +253,28 @@ class LLMImportanceProcessor:
             options={"temperature": 0.2},
         )
         payload = AnalysisPayload.model_validate(extract_json(completion.text))
+        action_items: list[ActionItem] = []
+        for position, item in enumerate(payload.action_items):
+            try:
+                action_items.append(
+                    ActionItem(
+                        item_id=uuid.uuid4().hex[:16],
+                        mail_id=mail.message_id,
+                        summary=item.summary[:200],
+                        action_type=item.action_type,
+                        due_at=parse_due_at(item.due_at, context.timezone),
+                        due_end=(
+                            parse_due_at(item.due_end, context.timezone) if item.due_end else None
+                        ),
+                        notes=item.notes[:300],
+                    )
+                )
+            except (ValueError, TypeError) as exc:
+                # one malformed item must not scrap the whole analysis
+                logger.warning(
+                    "dropping malformed action item %d from %r: %s", position, mail.message_id, exc
+                )
         urgency = parse_urgency(payload.urgency)
-        action_items = [
-            ActionItem(
-                item_id=uuid.uuid4().hex[:16],
-                mail_id=mail.message_id,
-                summary=item.summary[:200],
-                action_type=item.action_type,
-                due_at=parse_due_at(item.due_at, context.timezone),
-                due_end=(parse_due_at(item.due_end, context.timezone) if item.due_end else None),
-                notes=item.notes[:300],
-            )
-            for item in payload.action_items
-        ]
         analysis = MailAnalysis(
             summary=payload.summary[: self._max_summary_chars] or mail.subject,
             urgency=urgency,

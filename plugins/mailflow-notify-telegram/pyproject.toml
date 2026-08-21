@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 
 [project.entry-points."mailflow.plugins"]
-telegram-notify = "mailflow_notify_telegram.plugin:plugin"
+mailflow-notify-telegram = "mailflow_notify_telegram.plugin:plugin"
 
 [build-system]
 requires = ["hatchling"]

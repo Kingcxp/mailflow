@@ -34,7 +34,11 @@ class LLMRouterImpl:
     ) -> None:
         self._backends = dict(backends)
         self._configs = dict(configs)
-        self._secrets = [cfg.api_key for cfg in self._configs.values() if cfg.api_key]
+
+    @property
+    def _secrets(self) -> list[str]:
+        # read live so keys configured after startup are still redacted
+        return [cfg.api_key for cfg in self._configs.values() if cfg.api_key]
 
     def backend_for(self, llm_id: str) -> tuple[LLMBackend, LLMConfig] | None:
         backend = self._backends.get(llm_id)
