@@ -296,6 +296,22 @@ class TestCommandRouter:
         assert storage.mails["m1"].manual_urgency is None
         assert storage.mails["m1"].effective_urgency is Urgency.IMPORTANT
 
+    async def test_mail_urgency_rejects_unknown_level(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        response = await commands.execute("mail urgency m1 improtant")
+        assert not response.ok  # must not silently degrade to info
+        assert storage.mails["m1"].manual_urgency is None
+
+    async def test_blank_id_is_never_a_prefix_match(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, _ = router
+        # shlex drops empty args, so exercise the guard via a whitespace id
+        response = await commands.execute("mail show ' '")
+        assert not response.ok
+
     async def test_mail_delete_and_trash_restore(
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:

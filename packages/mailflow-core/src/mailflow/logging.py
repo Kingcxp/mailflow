@@ -127,6 +127,8 @@ class LoggingRuntime:
         from contextlib import suppress
 
         self._logger.removeHandler(self._queue_handler)
+        with suppress(Exception):
+            self._logger.removeFilter(self.redaction_filter)
         for handler in self._extra_handlers:
             self._logger.removeHandler(handler)
         with suppress(Exception):
@@ -196,7 +198,7 @@ def configure_logging(
             console=Console(file=console_target, force_terminal=console_stream is None),
             show_time=True,
             show_path=False,
-            markup=True,
+            markup=False,  # log text is data, not markup — brackets must render literally
             rich_tracebacks=False,  # tracebacks re-rendered from redacted exc_text
             level=config.console_level.upper(),
         )
@@ -235,6 +237,10 @@ def configure_logging(
     listener.start()
 
     mailflow_logger.addHandler(queue_handler)
+    # the redactor mutates records in place; filtering at the logger (not only
+    # the queue handler) keeps host-injected handlers behind it regardless of
+    # handler registration order
+    mailflow_logger.addFilter(redactor)
     for handler in extra:
         mailflow_logger.addHandler(handler)
 

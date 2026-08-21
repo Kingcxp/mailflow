@@ -64,18 +64,29 @@ _TOPICS = (
     "update",
 )
 
+_URGENCY_LEVELS = frozenset(u.value for u in Urgency)
+
 _PAGE_SIZE = 10
 """Rows per page for chat-friendly listings (chat messages are length-limited)."""
 
 
 def _split_flags(args: list[str]) -> tuple[list[str], dict[str, str]]:
-    """Split ``--flag value`` pairs from positional arguments."""
+    """Split ``--flag value`` pairs from positional arguments.
+
+    A value is only consumed when it does not look like another flag, so
+    ``--notes --due X`` cannot silently swallow ``--due``; the bare flag
+    stays a positional and the command reports its usage instead.
+    """
     positionals: list[str] = []
     flags: dict[str, str] = {}
     index = 0
     while index < len(args):
         arg = args[index]
-        if arg.startswith("--") and index + 1 < len(args):
+        if (
+            arg.startswith("--")
+            and index + 1 < len(args)
+            and not args[index + 1].startswith("--")
+        ):
             flags[arg[2:]] = args[index + 1]
             index += 2
             continue
@@ -186,7 +197,9 @@ def _markdown_spans(markdown: str) -> list[StyleSpan]:
     _resolve_span_markers(merged)
     spans: list[StyleSpan] = []
     offset = 0
-    for line in merged.plain.splitlines():
+    # split("\n") keeps the offset accounting exact (splitlines also breaks
+    # on \v \f \u2028 and counts \r\n as one separator)
+    for line in merged.plain.split("\n"):
         line_len = len(line)
         if line_len:
             char_styles = [""] * line_len
@@ -389,6 +402,8 @@ class CommandRouter:
 
     async def _find_mail(self, mail_id: str) -> MailRecord | None:
         """Exact id wins; otherwise a unique prefix (ids shown by the list)."""
+        if not mail_id.strip():
+            return None
         matches = [
             record
             for record in await self.service.list_mails()
@@ -502,6 +517,8 @@ class CommandRouter:
         record = await self._find_mail(mail_id)
         if record is None:
             return self._err(self._t("mail.not_found", mail_id=mail_id))
+        if level != "auto" and level not in _URGENCY_LEVELS:
+            return self._err(self._t("mail.urgency_usage"))
         urgency = None if level == "auto" else parse_urgency(level)
         updated = await self.service.set_mail_urgency(record.record_id, urgency)
         if updated is None:
@@ -641,6 +658,8 @@ class CommandRouter:
     async def _find_action(self, item_id: str) -> ActionItem | None:
         """Exact id wins; otherwise a unique prefix (the list truncates ids
         to ten characters, so the shown id must resolve)."""
+        if not item_id.strip():
+            return None
         matches = [
             item
             for item in await self.service.list_actions()
@@ -1266,12 +1285,14 @@ class CommandRouter:
             for option in options:
                 key = option.key + ("*" if option.is_secret() else "")
                 value = option.value
-                if isinstance(value, (list, dict)):
-                    value_text = f"{len(value)} items"  # pyright: ignore[reportUnknownArgumentType]
-                elif value is None or isinstance(value, (str, int, float, bool)):
-                    value_text = "-" if value is None else str(value)[:20]
+                if value is None:
+                    value_text = "-"
                 elif isinstance(value, bool):
                     value_text = "true" if value else "false"
+                elif isinstance(value, (str, int, float)):
+                    value_text = str(value)[:20]
+                elif isinstance(value, (list, dict)):
+                    value_text = f"{len(value)} items"  # pyright: ignore[reportUnknownArgumentType]
                 else:
                     value_text = "..."  # nested model
                 required = self._t("common.yes") if option.required else ""
@@ -1282,8 +1303,6 @@ class CommandRouter:
                         text=f"{required:<5} ", style=_STYLE_ACCENT if option.required else ""
                     )
                 )
-                spans.append(StyleSpan(text=f"{value_text:<22} "))
-                spans.append(StyleSpan(text=f"{option.description}\n"))
             spans.append(
                 StyleSpan(
                     text=f"\n{self._t('config.legend')}",
