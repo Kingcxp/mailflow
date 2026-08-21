@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -59,6 +60,29 @@ def _fetch_json(url: str, timeout: float = _FETCH_TIMEOUT) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _version_key(version: str) -> tuple[tuple[int, Any], ...]:
+    """Sort key for a release version.
+
+    Numeric components rank above non-numeric ones, so a real release
+    always compares newer than an odd tag ("nightly-x"); equal versions
+    written with different depth ("1.0" vs "1.0.0") must not differ.
+    """
+    parts: list[tuple[int, Any]] = []
+    for part in version.strip().lstrip("v").split("."):
+        number = re.fullmatch(r"\d+", part)
+        parts.append((1, int(number.group(0))) if number else (0, part))
+    return tuple(parts)
+
+
+def _version_newer(candidate: str, current: str) -> bool:
+    """True when ``candidate`` is a strictly newer release than ``current``."""
+    candidate_key = _version_key(candidate)
+    current_key = _version_key(current)
+    width = max(len(candidate_key), len(current_key))
+    pad = ((1, 0),) * (width - len(candidate_key))
+    return candidate_key + pad > current_key + ((1, 0),) * (width - len(current_key))
+
+
 def latest_mailflow_release(
     current: str = __version__, owner: str = "Kingcxp", repo: str = "mailflow"
 ) -> str:
@@ -100,7 +124,7 @@ def check_plugin_updates(
         if found is None:
             continue
         _repository, plugin = found
-        if plugin.version and plugin.version != old:
+        if plugin.version and _version_newer(plugin.version, old):
             updates[plugin_id] = (old, plugin.version)
     return updates
 
@@ -119,7 +143,7 @@ def check_updates(
     return UpdateReport(
         mailflow_current=mailflow_current,
         mailflow_latest=latest,
-        mailflow_update=latest != mailflow_current,
+        mailflow_update=_version_newer(latest, mailflow_current),
         plugin_updates=plugin_updates,
     )
 
@@ -136,7 +160,7 @@ async def apply_plugin_updates(
             continue
         _repository, plugin = found
         try:
-            output = await market.install(plugin)
+            output = await market.install(plugin, check=False)
             results[plugin_id] = output or "updated"
         except Exception as exc:
             logger.error("update of %r failed: %s", plugin_id, exc)
