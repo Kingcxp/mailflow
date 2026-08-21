@@ -257,3 +257,64 @@ class TestLLMChain:
         assert config.processors[0].fallback_llms == []
         # no llm still lists the removed id as a fallback
         assert all("b" not in llm.fallback for llm in config.llms)
+
+
+class TestPlaceholderBookkeeping:
+    """${VAR} placeholders must follow entries through edits, never land on
+    the wrong entry and never resurrect an explicitly replaced value."""
+
+    @staticmethod
+    def _config_with_placeholder() -> MailFlowConfig:
+        config = MailFlowConfig.model_validate(
+            {
+                "general": {"timezone": "UTC"},
+                "llms": [
+                    {"llm_id": "a", "model": "m1"},
+                    {"llm_id": "b", "model": "m2"},
+                ],
+            }
+        )
+        config.env_placeholders = {("llms", 1, "api_key"): "${SECRET}"}
+        return config
+
+    def test_apply_value_drops_the_edited_leaf_placeholder(self) -> None:
+        config = self._config_with_placeholder()
+        config.env_placeholders[("general", "timezone")] = "${MF_TZ}"
+        updated = apply_value(config, "general.timezone", "Europe/Berlin")
+        assert ("general", "timezone") not in updated.env_placeholders
+        assert updated.env_placeholders == {("llms", 1, "api_key"): "${SECRET}"}
+
+    def test_other_placeholders_survive_apply_value(self) -> None:
+        config = self._config_with_placeholder()
+        updated = apply_value(config, "general.timezone", "Europe/Berlin")
+        assert updated.env_placeholders == {("llms", 1, "api_key"): "${SECRET}"}
+
+    def test_remove_entry_shifts_following_indices(self) -> None:
+        config = self._config_with_placeholder()
+        updated = remove_entry(config, "llms", 0)
+        assert updated.env_placeholders == {("llms", 0, "api_key"): "${SECRET}"}
+
+    def test_remove_entry_drops_the_removed_entry_placeholders(self) -> None:
+        config = self._config_with_placeholder()
+        updated = remove_entry(config, "llms", 1)
+        assert updated.env_placeholders == {}
+
+    def test_move_entry_follows_the_moved_entry(self) -> None:
+        config = self._config_with_placeholder()
+        updated = move_entry(config, "llms", 1, -1)
+        assert updated.env_placeholders == {("llms", 0, "api_key"): "${SECRET}"}
+
+    def test_update_entry_drops_replaced_field_placeholders(self) -> None:
+        config = self._config_with_placeholder()
+        updated = update_entry(config, "llms", 1, {"api_key": "literal"})
+        assert updated.env_placeholders == {}
+
+    def test_update_entry_keeps_untouched_field_placeholders(self) -> None:
+        config = self._config_with_placeholder()
+        updated = update_entry(config, "llms", 1, {"model": "m2b"})
+        assert updated.env_placeholders == {("llms", 1, "api_key"): "${SECRET}"}
+
+    def test_malformed_index_raises_settings_error(self) -> None:
+        config = self._config_with_placeholder()
+        with pytest.raises(SettingsError):
+            apply_value(config, "llms[x].model", "m")

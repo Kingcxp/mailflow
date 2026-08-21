@@ -328,8 +328,48 @@ def _split_key(key: str) -> list[str | int]:
             parts.append(name)
         if bracket:
             index, _, _ = rest.partition("]")
-            parts.append(int(index))
+            try:
+                parts.append(int(index))
+            except ValueError as exc:
+                raise SettingsError(key, f"unknown config option {key!r}") from exc
     return parts
+
+
+def _carried_placeholders(
+    config: MailFlowConfig,
+    *,
+    drop: tuple[str | int, ...] | None = None,
+    group_removed: tuple[str, int] | None = None,
+    group_swapped: tuple[str, int, int] | None = None,
+) -> dict[tuple[str | int, ...], str]:
+    """Placeholder map for a mutated config: ``drop`` removes one leaf,
+    ``group_removed`` drops the entry's own placeholders and closes the gap,
+    ``group_swapped`` follows one entry moving inside its list."""
+    carried: dict[tuple[str | int, ...], str] = {}
+    for path, placeholder in config.env_placeholders.items():
+        if drop is not None and path == drop:
+            continue
+        if group_removed is not None and path[:2] == (
+            group_removed[0],
+            group_removed[1],
+        ):
+            continue
+        if group_removed is not None and path[0] == group_removed[0] and len(path) > 1:
+            index = path[1]
+            if isinstance(index, int) and index > group_removed[1]:
+                carried[(group_removed[0], index - 1, *path[2:])] = placeholder
+                continue
+        if group_swapped is not None and path[0] == group_swapped[0] and len(path) > 1:
+            group, source, destination = group_swapped
+            index = path[1]
+            if index == source:
+                carried[(group, destination, *path[2:])] = placeholder
+                continue
+            if index == destination:
+                carried[(group, source, *path[2:])] = placeholder
+                continue
+        carried[path] = placeholder
+    return carried
 
 
 def _navigate(data: Any, path: list[str | int], key: str) -> Any:
@@ -451,7 +491,7 @@ def apply_value(config: MailFlowConfig, key: str, raw: Any, **kwargs: Any) -> Ma
     except (KeyError, IndexError, TypeError) as exc:
         raise SettingsError(key, f"unknown config option {key!r}") from exc
     updated = _revalidate(data, key)
-    updated.env_placeholders = dict(config.env_placeholders)
+    updated.env_placeholders = _carried_placeholders(config, drop=tuple(path))
     return updated
 
 
@@ -512,7 +552,9 @@ def update_entry(
         raise SettingsError(group, _format_validation_error(exc)) from exc
     entries[index] = entry.model_dump()
     updated = _revalidate(data, group)
-    updated.env_placeholders = dict(config.env_placeholders)
+    updated.env_placeholders = _carried_placeholders(config)
+    for field in values:
+        updated.env_placeholders.pop((group, index, field), None)
     return updated
 
 
@@ -527,7 +569,9 @@ def remove_entry(config: MailFlowConfig, group: str, index: int) -> MailFlowConf
     if group == "llms":
         _drop_llm_references(data, str(removed.get("llm_id", "")))
     updated = _revalidate(data, group)
-    updated.env_placeholders = dict(config.env_placeholders)
+    updated.env_placeholders = _carried_placeholders(
+        config, group_removed=(group, index)
+    )
     return updated
 
 
@@ -561,7 +605,9 @@ def move_entry(config: MailFlowConfig, group: str, index: int, offset: int) -> M
     if group == "llms":
         _rebuild_llm_chain(entries)
     updated = _revalidate(data, group)
-    updated.env_placeholders = dict(config.env_placeholders)
+    updated.env_placeholders = _carried_placeholders(
+        config, group_swapped=(group, index, target)
+    )
     return updated
 
 
