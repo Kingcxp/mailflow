@@ -231,6 +231,24 @@ class TestReplyWorkflow:
         # token consumed -> cannot re-confirm, no double send
         assert source.sent == []
 
+    async def test_concurrent_confirms_send_once(self, service: MailFlowService) -> None:
+        """Two confirms racing with the same token: the per-draft lock makes
+        the second re-read the persisted SENT state and fail — one send."""
+        import asyncio
+
+        source: RecordingSource = service.sources["acct-1"]  # type: ignore[assignment]
+        draft = await service.create_reply("m1")
+        prepared = await service.prepare_reply(draft.draft_id)
+        token = prepared.token or ""
+        results = await asyncio.gather(
+            service.confirm_reply(draft.draft_id, token),
+            service.confirm_reply(draft.draft_id, token),
+            return_exceptions=True,
+        )
+        succeeded = [r for r in results if not isinstance(r, BaseException)]
+        assert len(succeeded) == 1
+        assert len(source.sent) == 1
+
     async def test_create_reply_unknown_mail(self, service: MailFlowService) -> None:
         with pytest.raises(KeyError):
             await service.create_reply("ghost")

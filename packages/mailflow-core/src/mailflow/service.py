@@ -86,6 +86,17 @@ _LANGUAGE_PREFERENCE = "language"
 _REPLY_TOKEN_TTL = timedelta(minutes=10)
 
 
+class _DraftLocks:
+    """One async lock per draft id, created on demand; bounds memory to the
+    number of drafts confirmed concurrently during this service's life."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def for_draft(self, draft_id: str) -> asyncio.Lock:
+        return self._locks.setdefault(draft_id, asyncio.Lock())
+
+
 class MailFlowService:
     """Embeds one fully configured MailFlow runtime."""
 
@@ -137,6 +148,7 @@ class MailFlowService:
         self._stop_task: asyncio.Task[Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
         self.commands: Any | None = None  # CommandRouter wired by mailflow.commands
+        self._reply_locks = _DraftLocks()
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -769,6 +781,13 @@ class MailFlowService:
         return draft
 
     async def confirm_reply(self, draft_id: str, token: str) -> ReplyDraft:
+        # Two concurrent confirms with the same token must not both pass the
+        # validity check before either persists SENT (a double send). The
+        # per-draft lock serializes claim → re-check → send.
+        async with self._reply_locks.for_draft(draft_id):
+            return await self._confirm_reply_locked(draft_id, token)
+
+    async def _confirm_reply_locked(self, draft_id: str, token: str) -> ReplyDraft:
         draft = await self._require_draft(draft_id)
         if not draft.is_confirmation_valid(token):
             raise PermissionError("invalid or expired confirmation token")

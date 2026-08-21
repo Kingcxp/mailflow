@@ -217,21 +217,29 @@ class MailFlowRuntime:
             # share the normalized id; process and store exactly one copy.
             logger.info("duplicate mail skipped (already stored): %s", record_id)
             return None
-        analysis, notes, _, _ = await self._pipeline.process(
-            mail,
-            mail.account_id,
-            timezone=self._config.general.timezone,
-            feedback_guidelines=(await self._storage.get_preference("feedback.guidelines") or ""),
-        )
-        record = MailRecord(
-            record_id=record_id,
-            mail=mail,
-            auto_urgency=analysis.urgency,
-            analysis=analysis,
-            processor_notes=notes,
-            received_at=mail.received_at,
-        )
-        await self._persist_with_retry(record)
+        try:
+            analysis, notes, _, _ = await self._pipeline.process(
+                mail,
+                mail.account_id,
+                timezone=self._config.general.timezone,
+                feedback_guidelines=(
+                    await self._storage.get_preference("feedback.guidelines") or ""
+                ),
+            )
+            record = MailRecord(
+                record_id=record_id,
+                mail=mail,
+                auto_urgency=analysis.urgency,
+                analysis=analysis,
+                processor_notes=notes,
+                received_at=mail.received_at,
+            )
+            await self._persist_with_retry(record)
+        except Exception:
+            # Not stored: release the dedup mark so a retry this session is
+            # possible instead of silently dropping the mail forever.
+            self._seen_ids.discard(record_id)
+            raise
         await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
         await self._notify(record)
         return record
