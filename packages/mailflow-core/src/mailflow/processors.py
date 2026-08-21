@@ -43,6 +43,7 @@ _DEFAULT_KEYWORDS = (
     "click here",
 )
 
+
 def _plain_body(mail: MailMessage) -> str:
     """Best-effort text body; HTML-only mails are tag-stripped so keyword
     scanning and the LLM prompt both see usable content."""

@@ -157,7 +157,6 @@ class PluginMarket:
         mapping = cast(dict[str, Any], manifest)
         return sorted(str(name) for name in mapping.get("plugins", []))
 
-
     def fetch_index(
         self, repository: Repository, timeout: float = _FETCH_TIMEOUT
     ) -> list[MarketPlugin]:

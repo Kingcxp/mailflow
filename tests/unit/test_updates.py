@@ -75,6 +75,7 @@ def _plugin(plugin_id: str = "mailflow-notify-demo", version: str = "1.0.0") -> 
         source=f"git+https://example.com/repo.git#{plugin_id}",
     )
 
+
 class FakeMarket(PluginMarket):
     """Market with one known plugin (or none for missing ids)."""
 

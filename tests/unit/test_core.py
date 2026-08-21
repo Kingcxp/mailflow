@@ -475,7 +475,6 @@ class TestConfigPersistenceSecrets:
         assert "sk-env-value" not in written
         assert 'api_key_env = "MF_ENV_TOKEN"' in written
 
-
     def test_scalar_set_keeps_placeholders_for_full_rewrites(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -537,28 +536,39 @@ class TestConfigPersistenceSecrets:
 class TestUniqueIdValidation:
     def test_duplicate_llm_ids_rejected(self) -> None:
         with pytest.raises(ValueError, match="duplicate llm_id"):
-            MailFlowConfig.model_validate(
-                {"llms": [{"llm_id": "a"}, {"llm_id": "a"}]}
-            )
+            MailFlowConfig.model_validate({"llms": [{"llm_id": "a"}, {"llm_id": "a"}]})
 
     def test_duplicate_processor_ids_rejected(self) -> None:
         with pytest.raises(ValueError, match="duplicate processor_id"):
             MailFlowConfig.model_validate(
-                {"processors": [{"processor_id": "p", "provider": "rules"},
-                                 {"processor_id": "p", "provider": "rules"}]}
+                {
+                    "processors": [
+                        {"processor_id": "p", "provider": "rules"},
+                        {"processor_id": "p", "provider": "rules"},
+                    ]
+                }
             )
 
     def test_duplicate_account_and_notifier_ids_rejected(self) -> None:
         with pytest.raises(ValueError, match="duplicate account_id"):
             MailFlowConfig.model_validate(
-                {"accounts": [{"account_id": "x", "provider": "fake"},
-                               {"account_id": "x", "provider": "fake"}]}
+                {
+                    "accounts": [
+                        {"account_id": "x", "provider": "fake"},
+                        {"account_id": "x", "provider": "fake"},
+                    ]
+                }
             )
         with pytest.raises(ValueError, match="duplicate notifier_id"):
             MailFlowConfig.model_validate(
-                {"notifiers": [{"notifier_id": "n", "provider": "console"},
-                                {"notifier_id": "n", "provider": "console"}]}
+                {
+                    "notifiers": [
+                        {"notifier_id": "n", "provider": "console"},
+                        {"notifier_id": "n", "provider": "console"},
+                    ]
+                }
             )
+
 
 class TestPatchConfigValue:
     """In-place patching is section-scoped: a same-named leaf elsewhere is safe."""

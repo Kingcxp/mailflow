@@ -82,11 +82,7 @@ def _split_flags(args: list[str]) -> tuple[list[str], dict[str, str]]:
     index = 0
     while index < len(args):
         arg = args[index]
-        if (
-            arg.startswith("--")
-            and index + 1 < len(args)
-            and not args[index + 1].startswith("--")
-        ):
+        if arg.startswith("--") and index + 1 < len(args) and not args[index + 1].startswith("--"):
             flags[arg[2:]] = args[index + 1]
             index += 2
             continue
@@ -1303,6 +1299,8 @@ class CommandRouter:
                         text=f"{required:<5} ", style=_STYLE_ACCENT if option.required else ""
                     )
                 )
+                spans.append(StyleSpan(text=f"{value_text:<22} "))
+                spans.append(StyleSpan(text=f"{option.description}\n"))
             spans.append(
                 StyleSpan(
                     text=f"\n{self._t('config.legend')}",

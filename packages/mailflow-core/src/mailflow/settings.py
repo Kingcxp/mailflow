@@ -553,8 +553,8 @@ def update_entry(
     entries[index] = entry.model_dump()
     updated = _revalidate(data, group)
     updated.env_placeholders = _carried_placeholders(config)
-    for field in values:
-        updated.env_placeholders.pop((group, index, field), None)
+    for name in values:
+        updated.env_placeholders.pop((group, index, str(name)), None)
     return updated
 
 
@@ -569,9 +569,7 @@ def remove_entry(config: MailFlowConfig, group: str, index: int) -> MailFlowConf
     if group == "llms":
         _drop_llm_references(data, str(removed.get("llm_id", "")))
     updated = _revalidate(data, group)
-    updated.env_placeholders = _carried_placeholders(
-        config, group_removed=(group, index)
-    )
+    updated.env_placeholders = _carried_placeholders(config, group_removed=(group, index))
     return updated
 
 
@@ -605,9 +603,7 @@ def move_entry(config: MailFlowConfig, group: str, index: int, offset: int) -> M
     if group == "llms":
         _rebuild_llm_chain(entries)
     updated = _revalidate(data, group)
-    updated.env_placeholders = _carried_placeholders(
-        config, group_swapped=(group, index, target)
-    )
+    updated.env_placeholders = _carried_placeholders(config, group_swapped=(group, index, target))
     return updated
 
 
