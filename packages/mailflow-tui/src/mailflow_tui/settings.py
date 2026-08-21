@@ -37,6 +37,7 @@ from mailflow.settings import (
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -94,7 +95,11 @@ def _table_id(event: Any) -> str:
 def _select_text(select: Any) -> str:
     """Selected value of a Select as text ("" when nothing is selected)."""
     value: Any = select.value
-    return "" if value is Select.BLANK or value is None else str(value)
+    # textual 8 removed Select.BLANK (it now resolves to Widget.BLANK ==
+    # False); the blank sentinel is Select.NULL
+    if value is None or value is False or value is Select.NULL:
+        return ""
+    return str(value)
 
 
 def default_text(spec: OptionSpec) -> str:
@@ -104,7 +109,17 @@ def default_text(spec: OptionSpec) -> str:
         return "true" if default else "false"
     if default is None or default == "" or default == [] or default == {}:
         return "-"
-    return str(default)
+    if isinstance(default, list):
+        return escape(f"{len(default)} entries")
+    if isinstance(default, dict):
+        return escape(f"{len(default)} keys")
+    text = str(default)
+    # model defaults repr as ClassName(...): summarize instead of dumping,
+    # the brackets would otherwise be parsed as markup and crash rendering
+    if text.endswith(")") and "(" in text and not text.startswith(("'", '"')):
+        name = text.split("(", 1)[0]
+        return f"{name}(…)" if name[:1].isupper() else escape(text)
+    return escape(text)
 
 
 class ListEditScreen(ModalScreen[str | None]):
@@ -207,7 +222,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         elif spec.editor is EditorKind.CHOICE:
             yield Select(
                 [(choice, choice) for choice in spec.choices],
-                value=str(current) if current in spec.choices else Select.BLANK,
+                value=str(current) if current in spec.choices else Select.NULL,
                 id=widget_id,
             )
         elif spec.editor in _MULTILINE_EDITORS:
@@ -254,7 +269,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         try:
             values = self._collect()
         except SettingsError as exc:
-            self.query_one("#entry-form-status", Static).update(f"[red]{exc.message}[/red]")
+            self.query_one("#entry-form-status", Static).update(f"[red]{escape(exc.message)}[/red]")
             return
         self.dismiss({**self._values, **values})
 
@@ -307,7 +322,7 @@ class OptionCard(Vertical):
         elif spec.editor is EditorKind.CHOICE:
             yield Select(
                 [(choice, choice) for choice in spec.choices],
-                value=str(spec.value) if spec.value in spec.choices else Select.BLANK,
+                value=str(spec.value) if spec.value in spec.choices else Select.NULL,
                 id=widget_id,
                 classes="option-input",
             )
@@ -469,7 +484,7 @@ class SettingsPane(Vertical):
     async def on_select_changed(self, event: Select.Changed) -> None:
         if (
             event.select.id == "language-select"
-            and event.value not in (Select.BLANK, Select.NULL)
+            and event.value is not Select.NULL
             and event.value is not None
             and str(event.value) != self._service.i18n.language
         ):
@@ -509,11 +524,11 @@ class SettingsPane(Vertical):
             await self._service.set_setting(key, value)
         except SettingsError as exc:
             message = self._t("tui.settings_invalid", option=exc.option, reason=exc.message)
-            self._set_status(f"[red]{message}[/red]")
+            self._set_status(f"[red]{escape(message)}[/red]")
             self.notify(message, severity="error", timeout=8)
             return
         except ValueError as exc:
-            self._set_status(f"[red]{exc}[/red]")
+            self._set_status(f"[red]{escape(str(exc))}[/red]")
             self.notify(str(exc), severity="error", timeout=8)
             return
         self._set_status(f"[green]{self._t('tui.settings_saved', option=key)}[/green]")
@@ -524,10 +539,10 @@ class SettingsPane(Vertical):
             await self._service.reset_setting(key)
         except SettingsError as exc:
             message = self._t("tui.settings_invalid", option=exc.option, reason=exc.message)
-            self._set_status(f"[red]{message}[/red]")
+            self._set_status(f"[red]{escape(message)}[/red]")
             return
         except ValueError as exc:
-            self._set_status(f"[red]{exc}[/red]")
+            self._set_status(f"[red]{escape(str(exc))}[/red]")
             return
         self._set_status(f"[green]{self._t('tui.settings_reset_done', option=key)}[/green]")
         await self.reload()
@@ -603,9 +618,9 @@ class LLMPane(Vertical):
             )
             table.add_row(
                 str(position + 1),
-                llm.llm_id,
-                llm.model,
-                llm.provider,
+                escape(llm.llm_id),
+                escape(llm.model),
+                escape(llm.provider),
                 role,
                 key=str(position),
             )
@@ -677,11 +692,11 @@ class LLMPane(Vertical):
             await action
         except SettingsError as exc:
             message = self._t("tui.settings_invalid", option=exc.option, reason=exc.message)
-            self._set_status(f"[red]{message}[/red]")
+            self._set_status(f"[red]{escape(message)}[/red]")
             self.notify(message, severity="error", timeout=8)
             return
         except ValueError as exc:
-            self._set_status(f"[red]{exc}[/red]")
+            self._set_status(f"[red]{escape(str(exc))}[/red]")
             self.notify(str(exc), severity="error", timeout=8)
             return
         if message_key:
@@ -784,9 +799,9 @@ class AccountsPane(Vertical):
         accounts = self._service.config.accounts
         for position, account in enumerate(accounts):
             table.add_row(
-                account.account_id,
-                account.email or "-",
-                account.provider,
+                escape(account.account_id),
+                escape(account.email or "-"),
+                escape(account.provider),
                 self._service.runtime.account_status(account.account_id),
                 key=str(position),
             )
@@ -809,9 +824,9 @@ class AccountsPane(Vertical):
                 else self._t("tui.history_marked_new")
             )
             table.add_row(
-                "[x]" if record_id in self._picked else "[ ]",
-                mail.subject or "(no subject)",
-                mail.sender.address,
+                "(x)" if record_id in self._picked else "( )",
+                escape(mail.subject or "(no subject)"),
+                escape(mail.sender.address),
                 mail.date.strftime("%Y-%m-%d %H:%M"),
                 state,
                 key=record_id,
@@ -892,11 +907,11 @@ class AccountsPane(Vertical):
             await action
         except SettingsError as exc:
             message = self._t("tui.settings_invalid", option=exc.option, reason=exc.message)
-            self._set_status(f"[red]{message}[/red]")
+            self._set_status(f"[red]{escape(message)}[/red]")
             self.notify(message, severity="error", timeout=8)
             return
         except ValueError as exc:
-            self._set_status(f"[red]{exc}[/red]")
+            self._set_status(f"[red]{escape(str(exc))}[/red]")
             self.notify(str(exc), severity="error", timeout=8)
             return
         if message_key:
@@ -919,10 +934,10 @@ class AccountsPane(Vertical):
             self._set_status(f"[yellow]{self._t('tui.history_unsupported')}[/yellow]")
             return
         except KeyError as exc:
-            self._set_status(f"[red]{exc}[/red]")
+            self._set_status(f"[red]{escape(str(exc))}[/red]")
             return
         except Exception as exc:  # provider/transport failures stay in the pane
-            self._set_status(f"[red]{exc}[/red]")
+            self._set_status(f"[red]{escape(str(exc))}[/red]")
             return
         known: set[str] = set(self._known)
         for mail in page:
@@ -948,7 +963,7 @@ class AccountsPane(Vertical):
             try:
                 record = await self._service.process_mail(mail)
             except Exception as exc:
-                self._set_status(f"[red]{exc}[/red]")
+                self._set_status(f"[red]{escape(str(exc))}[/red]")
                 return
             if record is None:
                 skipped += 1

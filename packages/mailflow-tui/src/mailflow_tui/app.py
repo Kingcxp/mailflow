@@ -17,6 +17,7 @@ from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -87,9 +88,9 @@ class ReplyModal(ModalScreen[Any]):
     def compose(self) -> ComposeResult:
         yield Static(self._service.t("tui.reply.label", default="Reply"), id="reply-title")
         with Vertical(id="reply-dialog"):
-            yield Label(f"To: {self._record.mail.sender.display}")
+            yield Label(f"To: {escape(self._record.mail.sender.display)}")
             yield Label(
-                f"Subject: {self._service.t('tui.reply.subject_prefix')} {self._record.mail.subject}"
+                f"Subject: {self._service.t('tui.reply.subject_prefix')} {escape(self._record.mail.subject)}"
             )
             with Horizontal(id="reply-templates"):
                 yield Button(self._t("tui.reply_tpl_cn"), id="reply-tpl-cn", variant="primary")
@@ -263,11 +264,11 @@ class ActionModal(ModalScreen[Any]):
         item = self._item
         yield Static(self._service.t("tui.action_detail"), id="action-title")
         with Vertical():
-            yield Label(f"{self._service.t('tui.action_time')}: {item.time_range}")
-            yield Label(f"{self._service.t('tui.action_type')}: {item.action_type}")
-            yield Label(f"{self._service.t('tui.action_content')}: {item.summary}")
-            yield Label(f"{self._service.t('tui.action_notes')}: {item.notes or '-'}")
-            yield Label(f"{self._service.t('tui.action_source')}: {item.mail_id}")
+            yield Label(f"{self._service.t('tui.action_time')}: {escape(item.time_range)}")
+            yield Label(f"{self._service.t('tui.action_type')}: {escape(item.action_type)}")
+            yield Label(f"{self._service.t('tui.action_content')}: {escape(item.summary)}")
+            yield Label(f"{self._service.t('tui.action_notes')}: {escape(item.notes or '-')}")
+            yield Label(f"{self._service.t('tui.action_source')}: {escape(item.mail_id)}")
             yield Button(self._service.t("tui.btn_close"), id="action-close", variant="primary")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -344,8 +345,8 @@ class MailPane(Vertical):
             urgency = record.effective_urgency
             table.add_row(
                 RichText(f"■ {urgency.value}", style=urgency.color),
-                record.mail.subject or "(no subject)",
-                record.mail.sender.address,
+                escape(record.mail.subject or "(no subject)"),
+                escape(record.mail.sender.address),
                 _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
                 key=record.record_id,
             )
@@ -379,24 +380,27 @@ class MailPane(Vertical):
         service = self._service
         self._set_static(
             "#mail-summary",
-            f"[bold]{service.t('tui.detail_summary')}:[/bold] {record.summary}",
+            f"[bold]{service.t('tui.detail_summary')}:[/bold] {escape(record.summary)}",
         )
         reason = record.analysis.reason if record.analysis else ""
         self._set_static(
             "#mail-reason",
-            f"[bold]{service.t('tui.detail_reason')}:[/bold] {reason or '-'}",
+            f"[bold]{service.t('tui.detail_reason')}:[/bold] {escape(reason or '-')}",
         )
         actions_text = ""
         if record.action_items:
             lines = [
-                f"  {item.time_range} [{item.action_type}] {item.summary}"
-                + (f" — {item.notes}" if item.notes else "")
+                "  "
+                + escape(f"{item.time_range} ({item.action_type}) {item.summary}")
+                + (f" — {escape(item.notes)}" if item.notes else "")
                 for item in record.action_items
             ]
             actions_text = f"\n[bold]{service.t('tui.action_content')}:[/bold]\n" + "\n".join(lines)
         self._set_static("#mail-actions", actions_text)
         body = record.mail.body_text.strip() or "(no body)"
-        self._set_static("#mail-body", f"[bold]{service.t('tui.detail_body')}:[/bold]\n{body}")
+        self._set_static(
+            "#mail-body", f"[bold]{service.t('tui.detail_body')}:[/bold]\n{escape(body)}"
+        )
         reply_flag = (
             f"\n[bold yellow]{service.t('tui.detail_reply_required', answer=service.t('common.yes'))}[/bold yellow]"
             if record.analysis and record.analysis.reply_required
@@ -489,11 +493,11 @@ class ActionsPane(Vertical):
             hint.update(self._service.t("tui.empty") if not self._items else _BLANK)
         for item in self._items:
             table.add_row(
-                item.time_range,
-                item.action_type,
-                item.summary,
-                item.notes or "-",
-                item.mail_id,
+                escape(item.time_range),
+                escape(item.action_type),
+                escape(item.summary),
+                escape(item.notes or "-"),
+                escape(item.mail_id),
                 key=item.item_id,
             )
 
@@ -577,30 +581,34 @@ class RuntimePane(Vertical):
                 "not_loaded": service.t("tui.plugin_status_not_loaded"),
             }.get(status_key, status_key)
             table.add_row(
-                plugin.plugin_id,
-                plugin.name,
+                escape(plugin.plugin_id),
+                escape(plugin.name),
                 ",".join(k.value for k in plugin.kinds) or "-",
                 status_text,
                 key=plugin.plugin_id,
             )
         adapters = "\n".join(
-            f"  {c.component_id} (plugin: {c.plugin_id})"
+            escape(f"  {c.component_id} (plugin: {c.plugin_id})")
             for c in snapshot.components
             if c.kind.value == "mail_source"
         )
         accounts = "\n".join(
-            f"  {a.account_id}  {a.email}  {a.provider}  [{a.status}]"
-            + (f"  error: {a.error}" if a.error else "")
+            escape(
+                f"  {a.account_id}  {a.email}  {a.provider} ({a.status})"
+                + (f"  error: {a.error}" if a.error else "")
+            )
             for a in snapshot.accounts
         )
         llms = "\n".join(
-            f"  {llm.llm_id}  model={llm.model}  backend={llm.backend}"
-            + ("  [default]" if llm.default else "")
+            escape(f"  {llm.llm_id}  model={llm.model}  backend={llm.backend}")
+            + ("  (default)" if llm.default else "")
             for llm in snapshot.llms
         )
         bindings = "\n".join(
-            f"  {b.processor_id} -> {b.llm_id or 'rules'}"
-            + (f"  fallback: {', '.join(b.fallback_llm_ids)}" if b.fallback_llm_ids else "")
+            escape(
+                f"  {b.processor_id} -> {b.llm_id or 'rules'}"
+                + (f"  fallback: {', '.join(b.fallback_llm_ids)}" if b.fallback_llm_ids else "")
+            )
             for b in snapshot.processors
         )
         self._set_static(
@@ -665,7 +673,7 @@ class LogsPane(Vertical):
         self._log_queue = log_queue
 
     def compose(self) -> ComposeResult:
-        yield RichLog(id="log-view", wrap=True, highlight=True, markup=True)
+        yield RichLog(id="log-view", wrap=True, highlight=True)
 
     async def on_mount(self) -> None:
         self.query_one("#log-view", RichLog).write(self._service.t("tui.logs_title"))
@@ -915,9 +923,9 @@ class MarketPane(Vertical):
                 if query not in blob:
                     continue
             table.add_row(
-                plugin.name or plugin.id,
-                plugin.description_for(language)[:44],
-                plugin.version,
+                escape(plugin.name or plugin.id),
+                escape(plugin.description_for(language)[:44]),
+                escape(plugin.version),
                 self._market_status_of(plugin),
                 key=plugin.id,
             )
