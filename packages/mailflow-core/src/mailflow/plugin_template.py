@@ -168,7 +168,12 @@ open a pull request against the plugin repository.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from mailflow.plugin_api import define_plugin
+
+logger = logging.getLogger(__name__)
 
 PLUGIN = define_plugin(
     "{plugin_id}",
