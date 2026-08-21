@@ -475,6 +475,28 @@ class TestTelegramNotifier:
         assert "Exam tomorrow" in unquote_plus(sent["body"])
         assert "secret-token" not in unquote_plus(sent["body"])
 
+    def test_stays_identical_to_the_marketplace_copy(self) -> None:
+        """The marketplace owns this plugin; the workspace copy exists only so
+        the tests above can run. Two copies that drift apart mean the
+        marketplace ships behavior nobody tested."""
+        from pathlib import Path
+
+        workspace = (
+            Path(__file__).resolve().parents[2]
+            / "plugins/mailflow-notify-telegram/src/mailflow_notify_telegram/plugin.py"
+        )
+        marketplace = (
+            workspace.parents[4].parent
+            / "mailflow-repo/notifier/mailflow-notify-telegram"
+            / "src/mailflow_notify_telegram/plugin.py"
+        )
+        if not marketplace.is_file():
+            pytest.skip("marketplace checkout not present")
+        assert workspace.read_text(encoding="utf-8") == marketplace.read_text(encoding="utf-8"), (
+            "plugins/mailflow-notify-telegram has drifted from the marketplace copy; "
+            "sync them or delete the workspace copy together with these tests"
+        )
+
 
 class TestIMAPMailSource:
     def test_parse_mime_basic(self) -> None:

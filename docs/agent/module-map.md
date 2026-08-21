@@ -54,6 +54,13 @@ The `rules` and `llm-importance` processors are **not** plugins: they live in
 under the plugin id `mailflow-core`. A plugin registering the same component
 id replaces the built-in.
 
+`plugins/mailflow-notify-telegram` is in the workspace but **not** in
+`BUNDLED_PLUGINS`: the marketplace owns and ships it, and this copy exists so
+`tests/integration/test_plugins.py::TestTelegramNotifier` can assert the
+contract that matters (a missing token skips instead of raising, and the bot
+token never appears in the request body). Keep the two copies identical, or
+delete this one together with its test.
+
 A sibling marketplace repository (`mailflow-repo`, pushed to
 github.com/Kingcxp/mailflow-repo) holds plugins one folder per plugin under
 category folders; the market client reads a root `index.json` (categories
@@ -82,5 +89,5 @@ core contracts only. Core never imports plugins or hosts.
 `tests/unit` (contracts, settings editor, commands, i18n, pipeline, runtime,
 letters, updates, plugin api/template, bot export), `tests/integration`
 (concrete backends with monkeypatched transport), `tests/e2e` (public
-`start_service` + TUI pilot). 317 tests at the time of writing; the per-file
+`start_service` + TUI pilot). 318 tests at the time of writing; the per-file
 breakdown lives in `../development/tests.md`.

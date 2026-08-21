@@ -2,7 +2,7 @@
 
 ## Layout
 
-317 tests (counts per file as of this writing):
+318 tests (counts per file as of this writing):
 
 ```
 tests/unit/                       contract and logic tests (no I/O, no network)
@@ -30,11 +30,13 @@ tests/unit/                       contract and logic tests (no I/O, no network)
   test_cli_export.py       4  `mailflow export` argument handling
   test_plugin_api.py       3  declarative decorators build both hooks
 tests/integration/                concrete adapters with fakes (never a real API)
-  test_plugins.py         28  sqlite persistence/trash semantics; the
+  test_plugins.py         29  sqlite persistence/trash semantics; the
                               openai-compatible and anthropic transports via a
                               monkeypatched httpx client; IMAP MIME parsing,
                               SMTP replies, UID-incremental polling, retry
-                              safety and history paging; bundled registration
+                              safety and history paging; bundled registration;
+                              and that the workspace copy of the Telegram
+                              notifier still matches the marketplace one
 tests/e2e/                        full flows through the public API
   test_start_service.py    2  start_service: source→queue→pipeline→storage, LLM
                               fallback, notifier, snapshot ownership, urgency
