@@ -99,6 +99,10 @@ def command(
             await service.wait_idle(timeout_seconds=20)  # let queued mail finish processing first
             response = await router.execute(command_text)
             _render_response(response)
+            if not response.ok:
+                # finally below still stops the service; a failed business
+                # command must not exit 0
+                raise typer.Exit(1)
         finally:
             await service.stop()
 

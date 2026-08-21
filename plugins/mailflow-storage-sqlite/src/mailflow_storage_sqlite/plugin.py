@@ -166,10 +166,13 @@ class SQLiteStorage:
             if row is None:
                 return
             deleted_at = datetime.now(UTC)
-            # OR IGNORE preserves the first deletion timestamp on re-trash cycles
+            # re-trash cycles (restore -> edit -> delete again) must keep the
+            # FIRST deletion timestamp but refresh the stored content, or the
+            # trash would restore a stale record
             conn.execute(
-                "INSERT OR IGNORE INTO trash_records (record_id, record_json, deleted_ts) "
-                "VALUES (?, ?, ?)",
+                "INSERT INTO trash_records (record_id, record_json, deleted_ts) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(record_id) DO UPDATE SET record_json = excluded.record_json",
                 (record_id, row[0], deleted_at.timestamp()),
             )
             conn.execute("DELETE FROM mails WHERE record_id = ?", (record_id,))
@@ -187,8 +190,9 @@ class SQLiteStorage:
             moved = 0
             for record_id, record_json in rows:
                 conn.execute(
-                    "INSERT OR IGNORE INTO trash_records (record_id, record_json, deleted_ts) "
-                    "VALUES (?, ?, ?)",
+                    "INSERT INTO trash_records (record_id, record_json, deleted_ts) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(record_id) DO UPDATE SET record_json = excluded.record_json",
                     (record_id, record_json, deleted_at.timestamp()),
                 )
                 conn.execute("DELETE FROM mails WHERE record_id = ?", (record_id,))

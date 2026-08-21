@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 
 [project.entry-points."mailflow.plugins"]
-imap = "mailflow_mail_imap.plugin:plugin"
+mailflow-mail-imap = "mailflow_mail_imap.plugin:plugin"
 
 [build-system]
 requires = ["hatchling"]

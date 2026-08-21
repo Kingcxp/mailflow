@@ -199,8 +199,9 @@ class IMAPSource:
                 # Incremental: only mails that arrived after the previous poll.
                 wanted = [u for u in all_uids if u > self._last_uid]
             else:
-                # First poll: the most recent ``limit`` mails (avoid flooding).
-                wanted = all_uids[-self._limit :]
+                # First poll: the most recent ``limit`` mails (avoid flooding;
+                # a non-positive limit would slice to the whole mailbox)
+                wanted = all_uids[-max(1, self._limit) :]
             messages: list[MailMessage] = []
             for uid_int in wanted:
                 _status, fetch = client.uid("fetch", str(uid_int), "(RFC822)")
@@ -274,8 +275,14 @@ class IMAPSource:
         message["Subject"] = draft.subject
         message["Date"] = formatdate(localtime=True)
         body = str(getattr(draft, "body", "") or "")
-        if "<" in body and ">" in body:
-            message.set_content("")
+        stripped = body.lstrip()
+        looks_like_html = stripped.startswith("<") and "</" in body
+        if looks_like_html:
+            # real HTML drafts ship with a plain-text alternative built from
+            # the same content, so non-HTML clients never see an empty body
+            from mailflow.letters import html_to_text
+
+            message.set_content(html_to_text(body) or "(see HTML version)")
             message.add_alternative(body, subtype="html")
         else:
             message.set_content(body)
