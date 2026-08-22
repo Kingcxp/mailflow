@@ -391,6 +391,7 @@
       "history_analyzing": "Analyzing {count} mail(s)...",
       "history_column_selected": "Pick",
       "history_empty": "No mail found in this mailbox.",
+      "history_failed": "{count} mail(s) failed to process",
       "history_load": "Load history",
       "history_loaded": "Loaded {count} mail(s).",
       "history_loading": "Loading history from {account}...",

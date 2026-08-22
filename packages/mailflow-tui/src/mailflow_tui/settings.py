@@ -952,22 +952,34 @@ class AccountsPane(Vertical):
         self._set_status(self._t("tui.history_analyzing", count=len(chosen)))
         processed = 0
         skipped = 0
+        failed: list[str] = []
         for mail in chosen:
+            message_id = mail.normalized_message_id()
             try:
                 record = await self._service.process_mail(mail)
             except Exception as exc:
-                self._set_status(f"[red]{escape(str(exc))}[/red]")
-                return
+                # one bad mail must not abort the batch: keep it picked so
+                # the user can retry after fixing the cause
+                failed.append(f"{mail.subject[:40]}: {exc}")
+                continue
+            self._known.add(message_id)
+            self._picked.discard(message_id)
             if record is None:
                 skipped += 1
             else:
                 processed += 1
-            self._known.add(mail.normalized_message_id())
-        self._picked.clear()
         self._render_history()
-        self._set_status(
-            f"[green]{self._t('tui.history_analyzed', count=processed, skipped=skipped)}[/green]"
-        )
+        if failed:
+            detail = "; ".join(failed[:3])
+            more = f" (+{len(failed) - 3})" if len(failed) > 3 else ""
+            self._set_status(
+                f"[red]{self._t('tui.history_failed', count=len(failed))}: "
+                f"{escape(detail)}{more}[/red]"
+            )
+        else:
+            self._set_status(
+                f"[green]{self._t('tui.history_analyzed', count=processed, skipped=skipped)}[/green]"
+            )
 
 
 __all__ = [

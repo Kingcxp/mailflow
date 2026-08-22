@@ -391,6 +391,7 @@
       "history_analyzing": "正在解析 {count} 封邮件...",
       "history_column_selected": "选择",
       "history_empty": "该邮箱中没有邮件。",
+      "history_failed": "{count} 封邮件处理失败",
       "history_load": "加载历史邮件",
       "history_loaded": "已加载 {count} 封邮件。",
       "history_loading": "正在从 {account} 加载历史邮件...",
