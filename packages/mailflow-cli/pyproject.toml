@@ -5,6 +5,7 @@ description = "MailFlow command-line host"
 requires-python = ">=3.11"
 dependencies = [
   "mailflow-core",
+  "mailflow-server",
   "mailflow-bundled",
   "rich>=13.7",
   "typer>=0.12",

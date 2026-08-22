@@ -64,6 +64,12 @@ def _remove_column(table: DataTable[Any], key: str) -> None:
         table.remove_column(key)
 
 
+def _typed_select(owner: Any, selector: str) -> Select[str] | None:
+    """query_one_optional without leaking an unparametrized Select (whose
+    ``value`` attribute comes back Unknown under strict type checking)."""
+    return cast("Select[str] | None", owner.query_one_optional(selector))
+
+
 def _apply_options(owner: Any, selector: str, pairs: list[tuple[str, str]]) -> None:
     """set_options + restore value, skipping identical lists so startup never
     pokes freshly mounted widgets (a Textual render race)."""
@@ -398,10 +404,12 @@ class MailPane(Vertical):
         await self._show_selected()
 
     def _select_value(self, selector: str) -> str:
-        select = self.query_one_optional(selector, Select)  # pyright: ignore[reportUnknownVariableType]
-        if select is None or select.value is Select.NULL or select.value is None:
-            return "all" if "filter" in selector else "time"
-        return str(select.value)
+        select = _typed_select(self, selector)
+        if select is not None:
+            value = select.value
+            if value is not Select.NULL:
+                return str(value)
+        return "all" if "filter" in selector else "time"
 
     def _refresh_view_options(self) -> None:
         """Re-translate the sort/filter dropdowns after a language switch."""
@@ -593,9 +601,11 @@ class ActionsPane(Vertical):
         current = self._select_value("#actions-type-filter")
         if current not in {"all", *types}:
             # stale selection vanished from the list: reset without recursing
-            type_select = self.query_one_optional("#actions-type-filter", Select)  # pyright: ignore[reportUnknownVariableType]
-            if type_select is not None and str(type_select.value) != "all":
-                type_select.value = "all"  # pyright: ignore[reportUnknownMemberType]
+            type_select = _typed_select(self, "#actions-type-filter")
+            if type_select is not None:
+                selected_value = type_select.value
+                if selected_value is not Select.NULL and str(selected_value) != "all":
+                    type_select.value = "all"
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
@@ -610,8 +620,8 @@ class ActionsPane(Vertical):
             )
 
     def _select_value(self, selector: str) -> str:
-        select = self.query_one_optional(selector, Select)  # pyright: ignore[reportUnknownVariableType]
-        if select is None or select.value is Select.NULL or select.value is None:
+        select = _typed_select(self, selector)
+        if select is None or select.value is Select.NULL:
             return "all"
         return str(select.value)
 

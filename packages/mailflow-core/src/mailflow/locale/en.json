@@ -515,6 +515,13 @@
       "title": "Updates",
       "up_to_date": "up to date",
       "usage": "update <check|now|status|auto <on|off>>"
+    },
+    "config.desc": {
+      "server.host": "Bind address for the admin server",
+      "server.password": "HTTP Basic auth password (secret; prefer password_env)",
+      "server.password_env": "Environment variable holding the admin password",
+      "server.port": "Admin server port",
+      "server.username": "HTTP Basic auth username for the admin server"
     }
   }
 }

@@ -314,12 +314,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         return "" if value is None else value
 
     def _extra_value(self, extra: _Extra) -> str:
-        pool = self._values.get("options") or {}
-        raw = (
-            self._values.get(extra.field_id)
-            if not extra.into_options
-            else pool.get(extra.field_id, self._values.get(extra.field_id))
-        )
+        pool: dict[str, Any] = dict(self._values.get("options") or {})
+        fallback = self._values.get(extra.field_id)
+        raw: Any = fallback if not extra.into_options else pool.get(extra.field_id, fallback)
         if raw is None or raw == "":
             return extra.default
         return str(raw)
@@ -350,7 +347,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         current = self._values.get(spec.label, spec.default)
         choices = spec.choices
         if spec.label == "provider" and self._provider_choices:
-            choices = self._provider_choices  # type: ignore[assignment]
+            choices = self._provider_choices
         yield Label(f"{spec.label}{' *' if spec.required else ''}", classes="field-label")
         description = self._describe(spec)
         if description:
@@ -453,7 +450,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             raw = ""
             if isinstance(node, Select):
                 raw = _select_text(node)
-            elif isinstance(node, (Input, TextArea)):
+            elif isinstance(node, TextArea):
+                raw = node.text
+            elif isinstance(node, Input):
                 raw = node.value
             if extra.field_id == "preset":
                 host, port, ssl_flag = _IMAP_PRESET_HOSTS.get(raw or "qq", ("", 993, True))

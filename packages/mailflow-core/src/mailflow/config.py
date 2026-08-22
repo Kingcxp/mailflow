@@ -339,6 +339,21 @@ class NotifierConfig(BaseModel):
     )
 
 
+class ServerConfig(BaseModel):
+    """REST+WS admin server (`mailflow serve`). password_env wins over the
+    literal password so secrets stay out of TOML."""
+
+    host: str = Field(default="127.0.0.1", description="Bind address for the admin server")
+    port: int = Field(default=8800, ge=1, le=65535, description="Admin server port")
+    username: str = Field(default="", description="HTTP Basic auth username")
+    password: str = Field(
+        default="", description="HTTP Basic auth password (secret; prefer password_env)"
+    )
+    password_env: str | None = Field(
+        default=None, description="Environment variable holding the admin password"
+    )
+
+
 class StorageConfig(BaseModel):
     provider: str = Field(default="sqlite", description="Storage backend component id")
     path: str = Field(default="data/mailflow.db", description="Database file path")
@@ -377,6 +392,9 @@ class MailFlowConfig(BaseModel):
     )
     notifiers: list[NotifierConfig] = Field(
         default_factory=lambda: [], description="Notification channels with urgency thresholds"
+    )
+    server: ServerConfig = Field(
+        default_factory=ServerConfig, description="Admin REST+WS server (`mailflow serve`)"
     )
     storage: StorageConfig = Field(
         default_factory=StorageConfig, description="Durable storage backend"

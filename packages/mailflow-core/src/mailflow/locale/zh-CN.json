@@ -515,6 +515,13 @@
       "title": "更新",
       "up_to_date": "已是最新",
       "usage": "update <check|now|status|auto <on|off>>"
+    },
+    "config.desc": {
+      "server.host": "管理服务监听地址",
+      "server.password": "管理服务 HTTP Basic 密码（机密；建议用 password_env）",
+      "server.password_env": "存放管理密码的环境变量名",
+      "server.port": "管理服务端口",
+      "server.username": "管理服务 HTTP Basic 用户名"
     }
   }
 }

@@ -15,6 +15,7 @@ mailflow-core = { workspace = true }
 mailflow-testkit = { workspace = true }
 mailflow-bundled = { workspace = true }
 mailflow-cli = { workspace = true }
+mailflow-server = { workspace = true }
 mailflow-tui = { workspace = true }
 mailflow-mail-fake = { workspace = true }
 mailflow-mail-imap = { workspace = true }
@@ -63,6 +64,7 @@ mypy_path = [
   "packages/mailflow-testkit/src",
   "packages/mailflow-bundled/src",
   "packages/mailflow-cli/src",
+  "packages/mailflow-server/src",
   "packages/mailflow-tui/src",
   "plugins/mailflow-mail-fake/src",
   "plugins/mailflow-mail-imap/src",
@@ -87,6 +89,7 @@ extraPaths = [
   "packages/mailflow-testkit/src",
   "packages/mailflow-bundled/src",
   "packages/mailflow-cli/src",
+  "packages/mailflow-server/src",
   "packages/mailflow-tui/src",
   "plugins/mailflow-mail-fake/src",
   "plugins/mailflow-mail-imap/src",

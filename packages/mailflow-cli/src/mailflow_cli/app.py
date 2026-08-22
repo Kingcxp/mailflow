@@ -291,6 +291,39 @@ def service_doctor(config: MailFlowConfig, manager: PluginManager, registry: Any
 
 
 @app.command()
+def serve(
+    config_path: str | None = typer.Option(None, "--config", "-c"),
+    host: str | None = typer.Option(None, "--host", help="Override [server].host"),
+    port: int | None = typer.Option(None, "--port", help="Override [server].port"),
+) -> None:
+    """Run the admin REST+WS server (remote TUI clients / bots)."""
+    import uvicorn
+    from mailflow_server import create_app
+
+    async def _run() -> None:
+        config = _load_config(config_path)
+        if host is not None:
+            config.server.host = host
+        if port is not None:
+            config.server.port = port
+        service = await start_service(config, config_path=config_path)
+        app = create_app(service)
+        uv_config = uvicorn.Config(
+            app,
+            host=config.server.host,
+            port=config.server.port,
+            log_level="info",
+        )
+        server = uvicorn.Server(uv_config)
+        try:
+            await server.serve()
+        finally:
+            await service.stop()
+
+    asyncio.run(_run())
+
+
+@app.command()
 def tui(
     config_path: str | None = typer.Option(
         None, "--config", "-c", help="Path to the TOML config file (defaults used when omitted)"
