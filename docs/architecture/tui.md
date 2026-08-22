@@ -112,3 +112,23 @@ cards (save / invalid value / restore default), the LLM chain reordering, the
 mailbox history browser (analyze a picked mail, skip a known one), the
 repository dialog's Back button, and that a processed-mail event refreshes the
 panes without a manual refresh.
+
+## Remote mode and embedded server
+
+`mailflow tui --local` starts the TUI together with the embedded
+admin REST+WS server (`mailflow_server.create_app`, credentials in
+`[server]`, auto-provisioned for the session). Other frontends —
+another TUI, a chat bot — attach with `mailflow tui --remote URL`:
+the login screen remembers address/username in
+`~/.mailflow/tui-session.json`, optionally stores the password and
+auto-logins until authentication fails. Remote sessions drive mail,
+actions, runtime toggles, logs (websocket relay) and scalar settings;
+mailbox history browsing, LLM chain editing and marketplace installs
+require a locally attached service.
+
+## Bots tab
+
+The Bots tab lists configured onebot/wechaty/openclaw-weixin notifier
+instances and probes their login state on demand. QR scanning happens
+in the bot runtime itself (NapCat, WeChaty gateway, OpenClaw); the tab
+verifies the session MailFlow sends through.

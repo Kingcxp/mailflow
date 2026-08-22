@@ -33,7 +33,9 @@
 | ------- | ---- |
 | `mailflow-bundled` | composition root: static registration of the official plugins, optional discovery |
 | `mailflow-cli` | Typer host: run/command/shell/config-check/snapshot/doctor/export/tui; renders CommandResponse with rich |
-| `mailflow-tui` | Textual app (Mail/Mailboxes/Actions/LLMs/Runtime/Logs/Market/Settings), settings editor (settings.py), export wizard (export.py), runner with injected log handler, app.tcss |
+| `mailflow-server` | FastAPI admin host (REST + /ws event/log relay) created via `create_app(service)`; HTTP Basic auth from `[server]` |
+| `mailflow-cli` serve | `mailflow serve -c … [--host --port]` runs the admin server under uvicorn |
+| `mailflow-tui` | Textual app (Mail/Mailboxes/Actions/LLMs/Bots/Runtime/Logs/Market/Settings), settings editor (settings.py), export wizard (export.py), runner with local/--local/--remote modes, remote adapter (remote.py), app.tcss |
 | `mailflow-testkit` | FakeMailSource, FakeLLMBackend, FakeNotifier, make_mail/fixed_timestamps |
 
 ## plugins/
@@ -48,6 +50,11 @@
 | `mailflow-notify-console` | `console` notifier |
 | `mailflow-export-nonebot` | `nonebot` bot exporter (generates a NoneBot2 plugin) |
 | `mailflow-export-astrbot` | `astrbot` bot exporter (generates an AstrBot plugin) |
+| `mailflow-notify-onebot` | `onebot` notifier — OneBot v11 HTTP (NapCat/go-cqhttp), `user:`/`group:` targets |
+| `mailflow-notify-wechaty` | `wechaty` notifier — WeChat contacts/rooms via a WeChaty HTTP gateway, `contact:`/`room:` targets |
+| `mailflow-notify-openclaw-weixin` | `openclaw-weixin` notifier — Tencent OpenClaw ClawBot channel through an OpenClaw gateway |
+| `mailflow-llm-google-generative-ai` | `google-generative-ai` LLM backend (Gemini API) |
+| `mailflow-llm-google-vertex` | `google-vertex` LLM backend (Vertex AI, service-account or access-token auth) |
 
 The `rules` and `llm-importance` processors are **not** plugins: they live in
 `mailflow/processors.py` and are registered by `register_builtin_processors`
