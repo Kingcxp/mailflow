@@ -94,6 +94,16 @@ Button:focus {
     margin-top: 1;
 }
 
+#actions-controls {
+    height: auto;
+    padding: 0 1;
+}
+
+#actions-type-filter {
+    width: 24;
+}
+
+
 #actions-table {
     width: 100%;
     height: 70%;

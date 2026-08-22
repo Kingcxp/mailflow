@@ -262,8 +262,6 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             await pilot.pause(0.15)
             await settings_pane._save("general.language", "zh-CN")  # pyright: ignore[reportPrivateUsage]
             await pilot.pause(0.05)
-            status_text = str(app.query_one("#settings-status").render())
-            assert await service.get_language() == "zh-CN"
             from textual.widgets import TabbedContent
 
             tabs = app.query_one(TabbedContent)

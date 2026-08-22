@@ -593,10 +593,8 @@ class MailFlowService:
         """Registry, plugin titles and language codes for the editor model:
         options land in their owner's section and general.language becomes
         a dropdown of the loaded packs."""
-        titles = {info.plugin_id: info.name for info in self.plugin_manager.enabled_infos()}
         return {
             "registry": self.registry,
-            "plugin_titles": titles,
             "language_choices": tuple(self.i18n.available_codes()),
         }
 

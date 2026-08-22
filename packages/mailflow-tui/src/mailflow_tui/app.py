@@ -295,6 +295,19 @@ class MailPane(Vertical):
                 yield Static("", id="mail-notes")
         with Horizontal(id="mail-controls"):
             yield Select(_URGENCY_OPTIONS, id="urgency-select")
+            yield Select(
+                [("all", "all")] + [(u.value, u.value) for u in Urgency],
+                id="mail-urgency-filter",
+                allow_blank=False,
+            )
+            yield Select(
+                [
+                    (self._service.t("tui.sort_urgency"), "urgency"),
+                    (self._service.t("tui.sort_time"), "time"),
+                ],
+                id="mail-sort",
+                allow_blank=False,
+            )
             yield Button(self._service.t("tui.btn_refresh"), id="btn-refresh", variant="primary")
             yield Button(self._service.t("tui.btn_trash"), id="btn-trash", variant="error")
             yield Button(self._service.t("tui.btn_reply"), id="btn-reply", variant="success")
@@ -336,12 +349,24 @@ class MailPane(Vertical):
             return
         table.clear()
         self._ensure_columns()
+        self._refresh_view_options()
         self._records = await self._service.list_mails()
         search = self.query_one_optional("#mail-search", Input)
         query = search.value.strip().lower() if search is not None else ""
-        for record in self._records:
-            if query and not self._matches(record, query):
-                continue
+        records = list(self._records)
+        if query:
+            records = [record for record in records if self._matches(record, query)]
+        urgency_filter = self._select_value("#mail-urgency-filter")
+        if urgency_filter != "all":
+            records = [
+                record for record in records if record.effective_urgency.value == urgency_filter
+            ]
+        # stable two-pass sort: newest first, then urgency when requested —
+        # the default view puts urgent mail on top without losing recency
+        records.sort(key=lambda record: record.mail.received_at, reverse=True)
+        if self._select_value("#mail-sort") == "urgency":
+            records.sort(key=lambda record: record.effective_urgency.rank, reverse=True)
+        for record in records:
             urgency = record.effective_urgency
             table.add_row(
                 RichText(f"■ {urgency.value}", style=urgency.color),
@@ -350,9 +375,39 @@ class MailPane(Vertical):
                 _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
                 key=record.record_id,
             )
-        if self._records and self._selected_id is None:
-            self._selected_id = self._records[0].record_id
+        visible_ids = {record.record_id for record in records}
+        if self._selected_id not in visible_ids:
+            self._selected_id = records[0].record_id if records else None
         await self._show_selected()
+
+    def _select_value(self, selector: str) -> str:
+        select = self.query_one_optional(selector, Select)  # pyright: ignore[reportUnknownVariableType]
+        if select is None or select.value is Select.NULL or select.value is None:
+            return "all" if "filter" in selector else "time"
+        return str(select.value)
+
+    def _refresh_view_options(self) -> None:
+        """Re-translate the sort/filter dropdowns after a language switch."""
+        service = self._service
+        filter_select = self.query_one_optional("#mail-urgency-filter", Select)  # pyright: ignore[reportUnknownVariableType]
+        if filter_select is not None:
+            current = filter_select.value
+            filter_select.set_options(  # pyright: ignore[reportUnknownMemberType]
+                [("all", "all")] + [(u.value, u.value) for u in Urgency],
+            )
+            if current is not Select.NULL:
+                filter_select.value = current  # pyright: ignore[reportUnknownMemberType]
+        sort_select = self.query_one_optional("#mail-sort", Select)  # pyright: ignore[reportUnknownVariableType]
+        if sort_select is not None:
+            current = sort_select.value
+            sort_select.set_options(  # pyright: ignore[reportUnknownMemberType]
+                [
+                    (service.t("tui.sort_urgency"), "urgency"),
+                    (service.t("tui.sort_time"), "time"),
+                ]
+            )
+            if current is not Select.NULL:
+                sort_select.value = current  # pyright: ignore[reportUnknownMemberType]
 
     def _matches(self, record: MailRecord, query: str) -> bool:
         haystack = f"{record.mail.subject} {record.mail.sender.address} {record.summary}".lower()
@@ -366,12 +421,17 @@ class MailPane(Vertical):
         self._selected_id = event.row_key.value
         await self._show_selected()
 
-    def _set_static(self, selector: str, content: str) -> None:
-        node = self.query_one_optional(selector, Static)
-        if node is not None:
-            node.update(content)
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id in ("mail-urgency-filter", "mail-sort"):
+            await self.refresh_mail()
+        elif event.select.id == "urgency-select" and self._selected_id is not None:
+            value = event.value
+            urgency: Urgency | None = None if value == "auto" else Urgency(str(value))
+            await self._service.set_mail_urgency(self._selected_id, urgency)
+            await self.refresh_mail()
 
     async def _show_selected(self) -> None:
+        """Render the detail column for the selected mail."""
         if self._selected_id is None:
             return
         record = await self._service.get_mail(self._selected_id)
@@ -412,6 +472,11 @@ class MailPane(Vertical):
             f"({'manual' if record.manual_urgency is not None else 'auto'})",
         )
 
+    def _set_static(self, selector: str, content: str) -> None:
+        node = self.query_one_optional(selector, Static)
+        if node is not None:
+            node.update(content)
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "btn-refresh":
@@ -432,14 +497,6 @@ class MailPane(Vertical):
                     ReplyModal(self._service, record)
                 )
 
-    async def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id != "urgency-select" or self._selected_id is None:
-            return
-        value = event.value
-        urgency: Urgency | None = None if value == "auto" else Urgency(str(value))
-        await self._service.set_mail_urgency(self._selected_id, urgency)
-        await self.refresh_mail()
-
     def select_mail(self, mail_id: str) -> None:
         self._selected_id = mail_id
         self.call_after_refresh(lambda: self._show_selected())
@@ -452,6 +509,21 @@ class ActionsPane(Vertical):
         self._items: list[ActionItem] = []
 
     def compose(self) -> ComposeResult:
+        with Horizontal(id="actions-controls"):
+            yield Select(
+                [
+                    (self._service.t("tui.range_all"), "all"),
+                    (self._service.t("tui.range_today"), "today"),
+                    (self._service.t("tui.range_week"), "week"),
+                ],
+                id="actions-range",
+                allow_blank=False,
+            )
+            yield Select(
+                [(self._service.t("tui.filter_all_types"), "all")],
+                id="actions-type-filter",
+                allow_blank=False,
+            )
         yield DataTable(id="actions-table")
         yield Static(self._service.t("tui.empty"), id="actions-hint")
 
@@ -488,10 +560,36 @@ class ActionsPane(Vertical):
         table.clear()
         self._ensure_columns()
         self._items = await self._service.list_actions()
+        items = list(self._items)
+        type_filter = self._select_value("#actions-type-filter")
+        if type_filter != "all":
+            items = [item for item in items if item.action_type == type_filter]
+        range_mode = self._select_value("#actions-range")
+        if range_mode != "all":
+            from datetime import UTC, datetime, timedelta
+
+            now = datetime.now(UTC)
+            horizon = (
+                now.replace(hour=23, minute=59, second=59, microsecond=0)
+                if range_mode == "today"
+                else now + timedelta(days=7)
+            )
+            items = [item for item in items if item.due_at <= horizon]
+        types = sorted({item.action_type for item in self._items})
+        type_select = self.query_one_optional("#actions-type-filter", Select)  # pyright: ignore[reportUnknownVariableType]
+        if type_select is not None:
+            current = self._select_value("#actions-type-filter")
+            type_select.set_options(  # pyright: ignore[reportUnknownMemberType]
+                [(self._service.t("tui.filter_all_types"), "all")] + [(t, t) for t in types],
+            )
+            if current not in {"all", *types}:
+                current = "all"
+            if str(type_select.value) != current:  # avoid re-entrant refresh
+                type_select.value = current  # pyright: ignore[reportUnknownMemberType]
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
-            hint.update(self._service.t("tui.empty") if not self._items else _BLANK)
-        for item in self._items:
+            hint.update(self._service.t("tui.empty") if not items else _BLANK)
+        for item in items:
             table.add_row(
                 escape(item.time_range),
                 escape(item.action_type),
@@ -500,6 +598,16 @@ class ActionsPane(Vertical):
                 escape(item.mail_id),
                 key=item.item_id,
             )
+
+    def _select_value(self, selector: str) -> str:
+        select = self.query_one_optional(selector, Select)  # pyright: ignore[reportUnknownVariableType]
+        if select is None or select.value is Select.NULL or select.value is None:
+            return "all"
+        return str(select.value)
+
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id in ("actions-type-filter", "actions-range"):
+            await self.refresh_actions()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         item = next((i for i in self._items if i.item_id == event.row_key.value), None)

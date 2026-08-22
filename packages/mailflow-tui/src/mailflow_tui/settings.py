@@ -483,7 +483,6 @@ class SettingsPane(Vertical):
             self._active = self._sections[index].section_id
             await self._render_options()
 
-
     def _card_of(self, button: Button) -> OptionCard | None:
         node: Any = button.parent
         while node is not None and not isinstance(node, OptionCard):

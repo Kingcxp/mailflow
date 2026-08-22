@@ -272,7 +272,6 @@ def build_sections(
     config: MailFlowConfig,
     *,
     registry: Any = None,
-    plugin_titles: dict[str, str] | None = None,
     language_choices: tuple[str, ...] = (),
 ) -> list[SettingsSection]:
     """Sidebar model: MailFlow's own sections first, then one per plugin.
@@ -287,7 +286,6 @@ def build_sections(
     ``language_choices`` turns ``general.language`` into a dropdown of the
     host's available languages instead of a free-text field.
     """
-    titles = plugin_titles or {}
     sections: list[SettingsSection] = [
         SettingsSection(
             section_id=group,
