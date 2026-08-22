@@ -626,7 +626,12 @@ class TestCommandRouter:
     async def test_plugin_uninstall_unknown(
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:
+        from mailflow.plugin_market import PluginMarket
+
         commands, _ = router
+        # no repositories configured: the lookup must fail offline instead of
+        # fetching the default marketplace over the network
+        commands.service.market = PluginMarket([])
         response = await commands.execute("plugin uninstall ghost")
         assert not response.ok
         assert "not found in any repository" in response.text

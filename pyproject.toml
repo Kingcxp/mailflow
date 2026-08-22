@@ -24,6 +24,8 @@ mailflow-llm-anthropic = { workspace = true }
 mailflow-notify-console = { workspace = true }
 mailflow-export-nonebot = { workspace = true }
 mailflow-export-astrbot = { workspace = true }
+mailflow-llm-google-generative-ai = { workspace = true }
+mailflow-llm-google-vertex = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -71,6 +73,8 @@ mypy_path = [
   "plugins/mailflow-export-nonebot/src",
   "plugins/mailflow-export-astrbot/src",
   "plugins/mailflow-notify-telegram/src",
+  "plugins/mailflow-llm-google-generative-ai/src",
+  "plugins/mailflow-llm-google-vertex/src",
 ]
 
 [tool.pyright]
@@ -93,4 +97,6 @@ extraPaths = [
   "plugins/mailflow-export-nonebot/src",
   "plugins/mailflow-export-astrbot/src",
   "plugins/mailflow-notify-telegram/src",
+  "plugins/mailflow-llm-google-generative-ai/src",
+  "plugins/mailflow-llm-google-vertex/src",
 ]

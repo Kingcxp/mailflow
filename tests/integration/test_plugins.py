@@ -349,10 +349,19 @@ class TestBundledRegistration:
             "mailflow-storage-sqlite",
             "mailflow-llm-openai-compatible",
             "mailflow-llm-anthropic",
+            "mailflow-llm-google-generative-ai",
+            "mailflow-llm-google-vertex",
             "mailflow-notify-console",
             "mailflow-export-nonebot",
             "mailflow-export-astrbot",
         }
+        assert registry.has(ComponentKind.LLM_BACKEND, "openai-completions")
+        assert registry.has(ComponentKind.LLM_BACKEND, "openai-responses")
+        assert registry.has(ComponentKind.LLM_BACKEND, "openai-codex-responses")
+        assert registry.has(ComponentKind.LLM_BACKEND, "azure-openai-responses")
+        assert registry.has(ComponentKind.LLM_BACKEND, "anthropic-messages")
+        assert registry.has(ComponentKind.LLM_BACKEND, "google-generative-ai")
+        assert registry.has(ComponentKind.LLM_BACKEND, "google-vertex")
         assert registry.has(ComponentKind.MAIL_SOURCE, "fake")
         assert registry.has(ComponentKind.MAIL_SOURCE, "imap")
         assert registry.has(ComponentKind.STORAGE, "sqlite")

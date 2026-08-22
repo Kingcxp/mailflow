@@ -9,6 +9,8 @@ dependencies = [
   "mailflow-mail-imap",
   "mailflow-storage-sqlite",
   "mailflow-llm-openai-compatible",
+  "mailflow-llm-google-generative-ai",
+  "mailflow-llm-google-vertex",
   "mailflow-llm-anthropic",
   "mailflow-notify-console",
   "mailflow-export-nonebot",

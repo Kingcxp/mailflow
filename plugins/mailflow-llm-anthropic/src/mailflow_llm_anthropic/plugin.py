@@ -152,8 +152,8 @@ class AnthropicBackend:
 PLUGIN_INFO = PluginInfo(
     plugin_id="mailflow-llm-anthropic",
     name="Anthropic LLM Backend",
-    version="0.1.0",
-    description="Chat-completions transport for Anthropic Claude (Messages API)",
+    version="0.2.0",
+    description="Anthropic Messages API transport (component id: anthropic-messages; legacy alias: anthropic)",
     kinds=[ComponentKind.LLM_BACKEND],
 )
 
@@ -163,6 +163,8 @@ class LLMPlugin:
         return PLUGIN_INFO
 
     def mailflow_register(self, registrar: PluginRegistrar, config: Any) -> None:
+        # fine-grained id plus the historical alias so old configs keep working
+        registrar.add_llm("anthropic-messages", AnthropicBackend)
         registrar.add_llm("anthropic", AnthropicBackend)
 
 

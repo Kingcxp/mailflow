@@ -1,0 +1,16 @@
+[project]
+name = "mailflow-llm-google-vertex"
+version = "0.1.0"
+description = "Google Vertex AI (Gemini on Vertex) backend for MailFlow"
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.27"]
+
+[project.entry-points."mailflow.plugins"]
+google-vertex = "mailflow_llm_google_vertex.plugin:plugin"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mailflow_llm_google_vertex"]

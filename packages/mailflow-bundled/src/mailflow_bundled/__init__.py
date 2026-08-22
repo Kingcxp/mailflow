@@ -14,6 +14,8 @@ from mailflow.plugins import PluginManager
 from mailflow_export_astrbot.plugin import plugin as astrbot_export_plugin
 from mailflow_export_nonebot.plugin import plugin as nonebot_export_plugin
 from mailflow_llm_anthropic.plugin import plugin as anthropic_plugin
+from mailflow_llm_google_generative_ai.plugin import plugin as google_gemini_plugin
+from mailflow_llm_google_vertex.plugin import plugin as google_vertex_plugin
 from mailflow_llm_openai_compatible.plugin import plugin as openai_plugin
 from mailflow_mail_fake.plugin import plugin as fake_plugin
 from mailflow_mail_imap.plugin import plugin as imap_plugin
@@ -26,6 +28,8 @@ BUNDLED_PLUGINS: tuple[Any, ...] = (
     storage_plugin,
     openai_plugin,
     anthropic_plugin,
+    google_gemini_plugin,
+    google_vertex_plugin,
     notify_plugin,
     nonebot_export_plugin,
     astrbot_export_plugin,
