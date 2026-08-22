@@ -14,6 +14,8 @@ members = [
     "mailflow-export-astrbot",
     "mailflow-export-nonebot",
     "mailflow-llm-anthropic",
+    "mailflow-llm-google-generative-ai",
+    "mailflow-llm-google-vertex",
     "mailflow-llm-openai-compatible",
     "mailflow-mail-fake",
     "mailflow-mail-imap",
@@ -449,6 +451,8 @@ dependencies = [
     { name = "mailflow-export-astrbot" },
     { name = "mailflow-export-nonebot" },
     { name = "mailflow-llm-anthropic" },
+    { name = "mailflow-llm-google-generative-ai" },
+    { name = "mailflow-llm-google-vertex" },
     { name = "mailflow-llm-openai-compatible" },
     { name = "mailflow-mail-fake" },
     { name = "mailflow-mail-imap" },
@@ -462,6 +466,8 @@ requires-dist = [
     { name = "mailflow-export-astrbot", editable = "plugins/mailflow-export-astrbot" },
     { name = "mailflow-export-nonebot", editable = "plugins/mailflow-export-nonebot" },
     { name = "mailflow-llm-anthropic", editable = "plugins/mailflow-llm-anthropic" },
+    { name = "mailflow-llm-google-generative-ai", editable = "plugins/mailflow-llm-google-generative-ai" },
+    { name = "mailflow-llm-google-vertex", editable = "plugins/mailflow-llm-google-vertex" },
     { name = "mailflow-llm-openai-compatible", editable = "plugins/mailflow-llm-openai-compatible" },
     { name = "mailflow-mail-fake", editable = "plugins/mailflow-mail-fake" },
     { name = "mailflow-mail-imap", editable = "plugins/mailflow-mail-imap" },
@@ -545,6 +551,28 @@ requires-dist = [
     { name = "httpx" },
     { name = "mailflow-core", editable = "packages/mailflow-core" },
 ]
+
+[[package]]
+name = "mailflow-llm-google-generative-ai"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-llm-google-generative-ai" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
+
+[[package]]
+name = "mailflow-llm-google-vertex"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-llm-google-vertex" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
 
 [[package]]
 name = "mailflow-llm-openai-compatible"
