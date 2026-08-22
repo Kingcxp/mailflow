@@ -33,8 +33,8 @@ def _websocket_connect() -> Callable[..., Any]:
     client works without it."""
     import websockets  # type: ignore[import-not-found,unused-ignore]
 
-    connect_fn: Callable[..., Any] = websockets.connect  # pyright: ignore[reportUnknownMemberType,reportUnknownMemberType]
-    return connect_fn
+    connect_fn: Callable[..., Any] = websockets.connect  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+    return connect_fn  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
 
 
 class RemoteClient:
