@@ -510,23 +510,13 @@ MarketDetailScreen {
     background: #181825;
 }
 
+#settings-sections ListItem {
+    padding: 0 1;  /* align section entries with the title above */
+}
+
 #settings-main {
     width: 1fr;
     margin-right: 1;
-}
-
-#settings-language-row {
-    height: auto;
-    align-vertical: middle;
-}
-
-#settings-language-label {
-    width: 12;
-    padding: 1 1 0 0;
-}
-
-#language-select {
-    width: 36;
 }
 
 #settings-status {

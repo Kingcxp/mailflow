@@ -375,18 +375,15 @@ class SettingsPane(Vertical):
                 yield Static(self._t("tui.settings_sections"), id="settings-sidebar-title")
                 yield ListView(id="settings-sections")
             with Vertical(id="settings-main"):
-                with Horizontal(id="settings-language-row"):
-                    yield Label(self._t("tui.settings_language"), id="settings-language-label")
-                    yield Select([], id="language-select")
+                # language switching lives in the general.language option
+                # card (dropdown of loaded packs) — no separate row
                 yield Static("", id="settings-status")
                 yield ScrollableContainer(id="settings-options")
 
     async def on_mount(self) -> None:
-        await self.refresh_languages()
         await self.reload()
 
     async def relabel(self) -> None:
-        await self.refresh_languages()
         await self.reload()
 
     # -- language ----------------------------------------------------------
@@ -410,7 +407,10 @@ class SettingsPane(Vertical):
         label_key = _SECTION_LABELS.get(section.section_id)
         if label_key is not None:
             return self._t(label_key)
-        return section.title or section.section_id
+        if section.plugin_id or not section.title:
+            # uniform naming: plugin sections read as their lowercase-dash id
+            return section.section_id
+        return section.title
 
     def _describe(self, spec: OptionSpec) -> str:
         key = f"config.desc.{generic_key(spec.key)}"
@@ -483,14 +483,6 @@ class SettingsPane(Vertical):
             self._active = self._sections[index].section_id
             await self._render_options()
 
-    async def on_select_changed(self, event: Select.Changed) -> None:
-        if (
-            event.select.id == "language-select"
-            and event.value is not Select.NULL
-            and event.value is not None
-            and str(event.value) != self._service.i18n.language
-        ):
-            await self._service.set_language(str(event.value))
 
     def _card_of(self, button: Button) -> OptionCard | None:
         node: Any = button.parent

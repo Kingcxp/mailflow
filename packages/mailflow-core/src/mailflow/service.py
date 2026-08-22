@@ -590,9 +590,15 @@ class MailFlowService:
     # -- settings editor (sections, typed edits, list entries) -----------------
 
     def _settings_context(self) -> dict[str, Any]:
-        """Registry + plugin titles so options land in their owner's section."""
+        """Registry, plugin titles and language codes for the editor model:
+        options land in their owner's section and general.language becomes
+        a dropdown of the loaded packs."""
         titles = {info.plugin_id: info.name for info in self.plugin_manager.enabled_infos()}
-        return {"registry": self.registry, "plugin_titles": titles}
+        return {
+            "registry": self.registry,
+            "plugin_titles": titles,
+            "language_choices": tuple(self.i18n.available_codes()),
+        }
 
     def settings_sections(self) -> list[SettingsSection]:
         """Sidebar model: MailFlow's own sections plus one per owning plugin."""
@@ -623,9 +629,32 @@ class MailFlowService:
         Raises :class:`mailflow.settings.SettingsError` naming the offending
         option when the value is invalid, so a host can point at the field.
         """
+        if key == "general.language":
+            return await self._set_language_setting(raw_value)
         updated = apply_value(self.config, key, raw_value, **self._settings_context())
         await self._persist_config(updated, key)
         return self.settings_option(key)
+
+    async def _set_language_setting(self, raw_value: Any) -> OptionSpec | None:
+        """Validate, switch the running UI and persist the interface language.
+
+        Works with or without a config file: embedded hosts (no ``--config``)
+        still get a live switch through the stored preference.
+        """
+        code = str(raw_value).strip()
+        updated = apply_value(
+            self.config, "general.language", code, **self._settings_context()
+        )  # SettingsError for an unloaded pack (choice validation)
+        if self.config_path is None:
+            self.config = updated
+            await self.events.emit("config.changed", key="general.language")
+        else:
+            await self._persist_config(updated, "general.language")
+        if code in self.i18n.available_codes() and code != self.i18n.language:
+            self.i18n.set_language(code)
+            await self.storage.set_preference(_LANGUAGE_PREFERENCE, code)
+            await self.events.emit("language.changed", language=code)
+        return self.settings_option("general.language")
 
     async def reset_setting(self, key: str) -> OptionSpec | None:
         """Restore one option to its schema default and persist."""

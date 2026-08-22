@@ -167,10 +167,14 @@ def _spec_for_field(
     name: str,
     info: FieldInfo,
     value: Any,
+    language_choices: tuple[str, ...] = (),
 ) -> OptionSpec:
     editor, choices, item_model = _editor_for(info.annotation)
     if editor is EditorKind.TEXT and is_secret_key(name):
         editor = EditorKind.SECRET
+    if key == "general.language" and language_choices:
+        editor = EditorKind.CHOICE
+        choices = tuple(language_choices)
     item_fields: tuple[OptionSpec, ...] = ()
     if editor is EditorKind.STRUCT_LIST and item_model is not None:
         item_fields = tuple(entry_field_specs(item_model, section=section))
@@ -222,7 +226,9 @@ def entry_field_specs(model: type[BaseModel], *, section: str = "") -> list[Opti
 # ---------------------------------------------------------------------------
 
 
-def _group_specs(config: MailFlowConfig, group: str) -> list[OptionSpec]:
+def _group_specs(
+    config: MailFlowConfig, group: str, *, language_choices: tuple[str, ...] = ()
+) -> list[OptionSpec]:
     model: Any = getattr(config, group)
     if not isinstance(model, BaseModel):
         return []
@@ -233,6 +239,7 @@ def _group_specs(config: MailFlowConfig, group: str) -> list[OptionSpec]:
             name=name,
             info=info,
             value=getattr(model, name),
+            language_choices=language_choices,
         )
         for name, info in _fields_of(type(model)).items()
     ]
@@ -266,17 +273,27 @@ def build_sections(
     *,
     registry: Any = None,
     plugin_titles: dict[str, str] | None = None,
+    language_choices: tuple[str, ...] = (),
 ) -> list[SettingsSection]:
     """Sidebar model: MailFlow's own sections first, then one per plugin.
 
     ``processors`` and ``notifiers`` entries are grouped under the plugin
     that registered their ``provider`` component, so installing a plugin
-    makes its options appear in its own section. Accounts and LLMs are
-    edited in their dedicated tabs and are deliberately excluded here.
+    makes its options appear in its own section. Plugin sections are
+    titled with their plugin id — the same lowercase-dash convention as
+    the core sections. Accounts and LLMs are edited in their dedicated
+    tabs and are deliberately excluded here.
+
+    ``language_choices`` turns ``general.language`` into a dropdown of the
+    host's available languages instead of a free-text field.
     """
     titles = plugin_titles or {}
     sections: list[SettingsSection] = [
-        SettingsSection(section_id=group, title=group, options=_group_specs(config, group))
+        SettingsSection(
+            section_id=group,
+            title=group,
+            options=_group_specs(config, group, language_choices=language_choices),
+        )
         for group in _CORE_GROUPS
     ]
     by_plugin: dict[str, SettingsSection] = {}
@@ -286,9 +303,10 @@ def build_sections(
             plugin_id = plugin_of_component(registry, provider) or provider or group
             section = by_plugin.get(plugin_id)
             if section is None:
+                # title stays empty: hosts render the id-style section_id
                 section = SettingsSection(
                     section_id=plugin_id,
-                    title=titles.get(plugin_id, plugin_id),
+                    title="",
                     plugin_id=plugin_id,
                 )
                 by_plugin[plugin_id] = section

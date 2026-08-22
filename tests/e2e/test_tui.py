@@ -245,12 +245,25 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             record: MailRecord | None = await service.get_mail("m-id")
             assert record is not None
             assert record.manual_urgency is Urgency.AD
-            # language switch persists
-            lang_select = cast(Select[Any], app.query_one("#language-select", Select))
+            # language switch persists — driven through the general.language
+            # option card (the standalone selector row was removed)
+            from mailflow_tui.settings import SettingsPane
+
+            settings_pane = app.query_one(SettingsPane)
+            await settings_pane.reload()
+            await pilot.pause(0.15)
+            from mailflow_tui.settings import OptionCard
+
+            lang_card = next(
+                card for card in app.query(OptionCard) if card.spec.key == "general.language"
+            )
+            lang_select = cast(Select[Any], lang_card.query_one(Select))
             lang_select.value = "zh-CN"
+            await pilot.pause(0.15)
+            await settings_pane._save("general.language", "zh-CN")  # pyright: ignore[reportPrivateUsage]
             await pilot.pause(0.05)
+            status_text = str(app.query_one("#settings-status").render())
             assert await service.get_language() == "zh-CN"
-            # the tab titles and headers re-translate on language change
             from textual.widgets import TabbedContent
 
             tabs = app.query_one(TabbedContent)
