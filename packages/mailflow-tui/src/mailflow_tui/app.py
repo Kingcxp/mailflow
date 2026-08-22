@@ -1202,6 +1202,123 @@ class MarketPane(Vertical):
         return await self._service.market.uninstall(plugin)
 
 
+class _BotStatusProbe:
+    """Connectivity probes for IM bot backends (OneBot v11 / WeChaty /
+    OpenClaw). Each returns a human-readable status line."""
+
+    @staticmethod
+    async def probe(provider: str, options: dict[str, Any]) -> str:
+        import httpx
+
+        try:
+            if provider == "onebot":
+                url = str(options.get("http_url", "")).rstrip("/")
+                if not url:
+                    return "not configured"
+                headers = {}
+                token = str(options.get("access_token", ""))
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    response = await client.post(f"{url}/get_login_info", json={}, headers=headers)
+                if response.status_code == 200:
+                    data = response.json().get("data") or {}
+                    return f"logged in as {data.get('nickname', '?')} ({data.get('user_id', '?')})"
+                return f"HTTP {response.status_code}"
+            if provider == "wechaty":
+                url = str(options.get("gateway_url", "")).rstrip("/")
+                if not url:
+                    return "not configured"
+                headers: dict[str, str] = {}
+                token_w = str(options.get("token", ""))
+                if token_w:
+                    headers["Authorization"] = f"Bearer {token_w}"
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    response = await client.get(f"{url}/health", headers=headers)
+                return "online" if response.status_code == 200 else f"HTTP {response.status_code}"
+            if provider == "openclaw-weixin":
+                url = str(options.get("base_url", "")).rstrip("/")
+                if not url:
+                    return "not configured"
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    response = await client.get(url)
+                return (
+                    "gateway reachable"
+                    if response.status_code < 500
+                    else f"HTTP {response.status_code}"
+                )
+        except Exception as exc:
+            return f"{type(exc).__name__}: unreachable"
+        return "unknown provider"
+
+
+class BotsPane(Vertical):
+    """平台登录: manage IM bot instances (OneBot/WeChaty/OpenClaw) and
+    check their login state. QR scanning happens in the bot runtime itself
+    (NapCat / WeChaty gateway / OpenClaw) — this tab verifies the session."""
+
+    IM_PROVIDERS: ClassVar[frozenset[str]] = frozenset({"onebot", "wechaty", "openclaw-weixin"})
+
+    def __init__(self, service: MailFlowService) -> None:
+        super().__init__()
+        self._service = service
+
+    def compose(self) -> ComposeResult:
+        yield Static(self._service.t("tui.bots_title"), id="bots-title")
+        yield DataTable(id="bots-table")
+        yield Button(self._service.t("tui.bots_check"), id="bots-check", variant="primary")
+        yield Static("", id="bots-status")
+
+    def _im_instances(self) -> list[tuple[str, str, dict[str, Any]]]:
+        out: list[tuple[str, str, dict[str, Any]]] = []
+        for notifier in self._service.config.notifiers:
+            if notifier.provider in self.IM_PROVIDERS:
+                out.append((notifier.notifier_id, notifier.provider, notifier.options))
+        return out
+
+    def _ensure_columns(self) -> None:
+        table = self.query_one("#bots-table", DataTable)
+        table.clear(columns=True)
+        table.add_column(self._service.t("plugin.header_name"), key="name")
+        table.add_column(
+            self._service.t("plugin.market_provider", default="provider"), key="provider"
+        )
+        table.add_column(self._service.t("tui.bots_targets"), key="targets")
+        table.add_column(self._service.t("tui.bots_status"), key="status")
+
+    def _render(self, statuses: dict[str, str] | None = None) -> None:
+        statuses = statuses or {}
+        table = self.query_one("#bots-table", DataTable)
+        table.clear()
+        for notifier_id, provider, options in self._im_instances():
+            targets = ", ".join(str(t) for t in options.get("targets") or []) or "-"
+            table.add_row(
+                notifier_id,
+                provider,
+                escape(targets),
+                statuses.get(notifier_id, "-"),
+                key=notifier_id,
+            )
+
+    def on_mount(self) -> None:
+        self._ensure_columns()
+        self._render()
+
+    async def relabel(self) -> None:
+        self.on_mount()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id != "bots-check":
+            return
+        status_node = self.query_one("#bots-status", Static)
+        status_node.update(self._service.t("tui.loading"))
+        results: dict[str, str] = {}
+        for notifier_id, provider, options in self._im_instances():
+            results[notifier_id] = await _BotStatusProbe.probe(provider, options)
+        self._render(results)
+        status_node.update(self._service.t("tui.bots_checked"))
+
+
 class MailFlowApp(App[None]):
     """Eight-tab administration UI."""
 
@@ -1245,6 +1362,8 @@ class MailFlowApp(App[None]):
                 # marketplace installs run uv against the local environment
                 with TabPane(self._service.t("tui.tab_market"), id="tab-market"):
                     yield MarketPane(self._service)
+            with TabPane(self._service.t("tui.tab_bots"), id="tab-bots"):
+                yield BotsPane(self._service)
             with TabPane(self._service.t("tui.tab_settings"), id="tab-settings"):
                 yield SettingsPane(self._service)
         yield Footer()
