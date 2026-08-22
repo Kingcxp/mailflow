@@ -32,3 +32,6 @@ logs/
 configs/local/
 configs/local.toml
 configs/*.local.toml
+
+# Per-developer test config (bootstrapped from example.toml on first run)
+configs/development.toml
