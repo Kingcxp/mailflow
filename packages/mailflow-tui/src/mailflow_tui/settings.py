@@ -445,9 +445,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                         placeholder=extra.default,
                     )
                 )
-                row.compose_add_child(
-                    Button("👁", id=f"{widget_id}-eye", classes="eye-btn")
-                )
+                row.compose_add_child(Button("👁", id=f"{widget_id}-eye", classes="eye-btn"))
                 yield row
             else:
                 yield Input(value=self._extra_value(extra), id=widget_id, placeholder=extra.default)
