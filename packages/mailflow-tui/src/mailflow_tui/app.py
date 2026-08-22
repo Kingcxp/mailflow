@@ -1234,12 +1234,12 @@ class _BotStatusProbe:
                 url = str(options.get("gateway_url", "")).rstrip("/")
                 if not url:
                     return "not configured"
-                headers: dict[str, str] = {}
+                wechaty_headers: dict[str, str] = {}
                 token_w = str(options.get("token", ""))
                 if token_w:
                     headers["Authorization"] = f"Bearer {token_w}"
                 async with httpx.AsyncClient(timeout=8.0) as client:
-                    response = await client.get(f"{url}/health", headers=headers)
+                    response = await client.get(f"{url}/health", headers=wechaty_headers)
                 return "online" if response.status_code == 200 else f"HTTP {response.status_code}"
             if provider == "openclaw-weixin":
                 url = str(options.get("base_url", "")).rstrip("/")
@@ -1291,7 +1291,7 @@ class BotsPane(Vertical):
         table.add_column(self._service.t("tui.bots_targets"), key="targets")
         table.add_column(self._service.t("tui.bots_status"), key="status")
 
-    def _render(self, statuses: dict[str, str] | None = None) -> None:
+    def _render_rows(self, statuses: dict[str, str] | None = None) -> None:
         statuses = statuses or {}
         table = self.query_one("#bots-table", DataTable)
         table.clear()
@@ -1320,7 +1320,7 @@ class BotsPane(Vertical):
         results: dict[str, str] = {}
         for notifier_id, provider, options in self._im_instances():
             results[notifier_id] = await _BotStatusProbe.probe(provider, options)
-        self._render(results)
+        self._render_rows(results)
         status_node.update(self._service.t("tui.bots_checked"))
 
 
