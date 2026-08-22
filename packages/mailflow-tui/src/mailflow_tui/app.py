@@ -664,6 +664,11 @@ class RuntimePane(Vertical):
                 yield Button(
                     self._service.t("tui.btn_enable"), id="runtime-plugin-enable", variant="success"
                 )
+                yield Button(
+                    self._service.t("tui.btn_uninstall"),
+                    id="runtime-plugin-uninstall",
+                    variant="warning",
+                )
             yield Static("", id="runtime-status")
             yield Static("", id="runtime-adapters")
             yield Static("", id="runtime-accounts")
@@ -780,25 +785,39 @@ class RuntimePane(Vertical):
         if self._selected_plugin is None:
             return
         button_id = event.button.id
+        status = self.query_one("#runtime-status", Static)
+        plugin_id = self._selected_plugin
         try:
             if button_id == "runtime-plugin-disable":
-                await self._service.plugin_disable(self._selected_plugin)
+                await self._service.plugin_disable(plugin_id)
             elif button_id == "runtime-plugin-enable":
-                await self._service.plugin_enable(self._selected_plugin)
+                created = await self._service.plugin_enable(plugin_id)
+            elif button_id == "runtime-plugin-uninstall":
+                output = await self._service.plugin_uninstall(plugin_id)
             else:
                 return
-        except (KeyError, ValueError) as exc:
-            self.query_one("#runtime-status", Static).update(str(exc))
+        except (KeyError, ValueError, RuntimeError) as exc:
+            status.update(f"[red]{exc}[/red]")
             return
-        self.query_one("#runtime-status", Static).update(
-            self._service.t(
-                "plugin.disabled_ok"
-                if button_id == "runtime-plugin-disable"
-                else "plugin.enabled_ok",
-                plugin_id=self._selected_plugin,
+        except Exception as exc:  # uv failures surface here too
+            status.update(f"[red]{exc}[/red]")
+            return
+        if button_id == "runtime-plugin-uninstall":
+            status.update(
+                f"{self._service.t('plugin.uninstalled_ok', plugin_id=plugin_id)}"
+                + f" ({self._service.t('plugin.restart_note')})"
+                + (f"\n{output}" if output else "")
             )
-            + f" ({self._service.t('plugin.restart_note')})"
-        )
+        elif button_id == "runtime-plugin-enable":
+            text = self._service.t("plugin.enabled_ok", plugin_id=plugin_id)
+            if created:
+                text += "\n" + self._service.t("plugin.instance_created", notifier_id=created)
+            status.update(f"{text}\n({self._service.t('plugin.applies_now')})")
+        else:
+            status.update(
+                f"{self._service.t('plugin.disabled_ok', plugin_id=plugin_id)}"
+                + f"\n({self._service.t('plugin.applies_now')})"
+            )
         await self.refresh_runtime()
 
 
