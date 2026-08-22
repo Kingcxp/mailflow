@@ -507,6 +507,14 @@ class MailPane(Vertical):
             await self.refresh_mail()
             return
         if button_id == "btn-reply":
+            if getattr(self._service, "remote", False):
+                from mailflow_server.client import RemoteUnsupported
+
+                try:
+                    raise RemoteUnsupported("reply drafts require a local service")
+                except RemoteUnsupported as exc:
+                    self._set_static("#mail-notes", f"[yellow]{exc}[/yellow]")
+                return
             record = await self._service.get_mail(self._selected_id)
             if record is not None:
                 # textual types Widget.app loosely; the cast pins the concrete app
@@ -1184,10 +1192,17 @@ class MailFlowApp(App[None]):
     ]
     TITLE = "MailFlow"
 
-    def __init__(self, service: MailFlowService, log_queue: queue_module.Queue[Any]) -> None:
+    def __init__(
+        self,
+        service: MailFlowService,
+        log_queue: queue_module.Queue[Any],
+        *,
+        remote: bool = False,
+    ) -> None:
         super().__init__()
         self._service = service
         self._log_queue = log_queue
+        self._remote = remote
         self._log_timer: Any = None
 
     def compose(self) -> ComposeResult:
@@ -1195,18 +1210,22 @@ class MailFlowApp(App[None]):
         with TabbedContent(initial="tab-mail"):
             with TabPane(self._service.t("tui.tab_mail"), id="tab-mail"):
                 yield MailPane(self._service)
-            with TabPane(self._service.t("tui.tab_mailboxes"), id="tab-mailboxes"):
-                yield AccountsPane(self._service)
             with TabPane(self._service.t("tui.tab_actions"), id="tab-actions"):
                 yield ActionsPane(self._service)
-            with TabPane(self._service.t("tui.tab_llms"), id="tab-llms"):
-                yield LLMPane(self._service)
+            if not self._remote:
+                # mailbox forms and history browsing need the local service
+                with TabPane(self._service.t("tui.tab_mailboxes"), id="tab-mailboxes"):
+                    yield AccountsPane(self._service)
+                with TabPane(self._service.t("tui.tab_llms"), id="tab-llms"):
+                    yield LLMPane(self._service)
             with TabPane(self._service.t("tui.tab_runtime"), id="tab-runtime"):
                 yield RuntimePane(self._service)
             with TabPane(self._service.t("tui.tab_logs"), id="tab-logs"):
                 yield LogsPane(self._service, self._log_queue)
-            with TabPane(self._service.t("tui.tab_market"), id="tab-market"):
-                yield MarketPane(self._service)
+            if not self._remote:
+                # marketplace installs run uv against the local environment
+                with TabPane(self._service.t("tui.tab_market"), id="tab-market"):
+                    yield MarketPane(self._service)
             with TabPane(self._service.t("tui.tab_settings"), id="tab-settings"):
                 yield SettingsPane(self._service)
         yield Footer()

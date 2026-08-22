@@ -325,14 +325,18 @@ def serve(
 
 @app.command()
 def tui(
-    config_path: str | None = typer.Option(
-        None, "--config", "-c", help="Path to the TOML config file (defaults used when omitted)"
+    config_path: str | None = typer.Option(None, "--config", "-c"),
+    local: bool = typer.Option(
+        False, "--local", help="Start the local admin REST+WS server alongside the TUI"
+    ),
+    remote: str | None = typer.Option(
+        None, "--remote", help="Connect to a running 'mailflow serve' URL instead"
     ),
 ) -> None:
-    """Launch the Textual terminal UI."""
+    """Launch the Textual terminal UI (local service, embedded server, or remote)."""
     from mailflow_tui.runner import run_tui
 
-    run_tui(config_path)
+    run_tui(config_path, local=local, remote_url=remote)
 
 
 def main() -> None:
