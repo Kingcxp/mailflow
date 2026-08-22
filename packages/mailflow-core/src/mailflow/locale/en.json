@@ -233,6 +233,7 @@
     },
     "plugin": {
       "already_installed": "{plugin_id} is already installed",
+      "applies_now": "applies immediately",
       "disable_usage": "plugin disable <plugin_id>",
       "disabled_ok": "Disabled {plugin_id}",
       "enable_usage": "plugin enable <plugin_id>",
@@ -248,6 +249,7 @@
       "install_usage": "plugin install <plugin_id>",
       "installed": "installed",
       "installed_ok": "Installed {plugin_id}",
+      "instance_created": "Auto-created notifier instance: {notifier_id} — configure it in Settings",
       "local_failed": "Some installs failed: {detail}",
       "local_installed": "Installed {count} local plugin(s): {plugins}",
       "local_none_found": "no plugins found under {path}",

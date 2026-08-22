@@ -155,6 +155,64 @@ class MailFlowRuntime:
                 self._account_status[account_id] = "stopped"
         logger.info("runtime stopped")
 
+    async def reconfigure(
+        self,
+        *,
+        config: MailFlowConfig,
+        sources: dict[str, MailSource],
+        pipeline: PipelineEngine,
+        notifiers: list[Notifier],
+        notifier_configs: list[NotifierConfig],
+    ) -> None:
+        """Hot-swap components after a settings change; the queue, workers
+        and scheduler loops keep running. Source tasks are restarted (their
+        adapters hold connections and per-adapter state); a restarted IMAP
+        source resumes from its persisted watermark semantics.
+
+        Storage swaps are deliberately not supported: a storage change still
+        requires a restart.
+        """
+        old_source_tasks = [task for task in self._tasks if task.get_name().startswith("source-")]
+        for task in old_source_tasks:
+            task.cancel()
+        if old_source_tasks:
+            await asyncio.gather(*old_source_tasks, return_exceptions=True)
+        self._tasks = [task for task in self._tasks if task not in old_source_tasks]
+        for source in self._sources.values():
+            with suppress(Exception):
+                await source.close()
+        self._config = config
+        self._account_configs = list(config.accounts)
+        self._sources = dict(sources)
+        self._pipeline = pipeline
+        self._notifiers = list(notifiers)
+        self._notifier_configs = list(notifier_configs)
+        for account in self._account_configs:
+            self._account_errors.pop(account.account_id, None)
+            if not account.enabled:
+                self._account_status[account.account_id] = "stopped"
+                continue
+            adapter = self._sources.get(account.account_id)
+            if adapter is None:
+                self._account_status[account.account_id] = "error"
+                self._account_errors[account.account_id] = (
+                    f"no source adapter for provider {account.provider!r}"
+                )
+                logger.error(
+                    "account %r: no source adapter for provider %r",
+                    account.account_id,
+                    account.provider,
+                )
+                continue
+            self._account_status[account.account_id] = "starting"
+            self._tasks.append(
+                asyncio.create_task(
+                    self._run_source(account, adapter), name=f"source-{account.account_id}"
+                )
+            )
+        await self._events.emit(f"{_EVENT_PREFIX}runtime.reconfigured")
+        logger.info("runtime reconfigured: %d accounts", len(self._account_configs))
+
     # -- source tasks ------------------------------------------------------------
 
     async def _run_source(self, account: MailAccountConfig, source: MailSource) -> None:

@@ -808,12 +808,13 @@ class CommandRouter:
         if len(args) != 1:
             return self._err(self._t("plugin.enable_usage"))
         try:
-            await self.service.plugin_enable(args[0])
+            created = await self.service.plugin_enable(args[0])
         except (KeyError, ValueError) as exc:
             return self._err(str(exc))
-        return self._ok(
-            self._t("plugin.enabled_ok", plugin_id=args[0]) + f" ({self._t('plugin.restart_note')})"
-        )
+        text = self._t("plugin.enabled_ok", plugin_id=args[0])
+        if created:
+            text += "\n" + self._t("plugin.instance_created", notifier_id=created)
+        return self._ok(f"{text}\n({self._t('plugin.applies_now')})")
 
     async def _cmd_plugin_disable(self, args: list[str]) -> CommandResponse:
         if len(args) != 1:
@@ -823,8 +824,7 @@ class CommandRouter:
         except (KeyError, ValueError) as exc:
             return self._err(str(exc))
         return self._ok(
-            self._t("plugin.disabled_ok", plugin_id=args[0])
-            + f" ({self._t('plugin.restart_note')})"
+            f"{self._t('plugin.disabled_ok', plugin_id=args[0])}\n({self._t('plugin.applies_now')})"
         )
 
     async def _cmd_plugin_install(self, args: list[str]) -> CommandResponse:

@@ -233,6 +233,7 @@
     },
     "plugin": {
       "already_installed": "{plugin_id} 已安装",
+      "applies_now": "已即时生效",
       "disable_usage": "plugin disable <插件id>",
       "disabled_ok": "已禁用 {plugin_id}",
       "enable_usage": "plugin enable <插件id>",
@@ -248,6 +249,7 @@
       "install_usage": "plugin install <插件id>",
       "installed": "已安装",
       "installed_ok": "已安装 {plugin_id}",
+      "instance_created": "已自动创建通知实例：{notifier_id} —— 请在设置中完成配置",
       "local_failed": "部分安装失败：{detail}",
       "local_installed": "已安装 {count} 个本地插件：{plugins}",
       "local_none_found": "在 {path} 下未找到插件",

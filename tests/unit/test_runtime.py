@@ -458,9 +458,22 @@ class TestReminderScheduler:
 
         events.subscribe("mailflow.action.reminder", capture)
         fired = await runtime.run_reminder_tick()
-        # the missed early window (2 days ago) catches up alongside day-of
-        assert fired == 2
-        assert {r["kind"] for r in reminders} == {"early", "day_of"}
+        # both windows whose scheduled time already passed fire (catch-up);
+        # before the configured reminder hour only day_of has passed, after
+        # it both early and day_of have — derive the expectation from the
+        # clock instead of assuming a wall-clock range
+        windows = dict(
+            reminder_times(
+                item,
+                runtime._config.general.timezone,  # pyright: ignore[reportPrivateUsage]
+                days_before=runtime._config.general.reminder_days_before,  # pyright: ignore[reportPrivateUsage]
+                hour=runtime._config.general.reminder_hour,  # pyright: ignore[reportPrivateUsage]
+                minute=runtime._config.general.reminder_minute,  # pyright: ignore[reportPrivateUsage]
+            )
+        )
+        due_kinds = {kind for when, kind in windows.items() if when <= datetime.now(UTC)}
+        assert fired == len(due_kinds)
+        assert {r["kind"] for r in reminders} == due_kinds
 
     async def test_future_item_does_not_fire(self) -> None:
         from mailflow.domain import ActionItem

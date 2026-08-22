@@ -144,6 +144,12 @@ class FakePluginManager:
     def snapshots(self, registry: ComponentRegistry) -> list[Any]:
         return []
 
+    def build_registry(self) -> ComponentRegistry:
+        return ComponentRegistry()
+
+    def enabled_infos(self) -> list[Any]:
+        return []
+
 
 def make_record(
     record_id: str = "m1",

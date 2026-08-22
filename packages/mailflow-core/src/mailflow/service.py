@@ -84,6 +84,37 @@ logger = logging.getLogger("mailflow.service")
 
 _LANGUAGE_PREFERENCE = "language"
 _REPLY_TOKEN_TTL = timedelta(minutes=10)
+_LIVE_GROUPS = frozenset({"accounts", "llms", "processors", "notifiers"})
+"""Config groups whose changes hot-apply to the running runtime."""
+
+
+def _bind_llm_processor(config: MailFlowConfig) -> MailFlowConfig:
+    """Give the built-in LLM analysis a binding as soon as an LLM exists.
+
+    Adding the first LLM (or renaming ids) must make analysis work without
+    the user hand-writing a [[processors]] entry: bind to the first LLM in
+    the chain — which is also the fallback head — and leave explicit user
+    bindings untouched.
+    """
+    if not config.llms:
+        return config
+    llm_ids = [llm.llm_id for llm in config.llms]
+    processor = next((p for p in config.processors if p.provider == "llm-importance"), None)
+    if processor is None:
+        config.processors.append(
+            ProcessorConfig(
+                processor_id="llm-importance",
+                provider="llm-importance",
+                priority=20,
+                llm=llm_ids[0],
+                fallback_llms=llm_ids[1:],
+            )
+        )
+        return config
+    if processor.llm is None or processor.llm not in llm_ids:
+        processor.llm = llm_ids[0]
+        processor.fallback_llms = llm_ids[1:]
+    return config
 
 
 class _DraftLocks:
@@ -169,6 +200,44 @@ class MailFlowService:
         await self.storage.close()
         self._started = False
         logger.info("mailflow service stopped")
+
+    async def reload_runtime(self) -> None:
+        """Rebuild sources, LLMs, pipeline and notifiers from the current
+        config without restarting: plugin enable/disable, account edits and
+        notifier changes apply immediately (storage swaps still require a
+        restart)."""
+        registry = self.plugin_manager.build_registry()
+        register_builtin_processors(registry)
+        self.registry = registry
+        sources = _build_sources(self.config, registry)
+        backends, llm_configs = _build_llms(self.config, registry)
+        router = LLMRouterImpl(backends, llm_configs)
+        language = self.config.general.summary_language or self.i18n.language
+        pipeline = _build_processors(self.config, registry, router, language=language)
+        notifiers: list[Notifier] = []
+        notifier_configs: list[NotifierConfig] = []
+        for notifier in self.config.notifiers:
+            if not notifier.enabled:
+                continue
+            if not registry.has(ComponentKind.NOTIFIER, notifier.provider):
+                logger.warning(
+                    "notifier %r: provider %r not loaded; skipping",
+                    notifier.notifier_id,
+                    notifier.provider,
+                )
+                continue
+            notifiers.append(registry.notifier_factory(notifier.provider)(notifier))
+            notifier_configs.append(notifier)
+        self.router = router
+        self.pipeline = pipeline
+        self.sources = sources
+        await self.runtime.reconfigure(
+            config=self.config,
+            sources=sources,
+            pipeline=pipeline,
+            notifiers=notifiers,
+            notifier_configs=notifier_configs,
+        )
 
     async def wait(self) -> None:
         """Block until the service is stopped (useful for standalone hosts)."""
@@ -544,6 +613,9 @@ class MailFlowService:
             write_config(updated, self.config_path)
         self.config = updated
         await self.events.emit("config.changed", key=key)
+        if key.split(".")[0] in _LIVE_GROUPS:
+            # accounts/llms/processors/notifiers changes apply immediately
+            await self.reload_runtime()
 
     async def set_setting(self, key: str, raw_value: Any) -> OptionSpec | None:
         """Coerce, validate and persist one option (scalar, list or mapping).
@@ -566,6 +638,7 @@ class MailFlowService:
         updated = add_entry(self.config, group, values)
         if group == "llms":
             updated = normalize_llm_chain(updated)
+            updated = _bind_llm_processor(updated)
         await self._persist_config(updated, group)
         return updated
 
@@ -575,6 +648,7 @@ class MailFlowService:
         updated = update_entry(self.config, group, index, values)
         if group == "llms":
             updated = normalize_llm_chain(updated)
+            updated = _bind_llm_processor(updated)
         await self._persist_config(updated, group)
         return updated
 
@@ -644,7 +718,8 @@ class MailFlowService:
         raise KeyError(self.t("plugin.unknown_plugin", plugin_id=plugin_id))
 
     async def plugin_disable(self, plugin_id: str) -> None:
-        """Add the plugin to the disabled list (applies on next start)."""
+        """Disable a plugin; its components unload immediately (config
+        entries stay, so re-enabling restores them)."""
         if self.config_path is None:
             raise ValueError("no config file loaded; start with --config to persist changes")
         from mailflow.config import write_config
@@ -656,9 +731,33 @@ class MailFlowService:
         plugins.enabled = [p for p in plugins.enabled if p != plugin_id]
         write_config(self.config, self.config_path)
         await self.events.emit("plugin.disabled", plugin_id=plugin_id)
+        await self.reload_runtime()
 
-    async def plugin_enable(self, plugin_id: str) -> None:
-        """Remove the plugin from the disabled list (applies on next start)."""
+    def _auto_instances_for(self, plugin_id: str) -> int:
+        """Ensure every notifier component of ``plugin_id`` has at least one
+        [[notifiers]] instance so enabling it has an observable effect;
+        returns how many instances were created. Sources and LLM backends
+        need credentials and are deliberately left to the user."""
+        created = 0
+        for component in self.registry.snapshots():
+            if component.plugin_id != plugin_id:
+                continue
+            if component.kind != ComponentKind.NOTIFIER:
+                continue
+            if any(n.provider == component.component_id for n in self.config.notifiers):
+                continue
+            self.config.notifiers.append(
+                NotifierConfig(
+                    notifier_id=f"{component.component_id}", provider=component.component_id
+                )
+            )
+            created += 1
+        return created
+
+    async def plugin_enable(self, plugin_id: str) -> str:
+        """Enable a plugin: components load immediately and notifier plugins
+        get a default instance when none exists. Returns the id of the
+        auto-created instance ('' when none was needed)."""
         if self.config_path is None:
             raise ValueError("no config file loaded; start with --config to persist changes")
         from mailflow.config import write_config
@@ -670,8 +769,13 @@ class MailFlowService:
         # plugin is part of it
         if plugins.enabled and plugin_id not in plugins.enabled:
             plugins.enabled.append(plugin_id)
+        created_instance = ""
+        if self._auto_instances_for(plugin_id):
+            created_instance = f"{self.config.notifiers[-1].notifier_id}"
         write_config(self.config, self.config_path)
         await self.events.emit("plugin.enabled", plugin_id=plugin_id)
+        await self.reload_runtime()
+        return created_instance
 
     def plugin_status(self, plugin_id: str) -> str:
         """'enabled' | 'disabled' | 'not_loaded' for the given plugin id."""
@@ -869,11 +973,13 @@ def _build_llms(
 
 
 def _default_processors() -> list[ProcessorConfig]:
-    """The out-of-the-box chain: deterministic rules first, LLM second."""
-    return [
-        ProcessorConfig(processor_id="rules", provider="rules", priority=10),
-        ProcessorConfig(processor_id="llm-importance", provider="llm-importance", priority=20),
-    ]
+    """No processors run out of the box: without a configured LLM there is
+    no meaningful analysis (mails are stored with the subject as summary),
+    and the keyword pre-filter produced low-quality canned summaries.
+    ``_bind_llm_processor`` creates the LLM binding automatically as soon
+    as the first LLM is configured; users can still add ``rules`` or any
+    other processor explicitly."""
+    return []
 
 
 def _build_llm_enhancers(config: MailFlowConfig, registry: ComponentRegistry) -> list[Any]:
