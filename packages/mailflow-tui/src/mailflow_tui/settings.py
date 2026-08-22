@@ -392,9 +392,13 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         if spec.editor is EditorKind.BOOLEAN:
             yield Switch(value=bool(current), id=widget_id)
         elif spec.editor is EditorKind.CHOICE or (spec.label == "provider" and choices):
+            initial = str(current) if str(current) in [str(c) for c in choices] else None
+            if spec.label == "provider" and not self._editing:
+                # a brand-new LLM defaults to the most common transport
+                initial = self._default_provider or initial
             yield Select(
                 [(str(choice), str(choice)) for choice in choices],
-                value=str(current) if str(current) in [str(c) for c in choices] else Select.NULL,
+                value=initial,
                 id=widget_id,
                 allow_blank=False,
             )
@@ -430,14 +434,21 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     allow_blank=False,
                 )
             elif extra.secret:
-                with Horizontal(classes="secret-row"):
-                    yield Input(
+                # mounted via mount_all (outside compose), so children are
+                # attached explicitly instead of with-block composition
+                row = Horizontal(classes="secret-row")
+                row.compose_add_child(
+                    Input(
                         value=self._extra_value(extra),
                         id=widget_id,
                         password=True,
                         placeholder=extra.default,
                     )
-                    yield Button("👁", id=f"{widget_id}-eye", classes="eye-btn")
+                )
+                row.compose_add_child(
+                    Button("👁", id=f"{widget_id}-eye", classes="eye-btn")
+                )
+                yield row
             else:
                 yield Input(value=self._extra_value(extra), id=widget_id, placeholder=extra.default)
 
