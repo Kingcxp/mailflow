@@ -21,9 +21,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
+from datetime import datetime
 from typing import Any, ClassVar
 
-from mailflow.domain import MailMessage
+from mailflow.config import LLMConfig
+from mailflow.domain import ComponentKind, MailMessage
 from mailflow.service import MailFlowService
 from mailflow.settings import (
     EditorKind,
@@ -165,8 +167,82 @@ class ListEditScreen(ModalScreen[str | None]):
             self.dismiss(None)
 
 
+class _Extra:
+    """One provider-specific form field: id, label key suffix, widget kind,
+    default and whether it lands in ``options`` (vs a top-level column)."""
+
+    __slots__ = ("default", "field_id", "into_options", "kind", "label", "secret")
+
+    def __init__(
+        self,
+        field_id: str,
+        *,
+        kind: str = "text",
+        default: str = "",
+        into_options: bool = True,
+        secret: bool = False,
+    ) -> None:
+        self.field_id = field_id
+        self.label = field_id.replace("_", " ")
+        self.kind = kind  # text | password | multiline
+        self.default = default
+        self.into_options = into_options
+        self.secret = secret
+
+
+_ADVANCED = ("headers", "query", "extra_body")
+
+_LLM_PROVIDER_FIELDS: dict[str, tuple[_Extra, ...]] = {
+    "openai-completions": (
+        _Extra("base_url", default="https://api.openai.com/v1", into_options=False),
+        _Extra("api_key", kind="password", secret=True),
+    ),
+    "openai-responses": (
+        _Extra("base_url", default="https://api.openai.com/v1", into_options=False),
+        _Extra("api_key", kind="password", secret=True),
+    ),
+    "openai-codex-responses": (
+        _Extra("base_url", default="https://chatgpt.com/backend-api", into_options=False),
+        _Extra("api_key", kind="password", secret=True),
+    ),
+    "azure-openai-responses": (
+        _Extra("base_url", default="https://YOUR-RESOURCE.openai.azure.com", into_options=False),
+        _Extra("api_key", kind="password", secret=True),
+        _Extra("api_version", default="preview"),
+    ),
+    "anthropic-messages": (
+        _Extra("base_url", default="https://api.anthropic.com", into_options=False),
+        _Extra("api_key", kind="password", secret=True),
+    ),
+    "google-generative-ai": (
+        _Extra("base_url", default="https://generativelanguage.googleapis.com", into_options=False),
+        _Extra("api_key", kind="password", secret=True),
+    ),
+    "google-vertex": (
+        _Extra("project"),
+        _Extra("location", default="us-central1"),
+        _Extra("service_account_file"),
+        _Extra("api_key", kind="password", secret=True),
+    ),
+}
+# the legacy alias behaves like plain completions
+_LLM_PROVIDER_FIELDS["openai-compatible"] = _LLM_PROVIDER_FIELDS["openai-completions"]
+
+_IMAP_PRESET_HOSTS: dict[str, tuple[str, int, bool]] = {
+    "qq": ("imap.qq.com", 993, True),
+    "163": ("imap.163.com", 993, True),
+    "outlook": ("outlook.office365.com", 993, True),
+    "gmail": ("imap.gmail.com", 993, True),
+}
+
+
 class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
-    """Form window for one structured entry (mailbox, LLM, processor, ...)."""
+    """Provider-aware form for one structured entry (mailbox, LLM, ...).
+
+    The ``provider`` dropdown re-renders the provider-specific section, so
+    users never hand-write TOML mappings; optional mapping fields stay
+    available under an "advanced" separator.
+    """
 
     BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss_modal", "Back")]
 
@@ -188,6 +264,16 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             for spec in entry_field_specs(entry_model(group))
             if spec.label not in hidden and spec.editor is not EditorKind.STRUCT_LIST
         ]
+        if group == "llms":
+            self._provider_choices = tuple(
+                sorted(service.registry.component_ids(ComponentKind.LLM_BACKEND))
+            )
+        elif group == "accounts":
+            self._provider_choices = tuple(
+                sorted(service.registry.component_ids(ComponentKind.MAIL_SOURCE))
+            )
+        else:
+            self._provider_choices = ()
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -196,6 +282,49 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         key = f"config.desc.{self._group}[].{spec.label}"
         translated = self._service.t(key)
         return spec.description if translated == key else translated
+
+    # -- helpers -------------------------------------------------------------
+
+    def _current_provider(self) -> str:
+        if self._group not in ("llms", "accounts"):
+            return ""
+        try:
+            selected = _select_text(self.query_one("#field-provider", Select))
+        except Exception:
+            selected = ""
+        return selected or str(self._values.get("provider", ""))
+
+    def _extras_for(self, provider: str) -> tuple[_Extra, ...]:
+        if self._group == "llms":
+            return _LLM_PROVIDER_FIELDS.get(provider, ())
+        if self._group == "accounts" and provider == "imap":
+            return (
+                _Extra("preset", default="qq"),
+                _Extra("username"),
+                _Extra("password", kind="password", secret=True),
+                _Extra("imap_folder", default="INBOX"),
+                _Extra("interval_seconds", default="300"),
+                _Extra("limit", default="20"),
+            )
+        return ()
+
+    def _core_value(self, label: str) -> Any:
+        spec = next((s for s in self._specs if s.label == label), None)
+        value = self._values.get(label, spec.default if spec else None)
+        return "" if value is None else value
+
+    def _extra_value(self, extra: _Extra) -> str:
+        pool = self._values.get("options") or {}
+        raw = (
+            self._values.get(extra.field_id)
+            if not extra.into_options
+            else pool.get(extra.field_id, self._values.get(extra.field_id))
+        )
+        if raw is None or raw == "":
+            return extra.default
+        return str(raw)
+
+    # -- composition -----------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         title_key = "tui.entry_form_edit" if self._editing else "tui.entry_form_new"
@@ -207,25 +336,33 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             with ScrollableContainer(id="entry-form-fields"):
                 for spec in self._specs:
                     yield from self._field_widgets(spec)
+                with Vertical(id="entry-form-extras"):
+                    yield from self._render_extras()
             yield Static("", id="entry-form-status")
             with Horizontal(classes="dialog-actions"):
+                if self._group == "llms":
+                    yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
                 yield Button(self._t("tui.btn_save"), id="entry-form-save", variant="success")
                 yield Button(self._t("tui.btn_back"), id="entry-form-back", variant="primary")
 
     def _field_widgets(self, spec: OptionSpec) -> ComposeResult:
         widget_id = f"field-{_slug(spec.label)}"
         current = self._values.get(spec.label, spec.default)
+        choices = spec.choices
+        if spec.label == "provider" and self._provider_choices:
+            choices = self._provider_choices  # type: ignore[assignment]
         yield Label(f"{spec.label}{' *' if spec.required else ''}", classes="field-label")
         description = self._describe(spec)
         if description:
-            yield Static(description, classes="field-desc")
+            yield Static(escape(description), classes="field-desc")
         if spec.editor is EditorKind.BOOLEAN:
             yield Switch(value=bool(current), id=widget_id)
-        elif spec.editor is EditorKind.CHOICE:
+        elif spec.editor is EditorKind.CHOICE or (spec.label == "provider" and choices):
             yield Select(
-                [(choice, choice) for choice in spec.choices],
-                value=str(current) if current in spec.choices else Select.NULL,
+                [(str(choice), str(choice)) for choice in choices],
+                value=str(current) if str(current) in [str(c) for c in choices] else Select.NULL,
                 id=widget_id,
+                allow_blank=False,
             )
         elif spec.editor in _MULTILINE_EDITORS:
             yield TextArea(
@@ -238,35 +375,200 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 password=spec.secret,
             )
 
-    def _collect(self) -> dict[str, Any]:
+    def _render_extras(self) -> ComposeResult:
+        provider = self._current_provider()
+        extras = self._extras_for(provider)
+        if extras:
+            yield Label(self._t("tui.provider_section", provider=provider), classes="field-label")
+        for extra in extras:
+            widget_id = f"extra-{_slug(extra.field_id)}"
+            yield Label(
+                extra.label + (" *" if extra.field_id == "project" else ""), classes="field-label"
+            )
+            if extra.kind == "choice":
+                yield Select(
+                    [(name, name) for name in _IMAP_PRESET_HOSTS],
+                    value=self._extra_value(extra) or "qq",
+                    id=widget_id,
+                    allow_blank=False,
+                )
+            elif extra.kind == "multiline":
+                yield TextArea(self._extra_value(extra), id=widget_id, classes="field-multiline")
+            else:
+                yield Input(
+                    value=self._extra_value(extra),
+                    id=widget_id,
+                    password=extra.secret,
+                    placeholder=extra.default,
+                )
+
+    def _rebuild_extras(self) -> None:
+        container = self.query_one_optional("#entry-form-extras", Vertical)
+        if container is None:
+            return
+        container.remove_children()
+        container.mount_all(list(self._render_extras()))
+
+    # -- collection ---------------------------------------------------------------
+
+    @staticmethod
+    def _split_mapping(text: str) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            out[name.strip()] = value.strip()
+        return out
+
+    def _collect_core(self) -> dict[str, Any]:
         values: dict[str, Any] = {}
         for spec in self._specs:
             selector = f"#field-{_slug(spec.label)}"
-            if spec.editor is EditorKind.BOOLEAN:
-                values[spec.label] = self.query_one(selector, Switch).value
+            node: Any | None = self.query_one_optional(selector)
+            if node is None:
                 continue
-            if spec.editor is EditorKind.CHOICE:
-                selected = _select_text(self.query_one(selector, Select))
-                if not selected:
-                    continue
-                values[spec.label] = coerce_value(spec, selected)
-                continue
-            raw = (
-                self.query_one(selector, TextArea).text
-                if spec.editor in _MULTILINE_EDITORS
-                else self.query_one(selector, Input).value
-            )
-            values[spec.label] = coerce_value(spec, raw)
+            if isinstance(node, Switch):
+                values[spec.label] = node.value
+            elif isinstance(node, Select):
+                selected = _select_text(node)
+                if selected:
+                    values[spec.label] = coerce_value(spec, selected)
+            elif isinstance(node, TextArea):
+                values[spec.label] = coerce_value(spec, node.text)
+            else:
+                text = node.value
+                if spec.secret and text == "":
+                    continue  # leave existing/blank secret untouched
+                values[spec.label] = coerce_value(spec, text)
         return values
+
+    def _collect_extras(self) -> dict[str, Any]:
+        provider = self._current_provider()
+        extras = self._extras_for(provider)
+        collected: dict[str, Any] = {"options": dict(self._values.get("options") or {})}
+        for extra in extras:
+            node: Any | None = self.query_one_optional(f"#extra-{_slug(extra.field_id)}")
+            raw = ""
+            if isinstance(node, Select):
+                raw = _select_text(node)
+            elif isinstance(node, (Input, TextArea)):
+                raw = node.value
+            if extra.field_id == "preset":
+                host, port, ssl_flag = _IMAP_PRESET_HOSTS.get(raw or "qq", ("", 993, True))
+                collected["options"]["imap_host"] = host
+                collected["options"]["imap_port"] = port
+                collected["options"]["imap_ssl"] = ssl_flag
+                continue
+            if isinstance(node, TextArea):  # headers / query / extra_body
+                parsed = self._split_mapping(raw)
+                if parsed:
+                    collected[extra.field_id] = parsed
+                continue
+            text = raw.strip()
+            if not text:
+                continue
+            target = collected["options"] if extra.into_options else collected
+            try:
+                target[extra.field_id] = (
+                    int(text) if extra.field_id in ("interval_seconds", "limit") else text
+                )
+            except ValueError as exc:
+                raise SettingsError(extra.field_id, f"{extra.label} must be a number") from exc
+        if not collected["options"]:
+            collected.pop("options")
+        return collected
+
+    def _collect(self) -> dict[str, Any]:
+        values = self._collect_core()
+        values.update(self._collect_extras())
+        return values
+
+    # -- llm connectivity test ---------------------------------------------------
+
+    async def _test_llm(self) -> None:
+        status = self.query_one("#entry-form-status", Static)
+        try:
+            values = self._collect()
+        except SettingsError as exc:
+            status.update(f"[red]{escape(exc.message)}[/red]")
+            return
+        llm_id = str(values.get("llm_id") or "test")
+        config = LLMConfig(
+            llm_id=llm_id,
+            provider=str(values.get("provider") or ""),
+            base_url=str(values.get("base_url") or ""),
+            api_key=str(values.get("api_key") or ""),
+            model=str(values.get("model") or ""),
+            headers=dict(values.get("headers") or {}),
+            query=dict(values.get("query") or {}),
+            options=dict(values.get("options") or {}),
+            timeout_seconds=20.0,
+            max_retries=0,
+        )
+        provider = config.provider
+        from mailflow.contracts import LLMBackend
+
+        backend: LLMBackend
+        try:
+            factory = self._service.registry.llm_factory(provider)
+            backend = factory(config)
+        except Exception as exc:
+            status.update(f"[red]{escape(str(exc))}[/red]")
+            return
+        started = datetime.now()
+        status.update(self._t("tui.llm_testing"))
+        try:
+            completion = await asyncio.wait_for(
+                backend.chat([{"role": "user", "content": "ping"}], temperature=0.0),
+                timeout=25.0,
+            )
+        except TimeoutError:
+            status.update(f"[red]{self._t('tui.llm_test_timeout')}[/red]")
+            return
+        except Exception as exc:
+            message = str(exc)
+            if config.api_key and config.api_key in message:
+                message = message.replace(config.api_key, "***")
+            status.update(f"[red]{escape(message[:300])}[/red]")
+            return
+        elapsed = (datetime.now() - started).total_seconds()
+        preview = escape(completion.text[:80])
+        status.update(
+            f"[green]{self._t('tui.llm_test_ok', seconds=f'{elapsed:.1f}', reply=preview)}[/green]"
+        )
+
+    # -- events -----------------------------------------------------------------
+
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "field-provider":
+            self._rebuild_extras()
+        elif event.select.id == "extra-preset":
+            preset = _IMAP_PRESET_HOSTS.get(_select_text(event.select))
+            if preset:
+                host, port, ssl_flag = preset
+                for field_id, value in (
+                    ("imap_host", host),
+                    ("imap_port", str(port)),
+                    ("imap_ssl", "true" if ssl_flag else "false"),
+                ):
+                    node = self.query_one_optional(f"#extra-{_slug(field_id)}")
+                    if isinstance(node, Input):
+                        node.value = value
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "entry-form-back":
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id
+        if button_id == "entry-form-back":
             self.dismiss(None)
             return
-        if event.button.id != "entry-form-save":
+        if button_id == "entry-form-test":
+            await self._test_llm()
+            return
+        if button_id != "entry-form-save":
             return
         try:
             values = self._collect()

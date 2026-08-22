@@ -64,6 +64,23 @@ def _remove_column(table: DataTable[Any], key: str) -> None:
         table.remove_column(key)
 
 
+def _apply_options(owner: Any, selector: str, pairs: list[tuple[str, str]]) -> None:
+    """set_options + restore value, skipping identical lists so startup never
+    pokes freshly mounted widgets (a Textual render race)."""
+    select = owner.query_one_optional(selector, Select)  # pyright: ignore[reportUnknownVariableType]
+    if select is None:
+        return
+    signatures = getattr(owner, "_options_signatures", {})
+    signature = repr(pairs)
+    if signatures.get(selector) == signature:
+        return
+    owner._options_signatures = {**signatures, selector: signature}
+    current = select.value
+    select.set_options(pairs)  # pyright: ignore[reportUnknownMemberType]
+    if current is not Select.NULL:
+        select.value = current  # pyright: ignore[reportUnknownMemberType]
+
+
 class ReplyModal(ModalScreen[Any]):
     """Draft, prepare and confirm a reply with a mandatory confirmation token.
 
@@ -389,25 +406,17 @@ class MailPane(Vertical):
     def _refresh_view_options(self) -> None:
         """Re-translate the sort/filter dropdowns after a language switch."""
         service = self._service
-        filter_select = self.query_one_optional("#mail-urgency-filter", Select)  # pyright: ignore[reportUnknownVariableType]
-        if filter_select is not None:
-            current = filter_select.value
-            filter_select.set_options(  # pyright: ignore[reportUnknownMemberType]
-                [("all", "all")] + [(u.value, u.value) for u in Urgency],
-            )
-            if current is not Select.NULL:
-                filter_select.value = current  # pyright: ignore[reportUnknownMemberType]
-        sort_select = self.query_one_optional("#mail-sort", Select)  # pyright: ignore[reportUnknownVariableType]
-        if sort_select is not None:
-            current = sort_select.value
-            sort_select.set_options(  # pyright: ignore[reportUnknownMemberType]
-                [
-                    (service.t("tui.sort_urgency"), "urgency"),
-                    (service.t("tui.sort_time"), "time"),
-                ]
-            )
-            if current is not Select.NULL:
-                sort_select.value = current  # pyright: ignore[reportUnknownMemberType]
+        _apply_options(
+            self, "#mail-urgency-filter", [("all", "all")] + [(u.value, u.value) for u in Urgency]
+        )
+        _apply_options(
+            self,
+            "#mail-sort",
+            [
+                (service.t("tui.sort_urgency"), "urgency"),
+                (service.t("tui.sort_time"), "time"),
+            ],
+        )
 
     def _matches(self, record: MailRecord, query: str) -> bool:
         haystack = f"{record.mail.subject} {record.mail.sender.address} {record.summary}".lower()
@@ -576,16 +585,17 @@ class ActionsPane(Vertical):
             )
             items = [item for item in items if item.due_at <= horizon]
         types = sorted({item.action_type for item in self._items})
-        type_select = self.query_one_optional("#actions-type-filter", Select)  # pyright: ignore[reportUnknownVariableType]
-        if type_select is not None:
-            current = self._select_value("#actions-type-filter")
-            type_select.set_options(  # pyright: ignore[reportUnknownMemberType]
-                [(self._service.t("tui.filter_all_types"), "all")] + [(t, t) for t in types],
-            )
-            if current not in {"all", *types}:
-                current = "all"
-            if str(type_select.value) != current:  # avoid re-entrant refresh
-                type_select.value = current  # pyright: ignore[reportUnknownMemberType]
+        _apply_options(
+            self,
+            "#actions-type-filter",
+            [(self._service.t("tui.filter_all_types"), "all")] + [(t, t) for t in types],
+        )
+        current = self._select_value("#actions-type-filter")
+        if current not in {"all", *types}:
+            # stale selection vanished from the list: reset without recursing
+            type_select = self.query_one_optional("#actions-type-filter", Select)  # pyright: ignore[reportUnknownVariableType]
+            if type_select is not None and str(type_select.value) != "all":
+                type_select.value = "all"  # pyright: ignore[reportUnknownMemberType]
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
