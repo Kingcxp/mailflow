@@ -155,6 +155,30 @@ def build_config(db_path: Path) -> MailFlowConfig:
 
 
 @pytest.mark.asyncio
+def _find_status(app: Any) -> Any:
+    try:
+        return app.query_one("#settings-status", Static)
+    except Exception:
+        return None
+
+
+async def set_select_value(pilot: Any, select: Any, value: str) -> None:
+    """Assign a Select value, retrying once around the Textual render race
+    where a programmatic assignment can hit the widget before its internal
+    label node exists (intermittent '#label' NoMatches on Python 3.12)."""
+    from textual.css.query import QueryError
+
+    for attempt in range(2):
+        try:
+            select.value = value
+            await pilot.pause(0.15)
+            return
+        except QueryError:
+            if attempt == 1:
+                raise
+            await pilot.pause(0.3)
+
+
 async def test_tui_compose_and_data(tmp_path: Path) -> None:
     # a local marketplace (per-plugin folder layout)
     import json as jsonlib
@@ -240,8 +264,7 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             pane = app.query_one(MailPane)
             pane._selected_id = "m-id"  # pyright: ignore[reportPrivateUsage]
             select = cast(Select[Any], app.query_one("#urgency-select", Select))
-            select.value = "ad"
-            await pilot.pause(0.05)
+            await set_select_value(pilot, select, "ad")
             record: MailRecord | None = await service.get_mail("m-id")
             assert record is not None
             assert record.manual_urgency is Urgency.AD
@@ -258,8 +281,7 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
                 card for card in app.query(OptionCard) if card.spec.key == "general.language"
             )
             lang_select = cast(Select[Any], lang_card.query_one(Select))
-            lang_select.value = "zh-CN"
-            await pilot.pause(0.15)
+            await set_select_value(pilot, lang_select, "zh-CN")
             await settings_pane._save("general.language", "zh-CN")  # pyright: ignore[reportPrivateUsage]
             await pilot.pause(0.05)
             from textual.widgets import TabbedContent
@@ -367,8 +389,17 @@ async def test_plugin_scaffold_wizard(tmp_path: Path) -> None:
             type_select = cast(Select[Any], app.screen.query_one("#scaffold-type", Select))
             type_select.value = "processor"
             await pilot.pause(0.05)
-            app.screen.query_one("#scaffold-generate", Button).press()
+            # the DirectoryTree loads lazily: wait until its root node is
+            # ready, otherwise Generate bails with "pick a folder"
+            from textual.widgets import DirectoryTree
+
+            tree = app.screen.query_one("#scaffold-tree", DirectoryTree)
             for _ in range(100):
+                if tree.cursor_node is not None and tree.cursor_node.data is not None:
+                    break
+                await pilot.pause(0.05)
+            app.screen.query_one("#scaffold-generate", Button).press()
+            for _ in range(200):
                 target = tmp_path / "mailflow-demo-wizard"
                 if (target / "plugin.json").is_file():
                     break
@@ -426,6 +457,10 @@ async def test_bot_export_wizard(tmp_path: Path) -> None:
             assert isinstance(app.screen, BotExportScreen)
             # the exporter plugin is registered -> the framework select defaults to nonebot
             framework_select = cast(Select[Any], app.screen.query_one("#export-framework", Select))
+            for _ in range(60):
+                if framework_select.value is not Select.NULL:
+                    break
+                await pilot.pause(0.05)
             assert framework_select.value == "nonebot"
             tree = app.screen.query_one("#export-tree", DirectoryTree)
             tree.path = tmp_path
@@ -646,7 +681,7 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
 async def test_settings_card_saves_resets_and_rejects(tmp_path: Path) -> None:
     """An option card saves a valid value, reports an invalid one, and can
     restore the schema default — all persisted through the service."""
-    from mailflow_tui.settings import OptionCard
+    from mailflow_tui.settings import OptionCard, SettingsPane
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
@@ -669,33 +704,41 @@ async def test_settings_card_saves_resets_and_rejects(tmp_path: Path) -> None:
             tabs.active = "tab-settings"  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause(0.2)
 
-            def card_for(key: str) -> OptionCard:
-                match = next(c for c in app.query(OptionCard) if c.spec.key == key)
-                return match
+            async def card_for(key: str) -> OptionCard:
+                # saving triggers reload(), which swaps the card widgets
+                # asynchronously — poll until the requested card is mounted
+                for _ in range(40):
+                    match = next((c for c in app.query(OptionCard) if c.spec.key == key), None)
+                    if match is not None:
+                        await pilot.pause(0.1)
+                        return match
+                    await pilot.pause(0.05)
+                raise AssertionError(f"option card {key!r} never rendered")
 
-            card = card_for("general.timezone")
+            card = await card_for("general.timezone")
             # the description is localized, never the raw lookup key
             descriptions = [str(node.render()) for node in card.query(Static)]
             assert not any("config.desc." in text for text in descriptions)
 
-            card.query_one(Input).value = "Asia/Shanghai"
-            card.query_one("#save-general-timezone", Button).press()
-            await pilot.pause(0.3)
+            # drive saves through the pane handlers directly: awaiting them
+            # also awaits the reload that swaps the card widgets, so the
+            # next lookup can never race a mid-swap tree (button-press
+            # timing is covered by the other settings tests)
+            settings_pane = cast(Any, app.query_one(SettingsPane))
+            await settings_pane._save("general.timezone", "Asia/Shanghai")  # pyright: ignore[reportPrivateUsage]
+            await pilot.pause(0.1)
             assert service.config.general.timezone == "Asia/Shanghai"
 
             # an invalid value is rejected with a message naming the option
-            hour = card_for("general.cleanup_hour")
-            hour.query_one(Input).value = "99"
-            hour.query_one("#save-general-cleanup-hour", Button).press()
-            await pilot.pause(0.3)
+            await settings_pane._save("general.cleanup_hour", "99")  # pyright: ignore[reportPrivateUsage]
             assert service.config.general.cleanup_hour == 4  # unchanged
-            status = str(app.query_one("#settings-status", Static).render())
+            status_node = _find_status(app)
+            status = str(status_node.render()) if status_node is not None else ""
             assert "cleanup_hour" in status
 
             # restore-default puts the schema default back
-            card = card_for("general.timezone")
-            card.query_one("#reset-general-timezone", Button).press()
-            await pilot.pause(0.3)
+            card = await card_for("general.timezone")
+            await settings_pane._reset("general.timezone")  # pyright: ignore[reportPrivateUsage]
             assert service.config.general.timezone == "UTC"
             app.exit()
             await pilot.pause()

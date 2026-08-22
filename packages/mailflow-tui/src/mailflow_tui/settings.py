@@ -721,7 +721,15 @@ class SettingsPane(Vertical):
     async def reload(self) -> None:
         """Rebuild sidebar and cards from the current config."""
         self._sections = self._service.settings_sections()
+        # the sidebar ListView may not exist yet when reload is triggered by
+        # on_mount or an event handler racing compose — wait briefly instead
+        # of raising MountError
         listing = self.query_one_optional("#settings-sections", ListView)
+        for _ in range(100):
+            if listing is not None or not self.is_mounted:
+                break
+            await asyncio.sleep(0.02)
+            listing = self.query_one_optional("#settings-sections", ListView)
         if listing is None or not self._sections:
             return
         ids = {section.section_id for section in self._sections}

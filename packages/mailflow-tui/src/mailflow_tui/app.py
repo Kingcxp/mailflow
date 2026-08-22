@@ -80,6 +80,11 @@ def _apply_options(owner: Any, selector: str, pairs: list[tuple[str, str]]) -> N
     signature = repr(pairs)
     if signatures.get(selector) == signature:
         return
+    if not getattr(owner, "_options_seeded", False):
+        # compose already mounted these exact options; poking a freshly
+        # mounted Select races its internal label rendering (Textual #bug)
+        owner._options_seeded = True
+        return
     owner._options_signatures = {**signatures, selector: signature}
     current = select.value
     select.set_options(pairs)  # pyright: ignore[reportUnknownMemberType]
