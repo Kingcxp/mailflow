@@ -171,7 +171,15 @@ class _Extra:
     """One provider-specific form field: id, label key suffix, widget kind,
     default and whether it lands in ``options`` (vs a top-level column)."""
 
-    __slots__ = ("default", "field_id", "into_options", "kind", "label", "secret")
+    __slots__ = (
+        "default",
+        "field_id",
+        "into_options",
+        "kind",
+        "label",
+        "required",
+        "secret",
+    )
 
     def __init__(
         self,
@@ -181,52 +189,76 @@ class _Extra:
         default: str = "",
         into_options: bool = True,
         secret: bool = False,
+        required: bool = False,
     ) -> None:
         self.field_id = field_id
         self.label = field_id.replace("_", " ")
-        self.kind = kind  # text | password | multiline
+        self.kind = kind  # text | password | choice
         self.default = default
         self.into_options = into_options
         self.secret = secret
+        self.required = required
 
 
 _ADVANCED = ("headers", "query", "extra_body")
 
 _LLM_PROVIDER_FIELDS: dict[str, tuple[_Extra, ...]] = {
     "openai-completions": (
-        _Extra("base_url", default="https://api.openai.com/v1", into_options=False),
-        _Extra("api_key", kind="password", secret=True),
+        _Extra("base_url", default="https://api.openai.com/v1", into_options=False, required=True),
+        _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
     ),
     "openai-responses": (
-        _Extra("base_url", default="https://api.openai.com/v1", into_options=False),
-        _Extra("api_key", kind="password", secret=True),
+        _Extra("base_url", default="https://api.openai.com/v1", into_options=False, required=True),
+        _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
     ),
     "openai-codex-responses": (
-        _Extra("base_url", default="https://chatgpt.com/backend-api", into_options=False),
-        _Extra("api_key", kind="password", secret=True),
+        _Extra(
+            "base_url",
+            default="https://chatgpt.com/backend-api",
+            into_options=False,
+            required=True,
+        ),
+        _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
     ),
     "azure-openai-responses": (
-        _Extra("base_url", default="https://YOUR-RESOURCE.openai.azure.com", into_options=False),
-        _Extra("api_key", kind="password", secret=True),
+        _Extra(
+            "base_url",
+            default="https://YOUR-RESOURCE.openai.azure.com",
+            into_options=False,
+            required=True,
+        ),
+        _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
         _Extra("api_version", default="preview"),
     ),
     "anthropic-messages": (
-        _Extra("base_url", default="https://api.anthropic.com", into_options=False),
-        _Extra("api_key", kind="password", secret=True),
+        _Extra("base_url", default="https://api.anthropic.com", into_options=False, required=True),
+        _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
     ),
     "google-generative-ai": (
-        _Extra("base_url", default="https://generativelanguage.googleapis.com", into_options=False),
-        _Extra("api_key", kind="password", secret=True),
+        _Extra(
+            "base_url",
+            default="https://generativelanguage.googleapis.com",
+            into_options=False,
+            required=True,
+        ),
+        _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
     ),
     "google-vertex": (
-        _Extra("project"),
+        _Extra("project", required=True),
         _Extra("location", default="us-central1"),
         _Extra("service_account_file"),
-        _Extra("api_key", kind="password", secret=True),
+        _Extra("api_key", kind="password", into_options=False, secret=True),
     ),
 }
 # the legacy alias behaves like plain completions
 _LLM_PROVIDER_FIELDS["openai-compatible"] = _LLM_PROVIDER_FIELDS["openai-completions"]
+
+_MINIMAL_CORE_FIELDS: dict[str, frozenset[str]] = {
+    # everything else (timeouts, retries, fallback chains, raw mappings) is
+    # editable in config.toml or via `config set`; forms stay minimal
+    "llms": frozenset({"llm_id", "model", "provider"}),
+    "accounts": frozenset({"account_id", "provider", "email", "enabled"}),
+}
 
 _IMAP_PRESET_HOSTS: dict[str, tuple[str, int, bool]] = {
     "qq": ("imap.qq.com", 993, True),
@@ -259,11 +291,16 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         self._group = group
         self._values = dict(values or {})
         self._editing = values is not None
+        minimal = _MINIMAL_CORE_FIELDS.get(group)
         self._specs = [
             spec
             for spec in entry_field_specs(entry_model(group))
-            if spec.label not in hidden and spec.editor is not EditorKind.STRUCT_LIST
+            if spec.label not in hidden
+            and spec.editor is not EditorKind.STRUCT_LIST
+            and (minimal is None or spec.label in minimal)
+            and spec.editor not in _MULTILINE_EDITORS  # no hand-written TOML
         ]
+        self._default_provider = "openai-completions" if group == "llms" else ""
         if group == "llms":
             self._provider_choices = tuple(
                 sorted(service.registry.component_ids(ComponentKind.LLM_BACKEND))
@@ -292,7 +329,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             selected = _select_text(self.query_one("#field-provider", Select))
         except Exception:
             selected = ""
-        return selected or str(self._values.get("provider", ""))
+        return selected or str(self._values.get("provider", "")) or self._default_provider
 
     def _extras_for(self, provider: str) -> tuple[_Extra, ...]:
         if self._group == "llms":
@@ -300,8 +337,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         if self._group == "accounts" and provider == "imap":
             return (
                 _Extra("preset", default="qq"),
-                _Extra("username"),
-                _Extra("password", kind="password", secret=True),
+                _Extra("username", required=True),
+                _Extra("password", kind="password", secret=True, required=True),
                 _Extra("imap_folder", default="INBOX"),
                 _Extra("interval_seconds", default="300"),
                 _Extra("limit", default="20"),
@@ -365,12 +402,16 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             yield TextArea(
                 as_editor_text(spec.editor, current), id=widget_id, classes="field-multiline"
             )
+        elif spec.secret:
+            with Horizontal(classes="secret-row"):
+                yield Input(
+                    value="" if current is None else str(current),
+                    id=widget_id,
+                    password=True,
+                )
+                yield Button("👁", id=f"{widget_id}-eye", classes="eye-btn")
         else:
-            yield Input(
-                value="" if current is None else str(current),
-                id=widget_id,
-                password=spec.secret,
-            )
+            yield Input(value="" if current is None else str(current), id=widget_id)
 
     def _render_extras(self) -> ComposeResult:
         provider = self._current_provider()
@@ -379,9 +420,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             yield Label(self._t("tui.provider_section", provider=provider), classes="field-label")
         for extra in extras:
             widget_id = f"extra-{_slug(extra.field_id)}"
-            yield Label(
-                extra.label + (" *" if extra.field_id == "project" else ""), classes="field-label"
-            )
+            marker = " *" if extra.required else ""
+            yield Label(extra.label + marker, classes="field-label")
             if extra.kind == "choice":
                 yield Select(
                     [(name, name) for name in _IMAP_PRESET_HOSTS],
@@ -389,21 +429,25 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     id=widget_id,
                     allow_blank=False,
                 )
-            elif extra.kind == "multiline":
-                yield TextArea(self._extra_value(extra), id=widget_id, classes="field-multiline")
+            elif extra.secret:
+                with Horizontal(classes="secret-row"):
+                    yield Input(
+                        value=self._extra_value(extra),
+                        id=widget_id,
+                        password=True,
+                        placeholder=extra.default,
+                    )
+                    yield Button("👁", id=f"{widget_id}-eye", classes="eye-btn")
             else:
-                yield Input(
-                    value=self._extra_value(extra),
-                    id=widget_id,
-                    password=extra.secret,
-                    placeholder=extra.default,
-                )
+                yield Input(value=self._extra_value(extra), id=widget_id, placeholder=extra.default)
 
-    def _rebuild_extras(self) -> None:
+    async def _rebuild_extras(self) -> None:
         container = self.query_one_optional("#entry-form-extras", Vertical)
         if container is None:
             return
-        container.remove_children()
+        # the removal must complete BEFORE new widgets mount, otherwise a
+        # same-id child is still present and Textual raises DuplicateIds
+        await container.remove_children()
         container.mount_all(list(self._render_extras()))
 
     # -- collection ---------------------------------------------------------------
@@ -467,6 +511,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 continue
             text = raw.strip()
             if not text:
+                if extra.required:
+                    raise SettingsError(extra.field_id, f"{extra.label} is required")
                 continue
             target = collected["options"] if extra.into_options else collected
             try:
@@ -475,6 +521,15 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 )
             except ValueError as exc:
                 raise SettingsError(extra.field_id, f"{extra.label} must be a number") from exc
+        if (
+            provider == "google-vertex"
+            and not collected["options"].get("service_account_file")
+            and not collected.get("api_key")
+        ):
+            raise SettingsError(
+                "credential",
+                "google-vertex needs api_key (access token) or service_account_file",
+            )
         if not collected["options"]:
             collected.pop("options")
         return collected
@@ -542,7 +597,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "field-provider":
-            self._rebuild_extras()
+            await self._rebuild_extras()
         elif event.select.id == "extra-preset":
             preset = _IMAP_PRESET_HOSTS.get(_select_text(event.select))
             if preset:
@@ -560,7 +615,17 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         self.dismiss(None)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        button_id = event.button.id
+        button_id = event.button.id or ""
+        if button_id.endswith("-eye"):
+            input_id = button_id[: -len("-eye")]
+            try:
+                secret_input = self.query_one(f"#{input_id}", Input)
+            except Exception:
+                return
+            secret_input.password = not secret_input.password
+            event.button.label = "🙈" if secret_input.password else "👁"
+            event.stop()
+            return
         if button_id == "entry-form-back":
             self.dismiss(None)
             return
@@ -665,6 +730,7 @@ class SettingsPane(Vertical):
         self._active = ""
         self._query = ""
         self._render_lock = asyncio.Lock()
+        self._reload_lock = asyncio.Lock()
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -719,7 +785,15 @@ class SettingsPane(Vertical):
         return spec.description if translated == key else translated
 
     async def reload(self) -> None:
-        """Rebuild sidebar and cards from the current config."""
+        """Rebuild sidebar and cards from the current config.
+
+        Serialized: a save and a language-changed relabel can fire two
+        reloads at once, and interleaved clear/append passes duplicated
+        every sidebar entry."""
+        async with self._reload_lock:
+            await self._reload_unlocked()
+
+    async def _reload_unlocked(self) -> None:
         self._sections = self._service.settings_sections()
         # the sidebar ListView may not exist yet when reload is triggered by
         # on_mount or an event handler racing compose — wait briefly instead

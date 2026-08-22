@@ -701,3 +701,19 @@ ListEditScreen, EntryFormScreen {
     padding: 0 1;
     color: $text-muted;
 }
+
+
+.secret-row {
+    height: auto;
+    align-vertical: middle;
+}
+
+.secret-row Input {
+    width: 1fr;
+}
+
+.eye-btn {
+    width: 5;
+    min-width: 5;
+    margin-left: 0;
+}

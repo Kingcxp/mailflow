@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 import queue as queue_module
 import secrets
+from pathlib import Path
 from typing import Any
 
 from mailflow.commands import CommandRouter
