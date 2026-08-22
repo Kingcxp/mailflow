@@ -12,7 +12,7 @@ import asyncio
 import base64
 import json
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 
 import httpx
 
@@ -28,12 +28,13 @@ def _basic(username: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Basic {token}"}
 
 
-def _websocket_connect() -> Any:
+def _websocket_connect() -> Callable[..., Any]:
     """websockets ships with uvicorn[standard]; imported lazily so the REST
     client works without it."""
     import websockets  # type: ignore[import-not-found,unused-ignore]
 
-    return cast(Any, websockets.connect)
+    connect_fn: Callable[..., Any] = websockets.connect  # pyright: ignore[reportUnknownMemberType,reportUnknownMemberType]
+    return connect_fn
 
 
 class RemoteClient:
@@ -115,12 +116,12 @@ class RemoteClient:
                     frame = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                event = frame.get("event", "")
-                payload = frame.get("payload") or {}
+                event = str(frame.get("event", ""))
+                payload_map: dict[str, Any] = dict(frame.get("payload") or {})
                 if event == "log":
                     await self.log_queue.put(str(frame.get("line", "")))
                     continue
-                await self._dispatch(event, payload)
+                await self._dispatch(event, payload_map)
 
     # -- service-like surface ----------------------------------------------------
 

@@ -133,10 +133,10 @@ async def _run_remote() -> None:
     async def _validate(url: str, user: str, password: str) -> dict[str, Any] | None:
         import httpx
 
-        from mailflow_tui.remote import _basic_header
+        from mailflow_tui.remote import basic_header
 
         async with httpx.AsyncClient(base_url=url, timeout=10.0) as probe:
-            response = await probe.get("/snapshot", headers=_basic_header(user, password))
+            response = await probe.get("/snapshot", headers=basic_header(user, password))
         if response.status_code != 200:
             return None
         payload: dict[str, Any] = response.json()

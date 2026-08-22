@@ -10,7 +10,7 @@ import contextlib
 import json
 import queue as queue_module
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from httpx import AsyncClient
 from mailflow_server.client import RemoteClient, RemoteUnsupported
@@ -34,9 +34,9 @@ def load_session() -> dict[str, Any]:
         return {}
     session: dict[str, Any] = {}
     if isinstance(loaded, dict):
-        entries: dict[Any, Any] = loaded
-        for key, value in entries.items():
-            session[str(key)] = value
+        mapping = cast("dict[str, Any]", loaded)
+        for raw_key, raw_value in mapping.items():
+            session[str(raw_key)] = raw_value
     return session
 
 
@@ -54,7 +54,7 @@ def clear_password() -> None:
     save_session(data)
 
 
-def _basic_header(username: str, password: str) -> dict[str, str]:
+def basic_header(username: str, password: str) -> dict[str, str]:
     token = base64.b64encode(f"{username}:{password}".encode()).decode()
     return {"Authorization": f"Basic {token}"}
 
@@ -105,7 +105,7 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
             return
         async with AsyncClient(base_url=url, timeout=10.0) as probe:
             try:
-                response = await probe.get("/snapshot", headers=_basic_header(user, password))
+                response = await probe.get("/snapshot", headers=basic_header(user, password))
             except Exception as exc:
                 status.update(f"[red]{type(exc).__name__}: cannot reach {url}[/red]")
                 return
@@ -258,6 +258,18 @@ class _SectionView:
         self.options = [_OptionView(option) for option in data.get("options", [])]
 
 
+def _as_str_lines(value: Any) -> str:
+    """Render a JSON list/dict as editor text; typed via Any intermediates so
+    both mypy and pyright treat element types as known-any."""
+    if isinstance(value, list):
+        items: list[Any] = value  # pyright: ignore[reportUnknownVariableType]
+        return "\n".join(str(item) for item in items)
+    if isinstance(value, dict):
+        mapping: dict[Any, Any] = value  # pyright: ignore[reportUnknownVariableType]
+        return "\n".join(f"{k} = {v}" for k, v in mapping.items())
+    return ""
+
+
 class _OptionView:
     _SECRET_MARKERS = ("api_key", "token", "password", "secret")
 
@@ -282,12 +294,7 @@ class _OptionView:
 
     def display_value(self) -> str:
         value: Any = self.value
-        if isinstance(value, list):
-            return "\n".join(str(item) for item in value)
-        if isinstance(value, dict):
-            mapping: dict[Any, Any] = value
-            return "\n".join(f"{k} = {v}" for k, v in mapping.items())
-        return "" if value is None else str(value)
+        return _as_str_lines(value)
 
 
 class _RecordView:

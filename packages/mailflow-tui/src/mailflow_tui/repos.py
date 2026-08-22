@@ -45,13 +45,13 @@ class ReposScreen(ModalScreen[bool | None]):
         self.dismiss(None)
 
     def on_mount(self) -> None:
-        table = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+        table: DataTable[Any] = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         table.add_column(self._t("plugin.header_name"), key="name")  # pyright: ignore[reportUnknownMemberType]
         table.add_column(self._t("tui.repos_url_header"), key="url")  # pyright: ignore[reportUnknownMemberType]
         self._reload()
 
     def _reload(self) -> None:
-        table = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+        table: DataTable[Any] = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         table.clear()  # pyright: ignore[reportUnknownMemberType]
         for repo in self._service.config.plugins.repositories:
             table.add_row(repo.name, repo.url, key=repo.name)  # pyright: ignore[reportUnknownMemberType]
@@ -72,12 +72,12 @@ class ReposScreen(ModalScreen[bool | None]):
 
     def on_data_table_row_selected(self, event: Any) -> None:
         """Double-click / Enter on a repo loads it into the form for editing."""
-        table = self.query_one("#repos-table", DataTable)
+        table: DataTable[Any] = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         try:
-            row = table.get_row_at(table.cursor_row)
+            row_values = table.get_row_at(table.cursor_row)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         except Exception:
             return
-        name, url = str(row[0]), str(row[1])
+        name, url = str(row_values[0]), str(row_values[1])
         self._editing_name = name
         self.query_one("#repos-name", Input).value = name
         self.query_one("#repos-url", Input).value = url
@@ -121,13 +121,13 @@ class ReposScreen(ModalScreen[bool | None]):
         self.notify(self._t("plugin.repo_added", name=name), timeout=5)
 
     async def _remove_repo(self) -> None:
-        table = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
-        row_key = table.cursor_row
-        if row_key is None:  # pyright: ignore[reportUnnecessaryComparison]
+        table: DataTable[Any] = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+        row_index = table.cursor_row
+        if row_index < 0:
             self.notify(self._t("tui.repos_pick_first"), severity="error", timeout=6)
             return
-        row = table.get_row_at(row_key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-        name = str(row[0])  # pyright: ignore[reportUnknownArgumentType, reportUnknownIndexType]
+        row_values = table.get_row_at(row_index)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        name = str(row_values[0])  # pyright: ignore[reportUnknownArgumentType, reportUnknownIndexType]
         try:
             await self._service.plugin_repo_remove(name)
         except KeyError as exc:

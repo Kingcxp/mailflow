@@ -35,6 +35,7 @@ from textual.widgets import (
     TextArea,
 )
 
+from mailflow_tui.bots import BotsPane
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
 from mailflow_tui.repos import ReposScreen
@@ -792,13 +793,29 @@ class RuntimePane(Vertical):
         button_id = event.button.id
         status = self.query_one("#runtime-status", Static)
         plugin_id = self._selected_plugin
+        message = ""
         try:
             if button_id == "runtime-plugin-disable":
                 await self._service.plugin_disable(plugin_id)
+                message = (
+                    f"{self._service.t('plugin.disabled_ok', plugin_id=plugin_id)}"
+                    + f"\n({self._service.t('plugin.applies_now')})"
+                )
             elif button_id == "runtime-plugin-enable":
-                created = await self._service.plugin_enable(plugin_id)
+                created_instance = await self._service.plugin_enable(plugin_id)
+                enabled = self._service.t("plugin.enabled_ok", plugin_id=plugin_id)
+                if created_instance:
+                    enabled += "\n" + self._service.t(
+                        "plugin.instance_created", notifier_id=created_instance
+                    )
+                message = f"{enabled}\n({self._service.t('plugin.applies_now')})"
             elif button_id == "runtime-plugin-uninstall":
-                output = await self._service.plugin_uninstall(plugin_id)
+                output_text = await self._service.plugin_uninstall(plugin_id)
+                message = (
+                    f"{self._service.t('plugin.uninstalled_ok', plugin_id=plugin_id)}"
+                    + f" ({self._service.t('plugin.restart_note')})"
+                    + (f"\n{output_text}" if output_text else "")
+                )
             else:
                 return
         except (KeyError, ValueError, RuntimeError) as exc:
@@ -807,22 +824,7 @@ class RuntimePane(Vertical):
         except Exception as exc:  # uv failures surface here too
             status.update(f"[red]{exc}[/red]")
             return
-        if button_id == "runtime-plugin-uninstall":
-            status.update(
-                f"{self._service.t('plugin.uninstalled_ok', plugin_id=plugin_id)}"
-                + f" ({self._service.t('plugin.restart_note')})"
-                + (f"\n{output}" if output else "")
-            )
-        elif button_id == "runtime-plugin-enable":
-            text = self._service.t("plugin.enabled_ok", plugin_id=plugin_id)
-            if created:
-                text += "\n" + self._service.t("plugin.instance_created", notifier_id=created)
-            status.update(f"{text}\n({self._service.t('plugin.applies_now')})")
-        else:
-            status.update(
-                f"{self._service.t('plugin.disabled_ok', plugin_id=plugin_id)}"
-                + f"\n({self._service.t('plugin.applies_now')})"
-            )
+        status.update(message)
         await self.refresh_runtime()
 
 
@@ -1205,123 +1207,6 @@ class MarketPane(Vertical):
         if not plugin.package:
             raise ValueError(f"plugin {plugin.id!r} has no pip package to uninstall")
         return await self._service.market.uninstall(plugin)
-
-
-class _BotStatusProbe:
-    """Connectivity probes for IM bot backends (OneBot v11 / WeChaty /
-    OpenClaw). Each returns a human-readable status line."""
-
-    @staticmethod
-    async def probe(provider: str, options: dict[str, Any]) -> str:
-        import httpx
-
-        try:
-            if provider == "onebot":
-                url = str(options.get("http_url", "")).rstrip("/")
-                if not url:
-                    return "not configured"
-                headers = {}
-                token = str(options.get("access_token", ""))
-                if token:
-                    headers["Authorization"] = f"Bearer {token}"
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    response = await client.post(f"{url}/get_login_info", json={}, headers=headers)
-                if response.status_code == 200:
-                    data = response.json().get("data") or {}
-                    return f"logged in as {data.get('nickname', '?')} ({data.get('user_id', '?')})"
-                return f"HTTP {response.status_code}"
-            if provider == "wechaty":
-                url = str(options.get("gateway_url", "")).rstrip("/")
-                if not url:
-                    return "not configured"
-                wechaty_headers: dict[str, str] = {}
-                token_w = str(options.get("token", ""))
-                if token_w:
-                    headers["Authorization"] = f"Bearer {token_w}"
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    response = await client.get(f"{url}/health", headers=wechaty_headers)
-                return "online" if response.status_code == 200 else f"HTTP {response.status_code}"
-            if provider == "openclaw-weixin":
-                url = str(options.get("base_url", "")).rstrip("/")
-                if not url:
-                    return "not configured"
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    response = await client.get(url)
-                return (
-                    "gateway reachable"
-                    if response.status_code < 500
-                    else f"HTTP {response.status_code}"
-                )
-        except Exception as exc:
-            return f"{type(exc).__name__}: unreachable"
-        return "unknown provider"
-
-
-class BotsPane(Vertical):
-    """平台登录: manage IM bot instances (OneBot/WeChaty/OpenClaw) and
-    check their login state. QR scanning happens in the bot runtime itself
-    (NapCat / WeChaty gateway / OpenClaw) — this tab verifies the session."""
-
-    IM_PROVIDERS: ClassVar[frozenset[str]] = frozenset({"onebot", "wechaty", "openclaw-weixin"})
-
-    def __init__(self, service: MailFlowService) -> None:
-        super().__init__()
-        self._service = service
-
-    def compose(self) -> ComposeResult:
-        yield Static(self._service.t("tui.bots_title"), id="bots-title")
-        yield DataTable(id="bots-table")
-        yield Button(self._service.t("tui.bots_check"), id="bots-check", variant="primary")
-        yield Static("", id="bots-status")
-
-    def _im_instances(self) -> list[tuple[str, str, dict[str, Any]]]:
-        out: list[tuple[str, str, dict[str, Any]]] = []
-        for notifier in self._service.config.notifiers:
-            if notifier.provider in self.IM_PROVIDERS:
-                out.append((notifier.notifier_id, notifier.provider, notifier.options))
-        return out
-
-    def _ensure_columns(self) -> None:
-        table = self.query_one("#bots-table", DataTable)
-        table.clear(columns=True)
-        table.add_column(self._service.t("plugin.header_name"), key="name")
-        table.add_column(
-            self._service.t("plugin.market_provider", default="provider"), key="provider"
-        )
-        table.add_column(self._service.t("tui.bots_targets"), key="targets")
-        table.add_column(self._service.t("tui.bots_status"), key="status")
-
-    def _render_rows(self, statuses: dict[str, str] | None = None) -> None:
-        statuses = statuses or {}
-        table = self.query_one("#bots-table", DataTable)
-        table.clear()
-        for notifier_id, provider, options in self._im_instances():
-            targets = ", ".join(str(t) for t in options.get("targets") or []) or "-"
-            table.add_row(
-                notifier_id,
-                provider,
-                escape(targets),
-                statuses.get(notifier_id, "-"),
-                key=notifier_id,
-            )
-
-    def on_mount(self) -> None:
-        self._ensure_columns()
-        self._render()
-
-    async def relabel(self) -> None:
-        self.on_mount()
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id != "bots-check":
-            return
-        status_node = self.query_one("#bots-status", Static)
-        status_node.update(self._service.t("tui.loading"))
-        results: dict[str, str] = {}
-        for notifier_id, provider, options in self._im_instances():
-            results[notifier_id] = await _BotStatusProbe.probe(provider, options)
-        self._render_rows(results)
-        status_node.update(self._service.t("tui.bots_checked"))
 
 
 class MailFlowApp(App[None]):
