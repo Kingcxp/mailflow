@@ -76,3 +76,46 @@ class TestRunTuiWiring:
 
         runner_module.run_tui(str(config_file))
         assert captured["config_path"] == str(config_file)
+
+
+class TestEnsureDefaultConfig:
+    def test_missing_file_is_bootstrapped_from_example(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mailflow_tui.runner import ensure_default_config
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir()
+        (tmp_path / "configs" / "example.toml").write_text("[general]\n", encoding="utf-8")
+
+        target = str(tmp_path / "configs" / "development.toml")
+        result = ensure_default_config(target)
+
+        assert result == target
+        assert Path(result).is_file()
+
+    def test_existing_file_is_left_alone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mailflow_tui.runner import ensure_default_config
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "configs").mkdir()
+        (tmp_path / "configs" / "development.toml").write_text(
+            '[general]\ntimezone = "Asia/Shanghai"\n', encoding="utf-8"
+        )
+        (tmp_path / "configs" / "example.toml").write_text("[general]\n", encoding="utf-8")
+
+        target = str(tmp_path / "configs" / "development.toml")
+        assert ensure_default_config(target) == target
+        assert 'timezone = "Asia/Shanghai"' in Path(target).read_text(encoding="utf-8")
+
+    def test_no_example_means_no_bootstrap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mailflow_tui.runner import ensure_default_config
+
+        monkeypatch.chdir(tmp_path)
+        target = str(tmp_path / "configs" / "development.toml")
+        assert ensure_default_config(target) == target
+        assert not Path(target).exists()

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 import queue as queue_module
 import secrets
 from typing import Any
@@ -76,7 +77,36 @@ async def _start_embedded_server(
     return server, task
 
 
+def ensure_default_config(config_path: str | None) -> str | None:
+    """Bootstrap a missing config file from the bundled example.
+
+    ``make tui`` points at ``configs/development.toml``, which is
+    per-developer and therefore not in version control — a fresh clone would
+    start with nothing. When the requested file does not exist but
+    ``configs/example.toml`` does, copy it so first launch has a starting
+    point instead of pure defaults.
+    """
+    if not config_path:
+        return config_path
+    path = Path(config_path)
+    if path.exists():
+        return config_path
+    example = Path("configs/example.toml")
+    if not example.exists():
+        return config_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    example_content = example.read_text(encoding="utf-8")
+    header = (
+        "# Bootstrapped from configs/example.toml by 'mailflow tui' —\n"
+        "# edit freely; this per-developer file is gitignored.\n"
+    )
+    path.write_text(header + example_content, encoding="utf-8")
+    logger.info("bootstrapped %s from configs/example.toml", config_path)
+    return config_path
+
+
 async def _run_local(config_path: str | None, *, with_server: bool) -> None:
+    config_path = ensure_default_config(config_path)
     config = tui_logging_config(load_config(config_path) if config_path else MailFlowConfig())
     manager = create_plugin_manager(config, discover_external=False)
     log_queue: queue_module.Queue[Any] = queue_module.Queue()
