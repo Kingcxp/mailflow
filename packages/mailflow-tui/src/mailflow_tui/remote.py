@@ -10,7 +10,7 @@ import contextlib
 import json
 import queue as queue_module
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar
 
 from httpx import AsyncClient
 from mailflow_server.client import RemoteClient, RemoteUnsupported
@@ -34,7 +34,7 @@ def load_session() -> dict[str, Any]:
         return {}
     session: dict[str, Any] = {}
     if isinstance(loaded, dict):
-        entries = cast("dict[Any, Any]", loaded)
+        entries: dict[Any, Any] = loaded
         for key, value in entries.items():
             session[str(key)] = value
     return session
@@ -69,7 +69,7 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         super().__init__()
         self._session = session
 
-    def compose(self):
+    def compose(self) -> Any:
         yield Label("MailFlow remote", id="login-title")
         with Vertical(id="login-dialog"):
             yield Label("Server URL", classes="field-label")
@@ -143,7 +143,8 @@ class RemoteServiceAdapter:
         self.events = _EventProxy(client)
 
     def t(self, key: str, **params: Any) -> str:
-        return self.i18n.t(key, **params)
+        result: str = self.i18n.t(key, **params)
+        return result
 
     # -- reads -----------------------------------------------------------------
     async def snapshot(self) -> dict[str, Any]:
@@ -282,9 +283,9 @@ class _OptionView:
     def display_value(self) -> str:
         value: Any = self.value
         if isinstance(value, list):
-            return "\n".join(str(item) for item in cast("list[Any]", value))
+            return "\n".join(str(item) for item in value)
         if isinstance(value, dict):
-            mapping = cast("dict[Any, Any]", value)
+            mapping: dict[Any, Any] = value
             return "\n".join(f"{k} = {v}" for k, v in mapping.items())
         return "" if value is None else str(value)
 

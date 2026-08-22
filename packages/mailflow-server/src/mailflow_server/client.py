@@ -31,7 +31,7 @@ def _basic(username: str, password: str) -> dict[str, str]:
 def _websocket_connect() -> Any:
     """websockets ships with uvicorn[standard]; imported lazily so the REST
     client works without it."""
-    import websockets  # type: ignore[import-untyped]
+    import websockets  # type: ignore[import-not-found,unused-ignore]
 
     return cast(Any, websockets.connect)
 

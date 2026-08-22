@@ -20,6 +20,9 @@ from mailflow_llm_openai_compatible.plugin import plugin as openai_plugin
 from mailflow_mail_fake.plugin import plugin as fake_plugin
 from mailflow_mail_imap.plugin import plugin as imap_plugin
 from mailflow_notify_console.plugin import plugin as notify_plugin
+from mailflow_notify_onebot.plugin import plugin as onebot_plugin
+from mailflow_notify_openclaw_weixin.plugin import plugin as openclaw_weixin_plugin
+from mailflow_notify_wechaty.plugin import plugin as wechaty_plugin
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 
 BUNDLED_PLUGINS: tuple[Any, ...] = (
@@ -31,6 +34,9 @@ BUNDLED_PLUGINS: tuple[Any, ...] = (
     google_gemini_plugin,
     google_vertex_plugin,
     notify_plugin,
+    onebot_plugin,
+    wechaty_plugin,
+    openclaw_weixin_plugin,
     nonebot_export_plugin,
     astrbot_export_plugin,
 )

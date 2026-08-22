@@ -1213,7 +1213,7 @@ class MailFlowApp(App[None]):
 
     def __init__(
         self,
-        service: MailFlowService,
+        service: Any,  # MailFlowService | remote.RemoteServiceAdapter
         log_queue: queue_module.Queue[Any],
         *,
         remote: bool = False,

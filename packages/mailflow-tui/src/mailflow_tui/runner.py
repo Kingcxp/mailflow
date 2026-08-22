@@ -124,7 +124,7 @@ async def _run_remote() -> None:
     )
 
     class _Bootstrap(_BaseApp[dict[str, str] | None]):
-        def compose(self):
+        def compose(self) -> Any:
             from textual.containers import Vertical
 
             with Vertical():
