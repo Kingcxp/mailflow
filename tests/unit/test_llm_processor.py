@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from mailflow.config import ProcessorConfig
@@ -220,3 +220,37 @@ class TestSummaryLanguage:
         await processor.process(make_mail(), CONTEXT)
         user_message = next(m for m in router.last_messages if m["role"] == "user")
         assert "Write the summary" not in user_message["content"]
+
+
+class TestThinkBlockStripping:
+    def _processor_with_text(self, text: str) -> LLMImportanceProcessor:
+        config = ProcessorConfig(
+            processor_id="p",
+            provider="llm-importance",
+            llm="l1",
+            fallback_llms=[],
+            options={},
+        )
+
+        class Router:
+            async def chat(self, messages, *, primary, fallback=None, options=None):
+                from mailflow.contracts import LLMCompletion
+
+                return LLMCompletion(text=text, model="m")
+
+        return LLMImportanceProcessor(config, cast(Any, Router()))
+
+    async def test_think_block_is_stripped_before_parsing(self) -> None:
+        import json as jsonlib
+
+        payload = {
+            "summary": "s",
+            "urgency": "info",
+            "reason": "r",
+            "action_items": [],
+        }
+        text = "<think>chain of thought...</think>\n" + jsonlib.dumps(payload)
+        processor = self._processor_with_text(text)
+        result = await processor.process(make_mail(), CONTEXT)
+        assert result.analysis is not None
+        assert "chain of thought" not in (result.analysis.summary + result.analysis.reason)

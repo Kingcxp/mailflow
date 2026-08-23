@@ -253,7 +253,12 @@ class LLMImportanceProcessor:
             fallback=list(self._config.fallback_llms),
             options={"temperature": 0.2},
         )
-        payload = AnalysisPayload.model_validate(extract_json(completion.text))
+        # reasoning models (DeepSeek-R1 style) prepend <think>…</think>; strip
+        # it so reasoning never leaks into stored summaries or JSON extraction
+        clean_text = re.sub(
+            r"<think>.*?</think>\s*", "", completion.text, flags=re.DOTALL | re.IGNORECASE
+        )
+        payload = AnalysisPayload.model_validate(extract_json(clean_text))
         action_items: list[ActionItem] = []
         for position, item in enumerate(payload.action_items):
             try:
