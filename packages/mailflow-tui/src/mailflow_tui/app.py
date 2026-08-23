@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import queue as queue_module
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, ClassVar, cast
 
@@ -1276,9 +1277,9 @@ class MailFlowApp(App[None]):
         # the service runs on the same loop as the app: schedule directly
         self._apply_language()
 
-    def _pane_factories(self) -> dict[str, tuple[type[Any], str]]:
+    def _pane_factories(self) -> dict[str, tuple[Callable[[Any], Any], str]]:
         return {
-            "tab-logs": (lambda service: LogsPane(service, self._log_queue), "tui.tab_logs"),
+            "tab-logs": (self._make_logs_pane, "tui.tab_logs"),
             "tab-mail": (MailPane, "tui.tab_mail"),
             "tab-mailboxes": (AccountsPane, "tui.tab_mailboxes"),
             "tab-actions": (ActionsPane, "tui.tab_actions"),
@@ -1288,6 +1289,9 @@ class MailFlowApp(App[None]):
             "tab-market": (MarketPane, "tui.tab_market"),
             "tab-settings": (SettingsPane, "tui.tab_settings"),
         }
+
+    def _make_logs_pane(self, service: Any) -> LogsPane:
+        return LogsPane(service, self._log_queue)
 
     def _apply_language(self) -> None:
         """Re-translate tab titles and remount every composed pane.
