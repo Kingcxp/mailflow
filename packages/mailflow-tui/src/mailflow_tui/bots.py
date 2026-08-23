@@ -11,7 +11,7 @@ from typing import Any, ClassVar
 import httpx
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.markup import escape
 from textual.widgets import Button, DataTable, Static
 
@@ -82,8 +82,11 @@ class BotsPane(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static(self._service.t("tui.bots_title"), id="bots-title")
-        yield DataTable(id="bots-table")
-        yield Button(self._service.t("tui.bots_check"), id="bots-check", variant="primary")
+        yield DataTable(id="bots-table", cursor_type="row")  # pyright: ignore[reportUnknownMemberType]
+        with Horizontal(id="bots-actions"):
+            yield Button(self._service.t("tui.btn_add"), id="bots-add", variant="success")
+            yield Button(self._service.t("tui.btn_delete"), id="bots-delete", variant="error")
+            yield Button(self._service.t("tui.bots_check"), id="bots-check", variant="primary")
         yield Static("", id="bots-status")
 
     def _im_instances(self) -> list[tuple[str, str, dict[str, Any]]]:
@@ -125,9 +128,42 @@ class BotsPane(Vertical):
     async def relabel(self) -> None:
         self.on_mount()
 
+    def on_data_table_row_selected(self, event: Any) -> None:
+        self._selected_id = str(event.row_key.value)
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id != "bots-check":
+        button_id = event.button.id or ""
+        if button_id == "bots-add":
+            from mailflow_tui.settings import EntryFormScreen
+
+            self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
+                EntryFormScreen(self._service, "notifiers")
+            )
+            await self.on_mount()
             return
+        if button_id == "bots-delete":
+            await self._delete_selected()
+            return
+        if button_id != "bots-check":
+            return
+        await self._check_all()
+
+    async def _delete_selected(self) -> None:
+        if getattr(self, "_selected_id", None) is None:
+            self.query_one("#bots-status", Static).update(self._service.t("tui.repos_pick_first"))
+            return
+        notifiers = self._service.config.notifiers
+        index = next(
+            (i for i, n in enumerate(notifiers) if n.notifier_id == self._selected_id),
+            None,
+        )
+        if index is None:
+            return
+        await self._service.remove_config_entry("notifiers", index)
+        self._selected_id = None
+        await self.on_mount()
+
+    async def _check_all(self) -> None:
         status_node = self.query_one("#bots-status", Static)
         status_node.update(self._service.t("tui.loading"))
         results: dict[str, str] = {}

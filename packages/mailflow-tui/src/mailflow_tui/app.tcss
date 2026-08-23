@@ -738,3 +738,13 @@ ListEditScreen, EntryFormScreen {
     border: round $secondary;
     background: #181825;
 }
+
+#bots-table {
+    height: 50%;
+    border: round $primary;
+}
+
+#bots-actions {
+    height: auto;
+    padding: 0 1;
+}
