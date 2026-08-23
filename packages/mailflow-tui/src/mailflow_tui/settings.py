@@ -403,11 +403,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 initial = self._default_provider or initial
             # literal None is an illegal Select value: NULL makes Textual pick
             # the first option when blank is not allowed, instead of crashing
-            if initial is None:
-                initial = Select.NULL
+            initial_value: Any = initial if initial is not None else Select.NULL
             yield Select(
                 [(str(choice), str(choice)) for choice in choices],
-                value=initial,
+                value=initial_value,
                 id=widget_id,
                 allow_blank=False,
             )

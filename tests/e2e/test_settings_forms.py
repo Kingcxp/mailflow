@@ -39,6 +39,16 @@ async def start_service_quiet(tmp_path: Path) -> MailFlowService:
     )
 
 
+def _result_collector(results: list[dict[str, Any]]) -> Any:
+    """push_screen callback capturing a form's result payload."""
+
+    def on_done(values: dict[str, Any] | None) -> None:
+        if values is not None:
+            results.append(values)
+
+    return on_done
+
+
 async def test_concurrent_reloads_do_not_duplicate_sections(
     tmp_path: Path,
 ) -> None:
@@ -182,8 +192,8 @@ async def test_account_form_opens_with_imap_default(tmp_path: Path) -> None:
             await pilot.pause()
             results: list[dict[str, Any]] = []
             app.push_screen(
-                EntryFormScreen(cast(Any, service), "accounts"),
-                lambda values: results.append(values),
+                cast(Any, EntryFormScreen(cast(Any, service), "accounts")),
+                _result_collector(results),
             )
             await pilot.pause(0.3)
 
