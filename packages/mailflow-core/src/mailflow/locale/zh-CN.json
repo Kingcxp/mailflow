@@ -323,6 +323,11 @@
       "usage": "trash <list|restore <id>>"
     },
     "tui": {
+      "account_test_failed": "登录失败：{reason}",
+      "account_test_ok": "登录成功（{seconds}s）",
+      "account_test_skip": "仅 imap 账户支持连接测试",
+      "account_test_timeout": "登录超时",
+      "account_testing": "正在登录 {host}…",
       "accounts_column_status": "状态",
       "accounts_empty": "尚未配置邮箱，点击“新增”添加。",
       "accounts_help": "添加邮箱后即可浏览历史邮件并选择需要解析的邮件。",

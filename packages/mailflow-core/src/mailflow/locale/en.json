@@ -323,6 +323,11 @@
       "usage": "trash <list|restore <id>>"
     },
     "tui": {
+      "account_test_failed": "login failed: {reason}",
+      "account_test_ok": "logged in successfully ({seconds}s)",
+      "account_test_skip": "connection test is available for imap accounts",
+      "account_test_timeout": "login timed out",
+      "account_testing": "Logging in to {host}…",
       "accounts_column_status": "Status",
       "accounts_empty": "No mailbox configured yet. Press Add to create one.",
       "accounts_help": "Add a mailbox, then browse its history and pick mail to analyze.",

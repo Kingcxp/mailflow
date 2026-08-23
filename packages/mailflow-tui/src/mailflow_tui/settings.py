@@ -414,6 +414,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             with Horizontal(classes="dialog-actions"):
                 if self._group == "llms":
                     yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
+                elif self._group == "accounts":
+                    yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
                 yield Button(self._t("tui.btn_save"), id="entry-form-save", variant="success")
                 yield Button(self._t("tui.btn_back"), id="entry-form-back", variant="primary")
 
@@ -661,6 +663,55 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         status.update(
             f"[green]{self._t('tui.llm_test_ok', seconds=f'{elapsed:.1f}', model=escape(completion.model or '-'))}[/green]"
         )
+
+    async def _test_account(self) -> None:
+        """Verify mailbox credentials by logging into the real backend."""
+        status = self.query_one("#entry-form-status", Static)
+        try:
+            values = self._collect()
+        except SettingsError as exc:
+            status.update(f"[red]{escape(exc.message)}[/red]")
+            return
+        provider = str(values.get("provider") or "")
+        if provider != "imap":
+            status.update(f"[yellow]{self._t('tui.account_test_skip')}[/yellow]")
+            return
+        opts = dict(values.get("options") or {})
+        host = str(opts.get("imap_host") or "")
+        port = int(opts.get("imap_port") or 993)
+        user = str(values.get("email") or opts.get("username") or "")
+        password = str(opts.get("password") or "")
+        use_ssl = bool(opts.get("imap_ssl", True))
+        if not host or not user or not password:
+            raise SettingsError("credentials", "host / username / password are required")
+        status.update(self._t("tui.account_testing", host=host))
+        import imaplib
+
+        def _probe() -> str:
+            client: Any
+            if use_ssl:
+                client = imaplib.IMAP4_SSL(host, port)
+            else:
+                client = imaplib.IMAP4(host, port)
+            try:
+                client.login(user, password)
+                return "ok"
+            finally:
+                with contextlib.suppress(Exception):
+                    client.logout()
+
+        started = datetime.now()
+        try:
+            await asyncio.wait_for(asyncio.to_thread(_probe), timeout=20.0)
+        except TimeoutError:
+            status.update(f"[red]{self._t('tui.account_test_timeout')}[/red]")
+            return
+        except Exception as exc:
+            detail = escape(str(exc)[:200])
+            status.update(f"[red]{self._t('tui.account_test_failed', reason=detail)}[/red]")
+            return
+        elapsed = (datetime.now() - started).total_seconds()
+        status.update(f"[green]{self._t('tui.account_test_ok', seconds=f'{elapsed:.1f}')}[/green]")
 
     # -- events -----------------------------------------------------------------
 
