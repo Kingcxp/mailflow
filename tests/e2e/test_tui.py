@@ -297,7 +297,14 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             await pilot.pause(0.05)
             sections = app.query_one("#settings-sections", ListView)
             assert len(sections.children) >= 5  # general/logging/plugins/storage/i18n
-            cards = list(app.query(OptionCard))
+            # reload() swaps cards asynchronously under a lock — poll instead
+            # of racing it
+            cards = []
+            for _ in range(40):
+                cards = list(app.query(OptionCard))
+                if cards:
+                    break
+                await pilot.pause(0.05)
             assert cards, "no option cards rendered"
             keys = {card.spec.key for card in cards}
             assert "general.reminder_hour" in keys
