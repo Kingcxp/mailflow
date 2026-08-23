@@ -639,12 +639,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         except Exception as exc:
             status.update(f"[red]{escape(str(exc))}[/red]")
             return
+        status.update(self._t("tui.llm_testing_connect", provider=config.provider))
         started = datetime.now()
-        status.update(self._t("tui.llm_testing"))
         try:
             completion = await asyncio.wait_for(
                 backend.chat([{"role": "user", "content": "ping"}], temperature=0.0),
-                timeout=25.0,
+                timeout=45.0,
             )
         except TimeoutError:
             status.update(f"[red]{self._t('tui.llm_test_timeout')}[/red]")
@@ -656,9 +656,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             status.update(f"[red]{escape(message[:300])}[/red]")
             return
         elapsed = (datetime.now() - started).total_seconds()
-        preview = escape(completion.text[:80])
+        # raw model output is intentionally not shown — latency and the model
+        # name are enough to judge connectivity without dumping content
         status.update(
-            f"[green]{self._t('tui.llm_test_ok', seconds=f'{elapsed:.1f}', reply=preview)}[/green]"
+            f"[green]{self._t('tui.llm_test_ok', seconds=f'{elapsed:.1f}', model=escape(completion.model or '-'))}[/green]"
         )
 
     # -- events -----------------------------------------------------------------
@@ -700,7 +701,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             self.dismiss(None)
             return
         if button_id == "entry-form-test":
-            await self._test_llm()
+            self.run_worker(self._test_llm(), exclusive=True, group="llm-test", exit_on_error=False)
             return
         if button_id != "entry-form-save":
             return
