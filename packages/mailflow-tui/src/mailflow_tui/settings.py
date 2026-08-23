@@ -193,7 +193,7 @@ class _Extra:
     ) -> None:
         self.field_id = field_id
         self.label = field_id.replace("_", " ")
-        self.kind = kind  # text | password | choice
+        self.kind = kind  # text | password | choice | int | float | lines
         self.default = default
         self.into_options = into_options
         self.secret = secret
@@ -206,10 +206,14 @@ _LLM_PROVIDER_FIELDS: dict[str, tuple[_Extra, ...]] = {
     "openai-completions": (
         _Extra("base_url", default="https://api.openai.com/v1", into_options=False, required=True),
         _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
+        _Extra("max_tokens", kind="int"),
+        _Extra("temperature", kind="float"),
     ),
     "openai-responses": (
         _Extra("base_url", default="https://api.openai.com/v1", into_options=False, required=True),
         _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
+        _Extra("max_tokens", kind="int"),
+        _Extra("temperature", kind="float"),
     ),
     "openai-codex-responses": (
         _Extra(
@@ -219,6 +223,8 @@ _LLM_PROVIDER_FIELDS: dict[str, tuple[_Extra, ...]] = {
             required=True,
         ),
         _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
+        _Extra("max_tokens", kind="int"),
+        _Extra("temperature", kind="float"),
     ),
     "azure-openai-responses": (
         _Extra(
@@ -228,11 +234,16 @@ _LLM_PROVIDER_FIELDS: dict[str, tuple[_Extra, ...]] = {
             required=True,
         ),
         _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
+        _Extra("max_tokens", kind="int"),
+        _Extra("temperature", kind="float"),
         _Extra("api_version", default="preview"),
     ),
     "anthropic-messages": (
         _Extra("base_url", default="https://api.anthropic.com", into_options=False, required=True),
         _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
+        _Extra("max_tokens", kind="int"),
+        _Extra("temperature", kind="float"),
+        _Extra("thinking_budget", kind="int"),
     ),
     "google-generative-ai": (
         _Extra(
@@ -242,12 +253,34 @@ _LLM_PROVIDER_FIELDS: dict[str, tuple[_Extra, ...]] = {
             required=True,
         ),
         _Extra("api_key", kind="password", into_options=False, secret=True, required=True),
+        _Extra("max_tokens", kind="int"),
+        _Extra("temperature", kind="float"),
+        _Extra("thinking_budget", kind="int"),
     ),
     "google-vertex": (
         _Extra("project", required=True),
         _Extra("location", default="us-central1"),
         _Extra("service_account_file"),
         _Extra("api_key", kind="password", into_options=False, secret=True),
+        _Extra("max_tokens", kind="int"),
+        _Extra("temperature", kind="float"),
+        _Extra("thinking_budget", kind="int"),
+    ),
+    "onebot": (
+        _Extra("http_url", required=True),
+        _Extra("access_token", kind="password", secret=True),
+        _Extra("targets", kind="lines", required=True),
+    ),
+    "wechaty": (
+        _Extra("gateway_url", required=True),
+        _Extra("token", kind="password", secret=True),
+        _Extra("targets", kind="lines", required=True),
+    ),
+    "openclaw-weixin": (
+        _Extra("base_url", required=True),
+        _Extra("endpoint", default="/v1/messages"),
+        _Extra("api_key", kind="password", secret=True, required=True),
+        _Extra("targets", kind="lines", required=True),
     ),
 }
 # the legacy alias behaves like plain completions
@@ -445,6 +478,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     id=widget_id,
                     allow_blank=False,
                 )
+            elif extra.kind == "lines":
+                yield TextArea(self._extra_value(extra), id=widget_id, classes="field-multiline")
             elif extra.secret:
                 # mounted via mount_all (outside compose), so children are
                 # attached explicitly instead of with-block composition
@@ -527,7 +562,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 collected["options"]["imap_port"] = port
                 collected["options"]["imap_ssl"] = ssl_flag
                 continue
-            if isinstance(node, TextArea):  # headers / query / extra_body
+            if isinstance(node, TextArea):
+                if extra.field_id == "targets":
+                    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+                    if lines:
+                        collected["options"]["targets"] = lines
+                    continue
                 parsed = self._split_mapping(raw)
                 if parsed:
                     collected[extra.field_id] = parsed
@@ -537,11 +577,16 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 if extra.required:
                     raise SettingsError(extra.field_id, f"{extra.label} is required")
                 continue
+            numeric_fields = ("interval_seconds", "limit", "max_tokens", "thinking_budget")
             target = collected["options"] if extra.into_options else collected
             try:
-                target[extra.field_id] = (
-                    int(text) if extra.field_id in ("interval_seconds", "limit") else text
-                )
+                if extra.field_id == "temperature":
+                    value_num: Any = float(text)
+                elif extra.field_id in numeric_fields:
+                    value_num: Any = int(text)
+                else:
+                    value_num: Any = text
+                target[extra.field_id] = value_num
             except ValueError as exc:
                 raise SettingsError(extra.field_id, f"{extra.label} must be a number") from exc
         if (
@@ -1362,10 +1407,7 @@ class AccountsPane(Vertical):
         table = self._history_table()
         if table is None:
             return []
-        return [str(row_key.value) for row_key in table.rows.keys()]
-
-    async def on_button_pressed_select_all(self) -> None:
-        pass
+        return [str(k.value) for k in table.rows]
 
     async def _select_all_history(self) -> None:
         for record_id in self._displayed_history_ids():
