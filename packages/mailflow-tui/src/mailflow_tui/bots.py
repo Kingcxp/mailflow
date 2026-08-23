@@ -79,6 +79,7 @@ class BotsPane(Vertical):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
+        self._selected_id: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(self._service.t("tui.bots_title"), id="bots-title")
