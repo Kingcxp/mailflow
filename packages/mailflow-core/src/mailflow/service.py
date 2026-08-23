@@ -618,8 +618,13 @@ class MailFlowService:
         self.config = updated
         await self.events.emit("config.changed", key=key)
         if key.split(".")[0] in _LIVE_GROUPS:
-            # accounts/llms/processors/notifiers changes apply immediately
-            await self.reload_runtime()
+            # accounts/llms/processors/notifiers changes apply immediately;
+            # a runtime rebuild problem must never swallow the fact that the
+            # config itself was persisted (panes re-read it regardless)
+            try:
+                await self.reload_runtime()
+            except Exception as exc:
+                logger.error("hot reload failed after %s change: %s", key, exc)
 
     async def set_setting(self, key: str, raw_value: Any) -> OptionSpec | None:
         """Coerce, validate and persist one option (scalar, list or mapping).

@@ -731,3 +731,10 @@ ListEditScreen, EntryFormScreen {
     height: 3;
     content-align: center middle;
 }
+
+
+#llms-request-log {
+    height: 10;
+    border: round $secondary;
+    background: #181825;
+}

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import re
 from datetime import datetime
 from typing import Any, ClassVar
@@ -48,6 +49,7 @@ from textual.widgets import (
     Label,
     ListItem,
     ListView,
+    RichLog,
     Select,
     Static,
     Switch,
@@ -412,9 +414,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     yield from self._render_extras()
             yield Static("", id="entry-form-status")
             with Horizontal(classes="dialog-actions"):
-                if self._group == "llms":
-                    yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
-                elif self._group == "accounts":
+                if self._group == "llms" or self._group == "accounts":
                     yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
                 yield Button(self._t("tui.btn_save"), id="entry-form-save", variant="success")
                 yield Button(self._t("tui.btn_back"), id="entry-form-back", variant="primary")
@@ -688,11 +688,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         import imaplib
 
         def _probe() -> str:
-            client: Any
-            if use_ssl:
-                client = imaplib.IMAP4_SSL(host, port)
-            else:
-                client = imaplib.IMAP4(host, port)
+            client = imaplib.IMAP4_SSL(host, port) if use_ssl else imaplib.IMAP4(host, port)
             try:
                 client.login(user, password)
                 return "ok"
@@ -1046,6 +1042,22 @@ class SettingsPane(Vertical):
         await self.reload()
 
 
+class _LlmLogHandler(logging.Handler):
+    """Feeds mailflow.llm log records into the pane's request log widget."""
+
+    def __init__(self, pane: Any) -> None:
+        super().__init__()
+        self._pane = pane
+
+    def emit(self, record: logging.LogRecord) -> None:
+        line = f"{record.levelname[:4]} {record.getMessage()}"
+        try:
+            pane_widget = self._pane
+            pane_widget.app.call_later(pane_widget._append_llm_log, line)
+        except Exception:
+            pass
+
+
 class LLMPane(Vertical):
     """The ordered LLM chain: first entry is default, the rest are fallbacks."""
 
@@ -1057,6 +1069,10 @@ class LLMPane(Vertical):
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
 
+    def _append_llm_log(self, line: str) -> None:
+        with contextlib.suppress(Exception):
+            self.query_one("#llms-request-log", RichLog).write(line)
+
     def compose(self) -> ComposeResult:
         yield Static(self._t("tui.llms_title"), id="llms-title")
         yield Static(self._t("tui.llms_help"), id="llms-help")
@@ -1067,10 +1083,18 @@ class LLMPane(Vertical):
             yield Button(self._t("tui.btn_delete"), id="llm-delete", variant="error")
             yield Button(self._t("tui.btn_move_up"), id="llm-up", variant="primary")
             yield Button(self._t("tui.btn_move_down"), id="llm-down", variant="primary")
+        with Vertical(id="llms-request-wrap"):
+            yield Static(self._t("tui.llm_log_title"), id="llm-log-title")
+            yield RichLog(id="llms-request-log", wrap=True, markup=False)
         yield Static("", id="llms-status")
 
     async def on_mount(self) -> None:
         await self.reload()
+        self._llm_log_handler = _LlmLogHandler(self)
+        logging.getLogger("mailflow.llm").addHandler(self._llm_log_handler)
+
+    def on_unmount(self) -> None:
+        logging.getLogger("mailflow.llm").removeHandler(self._llm_log_handler)
 
     async def relabel(self) -> None:
         self._columns_done = False
@@ -1097,7 +1121,7 @@ class LLMPane(Vertical):
         table.add_column(self._t("plugin.header_id"), key="llm")
         table.add_column(self._t("llm.header_model"), key="model")
         table.add_column(self._t("llm.header_backend"), key="provider")
-        table.add_column(self._t("tui.llms_column_role"), key="role")
+        table.add_column(self._t("tui.llms_column_default"), key="default_col")
         table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
         self._columns_done = True
 
@@ -1109,17 +1133,15 @@ class LLMPane(Vertical):
         self._ensure_columns()
         llms = self._service.config.llms
         for position, llm in enumerate(llms):
-            role = (
-                self._t("tui.llms_role_default")
-                if position == 0
-                else self._t("tui.llms_role_fallback", position=position)
+            default_marker = (
+                self._t("tui.llms_default_marker") if llm.default or position == 0 else ""
             )
             table.add_row(
                 str(position + 1),
                 escape(llm.llm_id),
                 escape(llm.model),
                 escape(llm.provider),
-                role,
+                default_marker,
                 key=str(position),
             )
         if not llms:
