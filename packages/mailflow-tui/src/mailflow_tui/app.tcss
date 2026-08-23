@@ -721,3 +721,13 @@ ListEditScreen, EntryFormScreen {
 #entry-form-extras {
     height: auto;
 }
+
+
+.secret-row Input {
+    height: 3;
+}
+
+.secret-row .eye-btn {
+    height: 3;
+    content-align: center middle;
+}

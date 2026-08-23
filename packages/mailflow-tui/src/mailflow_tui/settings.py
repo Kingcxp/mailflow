@@ -421,7 +421,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     id=widget_id,
                     password=True,
                 )
-                yield Button("👁", id=f"{widget_id}-eye", classes="eye-btn")
+                yield Button(self._t("tui.eye_hide"), id=f"{widget_id}-eye", classes="eye-btn")
         else:
             yield Input(value="" if current is None else str(current), id=widget_id)
 
@@ -434,6 +434,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             widget_id = f"extra-{_slug(extra.field_id)}"
             marker = " *" if extra.required else ""
             yield Label(extra.label + marker, classes="field-label")
+            desc_key = f"tui.extras_{_slug(extra.field_id).replace('-', '_')}"
+            translated_desc = self._t(desc_key)
+            if translated_desc != desc_key:
+                yield Static(escape(translated_desc), classes="field-desc")
             if extra.kind == "choice":
                 yield Select(
                     [(name, name) for name in _IMAP_PRESET_HOSTS],
@@ -453,7 +457,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                         placeholder=extra.default,
                     )
                 )
-                row.compose_add_child(Button("👁", id=f"{widget_id}-eye", classes="eye-btn"))
+                row.compose_add_child(
+                    Button(self._t("tui.eye_hide"), id=f"{widget_id}-eye", classes="eye-btn")
+                )
                 yield row
             else:
                 yield Input(value=self._extra_value(extra), id=widget_id, placeholder=extra.default)
@@ -640,7 +646,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             except Exception:
                 return
             secret_input.password = not secret_input.password
-            event.button.label = "🙈" if secret_input.password else "👁"
+            event.button.label = self._t(
+                "tui.eye_hide" if secret_input.password else "tui.eye_show"
+            )
             event.stop()
             return
         if button_id == "entry-form-back":
@@ -1130,6 +1138,9 @@ class AccountsPane(Vertical):
         yield DataTable(id="history-table")
         with Horizontal(id="history-actions"):
             yield Button(self._t("tui.history_analyze"), id="history-analyze", variant="success")
+            yield Button(
+                self._t("tui.history_select_all"), id="history-select-all", variant="primary"
+            )
             yield Button(self._t("tui.history_more"), id="history-more", variant="primary")
         yield Static("", id="accounts-status")
 
@@ -1248,6 +1259,9 @@ class AccountsPane(Vertical):
         if button_id == "account-add":
             self._open_form(None)
             return
+        if button_id == "history-select-all":
+            await self._select_all_history()
+            return
         if button_id == "history-analyze":
             await self._analyze_selected()
             return
@@ -1343,6 +1357,23 @@ class AccountsPane(Vertical):
             self._set_status(self._t("tui.history_empty"))
         else:
             self._set_status(self._t("tui.history_loaded", count=len(self._history)))
+
+    def _displayed_history_ids(self) -> list[str]:
+        table = self._history_table()
+        if table is None:
+            return []
+        return [str(row_key.value) for row_key in table.rows.keys()]
+
+    async def on_button_pressed_select_all(self) -> None:
+        pass
+
+    async def _select_all_history(self) -> None:
+        for record_id in self._displayed_history_ids():
+            self._picked.add(record_id)
+        self._render_history()
+        self._set_status(
+            f"[green]{self._t('tui.history_all_selected', count=len(self._picked))}[/green]"
+        )
 
     async def _analyze_selected(self) -> None:
         chosen = [mail for mail in self._history if mail.normalized_message_id() in self._picked]
