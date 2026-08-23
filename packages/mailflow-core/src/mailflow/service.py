@@ -739,7 +739,11 @@ class MailFlowService:
         # bundled plugins: the distribution package name equals the plugin id
         if PluginMarket.is_installed(plugin_id, package=plugin_id):
             return
-        found = await asyncio.to_thread(self.market.find, plugin_id)
+        try:
+            found = await asyncio.to_thread(self.market.find, plugin_id)
+        except OSError as exc:  # URLError/timeout: marketplace unreachable
+            logger.warning("marketplace lookup for %r failed: %s", plugin_id, exc)
+            found = None
         if found is not None and PluginMarket.is_installed(found[1].id, package=found[1].package):
             return
         raise KeyError(self.t("plugin.unknown_plugin", plugin_id=plugin_id))

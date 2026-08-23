@@ -13,7 +13,6 @@ from mailflow.commands import CommandRouter
 from mailflow.config import MailFlowConfig
 from mailflow.service import MailFlowService
 from mailflow_bundled import create_plugin_manager
-from mailflow_storage_sqlite.plugin import plugin as storage_plugin  # noqa: F401
 from mailflow_tui.app import MailFlowApp
 from textual.widgets import Button, Input, Select, Static, TabbedContent
 
@@ -72,7 +71,6 @@ async def test_concurrent_reloads_do_not_duplicate_sections(
 
 
 async def test_llm_form_default_provider_and_extras_rebuild(tmp_path: Path) -> None:
-    from mailflow_tui.remote import RemoteUnsupported  # noqa: F401
     from mailflow_tui.settings import EntryFormScreen
 
     service = await start_service_quiet(tmp_path)
@@ -82,9 +80,14 @@ async def test_llm_form_default_provider_and_extras_rebuild(tmp_path: Path) -> N
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
             results: list[dict[str, Any]] = []
+
+            def on_form_done(values: dict[str, Any] | None) -> None:
+                if values is not None:
+                    results.append(values)
+
             app.push_screen(
-                EntryFormScreen(cast(Any, service), "llms"),
-                lambda values: results.append(values),
+                cast(Any, EntryFormScreen(cast(Any, service), "llms")),
+                on_form_done,
             )
             await pilot.pause(0.2)
 
@@ -119,9 +122,14 @@ async def test_llm_form_required_validation_and_eye_toggle(tmp_path: Path) -> No
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
             results: list[dict[str, Any]] = []
+
+            def on_form_done(values: dict[str, Any] | None) -> None:
+                if values is not None:
+                    results.append(values)
+
             app.push_screen(
-                EntryFormScreen(cast(Any, service), "llms"),
-                lambda values: results.append(values),
+                cast(Any, EntryFormScreen(cast(Any, service), "llms")),
+                on_form_done,
             )
             await pilot.pause(0.2)
 

@@ -92,7 +92,7 @@ class TestEnsureDefaultConfig:
         result = ensure_default_config(target)
 
         assert result == target
-        assert Path(result).is_file()
+        assert Path(target).is_file()
 
     def test_existing_file_is_left_alone(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

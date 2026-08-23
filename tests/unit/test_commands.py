@@ -605,6 +605,9 @@ class TestCommandRouter:
         from mailflow.plugins import PluginInfo
 
         service = commands_service(MailFlowConfig(), config_path=str(tmp_path / "config.toml"))
+        from mailflow.plugin_market import PluginMarket
+
+        service.market = PluginMarket([])  # keep the ghost lookup offline
         service.plugin_manager = cast(Any, FakePluginManager())
 
         class KnownManager(FakePluginManager):
