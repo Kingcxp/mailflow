@@ -55,6 +55,9 @@ class OpenAIBackend:
     def __init__(self, config: LLMConfig) -> None:
         self._config = config
         self._path = str(config.options.get("path", self.default_path))
+        self._opt_max_tokens = int(config.options.get("max_tokens", 0) or 0)
+        opt_temp = config.options.get("temperature")
+        self._opt_temperature = float(opt_temp) if opt_temp not in (None, "") else None
 
     # -- request construction ---------------------------------------------------
 
@@ -86,6 +89,10 @@ class OpenAIBackend:
         body: dict[str, Any] = {"model": self._config.model, "messages": messages}
         if temperature is not None:
             body["temperature"] = temperature
+        elif self._opt_temperature is not None:
+            body["temperature"] = self._opt_temperature
+        if self._opt_max_tokens:
+            body["max_tokens"] = self._opt_max_tokens
         body.update(self._config.extra_body)
         if options:
             if isinstance(options.get("body"), dict):
@@ -202,6 +209,10 @@ class ResponsesBackend(OpenAIBackend):
             body["instructions"] = system
         if temperature is not None:
             body["temperature"] = temperature
+        elif self._opt_temperature is not None:
+            body["temperature"] = self._opt_temperature
+        if self._opt_max_tokens:
+            body.setdefault("max_output_tokens", self._opt_max_tokens)
         if self._codex:
             # Codex endpoints are stateless by contract
             body.setdefault("store", False)

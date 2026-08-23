@@ -44,6 +44,13 @@ class GeminiBackend:
 
     def __init__(self, config: LLMConfig) -> None:
         self._config = config
+        self._max_output_tokens = int(config.options.get("max_tokens", 0) or 0)
+        self._temperature_opt = (
+            float(config.options["temperature"])
+            if config.options.get("temperature") not in (None, "")
+            else None
+        )
+        self._thinking_budget = int(config.options.get("thinking_budget", 0) or 0)
         self._base = (config.base_url or _DEFAULT_BASE).rstrip("/")
 
     def _url(self) -> str:
@@ -76,6 +83,12 @@ class GeminiBackend:
         generation: dict[str, Any] = {}
         if temperature is not None:
             generation["temperature"] = temperature
+        elif self._temperature_opt is not None:
+            generation["temperature"] = self._temperature_opt
+        if self._max_output_tokens:
+            generation["maxOutputTokens"] = self._max_output_tokens
+        if self._thinking_budget:
+            generation["thinkingConfig"] = {"thinkingBudget": self._thinking_budget}
         extra = self._config.extra_body.get("generationConfig")
         if isinstance(extra, dict):
             generation.update(cast(dict[str, Any], extra))

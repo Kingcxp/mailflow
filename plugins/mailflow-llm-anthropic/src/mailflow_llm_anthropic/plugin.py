@@ -48,6 +48,10 @@ class AnthropicBackend:
         self._config = config
         self._base_url = str(config.options.get("base_url", _DEFAULT_URL)).rstrip("/")
         self._max_tokens = int(config.options.get("max_tokens", 1024))
+        self._thinking_budget = int(config.options.get("thinking_budget", 0) or 0)
+        if self._thinking_budget:
+            # Anthropic requires max_tokens > budget_tokens when thinking is on
+            self._max_tokens = max(self._max_tokens, self._thinking_budget + 1)
 
     def _url(self) -> str:
         return self._base_url
@@ -79,6 +83,11 @@ class AnthropicBackend:
             body["system"] = system
         if temperature is not None:
             body["temperature"] = temperature
+        if self._thinking_budget:
+            body["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self._thinking_budget,
+            }
         return body
 
     @staticmethod
