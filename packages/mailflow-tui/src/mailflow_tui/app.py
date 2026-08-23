@@ -1278,6 +1278,7 @@ class MailFlowApp(App[None]):
 
     def _pane_factories(self) -> dict[str, tuple[type[Any], str]]:
         return {
+            "tab-logs": (lambda service: LogsPane(service, self._log_queue), "tui.tab_logs"),
             "tab-mail": (MailPane, "tui.tab_mail"),
             "tab-mailboxes": (AccountsPane, "tui.tab_mailboxes"),
             "tab-actions": (ActionsPane, "tui.tab_actions"),

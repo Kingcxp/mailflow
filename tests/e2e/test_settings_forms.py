@@ -234,3 +234,31 @@ async def test_language_change_propagates_to_other_tabs(tmp_path: Path) -> None:
             assert mail_tab_title == "邮件"
     finally:
         await service.stop()
+
+
+async def test_entry_form_fields_scroll(tmp_path: Path) -> None:
+    """The LLM form is taller than its dialog: the fields container must be
+    scrollable (regression: a nested 1fr Vertical collapsed scrolling)."""
+    from mailflow_tui.settings import EntryFormScreen
+
+    service = await start_service_quiet(tmp_path)
+    CommandRouter(service)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.push_screen(
+                cast(Any, EntryFormScreen(cast(Any, service), "llms")),
+                _result_collector([]),
+            )
+            await pilot.pause(0.3)
+
+            fields = app.screen.query_one("#entry-form-fields")
+            assert fields.virtual_size.height > fields.size.height, (
+                "form content does not overflow: nothing to scroll"
+            )
+            fields.scroll_down()
+            await pilot.pause(0.1)
+            assert fields.scroll_y > 0
+    finally:
+        await service.stop()

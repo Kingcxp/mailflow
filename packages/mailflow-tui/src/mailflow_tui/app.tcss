@@ -717,3 +717,7 @@ ListEditScreen, EntryFormScreen {
     min-width: 5;
     margin-left: 0;
 }
+
+#entry-form-extras {
+    height: auto;
+}
