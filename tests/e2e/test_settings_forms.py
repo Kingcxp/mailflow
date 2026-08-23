@@ -167,3 +167,60 @@ async def test_llm_form_required_validation_and_eye_toggle(tmp_path: Path) -> No
     finally:
         await service.stop()
         await service.stop()
+
+
+async def test_account_form_opens_with_imap_default(tmp_path: Path) -> None:
+    """Regression: a NULL initial value crashed Select._on_mount with
+    InvalidSelectValueError when opening the add-mailbox form."""
+    from mailflow_tui.settings import EntryFormScreen
+
+    service = await start_service_quiet(tmp_path)
+    CommandRouter(service)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            results: list[dict[str, Any]] = []
+            app.push_screen(
+                EntryFormScreen(cast(Any, service), "accounts"),
+                lambda values: results.append(values),
+            )
+            await pilot.pause(0.3)
+
+            provider_select = cast(Select[Any], app.screen.query_one("#field-provider", Select))
+            assert str(provider_select.value) == "imap"
+            # imap-specific extras rendered for the default provider
+            assert app.screen.query_one("#extra-username", Input) is not None
+            assert results == []  # nothing saved by merely opening
+    finally:
+        await service.stop()
+
+
+async def test_language_change_propagates_to_other_tabs(tmp_path: Path) -> None:
+    from textual.widgets import TabbedContent
+
+    service = await start_service_quiet(tmp_path)
+    CommandRouter(service)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-mail"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.3)
+
+            refresh_before = str(app.query_one("#btn-refresh", Button).label)
+
+            await cast(Any, service).set_setting("general.language", "zh-CN")
+            # the language.changed worker remounts every composed pane
+            await pilot.pause(1.0)
+
+            assert service.i18n.language == "zh-CN"
+            refresh_after = str(app.query_one("#btn-refresh", Button).label)
+            assert refresh_after != refresh_before
+            assert refresh_after == "刷新"
+
+            mail_tab_title = str(tabs.get_tab("tab-mail").label)  # pyright: ignore[reportUnknownMemberType]
+            assert mail_tab_title == "邮件"
+    finally:
+        await service.stop()

@@ -1209,6 +1209,12 @@ class MarketPane(Vertical):
         return await self._service.market.uninstall(plugin)
 
 
+async def pilot_pause_if_possible(app: Any, seconds: float = 0.05) -> None:
+    """Yield control so remounted widgets finish composing; a no-op when the
+    app is not currently running its test/message pump."""
+    await asyncio.sleep(seconds)
+
+
 class MailFlowApp(App[None]):
     """Eight-tab administration UI."""
 
@@ -1270,47 +1276,51 @@ class MailFlowApp(App[None]):
         # the service runs on the same loop as the app: schedule directly
         self._apply_language()
 
+    def _pane_factories(self) -> dict[str, tuple[type[Any], str]]:
+        return {
+            "tab-mail": (MailPane, "tui.tab_mail"),
+            "tab-mailboxes": (AccountsPane, "tui.tab_mailboxes"),
+            "tab-actions": (ActionsPane, "tui.tab_actions"),
+            "tab-llms": (LLMPane, "tui.tab_llms"),
+            "tab-runtime": (RuntimePane, "tui.tab_runtime"),
+            "tab-bots": (BotsPane, "tui.tab_bots"),
+            "tab-market": (MarketPane, "tui.tab_market"),
+            "tab-settings": (SettingsPane, "tui.tab_settings"),
+        }
+
     def _apply_language(self) -> None:
-        """Re-translate tab titles and pane labels after a language switch."""
+        """Re-translate tab titles and remount every composed pane.
+
+        Remounting (instead of patching individual labels) guarantees the
+        whole UI — buttons, placeholders, table headers, static titles —
+        switches to the new language at once."""
         self.title = self._service.t("tui.title")
         tabs = self.query_one(TabbedContent)
-        for pane_id, key in (
-            ("tab-mail", "tui.tab_mail"),
-            ("tab-mailboxes", "tui.tab_mailboxes"),
-            ("tab-actions", "tui.tab_actions"),
-            ("tab-llms", "tui.tab_llms"),
-            ("tab-runtime", "tui.tab_runtime"),
-            ("tab-logs", "tui.tab_logs"),
-            ("tab-market", "tui.tab_market"),
-            ("tab-settings", "tui.tab_settings"),
-        ):
-            tab = tabs.get_tab(pane_id)
+        factories = self._pane_factories()
+        for pane_id, (_factory, key) in factories.items():
+            try:
+                tab = tabs.get_tab(pane_id)
+            except Exception:
+                continue  # remote mode hides some tabs entirely
             tab.label = self._service.t(key)  # pyright: ignore[reportUnknownMemberType]
-        self.run_worker(cast(Any, self._relabel_guarded))
+        self.run_worker(cast(Any, self._remount_guarded))
 
-    async def _relabel_guarded(self) -> None:
+    async def _remount_guarded(self) -> None:
         async with self._refresh_lock:
-            await self._relabel_panes()
+            await self._remount_panes()
 
-    async def _relabel_panes(self) -> None:
-        for pane_type in (
-            MailPane,
-            AccountsPane,
-            ActionsPane,
-            LLMPane,
-            RuntimePane,
-            SettingsPane,
-            MarketPane,
-        ):
-            query = self.query(pane_type)
-            if not query:
+    async def _remount_panes(self) -> None:
+        factories = self._pane_factories()
+        for pane_id, (factory, _key) in factories.items():
+            panes = self.query(f"#{pane_id}")
+            if not panes:
+                continue  # lazy: composes with current language on activation
+            container = panes.first()
+            if not container.is_mounted or not container.children:
                 continue
-            pane = query.first()
-            # lazy panes compose with the current language on first activation;
-            # only already-composed panes need relabeling here
-            if not pane.is_mounted or not pane.query("*"):
-                continue
-            await pane.relabel()  # type: ignore[attr-defined]
+            await container.remove_children()
+            await container.mount(factory(self._service))
+        await pilot_pause_if_possible(self)
 
     async def _on_mail_processed(self, event: str, **payload: Any) -> None:
         # the service runs on the same loop as the app: schedule directly

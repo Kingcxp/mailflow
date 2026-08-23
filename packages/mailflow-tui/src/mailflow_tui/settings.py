@@ -300,7 +300,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             and (minimal is None or spec.label in minimal)
             and spec.editor not in _MULTILINE_EDITORS  # no hand-written TOML
         ]
-        self._default_provider = "openai-completions" if group == "llms" else ""
+        if group == "llms":
+            self._default_provider = "openai-completions"
+        elif group == "accounts":
+            self._default_provider = "imap"
+        else:
+            self._default_provider = ""
         if group == "llms":
             self._provider_choices = tuple(
                 sorted(service.registry.component_ids(ComponentKind.LLM_BACKEND))
@@ -394,8 +399,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         elif spec.editor is EditorKind.CHOICE or (spec.label == "provider" and choices):
             initial = str(current) if str(current) in [str(c) for c in choices] else None
             if spec.label == "provider" and not self._editing:
-                # a brand-new LLM defaults to the most common transport
+                # a brand-new entry defaults to the most common transport
                 initial = self._default_provider or initial
+            # literal None is an illegal Select value: NULL makes Textual pick
+            # the first option when blank is not allowed, instead of crashing
+            if initial is None:
+                initial = Select.NULL
             yield Select(
                 [(str(choice), str(choice)) for choice in choices],
                 value=initial,
