@@ -582,12 +582,13 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             numeric_fields = ("interval_seconds", "limit", "max_tokens", "thinking_budget")
             target = collected["options"] if extra.into_options else collected
             try:
+                value_num: Any
                 if extra.field_id == "temperature":
-                    value_num: Any = float(text)
+                    value_num = float(text)
                 elif extra.field_id in numeric_fields:
-                    value_num: Any = int(text)
+                    value_num = int(text)
                 else:
-                    value_num: Any = text
+                    value_num = text
                 target[extra.field_id] = value_num
             except ValueError as exc:
                 raise SettingsError(extra.field_id, f"{extra.label} must be a number") from exc

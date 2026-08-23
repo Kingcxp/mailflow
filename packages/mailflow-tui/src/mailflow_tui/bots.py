@@ -128,6 +128,10 @@ class BotsPane(Vertical):
     async def relabel(self) -> None:
         self.on_mount()
 
+    def refresh_data(self) -> None:
+        self._ensure_columns()
+        self._render()
+
     def on_data_table_row_selected(self, event: Any) -> None:
         self._selected_id = str(event.row_key.value)
 
@@ -139,7 +143,7 @@ class BotsPane(Vertical):
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
                 EntryFormScreen(self._service, "notifiers")
             )
-            await self.on_mount()
+            self.call_after_refresh(self.refresh_data)
             return
         if button_id == "bots-delete":
             await self._delete_selected()
@@ -161,7 +165,8 @@ class BotsPane(Vertical):
             return
         await self._service.remove_config_entry("notifiers", index)
         self._selected_id = None
-        await self.on_mount()
+        self._ensure_columns()
+        self._render()
 
     async def _check_all(self) -> None:
         status_node = self.query_one("#bots-status", Static)
