@@ -233,7 +233,14 @@ class TestThinkBlockStripping:
         )
 
         class Router:
-            async def chat(self, messages, *, primary, fallback=None, options=None):
+            async def chat(
+                self,
+                messages: list[dict[str, Any]],
+                *,
+                primary: str,
+                fallback: list[str] | None = None,
+                options: dict[str, Any] | None = None,
+            ) -> Any:
                 from mailflow.contracts import LLMCompletion
 
                 return LLMCompletion(text=text, model="m")
@@ -243,7 +250,7 @@ class TestThinkBlockStripping:
     async def test_think_block_is_stripped_before_parsing(self) -> None:
         import json as jsonlib
 
-        payload = {
+        payload: dict[str, Any] = {
             "summary": "s",
             "urgency": "info",
             "reason": "r",
