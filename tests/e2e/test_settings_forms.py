@@ -80,6 +80,20 @@ async def test_concurrent_reloads_do_not_duplicate_sections(
         await service.stop()
 
 
+async def _wait_until(pilot: Any, predicate: Any, timeout: float = 4.0) -> None:
+    """Pilot pauses are not synchronization points on slow runners — poll
+    the predicate instead of sleeping a fixed 0.3s."""
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if predicate():
+            await pilot.pause()
+            return
+        await pilot.pause(0.05)
+    await pilot.pause()
+
+
 async def test_llm_form_default_provider_and_extras_rebuild(tmp_path: Path) -> None:
     from mailflow_tui.settings import EntryFormScreen
 
@@ -106,16 +120,17 @@ async def test_llm_form_default_provider_and_extras_rebuild(tmp_path: Path) -> N
             assert str(provider_select.value) == "openai-completions"
 
             # provider-specific extras are rendered immediately for the default
+            await _wait_until(pilot, lambda: bool(app.screen.query("#extra-base-url")))
             assert app.screen.query_one("#extra-base-url", Input) is not None
 
             # switching provider rebuilds the extras without DuplicateIds
             provider_select.value = "google-vertex"
-            await pilot.pause(0.3)
+            await _wait_until(pilot, lambda: bool(app.screen.query("#extra-project")))
             assert len(app.screen.query("#extra-project")) == 1
             assert len(app.screen.query("#extra-base-url")) == 0
 
             provider_select.value = "openai-completions"
-            await pilot.pause(0.3)
+            await _wait_until(pilot, lambda: bool(app.screen.query("#extra-api-key")))
             assert len(app.screen.query("#extra-base-url")) == 1
             assert len(app.screen.query("#extra-api-key")) == 1
     finally:
