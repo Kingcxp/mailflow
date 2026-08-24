@@ -97,23 +97,40 @@ class RulesProcessor:
         return ProcessorResult()
 
 
-SYSTEM_PROMPT = """You classify email into exactly four importance levels:
-- "ad": irrelevant advertising/junk (gray #909399). Do NOT reply to these.
-- "info": contains useful information but nothing time-critical (green #67C23A),
-  e.g. a lecture notice you may ignore safely.
-- "important": needs reading (orange #E6A23C), e.g. a verification code.
-- "urgent": must be handled now or at a specific time (red #F56C6C),
-  e.g. picking up an ID card, attending an exam, joining an academic meeting.
+SYSTEM_PROMPT = """You triage a university student's email into exactly four
+importance levels. Judge from the perspective of the recipient: what would a
+busy student actually need to act on?
 
-Rules:
-1. Never invent facts that are not in the mail. If a field is unknown use "".
-2. "reply_required" is true ONLY when the sender explicitly asks for a
-   response or the mail clearly expects one (RSVP, question, confirmation).
-3. For every timed obligation (exam, meeting, errand, deadline) produce an
-   action item. action_type is one of: "exam", "meeting", "errand", "other".
-4. notes for an action item must list practical preparations mentioned in the
-   mail (what to bring, what to wear, materials to prepare).
-5. Output ONLY a single JSON object, no prose, no markdown fences:
+- "urgent" (red #F56C6C): the recipient MUST physically or digitally act at a
+  specific date/time within the next few days — pick up a document (student
+  card, certificate), attend an exam/meeting/defense at a stated time, complete
+  registration/payment before a deadline, submit paperwork by a date. A due
+  date/time is present or clearly implied.
+- "important" (orange #E6A23C): needs timely attention but is NOT a physical
+  appointment — verification codes, one-time passwords, action-required online
+  steps (pay a fee online, confirm enrollment), official notices the recipient
+  must read and respond to this week.
+- "info" (green #67C23A): optional or FYI content — academic lectures/seminars
+  the recipient MAY attend, club activities, general announcements, grade
+  postings, newsletters.
+- "ad" (gray #909399): marketing, promotions, routine system/account login
+  reminders, security-notice boilerplate, password-expiry nudges, delivery
+  status updates, and any bulk mail.
+
+Calibration rules:
+1. When in doubt between urgent and important, choose important. Urgent is
+   reserved for concrete scheduled obligations with a date/time.
+2. Login reminders, "your account was accessed", password-expiry notices and
+   similar routine system mails are ALWAYS "ad", never important/urgent.
+3. Lectures and seminars without mandatory attendance are "info", even with a
+   date. Only mark urgent/important if attendance is required for THIS
+   recipient (their name, their session, compulsory for their program).
+4. Never invent facts not in the mail. Unknown fields use "".
+5. reply_required=true ONLY when the sender explicitly expects an answer.
+6. Every timed obligation classified urgent/important MUST yield exactly one
+   action item with due_at parsed from the mail; action_type ∈
+   {"exam","meeting","errand","other"}; notes list practical preparations.
+7. Output ONLY a single JSON object, no prose, no markdown fences:
 {
   "summary": "one or two sentence summary",
   "urgency": "ad|info|important|urgent",
