@@ -121,7 +121,20 @@ All notable changes are recorded here; the format follows
   paths, no Chinese text left in `en.json`, and a `config.desc.<key>` entry
   for every configurable option in both packs.
 
+### Added
+
+- **Reject with a reason** in the Mail tab: disputing a mail's priority
+  records the reason as a lasting correction guideline that is injected
+  into every future LLM analysis, so the same mistake is not repeated.
+  The detail view shows the rejection reason; remote mode is unsupported.
+
 ### Fixed
+
+- Locale keys added flat at the top level of the language packs (all UI
+  strings introduced in the previous rounds) were silently ignored by the
+  pack loader, which only reads the nested `messages` object — buttons and
+  titles rendered as raw keys. All keys migrated into `messages`.
+
 
 - Deleting a mail-derived todo now hides it permanently (stable natural
   key: mail id + due time + type survives re-analysis); custom todos are

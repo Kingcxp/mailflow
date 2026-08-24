@@ -277,3 +277,75 @@ async def test_entry_form_fields_scroll(tmp_path: Path) -> None:
             assert fields.scroll_y > 0
     finally:
         await service.stop()
+
+
+async def test_reject_mail_with_reason_feeds_guidelines(tmp_path: Path) -> None:
+    """The 打回 flow: button opens a dialog, the reason lands in the rolling
+    guidelines that every future analysis receives, and the detail view
+    marks the mail as rejected."""
+    from mailflow.domain import MailAnalysis, MailRecord, Urgency
+    from mailflow.plugins import PluginManager
+    from mailflow.service import start_service
+    from mailflow_storage_sqlite.plugin import plugin as storage_plugin
+    from mailflow_testkit.fakes import make_mail as make_test_mail
+    from mailflow_tui.app import MailFlowApp
+    from textual.widgets import Button, DataTable
+
+    def build_config(db: Path) -> Any:
+        from mailflow.config import MailFlowConfig
+
+        return MailFlowConfig()
+
+    manager = PluginManager(build_config(tmp_path / "unused"))
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "fb2.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    CommandRouter(service)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            record = MailRecord(
+                record_id="m-reject",
+                mail=make_test_mail(message_id="m-reject", subject="促销邮件"),
+                auto_urgency=Urgency.URGENT,
+                analysis=MailAnalysis(summary="促销", urgency=Urgency.URGENT),
+            )
+            await service.storage.save_mail(record)
+            await pilot.pause()
+            app.query_one("#btn-refresh", Button).press()
+            await pilot.pause()
+
+            table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
+            for _ in range(60):
+                if table.row_count >= 1:
+                    break
+                await pilot.pause(0.05)
+            assert table.row_count >= 1
+
+            app.query_one("#btn-feedback", Button).press()
+            await pilot.pause()
+            from textual.widgets import TextArea
+
+            area = app.screen.query_one("#feedback-reason", TextArea)
+            area.text = "这是营销广告，不是紧急事务\n永远归为 ad"
+            app.screen.query_one("#feedback-save", Button).press()
+            for _ in range(60):
+                if "营销广告" in (await service.feedback_guidelines()):
+                    break
+                await pilot.pause(0.05)
+            guidelines = await service.feedback_guidelines()
+            assert "m-reject" in guidelines
+            assert "营销广告" in guidelines
+
+            # detail view shows the rejection marker
+            notes_widget = app.query_one("#mail-notes")
+            notes = str(
+                notes_widget.content  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType, reportAttributeAccessIssue]
+            )
+            assert "已打回" in notes or "Rejected" in notes
+    finally:
+        await service.stop()

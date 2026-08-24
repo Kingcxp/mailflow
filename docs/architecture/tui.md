@@ -27,6 +27,10 @@ without it the service has no file to write to.
   `service.process_mail`. Already-stored mail is marked and skipped, so
   re-analyzing is a no-op instead of a duplicate. Sources that do not
   implement the optional history capability report that instead of failing.
+- **Mail detail**: a **Reject** button opens a dialog to record a reason;
+  the reason joins the rolling correction guidelines that every future LLM
+  analysis receives (`feedback.guidelines`, most recent 20 kept), and the
+  detail view marks the mail with its rejection reason.
 - **Actions**: time / type / content / notes / source-mail columns; row
   selection opens a detail modal; **Delete** removes the selected entry.
   User-created todos are deleted for real; mail-derived todos are dismissed

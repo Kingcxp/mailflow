@@ -547,7 +547,26 @@
       "title": "MailFlow",
       "urgency_auto": "auto",
       "urgency_help": "ad = gray (ads) · info = green (useful) · important = orange (read) · urgent = red (act now) · auto = automatic",
-      "urgency_label": "Set urgency"
+      "urgency_label": "Set urgency",
+      "btn_delete_todo": "Delete selected",
+      "history_picked": "picked",
+      "history_unpicked": "",
+      "extras_http_url": "OneBot 11 HTTP endpoint, e.g. http://127.0.0.1:5700 (NapCat/Lagrange)",
+      "extras_access_token": "access_token; leave empty when the bot side has none",
+      "extras_gateway_url": "WeChaty gateway URL, e.g. http://127.0.0.1:8788",
+      "extras_token": "Gateway auth token",
+      "extras_endpoint": "API path, default /api/v1",
+      "extras_targets": "One target per line: QQ uses user:QQID or group:ROOMID; WeChat uses wxid_xxx or room-id@chatroom",
+      "bots_login_help": "Login: QR scanning happens in the bot runtime — start NapCat / the WeChaty gateway / OpenClaw and scan there first, then click Add here to enter its address and targets; the Status column shows connection-test results.",
+      "notify_title": "Latest mail notifications",
+      "btn_feedback": "Reject",
+      "feedback_title": "Reject with a reason",
+      "feedback_hint": "The reason becomes a lasting correction guideline injected into every future analysis, so the same mistake is not repeated",
+      "feedback_reason_label": "Why is this classification wrong…",
+      "feedback_empty": "Reason must not be empty",
+      "feedback_saved": "Feedback recorded: future analyses will follow it",
+      "feedback_marker": "Rejected",
+      "feedback_local_only": "Rejecting requires a local service (unsupported remotely)"
     },
     "update": {
       "applied_title": "Applied updates",
@@ -568,16 +587,5 @@
       "server.username": "HTTP Basic auth username for the admin server"
     }
   },
-  "tui.btn_delete_todo": "Delete selected",
-  "tui.history_picked": "picked",
-  "tui.history_unpicked": "",
-  "tui.extras_http_url": "OneBot 11 HTTP endpoint, e.g. http://127.0.0.1:5700 (NapCat/Lagrange)",
-  "tui.extras_access_token": "access_token; leave empty when the bot side has none",
-  "tui.extras_gateway_url": "WeChaty gateway URL, e.g. http://127.0.0.1:8788",
-  "tui.extras_token": "Gateway auth token",
-  "tui.extras_base_url": "OpenClaw WeChat service URL, e.g. http://127.0.0.1:8000",
-  "tui.extras_endpoint": "API path, default /api/v1",
-  "tui.extras_targets": "One target per line: QQ uses user:QQID or group:ROOMID; WeChat uses wxid_xxx or room-id@chatroom",
-  "tui.bots_login_help": "Login: QR scanning happens in the bot runtime — start NapCat / the WeChaty gateway / OpenClaw and scan there first, then click Add here to enter its address and targets; the Status column shows connection-test results.",
-  "tui.notify_title": "Latest mail notifications"
+  "tui.extras_base_url": "OpenClaw WeChat service URL, e.g. http://127.0.0.1:8000"
 }

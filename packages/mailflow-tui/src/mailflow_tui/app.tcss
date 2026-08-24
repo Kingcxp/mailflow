@@ -163,6 +163,42 @@ ReplyModal {
     align: center middle;
 }
 
+FeedbackModal {
+    align: center middle;
+}
+
+#feedback-dialog {
+    width: 70;
+    height: auto;
+    max-height: 70%;
+    border: round $accent;
+    background: $surface;
+    padding: 0 1;
+}
+
+#feedback-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#feedback-hint {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#feedback-reason {
+    height: 6;
+}
+
+#feedback-buttons {
+    height: auto;
+    margin-top: 1;
+}
+
+#feedback-buttons Button {
+    margin-right: 1;
+}
+
 #reply-dialog {
     width: 90;
     height: 80%;
