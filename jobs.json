@@ -1,0 +1,317 @@
+{
+  "total_count": 2,
+  "jobs": [
+    {
+      "id": 97391774576,
+      "run_id": 32714165546,
+      "workflow_name": "ci",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/Kingcxp/mailflow/actions/runs/32714165546",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOT5foYs8AAAAWrQCLcA",
+      "head_sha": "213a98b92c02615f7b87ebe56c833633b96ac84c",
+      "url": "https://api.github.com/repos/Kingcxp/mailflow/actions/jobs/97391774576",
+      "html_url": "https://github.com/Kingcxp/mailflow/actions/runs/32714165546/job/97391774576",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-08-24T09:56:09Z",
+      "started_at": "2026-08-24T09:56:12Z",
+      "completed_at": "2026-08-24T09:57:12Z",
+      "name": "gate (windows-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-08-24T09:56:13Z",
+          "completed_at": "2026-08-24T09:56:15Z"
+        },
+        {
+          "name": "Run actions/checkout@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-08-24T09:56:15Z",
+          "completed_at": "2026-08-24T09:56:23Z"
+        },
+        {
+          "name": "Install uv",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-08-24T09:56:23Z",
+          "completed_at": "2026-08-24T09:56:27Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-08-24T09:56:27Z",
+          "completed_at": "2026-08-24T09:56:27Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-08-24T09:56:27Z",
+          "completed_at": "2026-08-24T09:56:40Z"
+        },
+        {
+          "name": "Lint (ruff check)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-08-24T09:56:40Z",
+          "completed_at": "2026-08-24T09:56:40Z"
+        },
+        {
+          "name": "Format (ruff format)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-08-24T09:56:40Z",
+          "completed_at": "2026-08-24T09:56:41Z"
+        },
+        {
+          "name": "Type check (mypy)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-08-24T09:56:41Z",
+          "completed_at": "2026-08-24T09:56:52Z"
+        },
+        {
+          "name": "Type check (pyright)",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 9,
+          "started_at": "2026-08-24T09:56:52Z",
+          "completed_at": "2026-08-24T09:57:06Z"
+        },
+        {
+          "name": "Tests",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 10,
+          "started_at": "2026-08-24T09:57:06Z",
+          "completed_at": "2026-08-24T09:57:06Z"
+        },
+        {
+          "name": "Annotate test failures",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 11,
+          "started_at": "2026-08-24T09:57:06Z",
+          "completed_at": "2026-08-24T09:57:07Z"
+        },
+        {
+          "name": "Docs gate",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12,
+          "started_at": "2026-08-24T09:57:07Z",
+          "completed_at": "2026-08-24T09:57:07Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 22,
+          "started_at": "2026-08-24T09:57:07Z",
+          "completed_at": "2026-08-24T09:57:07Z"
+        },
+        {
+          "name": "Post Install uv",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 23,
+          "started_at": "2026-08-24T09:57:07Z",
+          "completed_at": "2026-08-24T09:57:07Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 24,
+          "started_at": "2026-08-24T09:57:07Z",
+          "completed_at": "2026-08-24T09:57:09Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 25,
+          "started_at": "2026-08-24T09:57:09Z",
+          "completed_at": "2026-08-24T09:57:09Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/Kingcxp/mailflow/check-runs/97391774576",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000000745,
+      "runner_name": "GitHub Actions 1000000745",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 97391774717,
+      "run_id": 32714165546,
+      "workflow_name": "ci",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/Kingcxp/mailflow/actions/runs/32714165546",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOT5foYs8AAAAWrQCL_Q",
+      "head_sha": "213a98b92c02615f7b87ebe56c833633b96ac84c",
+      "url": "https://api.github.com/repos/Kingcxp/mailflow/actions/jobs/97391774717",
+      "html_url": "https://github.com/Kingcxp/mailflow/actions/runs/32714165546/job/97391774717",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-08-24T09:56:09Z",
+      "started_at": "2026-08-24T09:56:13Z",
+      "completed_at": "2026-08-24T09:56:45Z",
+      "name": "gate (ubuntu-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-08-24T09:56:14Z",
+          "completed_at": "2026-08-24T09:56:15Z"
+        },
+        {
+          "name": "Run actions/checkout@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-08-24T09:56:15Z",
+          "completed_at": "2026-08-24T09:56:16Z"
+        },
+        {
+          "name": "Install uv",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-08-24T09:56:16Z",
+          "completed_at": "2026-08-24T09:56:18Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-08-24T09:56:18Z",
+          "completed_at": "2026-08-24T09:56:18Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-08-24T09:56:18Z",
+          "completed_at": "2026-08-24T09:56:24Z"
+        },
+        {
+          "name": "Lint (ruff check)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-08-24T09:56:24Z",
+          "completed_at": "2026-08-24T09:56:24Z"
+        },
+        {
+          "name": "Format (ruff format)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-08-24T09:56:24Z",
+          "completed_at": "2026-08-24T09:56:24Z"
+        },
+        {
+          "name": "Type check (mypy)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-08-24T09:56:24Z",
+          "completed_at": "2026-08-24T09:56:33Z"
+        },
+        {
+          "name": "Type check (pyright)",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 9,
+          "started_at": "2026-08-24T09:56:33Z",
+          "completed_at": "2026-08-24T09:56:42Z"
+        },
+        {
+          "name": "Tests",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 10,
+          "started_at": "2026-08-24T09:56:42Z",
+          "completed_at": "2026-08-24T09:56:42Z"
+        },
+        {
+          "name": "Annotate test failures",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 11,
+          "started_at": "2026-08-24T09:56:42Z",
+          "completed_at": "2026-08-24T09:56:42Z"
+        },
+        {
+          "name": "Docs gate",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12,
+          "started_at": "2026-08-24T09:56:42Z",
+          "completed_at": "2026-08-24T09:56:42Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 22,
+          "started_at": "2026-08-24T09:56:42Z",
+          "completed_at": "2026-08-24T09:56:42Z"
+        },
+        {
+          "name": "Post Install uv",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 23,
+          "started_at": "2026-08-24T09:56:42Z",
+          "completed_at": "2026-08-24T09:56:42Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 24,
+          "started_at": "2026-08-24T09:56:42Z",
+          "completed_at": "2026-08-24T09:56:42Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 25,
+          "started_at": "2026-08-24T09:56:42Z",
+          "completed_at": "2026-08-24T09:56:42Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/Kingcxp/mailflow/check-runs/97391774717",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000000744,
+      "runner_name": "GitHub Actions 1000000744",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}

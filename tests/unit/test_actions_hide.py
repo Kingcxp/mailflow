@@ -28,22 +28,22 @@ class _Store:
 
     async def initialize(self) -> None: ...
     async def close(self) -> None: ...
-    async def get_preference(self, k):
+    async def get_preference(self, k: str) -> str | None:
         return self.preferences.get(k)
 
-    async def set_preference(self, k, v):
+    async def set_preference(self, k: str, v: str) -> None:
         self.preferences[k] = v
 
-    async def list_mails(self):
+    async def list_mails(self) -> list[Any]:
         return list(self.mails.values())
 
-    async def list_custom_actions(self):
+    async def list_custom_actions(self) -> list[ActionItem]:
         return list(self.custom.values())
 
-    async def save_custom_action(self, item):
+    async def save_custom_action(self, item: ActionItem) -> None:
         self.custom[item.item_id] = item
 
-    async def delete_custom_action(self, item_id):
+    async def delete_custom_action(self, item_id: str) -> bool:
         return self.custom.pop(item_id, None) is not None
 
 

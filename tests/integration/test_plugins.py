@@ -875,7 +875,7 @@ class TestIMAPBacklogSkipDefault:
                 return "OK", [(b"1", raw)]
 
         monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", NewMailIMAP)
-        fetched = source._fetch_once()
+        fetched = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
         assert [m.subject for m in fetched] == ["msg 4"]
 
     def _uid_handler(self, command: str, *args: Any):

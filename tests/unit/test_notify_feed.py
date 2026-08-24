@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from mailflow.domain import MailAnalysis, MailMessage, MailRecord, Urgency
-from mailflow_tui.settings import _NotifyFeed
+from mailflow_tui.settings import _NotifyFeed  # pyright: ignore[reportPrivateUsage]
 
 
 class _Pane:
@@ -45,7 +45,7 @@ def _record(urgency: Urgency) -> MailRecord:
 
 async def test_feed_renders_effective_urgency_and_subject() -> None:
     feed = _NotifyFeed(service=Any, pane=_Pane())  # type: ignore[arg-type]
-    await feed._on_processed(record=_record(Urgency.URGENT))
+    await feed._on_processed(record=_record(Urgency.URGENT))  # pyright: ignore[reportPrivateUsage]
 
     entries = feed.snapshot()
     assert len(entries) == 1
@@ -57,5 +57,5 @@ async def test_feed_renders_effective_urgency_and_subject() -> None:
 
 async def test_feed_ignores_missing_record() -> None:
     feed = _NotifyFeed(service=Any, pane=_Pane())  # type: ignore[arg-type]
-    await feed._on_processed()
+    await feed._on_processed()  # pyright: ignore[reportPrivateUsage]
     assert feed.snapshot() == []

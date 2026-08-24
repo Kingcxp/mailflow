@@ -664,12 +664,12 @@ class ActionsPane(Vertical):
         table = self._actions_table()
         if table is None:
             return
-        row_index = table.cursor_row  # pyright: ignore[reportAttributeAccessIssue]
-        if row_index is None or row_index < 0 or row_index >= table.row_count:
+        row_index = table.cursor_row
+        if row_index < 0 or row_index >= table.row_count:
             return
-        row_key = table.row_keys[row_index] if hasattr(table, "row_keys") else None
-        if row_key is None:
-            return
+        from textual.coordinate import Coordinate
+
+        row_key = table.coordinate_to_cell_key(Coordinate(row_index, 0)).row_key
         item = next((i for i in self._items if i.item_id == str(row_key.value)), None)
         if item is None:
             return

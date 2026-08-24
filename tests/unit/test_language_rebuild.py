@@ -49,7 +49,7 @@ def service(tmp_path: Any) -> MailFlowService:
 async def test_language_switch_updates_pipeline_language(service: MailFlowService) -> None:
     from mailflow.llm import LLMRouterImpl
     from mailflow.processors import register_builtin_processors
-    from mailflow.service import _build_processors
+    from mailflow.service import _build_processors  # pyright: ignore[reportPrivateUsage]
 
     register_builtin_processors(service.registry)
 
@@ -78,7 +78,7 @@ async def test_language_switch_updates_pipeline_language(service: MailFlowServic
 
 def _pipeline_language(service: MailFlowService) -> str:
     """The language option baked into the llm-importance binding."""
-    for binding in service.pipeline._bindings:
+    for binding in service.pipeline._bindings:  # pyright: ignore[reportPrivateUsage]
         options = binding.options or {}
         if binding.processor_id == "llm-importance":
             return str(options.get("language", ""))
