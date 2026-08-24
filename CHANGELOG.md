@@ -130,6 +130,20 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- The entry form's test button ran the LLM probe for every group — testing
+  a mailbox surfaced "no llm_backend component 'imap'". It now dispatches
+  per group (accounts → IMAP login check, llms → completion ping).
+- The LLM connection test reported the unformatted template (the key
+  expects a {reply} placeholder the code never passed); it now uses the
+  model variant: latency + model name.
+- Saving an LLM/account could leave the table stale until the next manual
+  refresh: persisting awaited the runtime rebuild, whose source-task drain
+  waited indefinitely for a source parked in a blocking connect. The drain
+  is now bounded (5s) and IMAP connects carry a 20s socket timeout.
+- Language switches left the Logs tab label untranslated (the logs pane is
+  deliberately never remounted, and the relabel pass skipped it).
+
+
 - Locale keys added flat at the top level of the language packs (all UI
   strings introduced in the previous rounds) were silently ignored by the
   pack loader, which only reads the nested `messages` object — buttons and

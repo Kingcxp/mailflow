@@ -685,10 +685,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             status.update(f"[red]{escape(message[:300])}[/red]")
             return
         elapsed = (datetime.now() - started).total_seconds()
-        # raw model output is intentionally not shown — latency and the model
-        # name are enough to judge connectivity without dumping content
+        # raw model output is intentionally not shown — latency, the model
+        # name and the routed provider are enough to judge connectivity
         status.update(
-            f"[green]{self._t('tui.llm_test_ok', seconds=f'{elapsed:.1f}', model=escape(completion.model or '-'))}[/green]"
+            f"[green]{self._t('tui.llm_test_ok_model', seconds=f'{elapsed:.1f}', model=escape(completion.model or '-'))}[/green]"
         )
 
     async def _test_account(self) -> None:
@@ -775,7 +775,14 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             self.dismiss(None)
             return
         if button_id == "entry-form-test":
-            self.run_worker(self._test_llm(), exclusive=True, group="llm-test", exit_on_error=False)
+            if self._group == "accounts":
+                self.run_worker(
+                    self._test_account(), exclusive=True, group="account-test", exit_on_error=False
+                )
+            else:
+                self.run_worker(
+                    self._test_llm(), exclusive=True, group="llm-test", exit_on_error=False
+                )
             return
         if button_id != "entry-form-save":
             return

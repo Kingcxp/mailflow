@@ -349,3 +349,43 @@ async def test_reject_mail_with_reason_feeds_guidelines(tmp_path: Path) -> None:
             assert "已打回" in notes or "Rejected" in notes
     finally:
         await service.stop()
+
+
+async def test_account_form_test_button_probes_imap_not_llm(tmp_path: Path) -> None:
+    """Regression: the form's test button used to run the LLM probe for
+    every group, surfacing "no llm_backend component 'imap'" in the
+    mailbox form. It must dispatch to the IMAP credential check."""
+    from textual.widgets import Button, Static
+
+    service = await start_service_quiet(tmp_path)
+    CommandRouter(service)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            from textual.widgets import TabbedContent
+
+            app.query_one(TabbedContent).active = "tab-mailboxes"
+            for _ in range(40):
+                if app.query("#account-add"):
+                    break
+                await pilot.pause(0.05)
+            app.query_one("#account-add", Button).press()
+            await pilot.pause(0.3)
+            for _ in range(40):
+                if app.screen.query("#entry-form-test"):
+                    break
+                await pilot.pause(0.05)
+            # default provider imap, no credentials yet
+            app.screen.query_one("#entry-form-test", Button).press()
+            status = app.screen.query_one("#entry-form-status", Static)
+            text = ""
+            for _ in range(40):
+                text = str(status.content)
+                if text.strip():
+                    break
+                await pilot.pause(0.05)
+            assert "llm_backend" not in text
+            assert text.strip()
+    finally:
+        await service.stop()

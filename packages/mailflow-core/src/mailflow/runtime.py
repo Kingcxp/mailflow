@@ -176,7 +176,11 @@ class MailFlowRuntime:
         for task in old_source_tasks:
             task.cancel()
         if old_source_tasks:
-            await asyncio.gather(*old_source_tasks, return_exceptions=True)
+            # A source parked in a blocking connect (to_thread cannot be
+            # interrupted) must not stall a settings change indefinitely:
+            # wait briefly, then proceed — the cancelled tasks finish in the
+            # background and are already removed from the task list.
+            await asyncio.wait(old_source_tasks, timeout=5.0)
         self._tasks = [task for task in self._tasks if task not in old_source_tasks]
         for source in self._sources.values():
             with suppress(Exception):

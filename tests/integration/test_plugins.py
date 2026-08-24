@@ -605,7 +605,7 @@ class TestIMAPMailSource:
         class FakeIMAP:
             uids: ClassVar[list[int]] = [1, 2]
 
-            def __init__(self, host: str, port: int) -> None:
+            def __init__(self, host: str, port: int, timeout: float = 0) -> None:
                 self.host = host
                 self.port = port
                 self.logged = False
@@ -668,7 +668,7 @@ class TestIMAPMailSource:
         state = {"fail_uid": 2}
 
         class FlakyIMAP:
-            def __init__(self, host: str, port: int) -> None: ...
+            def __init__(self, host: str, port: int, timeout: float = 0) -> None: ...
 
             def login(self, user: str, password: str) -> None: ...
 
@@ -716,7 +716,7 @@ class TestIMAPMailSource:
         from mailflow_mail_imap.plugin import IMAPSource
 
         class HistoryIMAP:
-            def __init__(self, host: str, port: int) -> None: ...
+            def __init__(self, host: str, port: int, timeout: float = 0) -> None: ...
 
             def login(self, user: str, password: str) -> None: ...
 
@@ -833,7 +833,7 @@ class TestIMAPBacklogSkipDefault:
         from mailflow_mail_imap.plugin import IMAPSource
 
         class SeedIMAP:
-            def __init__(self, host: str, port: int) -> None: ...
+            def __init__(self, host: str, port: int, timeout: float = 0) -> None: ...
 
             def login(self, user: str, password: str) -> None: ...
 

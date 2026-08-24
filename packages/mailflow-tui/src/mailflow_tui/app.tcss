@@ -749,9 +749,17 @@ ListEditScreen, EntryFormScreen {
 }
 
 .eye-btn {
-    width: 5;
-    min-width: 5;
+    width: 6;
+    min-width: 6;
     margin-left: 0;
+}
+
+/* reverse video on a tiny CJK label looks broken — use a subtle lighten */
+.eye-btn:hover,
+.eye-btn:focus {
+    background: $surface-lighten-3;
+    text-style: bold;
+    color: $text;
 }
 
 #entry-form-extras {

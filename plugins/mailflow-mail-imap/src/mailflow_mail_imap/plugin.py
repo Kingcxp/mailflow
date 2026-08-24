@@ -183,10 +183,12 @@ class IMAPSource:
                 f"account {self._account.account_id!r}: no imap_host configured "
                 "(set options.preset to qq/163/outlook/gmail or provide imap_host)"
             )
+        # a bounded connect timeout keeps an unreachable host from stalling
+        # polls, history loads and runtime reconfiguration indefinitely
         client = (
-            imaplib.IMAP4_SSL(host, port)
+            imaplib.IMAP4_SSL(host, port, timeout=20.0)
             if self._settings.get("imap_ssl", True)
-            else imaplib.IMAP4(host, port)
+            else imaplib.IMAP4(host, port, timeout=20.0)
         )
         client.login(self._username, self._password)
         folder = str(self._settings.get("imap_folder", "INBOX"))

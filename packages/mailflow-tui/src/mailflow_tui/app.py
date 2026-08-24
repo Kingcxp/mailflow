@@ -1429,6 +1429,13 @@ class MailFlowApp(App[None]):
             "tab-settings": (SettingsPane, "tui.tab_settings"),
         }
 
+    def _tab_label_keys(self) -> dict[str, str]:
+        """Every tab id → its label key, including tabs that are never
+        remounted (logs survive language switches to keep their history)."""
+        keys = {pane_id: key for pane_id, (_f, key) in self._pane_factories().items()}
+        keys["tab-logs"] = "tui.tab_logs"
+        return keys
+
     def _apply_language(self) -> None:
         """Re-translate tab titles and remount every composed pane.
 
@@ -1437,8 +1444,7 @@ class MailFlowApp(App[None]):
         switches to the new language at once."""
         self.title = self._service.t("tui.title")
         tabs = self.query_one(TabbedContent)
-        factories = self._pane_factories()
-        for pane_id, (_factory, key) in factories.items():
+        for pane_id, key in self._tab_label_keys().items():
             try:
                 tab = tabs.get_tab(pane_id)
             except Exception:
@@ -1461,6 +1467,9 @@ class MailFlowApp(App[None]):
                 continue
             await container.remove_children()
             await container.mount(factory(self._service))
+        # panes that survive remounting still need their statics retranslated
+        for pane in self.query(LogsPane):
+            pane.relabel()
         await pilot_pause_if_possible(self)
 
     async def _on_mail_processed(self, event: str, **payload: Any) -> None:

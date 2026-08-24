@@ -83,6 +83,9 @@ schema knowledge of its own.
 - List and mapping values open `ListEditScreen` (one entry per line, or JSON
   for mappings); structured entries open `EntryFormScreen`, a real form window
   with per-field labels, descriptions and a Back button.
+- Each form's **Test** button dispatches by group: mailbox forms run a
+  real IMAP login probe (20s socket timeout), LLM forms send a one-shot
+  completion and report latency plus the model name.
 - An invalid edit shows which option is wrong and why (from
   `SettingsError.option`/`.message`) in the status line and as a notification;
   a valid edit is persisted immediately through the service.
