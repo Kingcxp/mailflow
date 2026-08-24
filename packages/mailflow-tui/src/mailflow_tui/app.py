@@ -880,7 +880,11 @@ class LogsPane(Vertical):
     }
 
     def drain(self) -> None:
-        log_view = self.query_one("#log-view", RichLog)
+        # remounts (language switch, tab re-compose) can tick the interval
+        # while the widget tree is detached — never crash the app for it
+        log_view = self.query_one_optional("#log-view", RichLog)
+        if log_view is None:
+            return
         while True:
             try:
                 line = self._log_queue.get_nowait()
