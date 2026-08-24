@@ -848,6 +848,13 @@ class LogsPane(Vertical):
         if log_view is not None:
             log_view.write(self._service.t("tui.logs_title"))
 
+    _LEVEL_STYLES = {
+        "ERROR": "bold red",
+        "CRITICAL": "bold red",
+        "WARNING": "yellow",
+        "INFO": "dim",
+    }
+
     def drain(self) -> None:
         log_view = self.query_one("#log-view", RichLog)
         while True:
@@ -855,7 +862,19 @@ class LogsPane(Vertical):
                 line = self._log_queue.get_nowait()
             except queue_module.Empty:
                 break
-            log_view.write(line)
+            # lines arrive as "HH:MM:SS|LEVEL|logger|message"
+            from rich.text import Text
+
+            parts = line.split("|", 3)
+            if len(parts) == 4:
+                time_part, level, logger_name, message = parts
+                text = Text(f"{time_part} ")
+                text.append(f"{level:<7}", style=self._LEVEL_STYLES.get(level, "bold"))
+                text.append(f" {logger_name} ")
+                text.append(message)
+                log_view.write(text)
+            else:
+                log_view.write(line)
 
 
 class MarketDetailScreen(ModalScreen[Any]):

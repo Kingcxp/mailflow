@@ -29,10 +29,16 @@ logger = logging.getLogger("mailflow.tui")
 
 
 class TuiLogHandler(logging.Handler):
-    """Routes mailflow log records into a queue the TUI drains on its timer."""
+    """Routes mailflow log records into a queue the TUI drains on its timer.
+
+    Lines carry a ``HH:MM:SS LEVEL`` prefix so the Logs tab can colorize by
+    severity while staying plain text (no ANSI/markup escapes)."""
 
     def __init__(self, log_queue: queue_module.Queue[Any]) -> None:
         super().__init__()
+        self.setFormatter(
+            logging.Formatter("%(asctime)s|%(levelname)s|%(name)s|%(message)s", "%H:%M:%S")
+        )
         self._log_queue = log_queue
 
     def emit(self, record: logging.LogRecord) -> None:
