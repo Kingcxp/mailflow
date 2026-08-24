@@ -109,11 +109,35 @@ class MemoryStorage:
         self.mails[record_id] = record
         return record
 
-    async def purge_trash(self, before: datetime) -> int:
-        return 0
-
     async def cleanup_mail(self, before: datetime) -> int:
-        return 0
+        moved = 0
+        for record_id in list(self.mails):
+            if self.mails[record_id].received_at < before:
+                self.trash[record_id] = self._to_trash(self.mails.pop(record_id))
+                moved += 1
+        return moved
+
+    def _to_trash(self, record: MailRecord) -> TrashRecord:
+        from mailflow.domain import TrashRecord, utcnow
+
+        return TrashRecord(
+            record_id=record.record_id,
+            mail=record.mail,
+            auto_urgency=record.auto_urgency,
+            manual_urgency=record.manual_urgency,
+            analysis=record.analysis,
+            processor_notes=record.processor_notes,
+            deleted_at=datetime.now(UTC),
+            expires_at=utcnow(),
+        )
+
+    async def purge_trash(self, before: datetime) -> int:
+        purged = 0
+        for record_id in list(self.trash):
+            if self.trash[record_id].deleted_at < before:
+                del self.trash[record_id]
+                purged += 1
+        return purged
 
     async def save_draft(self, draft: ReplyDraft) -> None:
         self.drafts[draft.draft_id] = draft
@@ -883,3 +907,25 @@ class TestLocalPluginInstall:
         response = await commands.execute(f"plugin install {str(empty).replace(chr(92), chr(47))}")
         assert not response.ok
         assert "no plugins found" in response.text
+
+
+class TestMailWipe:
+    async def test_wipe_requires_explicit_confirm(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        response = await commands.execute("mail wipe")
+        assert not response.ok
+        assert "CONFIRM" in response.text
+        assert len(storage.mails) == 3  # untouched
+
+    async def test_wipe_confirmed_clears_mails_and_trash(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        await commands.execute("mail delete m1")
+        assert len(storage.trash) >= 1
+        response = await commands.execute("mail wipe CONFIRM")
+        assert response.ok
+        assert len(storage.mails) == 0
+        assert len(storage.trash) == 0
