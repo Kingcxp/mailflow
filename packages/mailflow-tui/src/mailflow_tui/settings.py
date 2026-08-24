@@ -1122,7 +1122,7 @@ class _NotifyFeed:
             line.append(summary[:160], "dim")
         self._entries.append(line)
         with contextlib.suppress(Exception):
-            self._pane.app.call_later(self._pane._render_notify_feed)
+            self._pane.app.call_later(self._pane._append_notify_entry, line)
 
     def snapshot(self) -> list[Text]:
         return list(self._entries)
@@ -1167,16 +1167,11 @@ class LLMPane(Vertical):
         if feed is not None:
             feed.stop()
 
-    def _render_notify_feed(self) -> None:
-        feed = getattr(self, "_notify_feed", None)
-        if feed is None:
-            return
-        widget = self.query_one_optional("#notify-feed", RichLog)
-        if widget is None:
-            return
-        widget.clear()
-        for entry in feed.snapshot():
-            widget.write(entry)
+    def _append_notify_entry(self, entry: Text) -> None:
+        """Write one entry incrementally — clear()+rewrite on every mail
+        churned the UI loop hard enough to starve Textual pilots in e2e."""
+        with contextlib.suppress(Exception):
+            self.query_one("#notify-feed", RichLog).write(entry)
 
     async def relabel(self) -> None:
         self._columns_done = False
