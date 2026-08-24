@@ -14,6 +14,19 @@ no concrete adapter, transport or UI type is imported.
 | `IMPORTANT` | `important`| #E6A23C  | needs reading (verification code)              |
 | `URGENT`    | `urgent`   | #F56C6C  | must be handled now or at a specific time      |
 
+The product contract behind the table: **urgent** is reserved for concrete,
+dated obligations aimed at the recipient — exams, compulsory meetings,
+defenses, document pickups, payment/registration deadlines. Every
+urgent/important mail with a stated time MUST yield an `ActionItem`, and
+action items drive the reminder scheduler (early reminder the evening
+before at `reminder_hour`, final reminder at `reminder_minute` before the
+due time) — that is the "strict notification" path. Login notices,
+password expirations and shipping notifications are `ad`-grade noise;
+lectures without compulsory attendance are `info`. `important` means "read
+and probably act today" without a hard timestamp. `manual_urgency` lets
+the user correct any call; the correction is an override, never a
+re-training signal.
+
 `rank` orders them for notifier thresholds; `parse_urgency` normalizes
 common LLM synonyms ("critical", "junk", "medium", case variants) to the
 canonical values.
