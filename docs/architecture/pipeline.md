@@ -45,3 +45,13 @@ A processor exception is captured in its note and logged; with
 `failure_policy = continue` the next processor still runs. A mail that fails
 processing entirely is logged by the worker and never kills the worker or
 other sources.
+
+
+## Summary language
+
+The `llm-importance` processor writes summaries, notes and reply drafts in
+the language given by its `language` option. `start_service` seeds it from
+`general.summary_language` (when set) or the UI language; switching
+`general.language` in the TUI hot-rebuilds the pipeline so the next
+analysis follows immediately. An explicit per-processor `options.language`
+entry always wins.

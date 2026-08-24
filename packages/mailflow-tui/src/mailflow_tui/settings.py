@@ -1105,15 +1105,16 @@ class _NotifyFeed:
         record = payload.get("record")
         if record is None:
             return
-        urgency = str(getattr(getattr(record, "analysis", None), "urgency", "info"))
+        urgency = str(getattr(record, "effective_urgency", "info"))
         style = self._STYLES.get(urgency, "white")
         stamp = getattr(record, "received_at", None)
         when = stamp.strftime("%m-%d %H:%M") if stamp is not None else ""
+        subject = str(getattr(getattr(record, "mail", None), "subject", "") or "")
         line = Text.assemble(
             (when + "  ", "dim"),
             (urgency.upper(), style),
             ("  ", ""),
-            (str(getattr(record, "subject", ""))[:60], "bold"),
+            (subject[:60], "bold"),
         )
         summary = str(getattr(getattr(record, "analysis", None), "summary", ""))
         if summary:

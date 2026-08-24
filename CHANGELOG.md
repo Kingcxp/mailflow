@@ -123,6 +123,25 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- Deleting a mail-derived todo now hides it permanently (stable natural
+  key: mail id + due time + type survives re-analysis); custom todos are
+  deleted for real. The Actions tab gained a Delete button.
+- History browser pick column renders again (Rich markup was swallowing the
+  `[x]`/`[ ]` cells); picked/unpicked are localized plain-text marks.
+- Switching `general.language` hot-rebuilds the pipeline, so summaries and
+  notes follow the UI language immediately instead of after a restart.
+- IM bot forms: provider is a dropdown (onebot/wechaty/openclaw-weixin)
+  with per-provider option fields and bilingual descriptions; the Bots tab
+  explains that QR login happens in the external runtime.
+- LLM activity is visible again: router successes and backend retries log
+  at INFO into the main Logs tab; the LLM tab's lower half is now a colored
+  per-mail notification feed.
+- New IMAP accounts skip the existing backlog by default (first poll seeds
+  the watermark without emitting); `analyze_backlog = true` restores the
+  legacy pull. The `other` todo category is a last resort via prompt-level
+  category definitions.
+
+
 - The TUI and the CLI `run`/`shell` commands never forwarded `--config` to
   `start_service`, so `service.config_path` stayed `None` and every
   persisting action (`config set`, plugin enable/disable, repository

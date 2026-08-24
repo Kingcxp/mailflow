@@ -28,11 +28,19 @@ without it the service has no file to write to.
   re-analyzing is a no-op instead of a duplicate. Sources that do not
   implement the optional history capability report that instead of failing.
 - **Actions**: time / type / content / notes / source-mail columns; row
-  selection opens a detail modal.
+  selection opens a detail modal; **Delete** removes the selected entry.
+  User-created todos are deleted for real; mail-derived todos are dismissed
+  by their stable identity (mail id + due time + type), so re-analyzing the
+  source mail keeps them hidden instead of resurrecting them.
 - **LLMs** (`settings.py: LLMPane`): the ordered fallback chain. Add / Edit /
   Delete plus Move up / Move down; the first row is the default and each row
   falls back to the ones below it, so `default` and `fallback` are never typed
-  in by hand (the form hides them).
+  in by hand (the form hides them). The lower half of the tab is the
+  **notification feed**: one colored entry per processed mail (all urgency
+  levels, per-level colors, summary line), fed by the
+  `mailflow.mail.processed` event. Raw LLM request logging lives in the main
+  Logs tab — the router and backends log routing decisions and retries at
+  INFO so the full LLM activity is visible there.
 - **Runtime**: a plugins table (id/name/kinds/status) with quick
   Disable/Enable buttons (persisted, applies on next start), plus mail
   adapters, accounts (status/errors), LLMs, processor → LLM/fallback
@@ -131,4 +139,8 @@ require a locally attached service.
 The Bots tab lists configured onebot/wechaty/openclaw-weixin notifier
 instances and probes their login state on demand. QR scanning happens
 in the bot runtime itself (NapCat, WeChaty gateway, OpenClaw); the tab
-verifies the session MailFlow sends through.
+verifies the session MailFlow sends through. The add form is a real
+`EntryFormScreen`: the provider is a dropdown limited to the IM providers,
+each provider renders its own option fields (endpoint URL, token, targets)
+with bilingual descriptions, and a help line above the table explains the
+external-runtime login model.
