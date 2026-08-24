@@ -66,13 +66,19 @@ def service() -> MailFlowService:
     return svc
 
 
+_DUE = datetime.now(UTC) + timedelta(days=2)
+
+
 def _mail_item(item_id: str) -> ActionItem:
+    """Same natural identity (mail id + due time + type) for every id —
+    re-analysis of the same mail reproduces the due time, and Linux clock
+    resolution would otherwise make the two now() calls differ."""
     return ActionItem(
         item_id=item_id,
         mail_id="m1",
         summary="领学生证",
         action_type="errand",
-        due_at=datetime.now(UTC) + timedelta(days=2),
+        due_at=_DUE,
     )
 
 
