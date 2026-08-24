@@ -733,10 +733,21 @@ ListEditScreen, EntryFormScreen {
 }
 
 
-#llms-request-log {
-    height: 10;
+#notify-title {
+    margin-bottom: 1;
+    padding: 0 1;
+    text-style: bold;
+}
+
+#notify-wrap {
+    height: 45%;
+}
+
+#notify-feed {
+    height: 1fr;
     border: round $secondary;
     background: #181825;
+    padding: 0 1;
 }
 
 #bots-table {

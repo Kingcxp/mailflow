@@ -567,5 +567,17 @@
       "server.port": "管理服务端口",
       "server.username": "管理服务 HTTP Basic 用户名"
     }
-  }
+  },
+  "tui.btn_delete_todo": "删除选中待办",
+  "tui.history_picked": "已选",
+  "tui.history_unpicked": "未选",
+  "tui.extras_http_url": "OneBot 11 HTTP 上报地址，例如 http://127.0.0.1:5700（NapCat/Lagrange 等）",
+  "tui.extras_access_token": "access_token，与机器人端 access_token 一致时可留空",
+  "tui.extras_gateway_url": "WeChaty 网关服务地址，例如 http://127.0.0.1:8788",
+  "tui.extras_token": "网关鉴权 token",
+  "tui.extras_base_url": "OpenClaw 微信服务地址，例如 http://127.0.0.1:8000",
+  "tui.extras_endpoint": "API 路径，默认 /api/v1",
+  "tui.extras_targets": "推送目标列表，每行一个，格式见下方说明：QQ 为 user:QQ号 或 group:群号；微信为 wxid_xxx 或 room-id@chatroom",
+  "tui.bots_login_help": "登录方式：扫码在机器人运行时里完成——先启动 NapCat / WeChaty 网关 / OpenClaw 并扫码登录，再在这里点“添加”填写它的地址与推送目标；状态列显示连接测试结果。",
+  "tui.notify_title": "最新邮件通知"
 }

@@ -167,6 +167,11 @@ class IMAPSource:
         self._limit = int(account.options.get("limit", 20))
         self._seen: set[str] = set()
         self._last_uid: int | None = None
+        # default behavior: seed the watermark at first poll WITHOUT emitting
+        # the existing backlog — only mail arriving afterwards is analyzed.
+        # Set options.analyze_backlog = true to restore legacy full-backlog
+        # ingestion on the first poll.
+        self._analyze_backlog = bool(account.options.get("analyze_backlog", False))
         self._username = str(account.options.get("username") or account.email)
         self._password = str(account.options.get("password") or "")
 
@@ -198,10 +203,16 @@ class IMAPSource:
             if self._last_uid is not None:
                 # Incremental: only mails that arrived after the previous poll.
                 wanted = [u for u in all_uids if u > self._last_uid]
-            else:
-                # First poll: the most recent ``limit`` mails (avoid flooding;
-                # a non-positive limit would slice to the whole mailbox)
+            elif self._analyze_backlog:
+                # Legacy mode: pull the newest ``limit`` existing mails
                 wanted = all_uids[-max(1, self._limit) :]
+            else:
+                # Default mode: skip the backlog entirely — seed the watermark
+                # at the newest UID so only mail arriving AFTER setup is
+                # analyzed
+                wanted = []
+                if all_uids:
+                    self._last_uid = max(all_uids)
             messages: list[MailMessage] = []
             for uid_int in wanted:
                 _status, fetch = client.uid("fetch", str(uid_int), "(RFC822)")

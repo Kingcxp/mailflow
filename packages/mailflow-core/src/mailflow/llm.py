@@ -83,7 +83,7 @@ class LLMRouterImpl:
                 continue
             completion.llm_id = llm_id
             completion.backend = config.provider
-            logger.debug(
+            logger.info(
                 "llm %r served by backend %r model=%r", llm_id, config.provider, completion.model
             )
             return completion

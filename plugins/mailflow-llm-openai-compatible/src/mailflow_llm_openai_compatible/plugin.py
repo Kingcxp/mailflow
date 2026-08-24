@@ -128,7 +128,7 @@ class OpenAIBackend:
                 if attempt >= max_retries or not _retryable(exc):
                     break
                 backoff = min(2**attempt, _MAX_BACKOFF_SECONDS)
-                logger.debug(
+                logger.info(
                     "%s attempt %d/%d failed (%s); retrying in %.1fs",
                     self.backend_id,
                     attempt + 1,

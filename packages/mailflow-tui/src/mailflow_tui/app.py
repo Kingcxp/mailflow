@@ -557,6 +557,12 @@ class ActionsPane(Vertical):
                 allow_blank=False,
             )
         yield DataTable(id="actions-table")
+        with Horizontal(id="actions-buttons"):
+            yield Button(
+                self._service.t("tui.btn_delete_todo"),
+                id="actions-delete",
+                variant="error",
+            )
         yield Static(self._service.t("tui.empty"), id="actions-hint")
 
     async def on_mount(self) -> None:
@@ -651,6 +657,24 @@ class ActionsPane(Vertical):
             cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
                 ActionModal(self._service, item)
             )
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id != "actions-delete":
+            return
+        table = self._actions_table()
+        if table is None:
+            return
+        row_index = table.cursor_row  # pyright: ignore[reportAttributeAccessIssue]
+        if row_index is None or row_index < 0 or row_index >= table.row_count:
+            return
+        row_key = table.row_keys[row_index] if hasattr(table, "row_keys") else None
+        if row_key is None:
+            return
+        item = next((i for i in self._items if i.item_id == str(row_key.value)), None)
+        if item is None:
+            return
+        await self._service.delete_action(item.item_id)
+        await self.refresh_actions()
 
 
 class RuntimePane(Vertical):

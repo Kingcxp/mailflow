@@ -83,6 +83,7 @@ class BotsPane(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static(self._service.t("tui.bots_title"), id="bots-title")
+        yield Static(escape(self._service.t("tui.bots_login_help")), id="bots-login-help")
         yield DataTable(id="bots-table", cursor_type="row")  # pyright: ignore[reportUnknownMemberType]
         with Horizontal(id="bots-actions"):
             yield Button(self._service.t("tui.btn_add"), id="bots-add", variant="success")

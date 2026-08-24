@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
@@ -351,8 +352,69 @@ class MailFlowService:
         """True when this mail is already stored (so the UI can mark it)."""
         return await self.storage.get_mail(mail.normalized_message_id()) is not None
 
+    @staticmethod
+    def _action_natural_key(item: ActionItem) -> str:
+        """Stable identity across re-analysis: mail id + due time + type.
+        The summary text varies between LLM runs and is deliberately excluded
+        so a re-generated replacement still matches its dismissed predecessor."""
+        return f"{item.mail_id}|{item.due_at.isoformat()}|{item.action_type}"
+
+    async def _dismissed_keys(self) -> frozenset[str]:
+        raw = await self.storage.get_preference("actions.dismissed")
+        try:
+            parsed = json.loads(raw or "[]")
+            return frozenset(str(k) for k in parsed)
+        except Exception:
+            return frozenset()
+
+    async def _add_dismissed_key(self, key: str) -> None:
+        current = await self._dismissed_keys()
+        merged = sorted(current | {key})
+        await self.storage.set_preference(
+            "actions.dismissed", json.dumps(merged, ensure_ascii=False)
+        )
+
     async def list_actions(self) -> list[ActionItem]:
-        """All timed action items: mail-derived plus user-created, by due time."""
+        """All timed action items by due time.
+
+        Mail-derived items whose natural key was dismissed (deleted by the
+        user) stay hidden even after the mail is re-analyzed; user-created
+        items are deleted for real."""
+        dismissed = await self._dismissed_keys()
+        items: list[ActionItem] = []
+        for record in await self.storage.list_mails():
+            items.extend(
+                item
+                for item in record.action_items
+                if self._action_natural_key(item) not in dismissed
+            )
+        custom = await self.storage.list_custom_actions()
+        items.extend(item for item in custom if self._action_natural_key(item) not in dismissed)
+        return sorted(items, key=lambda item: item.due_at)
+
+    async def delete_action(self, item_id: str) -> bool:
+        """Delete an action item.
+
+        User-created items are removed from storage permanently. Items
+        derived from a mail cannot be deleted (they regenerate on
+        re-analysis); they are recorded in a dismissal list keyed by their
+        stable identity so they stay hidden across re-parses."""
+        all_items = await self.list_actions_all()
+        target = next((i for i in all_items if i.item_id == item_id), None)
+        if target is None:
+            # fall back to prefix matching like the router does
+            matches = [i for i in all_items if i.item_id.startswith(item_id)]
+            if len(matches) == 1:
+                target = matches[0]
+        if target is None:
+            return False
+        if target.mail_id:
+            await self._add_dismissed_key(self._action_natural_key(target))
+            return True
+        return await self.storage.delete_custom_action(item_id)
+
+    async def list_actions_all(self) -> list[ActionItem]:
+        """list_actions() without the dismissal filter (internal)."""
         items: list[ActionItem] = []
         for record in await self.storage.list_mails():
             items.extend(record.action_items)
@@ -385,10 +447,7 @@ class MailFlowService:
         await self.storage.save_custom_action(item)
         return item
 
-    async def delete_action(self, item_id: str) -> bool:
-        """Delete a user-created action item; mail-derived items are not
-        stored here and are left untouched."""
-        return await self.storage.delete_custom_action(item_id)
+    # delete_action now lives above with dismissal semantics
 
     # -- user feedback (filter tuning) -------------------------------------------
 

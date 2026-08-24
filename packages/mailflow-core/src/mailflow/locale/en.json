@@ -567,5 +567,17 @@
       "server.port": "Admin server port",
       "server.username": "HTTP Basic auth username for the admin server"
     }
-  }
+  },
+  "tui.btn_delete_todo": "Delete selected",
+  "tui.history_picked": "picked",
+  "tui.history_unpicked": "",
+  "tui.extras_http_url": "OneBot 11 HTTP endpoint, e.g. http://127.0.0.1:5700 (NapCat/Lagrange)",
+  "tui.extras_access_token": "access_token; leave empty when the bot side has none",
+  "tui.extras_gateway_url": "WeChaty gateway URL, e.g. http://127.0.0.1:8788",
+  "tui.extras_token": "Gateway auth token",
+  "tui.extras_base_url": "OpenClaw WeChat service URL, e.g. http://127.0.0.1:8000",
+  "tui.extras_endpoint": "API path, default /api/v1",
+  "tui.extras_targets": "One target per line: QQ uses user:QQID or group:ROOMID; WeChat uses wxid_xxx or room-id@chatroom",
+  "tui.bots_login_help": "Login: QR scanning happens in the bot runtime — start NapCat / the WeChaty gateway / OpenClaw and scan there first, then click Add here to enter its address and targets; the Status column shows connection-test results.",
+  "tui.notify_title": "Latest mail notifications"
 }

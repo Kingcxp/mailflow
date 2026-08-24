@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import re
+from collections import deque
 from datetime import datetime
 from typing import Any, ClassVar
 
@@ -37,6 +37,7 @@ from mailflow.settings import (
     entry_field_specs,
     entry_model,
 )
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
@@ -339,6 +340,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             self._default_provider = "openai-completions"
         elif group == "accounts":
             self._default_provider = "imap"
+        elif group == "notifiers":
+            self._default_provider = "onebot"
         else:
             self._default_provider = ""
         if group == "llms":
@@ -349,6 +352,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             self._provider_choices = tuple(
                 sorted(service.registry.component_ids(ComponentKind.MAIL_SOURCE))
             )
+        elif group == "notifiers":
+            from mailflow_tui.bots import BotsPane
+
+            self._provider_choices = tuple(sorted(BotsPane.IM_PROVIDERS))
         else:
             self._provider_choices = ()
 
@@ -363,7 +370,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
     # -- helpers -------------------------------------------------------------
 
     def _current_provider(self) -> str:
-        if self._group not in ("llms", "accounts"):
+        if self._group not in ("llms", "accounts", "notifiers"):
             return ""
         try:
             selected = _select_text(self.query_one("#field-provider", Select))
@@ -383,6 +390,25 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 _Extra("interval_seconds", default="300"),
                 _Extra("limit", default="20"),
             )
+        if self._group == "notifiers":
+            if provider == "onebot":
+                return (
+                    _Extra("http_url", required=True),
+                    _Extra("access_token", kind="password", secret=True),
+                    _Extra("targets", required=True),
+                )
+            if provider == "wechaty":
+                return (
+                    _Extra("gateway_url", required=True),
+                    _Extra("token", kind="password", secret=True),
+                    _Extra("targets", required=True),
+                )
+            if provider == "openclaw-weixin":
+                return (
+                    _Extra("base_url", required=True),
+                    _Extra("endpoint", default="/api/v1"),
+                    _Extra("targets", required=True),
+                )
         return ()
 
     def _core_value(self, label: str) -> Any:
@@ -1043,20 +1069,62 @@ class SettingsPane(Vertical):
         await self.reload()
 
 
-class _LlmLogHandler(logging.Handler):
-    """Feeds mailflow.llm log records into the pane's request log widget."""
+class _NotifyFeed:
+    """Rich notification feed shown under the LLM chain table.
 
-    def __init__(self, pane: Any) -> None:
-        super().__init__()
+    Subscribes to ``mailflow.mail.processed`` and renders one colored entry
+    per processed mail (all urgency levels, strongest last). Replaces the
+    former raw request log — LLM activity now lives in the main Logs tab."""
+
+    MAX_ENTRIES = 100
+
+    _STYLES: ClassVar[dict[str, str]] = {
+        "urgent": "bold #F56C6C",
+        "important": "#E6A23C",
+        "info": "#67C23A",
+        "ad": "#909399",
+    }
+
+    def __init__(self, service: MailFlowService, pane: Any) -> None:
+        self._service = service
         self._pane = pane
+        self._entries: deque[Text] = deque(maxlen=self.MAX_ENTRIES)
 
-    def emit(self, record: logging.LogRecord) -> None:
-        line = f"{record.levelname[:4]} {record.getMessage()}"
-        try:
-            pane_widget = self._pane
-            pane_widget.app.call_later(pane_widget._append_llm_log, line)
-        except Exception:
-            pass
+    def start(self) -> None:
+        self._unsubscribe = self._service.events.subscribe(
+            "mailflow.mail.processed", self._on_processed
+        )
+
+    def stop(self) -> None:
+        stop = getattr(self, "_unsubscribe", None)
+        if stop is not None:
+            with contextlib.suppress(Exception):
+                stop()
+
+    async def _on_processed(self, **payload: Any) -> None:
+        record = payload.get("record")
+        if record is None:
+            return
+        urgency = str(getattr(getattr(record, "analysis", None), "urgency", "info"))
+        style = self._STYLES.get(urgency, "white")
+        stamp = getattr(record, "received_at", None)
+        when = stamp.strftime("%m-%d %H:%M") if stamp is not None else ""
+        line = Text.assemble(
+            (when + "  ", "dim"),
+            (urgency.upper(), style),
+            ("  ", ""),
+            (str(getattr(record, "subject", ""))[:60], "bold"),
+        )
+        summary = str(getattr(getattr(record, "analysis", None), "summary", ""))
+        if summary:
+            line.append("\n")
+            line.append(summary[:160], "dim")
+        self._entries.append(line)
+        with contextlib.suppress(Exception):
+            self._pane.app.call_later(self._pane._render_notify_feed)
+
+    def snapshot(self) -> list[Text]:
+        return list(self._entries)
 
 
 class LLMPane(Vertical):
@@ -1070,10 +1138,6 @@ class LLMPane(Vertical):
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
 
-    def _append_llm_log(self, line: str) -> None:
-        with contextlib.suppress(Exception):
-            self.query_one("#llms-request-log", RichLog).write(line)
-
     def compose(self) -> ComposeResult:
         yield Static(self._t("tui.llms_title"), id="llms-title")
         yield Static(self._t("tui.llms_help"), id="llms-help")
@@ -1084,18 +1148,34 @@ class LLMPane(Vertical):
             yield Button(self._t("tui.btn_delete"), id="llm-delete", variant="error")
             yield Button(self._t("tui.btn_move_up"), id="llm-up", variant="primary")
             yield Button(self._t("tui.btn_move_down"), id="llm-down", variant="primary")
-        with Vertical(id="llms-request-wrap"):
-            yield Static(self._t("tui.llm_log_title"), id="llm-log-title")
-            yield RichLog(id="llms-request-log", wrap=True, markup=False)
+        with Vertical(id="notify-wrap"):
+            yield Static(self._t("tui.notify_title"), id="notify-title")
+            yield RichLog(id="notify-feed", wrap=True, markup=False, highlight=False)
         yield Static("", id="llms-status")
 
     async def on_mount(self) -> None:
         await self.reload()
-        self._llm_log_handler = _LlmLogHandler(self)
-        logging.getLogger("mailflow.llm").addHandler(self._llm_log_handler)
+        self._notify_feed = _NotifyFeed(self._service, self)
+        self._notify_feed.start()
+        for entry in self._notify_feed.snapshot():
+            with contextlib.suppress(Exception):
+                self.query_one("#notify-feed", RichLog).write(entry)
 
     def on_unmount(self) -> None:
-        logging.getLogger("mailflow.llm").removeHandler(self._llm_log_handler)
+        feed = getattr(self, "_notify_feed", None)
+        if feed is not None:
+            feed.stop()
+
+    def _render_notify_feed(self) -> None:
+        feed = getattr(self, "_notify_feed", None)
+        if feed is None:
+            return
+        widget = self.query_one_optional("#notify-feed", RichLog)
+        if widget is None:
+            return
+        widget.clear()
+        for entry in feed.snapshot():
+            widget.write(entry)
 
     async def relabel(self) -> None:
         self._columns_done = False
@@ -1348,7 +1428,9 @@ class AccountsPane(Vertical):
                 else self._t("tui.history_marked_new")
             )
             table.add_row(
-                "[x]" if record_id in self._picked else "[ ]",
+                self._t("tui.history_picked")
+                if record_id in self._picked
+                else self._t("tui.history_unpicked"),
                 escape(mail.subject or "(no subject)"),
                 escape(mail.sender.address),
                 mail.date.strftime("%Y-%m-%d %H:%M"),

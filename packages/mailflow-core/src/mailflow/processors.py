@@ -130,6 +130,11 @@ Calibration rules:
 6. Every timed obligation classified urgent/important MUST yield exactly one
    action item with due_at parsed from the mail; action_type ∈
    {"exam","meeting","errand","other"}; notes list practical preparations.
+   Category definitions: "exam" = tests/exams/quizzes; "meeting" = scheduled
+   meetings, calls, defenses, interviews; "errand" = physical errands and
+   deadlines requiring an action (pickups, payments, registrations,
+   appointments, submission deadlines); "other" ONLY when none of the three
+   fit — always prefer the closest specific category.
 7. Output ONLY a single JSON object, no prose, no markdown fences:
 {
   "summary": "one or two sentence summary",
