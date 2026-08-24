@@ -389,3 +389,62 @@ async def test_account_form_test_button_probes_imap_not_llm(tmp_path: Path) -> N
             assert text.strip()
     finally:
         await service.stop()
+
+
+async def test_history_bulk_load_beyond_hundred_mails(tmp_path: Path) -> None:
+    """Loading 5+ consecutive pages (125 mails) must not crash the app:
+    regression for the >100-mails report."""
+
+    from textual.widgets import Button, DataTable, TabbedContent
+
+    service = await start_service_quiet(tmp_path)
+    # the built-in mailflow-mail-fake plugin builds its source from the
+    # account's options.mails list — declare 125 mails there
+    service.config.accounts = [
+        _fake_account(
+            mails=[{"message_id": f"bulk-{i}", "subject": f"历史邮件 {i}"} for i in range(125)]
+        )
+    ]
+    await service.reload_runtime()
+    CommandRouter(service)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            app.query_one(TabbedContent).active = "tab-mailboxes"
+            await _wait_until(pilot, lambda: bool(app.query("#history-more")))
+            pane = _accounts_pane(app)
+            pane._selected = 0
+            pane._history_account = "acct-1"
+
+            more = app.query_one("#history-more", Button)
+            for _expected in range(25, 126, 25):  # 5 x 25 = 125 > 100
+                before = len(pane._history)
+                more.press()
+                # a page can yield fewer NEW rows (server resends overlap);
+                # wait for progress, not an exact count
+                await _wait_until(
+                    pilot,
+                    lambda: len(pane._history) > before,  # noqa: B023
+                )
+            table = cast(DataTable[Any], app.query_one("#history-table", DataTable))
+            assert table.row_count == 125
+    finally:
+        await service.stop()
+
+
+def _fake_account(mails: list[dict[str, Any]] | None = None) -> Any:
+    from mailflow.config import MailAccountConfig
+
+    return MailAccountConfig(
+        account_id="acct-1",
+        provider="fake",
+        email="a@b.c",
+        options={"mails": mails or []},
+    )
+
+
+def _accounts_pane(app: Any) -> Any:
+    from mailflow_tui.settings import AccountsPane
+
+    return app.query_one(AccountsPane)

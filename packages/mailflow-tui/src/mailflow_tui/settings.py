@@ -1425,6 +1425,13 @@ class AccountsPane(Vertical):
         self._ensure_history_columns()
         for mail in self._history:
             record_id = mail.normalized_message_id()
+            try:
+                subject = escape(mail.subject or "(no subject)")
+                sender = escape(mail.sender.address)
+                date_text = mail.date.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                # one poison mail must never take the app down
+                subject, sender, date_text = "(parse error)", "-", "-"
             state = (
                 self._t("tui.history_marked_known")
                 if record_id in self._known
@@ -1434,9 +1441,9 @@ class AccountsPane(Vertical):
                 self._t("tui.history_picked")
                 if record_id in self._picked
                 else self._t("tui.history_unpicked"),
-                escape(mail.subject or "(no subject)"),
-                escape(mail.sender.address),
-                mail.date.strftime("%Y-%m-%d %H:%M"),
+                subject,
+                sender,
+                date_text,
                 state,
                 key=record_id,
             )
@@ -1471,7 +1478,15 @@ class AccountsPane(Vertical):
             await self._analyze_selected()
             return
         if button_id == "history-more":
-            await self._load_history(offset=len(self._history))
+            # network I/O must never run on the UI handler: an exclusive
+            # worker keeps the app responsive while IMAP answers (or times
+            # out), and repeated clicks collapse into one running load
+            self.run_worker(
+                self._load_history(offset=len(self._history)),
+                exclusive=True,
+                group="history-load",
+                exit_on_error=False,
+            )
             return
         index = self._selected
         if index is None or index >= len(self._service.config.accounts):
@@ -1552,11 +1567,21 @@ class AccountsPane(Vertical):
             self._set_status(f"[red]{escape(str(exc))}[/red]")
             return
         known: set[str] = set(self._known)
+        fresh: list[MailMessage] = []
+        seen_ids = {m.normalized_message_id() for m in self._history}
         for mail in page:
+            record_id = mail.normalized_message_id()
+            # servers resend the same message across windows (and duplicate
+            # message-ids exist in the wild); a repeated DataTable row key
+            # would crash the table, so keep exactly one row per mail
+            if record_id in seen_ids:
+                continue
+            seen_ids.add(record_id)
+            fresh.append(mail)
             if await self._service.is_mail_known(mail):
-                known.add(mail.normalized_message_id())
+                known.add(record_id)
         self._known = known
-        self._history = [*self._history, *page] if offset else list(page)
+        self._history = [*self._history, *fresh] if offset else list(fresh)
         self._render_history()
         if not self._history:
             self._set_status(self._t("tui.history_empty"))

@@ -1477,7 +1477,17 @@ class MailFlowApp(App[None]):
         self._schedule_reload()
 
     def _schedule_reload(self) -> None:
-        self.run_worker(cast(Any, self._reload_guarded))
+        # a bulk re-analysis emits one event per mail: coalesce the burst
+        # into a single refresh instead of queueing a full reload per mail
+        if getattr(self, "_reload_scheduled", False):
+            return
+        self._reload_scheduled = True
+
+        def _run() -> None:
+            self._reload_scheduled = False
+            self.run_worker(cast(Any, self._reload_guarded))
+
+        self.call_after_refresh(_run)
 
     async def _reload_guarded(self) -> None:
         async with self._refresh_lock:

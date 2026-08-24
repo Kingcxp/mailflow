@@ -130,6 +130,14 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- Bulk history browsing beyond ~100 mails could crash or freeze the app:
+  page loads now run in an exclusive worker (IMAP I/O never blocks the UI
+  handler), duplicate message-ids across windows are collapsed to one row
+  (a repeated DataTable row key raised), a poison mail renders as a
+  "(parse error)" row instead of killing the pane, and the per-mail full
+  refresh after a bulk re-analysis is coalesced into a single pass.
+
+
 - The entry form's test button ran the LLM probe for every group — testing
   a mailbox surfaced "no llm_backend component 'imap'". It now dispatches
   per group (accounts → IMAP login check, llms → completion ping).
