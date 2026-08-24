@@ -848,7 +848,7 @@ class LogsPane(Vertical):
         if log_view is not None:
             log_view.write(self._service.t("tui.logs_title"))
 
-    _LEVEL_STYLES = {
+    _LEVEL_STYLES: ClassVar[dict[str, str]] = {
         "ERROR": "bold red",
         "CRITICAL": "bold red",
         "WARNING": "yellow",

@@ -1347,7 +1347,6 @@ class AccountsPane(Vertical):
                 if record_id in self._known
                 else self._t("tui.history_marked_new")
             )
-            state_text = self._t("tui.history_state_picked") if record_id in self._picked else ""
             table.add_row(
                 "[x]" if record_id in self._picked else "[ ]",
                 escape(mail.subject or "(no subject)"),
@@ -1513,7 +1512,7 @@ class AccountsPane(Vertical):
                     f"{subject_short}[/cyan]"
                 )
             try:
-                record = await self._service.process_mail(mail, force=True)
+                await self._service.process_mail(mail, force=True)
             except Exception as exc:
                 # one bad mail must not abort the batch: keep it picked so
                 # the user can retry after fixing the cause
