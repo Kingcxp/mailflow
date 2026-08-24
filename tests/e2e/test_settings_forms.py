@@ -80,12 +80,12 @@ async def test_concurrent_reloads_do_not_duplicate_sections(
         await service.stop()
 
 
-async def _wait_until(pilot: Any, predicate: Any, timeout: float = 4.0) -> None:
+async def _wait_until(pilot: Any, predicate: Any, budget: float = 4.0) -> None:
     """Pilot pauses are not synchronization points on slow runners — poll
     the predicate instead of sleeping a fixed 0.3s."""
     import time as _time
 
-    deadline = _time.monotonic() + timeout
+    deadline = _time.monotonic() + budget
     while _time.monotonic() < deadline:
         if predicate():
             await pilot.pause()
