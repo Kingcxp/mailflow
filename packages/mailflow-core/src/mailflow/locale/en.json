@@ -428,6 +428,8 @@
       "history_marked_new": "new",
       "history_more": "Load more",
       "history_none_selected": "Select at least one mail to analyze.",
+      "history_progress": "analyzing {position}/{total}:",
+      "history_reanalyzed": "re-analyzed {count} mail(s); stored analyses replaced",
       "history_select_all": "Select all",
       "history_select_hint": "Space toggles a mail; Analyze selected runs them through the pipeline.",
       "history_title": "History",

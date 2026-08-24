@@ -254,23 +254,35 @@ class MailFlowRuntime:
             finally:
                 self._queue.task_done()
 
-    async def process_mail_now(self, mail: MailMessage) -> MailRecord | None:
+    async def process_mail_now(
+        self, mail: MailMessage, *, force: bool = False
+    ) -> MailRecord | None:
         """Run one mail through the pipeline immediately, bypassing the queue.
 
         Used by on-demand flows (the TUI mailbox browser) so a user-selected
         historical mail follows exactly the same path as a streamed one:
         dedup, persistence, ``mail.processed`` and notifier thresholds.
         Returns the stored record, or ``None`` when it was a duplicate.
+        With ``force=True`` (explicit user re-analysis) the dedup checks are
+        bypassed and the stored record is replaced with the fresh analysis.
         """
+        if force:
+            record_id = mail.normalized_message_id()
+            self._seen_ids.discard(record_id)
+            record = await self._process_one(mail, _skip_dedup=True)
+            await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
+            return record
         return await self._process_one(mail)
 
-    async def _process_one(self, mail: MailMessage) -> MailRecord | None:
+    async def _process_one(
+        self, mail: MailMessage, *, _skip_dedup: bool = False
+    ) -> MailRecord | None:
         record_id = mail.normalized_message_id()
-        if record_id in self._seen_ids:
+        if not _skip_dedup and record_id in self._seen_ids:
             logger.info("duplicate mail skipped (already processed): %s", record_id)
             return None
         self._seen_ids.add(record_id)  # no await: atomic across workers
-        if await self._storage.get_mail(record_id) is not None:
+        if not _skip_dedup and await self._storage.get_mail(record_id) is not None:
             # Forwarded copies of the same mail (multiple accounts, restarts)
             # share the normalized id; process and store exactly one copy.
             logger.info("duplicate mail skipped (already stored): %s", record_id)

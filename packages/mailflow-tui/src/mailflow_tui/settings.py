@@ -1347,8 +1347,9 @@ class AccountsPane(Vertical):
                 if record_id in self._known
                 else self._t("tui.history_marked_new")
             )
+            state_text = self._t("tui.history_state_picked") if record_id in self._picked else ""
             table.add_row(
-                "(x)" if record_id in self._picked else "( )",
+                "[x]" if record_id in self._picked else "[ ]",
                 escape(mail.subject or "(no subject)"),
                 escape(mail.sender.address),
                 mail.date.strftime("%Y-%m-%d %H:%M"),
@@ -1497,25 +1498,35 @@ class AccountsPane(Vertical):
         if not chosen:
             self._set_status(f"[yellow]{self._t('tui.history_none_selected')}[/yellow]")
             return
-        self._set_status(self._t("tui.history_analyzing", count=len(chosen)))
+        # user explicitly picked these mails: always re-run the pipeline and
+        # replace the stored analysis, bypassing the dedup shortcut
+        status_node = self.query_one_optional("#accounts-status", Static)
         processed = 0
-        skipped = 0
         failed: list[str] = []
-        for mail in chosen:
-            message_id = mail.normalized_message_id()
+
+        async def _run_one(position: int, mail: Any) -> None:
+            nonlocal processed
+            subject_short = escape(mail.subject[:36])
+            if status_node is not None:
+                status_node.update(
+                    f"[cyan]{self._t('tui.history_progress', position=position, total=len(chosen))} "
+                    f"{subject_short}[/cyan]"
+                )
             try:
-                record = await self._service.process_mail(mail)
+                record = await self._service.process_mail(mail, force=True)
             except Exception as exc:
                 # one bad mail must not abort the batch: keep it picked so
                 # the user can retry after fixing the cause
                 failed.append(f"{mail.subject[:40]}: {exc}")
-                continue
+                return
+            message_id = mail.normalized_message_id()
             self._known.add(message_id)
             self._picked.discard(message_id)
-            if record is None:
-                skipped += 1
-            else:
-                processed += 1
+            processed += 1
+
+        for position, mail in enumerate(chosen, start=1):
+            await _run_one(position, mail)
+
         self._render_history()
         if failed:
             detail = "; ".join(failed[:3])
@@ -1525,9 +1536,7 @@ class AccountsPane(Vertical):
                 f"{escape(detail)}{more}[/red]"
             )
         else:
-            self._set_status(
-                f"[green]{self._t('tui.history_analyzed', count=processed, skipped=skipped)}[/green]"
-            )
+            self._set_status(f"[green]{self._t('tui.history_reanalyzed', count=processed)}[/green]")
 
 
 __all__ = [

@@ -339,13 +339,13 @@ class MailFlowService:
             )
         return await source.fetch_history(limit=limit, offset=offset)
 
-    async def process_mail(self, mail: MailMessage) -> MailRecord | None:
+    async def process_mail(self, mail: MailMessage, *, force: bool = False) -> MailRecord | None:
         """Analyze and store one mail immediately (same path as live mail).
 
-        Returns the stored record, or ``None`` when the mail was already
-        processed (dedup by normalized message id).
-        """
-        return await self.runtime.process_mail_now(mail)
+        Returns the stored record, or ``None`` when it was already processed.
+        With ``force=True`` an existing record is replaced by the fresh run —
+        used when the user explicitly picks history mails for re-analysis."""
+        return await self.runtime.process_mail_now(mail, force=force)
 
     async def is_mail_known(self, mail: MailMessage) -> bool:
         """True when this mail is already stored (so the UI can mark it)."""

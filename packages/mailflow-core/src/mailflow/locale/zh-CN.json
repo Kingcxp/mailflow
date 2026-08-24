@@ -428,6 +428,8 @@
       "history_marked_new": "未解析",
       "history_more": "加载更多",
       "history_none_selected": "请至少选择一封要解析的邮件。",
+      "history_progress": "解析中 {position}/{total}：",
+      "history_reanalyzed": "已重新解析 {count} 封邮件；旧解析结果已被替换",
       "history_select_all": "全选",
       "history_select_hint": "空格键勾选邮件，“解析所选”会将其送入处理流程。",
       "history_title": "历史邮件",
