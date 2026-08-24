@@ -15,7 +15,11 @@ def main() -> int:
     if len(sys.argv) != 2:
         print("usage: python tools/annotate_pytest_failures.py pytest.xml", file=sys.stderr)
         return 2
-    root = ET.parse(sys.argv[1]).getroot()
+    try:
+        root = ET.parse(sys.argv[1]).getroot()
+    except (OSError, ET.ParseError) as exc:
+        print(f"::error::pytest produced no readable junit.xml ({exc}); the run crashed hard")
+        return 1
     count = 0
     for case in root.iter("testcase"):
         for kind in ("failure", "error"):
