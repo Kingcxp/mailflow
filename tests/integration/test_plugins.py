@@ -642,6 +642,7 @@ class TestIMAPMailSource:
                 "username": "me@qq.com",
                 "password": "secret",
                 "limit": 5,
+                "analyze_backlog": True,
             },
         )
         source = IMAPSource(account)
@@ -691,7 +692,13 @@ class TestIMAPMailSource:
         account = MailAccountConfig(
             account_id="acct-1",
             provider="imap",
-            options={"preset": "qq", "username": "u", "password": "p", "limit": 5},
+            options={
+                "preset": "qq",
+                "username": "u",
+                "password": "p",
+                "limit": 5,
+                "analyze_backlog": True,
+            },
         )
         source = IMAPSource(account)
         first = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
@@ -731,7 +738,13 @@ class TestIMAPMailSource:
         account = MailAccountConfig(
             account_id="acct-1",
             provider="imap",
-            options={"preset": "qq", "username": "u", "password": "p", "limit": 2},
+            options={
+                "preset": "qq",
+                "username": "u",
+                "password": "p",
+                "limit": 2,
+                "analyze_backlog": True,
+            },
         )
         source = IMAPSource(account)
         page = await source.fetch_history(limit=2)
@@ -807,3 +820,63 @@ class TestAnthropicBackend:
         assert body["messages"] == [{"role": "user", "content": "Summarize this mail."}]
         assert captured[0]["headers"]["x-api-key"] == "sk-ant-secret"
         assert captured[0]["headers"]["anthropic-version"] == "2023-06-01"
+
+
+class TestIMAPBacklogSkipDefault:
+    """Default mode: the first poll seeds the watermark WITHOUT emitting the
+    existing backlog — only mail arriving after setup gets analyzed."""
+
+    async def test_first_poll_skips_backlog_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mailflow.config import MailAccountConfig
+        from mailflow_mail_imap.plugin import IMAPSource
+
+        class SeedIMAP:
+            def __init__(self, host: str, port: int) -> None: ...
+
+            def login(self, user: str, password: str) -> None: ...
+
+            def select(self, folder: str) -> None: ...
+
+            def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+                if command == "search":
+                    return "OK", [b"1 2 3"]
+                uid = int(args[0])
+                raw = (
+                    f"From: a@example.com\r\nSubject: msg {uid}\r\n"
+                    f"Message-ID: <x-{uid}@e>\r\n\r\nbody"
+                ).encode()
+                return "OK", [(b"1", raw)]
+
+            def logout(self) -> None: ...
+
+        monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", SeedIMAP)
+        account = MailAccountConfig(
+            account_id="acct-1",
+            provider="imap",
+            options={"preset": "qq", "username": "u", "password": "p"},
+        )
+        source = IMAPSource(account)
+        # first poll emits nothing but seeds the watermark at uid 3
+        assert source._fetch_once() == []  # pyright: ignore[reportPrivateUsage]
+        assert source._last_uid == 3  # pyright: ignore[reportPrivateUsage]
+
+        # a later poll with a new mail (uid 4) is delivered normally
+        class NewMailIMAP(SeedIMAP):
+            def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+                if command == "search":
+                    return "OK", [b"1 2 3 4"]
+                uid = int(args[0])
+                raw = (
+                    f"From: a@example.com\r\nSubject: msg {uid}\r\n"
+                    f"Message-ID: <x-{uid}@e>\r\n\r\nbody"
+                ).encode()
+                return "OK", [(b"1", raw)]
+
+        monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", NewMailIMAP)
+        fetched = source._fetch_once()
+        assert [m.subject for m in fetched] == ["msg 4"]
+
+    def _uid_handler(self, command: str, *args: Any):
+        return "OK", [b"4"]

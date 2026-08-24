@@ -679,6 +679,10 @@ class MailFlowService:
             self.i18n.set_language(code)
             await self.storage.set_preference(_LANGUAGE_PREFERENCE, code)
             await self.events.emit("language.changed", language=code)
+            try:
+                await self.reload_runtime()
+            except Exception as exc:
+                logger.error("pipeline language rebuild failed: %s", exc)
         return self.settings_option("general.language")
 
     async def reset_setting(self, key: str) -> OptionSpec | None:
