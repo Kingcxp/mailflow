@@ -192,6 +192,7 @@
       "usage": "llm <list|bindings>"
     },
     "mail": {
+      "btn_wipe": "Wipe & redo",
       "deleted": "Mail {mail_id} moved to trash",
       "field_account": "Account",
       "field_actions": "Action items",
@@ -229,7 +230,11 @@
       "urgency_reset": "Urgency of {mail_id} reset to automatic ({urgency})",
       "urgency_updated": "Urgency of {mail_id} set to {urgency}",
       "urgency_usage": "mail urgency <mail_id> <ad|info|important|urgent|auto>",
-      "usage": "mail <list|show <id>|urgency <id> <level>|delete <id>>"
+      "usage": "mail <list|show <id>|urgency <id> <level>|delete <id>>",
+      "wipe_confirm_hint": "Run `mail wipe CONFIRM` to execute.",
+      "wipe_done": "Wiped {mails} active mail(s) and {trash} trash record(s). Dedup state cleared — restart or use the mailbox browser to re-ingest older mail beyond the fetch limit.",
+      "wipe_warn_body": " All analyses are erased; new polls re-ingest only newly received mail. Mails still listed in the Mailboxes history browser can be force re-analyzed individually.",
+      "wipe_warn_title": "This will PERMANENTLY delete every processed mail."
     },
     "plugin": {
       "already_installed": "{plugin_id} is already installed",

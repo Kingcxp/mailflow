@@ -192,6 +192,7 @@
       "usage": "llm <list|bindings>"
     },
     "mail": {
+      "btn_wipe": "清空重析",
       "deleted": "邮件 {mail_id} 已移入回收站",
       "field_account": "账户",
       "field_actions": "待办事项",
@@ -229,7 +230,11 @@
       "urgency_reset": "邮件 {mail_id} 的紧急度已重置为自动（{urgency}）",
       "urgency_updated": "邮件 {mail_id} 的紧急度已设为 {urgency}",
       "urgency_usage": "mail urgency <邮件id> <ad|info|important|urgent|auto>",
-      "usage": "mail <list|show <id>|urgency <id> <级别>|delete <id>>"
+      "usage": "mail <list|show <id>|urgency <id> <级别>|delete <id>>",
+      "wipe_confirm_hint": "执行请输入：`mail wipe CONFIRM`",
+      "wipe_done": "已清空 {mails} 封活动邮件与 {trash} 条回收站记录，去重状态已重置——超出拉取上限的旧邮件可在重启后通过邮箱浏览器重新解析。",
+      "wipe_warn_body": "所有解析结果都会被清除；之后的轮询只重新拉取新收到的邮件。仍显示在邮箱历史浏览器中的邮件可逐批强制重新解析。",
+      "wipe_warn_title": "此操作将永久删除全部已处理邮件。"
     },
     "plugin": {
       "already_installed": "{plugin_id} 已安装",

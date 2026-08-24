@@ -524,6 +524,28 @@ class MailFlowService:
     async def restore_mail(self, record_id: str) -> MailRecord | None:
         return await self.storage.restore_from_trash(record_id)
 
+    async def purge_all_processed(self) -> tuple[int, int]:
+        """Wipe every active mail and the entire trash, then forget in-memory
+        dedup state — the "start over" action for wrong historical analyses.
+
+        Live polling is unaffected (new mail keeps arriving); mails still
+        sitting in an open history browser can be force re-analyzed back into
+        storage via ``process_mail(force=True)``.
+        """
+        moved, purged = await self.run_cleanup_wide()
+        self.runtime.reset_dedup()
+        return moved, purged
+
+    async def run_cleanup_wide(self) -> tuple[int, int]:
+        """Move every active mail to trash and purge the trash permanently."""
+        from mailflow.domain import utcnow
+
+        horizon_active = utcnow() + timedelta(days=1)
+        horizon_trash = utcnow() + timedelta(days=36500)
+        moved = await self.storage.cleanup_mail(horizon_active)
+        purged = await self.storage.purge_trash(horizon_trash)
+        return moved, purged
+
     async def run_cleanup(self) -> tuple[int, int]:
         moved = await self.storage.cleanup_mail(
             utcnow() - timedelta(days=self.config.general.mail_retention_days)

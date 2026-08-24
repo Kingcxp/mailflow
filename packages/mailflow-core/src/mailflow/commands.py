@@ -359,6 +359,8 @@ class CommandRouter:
             return await self._mail_delete(rest)
         if sub == "urgency":
             return await self._mail_urgency(rest)
+        if sub == "wipe":
+            return await self._mail_wipe(rest)
         return self._err(self._t("mail.usage"))
 
     async def _mail_list(self, *, page: int = 1, query: str = "") -> CommandResponse:
@@ -532,6 +534,31 @@ class CommandRouter:
         )
 
     # -- action items -------------------------------------------------------------------------
+
+    async def _mail_wipe(self, args: list[str]) -> CommandResponse:
+        """``mail wipe CONFIRM`` — wipe every processed mail + trash so the
+        pipeline can start over. Two-step: bare ``mail wipe`` explains and
+        refuses; the literal word CONFIRM executes."""
+        if args != ["CONFIRM"]:
+            return CommandResponse.rich(
+                [
+                    (self._t("mail.wipe_warn_title"), _STYLE_ERROR),
+                    (
+                        "\n" + self._t("mail.wipe_warn_body"),
+                        "",
+                    ),
+                    (f"\n{self._t('mail.wipe_confirm_hint')}\n", _STYLE_ACCENT),
+                ],
+                ok=False,
+            )
+        try:
+            moved, purged = await self.service.purge_all_processed()
+        except Exception as exc:
+            return self._err(self._t("common.error", message=str(exc)))
+        return self._ok(
+            self._t("mail.wipe_done", mails=moved, trash=purged)
+            + f"\n({self._t('plugin.applies_now')})"
+        )
 
     async def _cmd_action(self, args: list[str]) -> CommandResponse:
         if not args or args[0] == "list":

@@ -254,6 +254,10 @@ class MailFlowRuntime:
             finally:
                 self._queue.task_done()
 
+    def reset_dedup(self) -> None:
+        """Forget in-memory dedup state so wiped mails can be re-ingested."""
+        self._seen_ids.clear()
+
     async def process_mail_now(
         self, mail: MailMessage, *, force: bool = False
     ) -> MailRecord | None:
