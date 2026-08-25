@@ -395,32 +395,41 @@ class MailPane(Vertical):
                 yield Static("", id="mail-actions")
                 yield Static("", id="mail-body")
                 yield Static("", id="mail-notes")
-        with Horizontal(id="mail-controls"):
-            yield Select(self._urgency_options(), id="urgency-select", allow_blank=False)
-            yield Select(
-                [("all", "all")] + [(u.value, u.value) for u in Urgency],
-                id="mail-urgency-filter",
-                allow_blank=False,
-            )
-            yield Select(
-                [
-                    (self._service.t("tui.sort_urgency"), "urgency"),
-                    (self._service.t("tui.sort_time"), "time"),
-                ],
-                id="mail-sort",
-                allow_blank=False,
-            )
-            yield Button(self._service.t("tui.btn_refresh"), id="btn-refresh", variant="primary")
-        with Horizontal(id="mail-actions-row"):
-            yield Button(self._service.t("tui.btn_trash"), id="btn-trash", variant="error")
-            yield Button(self._service.t("tui.btn_feedback"), id="btn-feedback", variant="warning")
-            yield Button(self._service.t("tui.btn_reply"), id="btn-reply", variant="success")
-            yield Button(self._service.t("tui.btn_reparse"), id="btn-reparse", variant="primary")
-            yield Button(
-                self._service.t("tui.btn_reparse_failed"),
-                id="btn-reparse-failed",
-                variant="error",
-            )
+        with Vertical(id="mail-controls"):
+            with Horizontal(id="mail-selects"):
+                yield Select(self._urgency_options(), id="urgency-select", allow_blank=False)
+                yield Select(
+                    [("all", "all")] + [(u.value, u.value) for u in Urgency],
+                    id="mail-urgency-filter",
+                    allow_blank=False,
+                )
+                yield Select(
+                    [
+                        (self._service.t("tui.sort_urgency"), "urgency"),
+                        (self._service.t("tui.sort_time"), "time"),
+                    ],
+                    id="mail-sort",
+                    allow_blank=False,
+                )
+                yield Button(
+                    self._service.t("tui.btn_refresh"), id="btn-refresh", variant="primary"
+                )
+            with Horizontal(id="mail-actions-row1"):
+                yield Button(self._service.t("tui.btn_trash"), id="btn-trash", variant="error")
+                yield Button(
+                    self._service.t("tui.btn_feedback"), id="btn-feedback", variant="warning"
+                )
+                yield Button(self._service.t("tui.btn_reply"), id="btn-reply", variant="success")
+            yield Static("", id="mail-actions-spacer")
+            with Horizontal(id="mail-actions-row2"):
+                yield Button(
+                    self._service.t("tui.btn_reparse"), id="btn-reparse", variant="primary"
+                )
+                yield Button(
+                    self._service.t("tui.btn_reparse_failed"),
+                    id="btn-reparse-failed",
+                    variant="error",
+                )
 
     async def on_mount(self) -> None:
         self._urgency_suppress = False
