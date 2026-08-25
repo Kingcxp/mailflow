@@ -81,6 +81,9 @@ class SQLiteStorage:
 
     async def initialize(self) -> None:
         async with self._lock:
+            if self._conn is not None:
+                return  # idempotent: hosts may initialize early (language
+                # preference must be readable before pipeline construction)
             if self._path != ":memory:":
                 Path(self._path).parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(self._path, check_same_thread=False)

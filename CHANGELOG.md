@@ -130,6 +130,15 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- Summaries ignored the persisted UI language after a restart: the
+  pipeline was built from the `[i18n]` bootstrap default (typically `en`)
+  before the stored zh-CN preference was ever applied, and the persisted
+  preference was never propagated into the processor chain. Startup now
+  reads the preference before constructing the pipeline (storage
+  initialize is idempotent so hosts can bootstrap early), and
+  `general.language` takes precedence over the `[i18n]` bootstrap value.
+
+
 - More UI-blocking operations moved off button handlers into exclusive
   workers: the Bots tab connection probes (now also run concurrently
   instead of serial 8s timeouts), the reply modal's prepare (LLM) and

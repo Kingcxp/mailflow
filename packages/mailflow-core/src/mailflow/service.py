@@ -1236,10 +1236,11 @@ async def start_service(
 
     try:
         i18n = I18n(
-            config.i18n.language or config.general.language,
+            # the user-facing general.language setting drives the bootstrap;
+            # the [i18n] section only configures extra pack directories
+            config.general.language or config.i18n.language,
             extra_dirs=config.i18n.extra_dirs,
         )
-        language = config.general.summary_language or i18n.language
         manager = plugin_manager or PluginManager(config)
         if discover_plugins and plugin_manager is None:
             manager.discover()
@@ -1247,6 +1248,19 @@ async def start_service(
         register_builtin_processors(registry)
 
         storage = registry.storage_factory(config.storage.provider)(config.storage)
+        await storage.initialize()
+        # the persisted UI preference must be applied BEFORE the pipeline is
+        # built: the summary language is baked into the llm-importance
+        # processor at construction time, and a pipeline built from the
+        # [i18n] bootstrap default would summarize in the wrong language
+        # until the user manually switched languages in this session
+        try:
+            stored_language = await storage.get_preference(_LANGUAGE_PREFERENCE)
+            if stored_language and stored_language in i18n.available_codes():
+                i18n.set_language(stored_language)
+        except Exception as exc:
+            logger.debug("could not read language preference: %s", exc)
+        language = config.general.summary_language or i18n.language
 
         sources = _build_sources(config, registry)
         backends, llm_configs = _build_llms(config, registry)

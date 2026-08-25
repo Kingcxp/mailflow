@@ -83,3 +83,56 @@ def _pipeline_language(service: MailFlowService) -> str:
         if binding.processor_id == "llm-importance":
             return str(options.get("language", ""))
     return ""
+
+
+async def test_startup_applies_persisted_language_to_pipeline(tmp_path: Any) -> None:
+    """A fresh service start must build the pipeline with the persisted UI
+    language — not the [i18n] bootstrap default (regression: zh-CN
+    preference with an en bootstrap produced English summaries)."""
+    from pathlib import Path
+
+    from mailflow.plugins import PluginManager
+    from mailflow.service import start_service
+    from mailflow_storage_sqlite.plugin import plugin as storage_plugin
+
+    def build_config(db: Path) -> Any:
+        from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
+
+        cfg = MailFlowConfig()
+        cfg.i18n.language = "en"  # bootstrap default, as in example configs
+        cfg.general.language = "zh-CN"
+        cfg.llms = [LLMConfig(llm_id="main", provider="openai-completions", model="m")]
+        cfg.processors = [
+            ProcessorConfig(processor_id="llm-importance", provider="llm-importance", llm="main")
+        ]
+        return cfg
+
+    config_path = tmp_path / "cfg.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    # first run: persist the zh-CN preference the way the TUI does
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "seed.db"),
+        config_path=config_path,
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    await service.set_language("zh-CN")
+    await service.stop()
+
+    # second run: the persisted preference must reach the pipeline
+    service2 = await start_service(
+        build_config(tmp_path / "run.db"),
+        config_path=config_path,
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    try:
+        assert await service2.get_language() == "zh-CN"
+        assert _pipeline_language(service2) == "zh-CN"
+    finally:
+        await service2.stop()

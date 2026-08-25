@@ -51,7 +51,9 @@ other sources.
 
 The `llm-importance` processor writes summaries, notes and reply drafts in
 the language given by its `language` option. `start_service` seeds it from
-`general.summary_language` (when set) or the UI language; switching
-`general.language` in the TUI hot-rebuilds the pipeline so the next
-analysis follows immediately. An explicit per-processor `options.language`
-entry always wins.
+`general.summary_language` (when set) or the UI language; the persisted UI
+preference is applied to `i18n` *before* the pipeline is built, so a fresh
+start summarizes in the language the user last selected — not the `[i18n]`
+bootstrap default. Switching `general.language` in the TUI hot-rebuilds
+the pipeline so the next analysis follows immediately. An explicit
+`general.summary_language` entry always wins over the UI language.
