@@ -136,6 +136,20 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- Urgent notifications survive transient transport failures: the runtime
+  retries each notifier three times (2s/4s backoff) before logging the
+  loss, and the OneBot notifier validates numeric QQ ids at construction
+  so one malformed target line can no longer abort delivery to the
+  remaining targets.
+- The todo detail modal now loads the source mail: subject, sender, date,
+  analysis summary and reason, plus the original body (html rendered as
+  text) — a todo without its mail context forced manual hunting through
+  the mail tab.
+- The settings search filter e2e re-queries the search input every poll
+  iteration: a late remount detaches the captured widget and the filter
+  never applied on slow runners.
+
+
 - The re-analyze buttons and the urgency dropdown rendered raw locale keys
   (`tui.btn_reparse`, …): a workspace sync issue kept dropping freshly
   written key batches from the language packs. All keys are re-pinned and

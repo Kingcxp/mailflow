@@ -616,7 +616,8 @@
       "tui.bots_unknown_provider": "unknown provider",
       "tui.bots_gateway_reachable": "gateway reachable",
       "tui.bots_http_status": "HTTP {status}",
-      "tui.reply_saved": "saved"
+      "tui.reply_saved": "saved",
+      "tui.action_mail_missing": "source mail is no longer in the mail list (possibly cleaned up)"
     },
     "update": {
       "applied_title": "Applied updates",

@@ -36,8 +36,17 @@ class OneBotNotifier:
             text = str(entry).strip()
             kind, _, identifier = text.partition(":")
             kind = kind.strip().lower()
-            if kind in ("user", "group") and identifier.strip():
-                self._targets.append((kind, identifier.strip()))
+            if kind not in ("user", "group") or not identifier.strip():
+                logger.warning("onebot notifier: ignoring malformed target %r", text)
+                continue
+            # the send payload needs a numeric id: reject garbage here so a
+            # single bad line cannot abort delivery to the remaining targets
+            try:
+                int(identifier.strip())
+            except ValueError:
+                logger.warning("onebot notifier: target %r has a non-numeric id; ignoring", text)
+                continue
+            self._targets.append((kind, identifier.strip()))
 
     async def notify(self, record: MailRecord) -> None:
         if not self._url or not self._targets:

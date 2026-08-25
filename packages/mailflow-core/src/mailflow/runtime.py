@@ -350,10 +350,25 @@ class MailFlowRuntime:
         for notifier, notifier_config in zip(self._notifiers, self._notifier_configs, strict=True):
             if record.effective_urgency.rank < notifier_config.minimum_urgency.rank:
                 continue
-            try:
-                await notifier.notify(record)
-            except Exception as exc:
-                logger.warning("notifier failed for %r: %s", record.record_id, exc)
+            # a notification that silently disappears defeats the whole
+            # point of the urgency contract: retry transient failures
+            last_exc: Exception | None = None
+            for attempt in range(3):
+                try:
+                    await notifier.notify(record)
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < 2:
+                        await asyncio.sleep(2.0 * (attempt + 1))
+            if last_exc is not None:
+                logger.warning(
+                    "notifier %r failed for %r after 3 attempts: %s",
+                    getattr(notifier, "backend_id", type(notifier).__name__),
+                    record.record_id,
+                    last_exc,
+                )
 
     # -- retention cleanup ----------------------------------------------------------
 

@@ -321,7 +321,49 @@ class ActionModal(ModalScreen[Any]):
             yield Label(f"{self._service.t('tui.action_content')}: {escape(item.summary)}")
             yield Label(f"{self._service.t('tui.action_notes')}: {escape(item.notes or '-')}")
             yield Label(f"{self._service.t('tui.action_source')}: {escape(item.mail_id)}")
+            # the source mail's own details load asynchronously below
+            yield Static("", id="action-mail-detail")
             yield Button(self._service.t("tui.btn_close"), id="action-close", variant="primary")
+
+    async def on_mount(self) -> None:
+        """Load the source mail: a todo without its original message context
+        (subject, sender, body) forces the user to hunt through the mail tab."""
+        record = await self._service.get_mail(self._item.mail_id)
+        node = self.query_one_optional("#action-mail-detail", Static)
+        if node is None:
+            return
+        if record is None:
+            node.update(f"[dim]{self._service.t('tui.action_mail_missing')}[/dim]")
+            return
+        mail = record.mail
+        body = mail.body_text.strip()
+        if not body and mail.body_html:
+            body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", mail.body_html)
+            body = re.sub(r"<[^>]+>", " ", body)
+            body = re.sub(r"[ \t\r\f\v]+", " ", body).strip()
+        lines = [
+            f"[bold]{self._service.t('tui.column_subject')}:[/bold] {escape(mail.subject)}",
+            f"[bold]{self._service.t('tui.column_sender')}:[/bold] "
+            f"{escape(mail.sender.display or mail.sender.address)}",
+            f"[bold]{self._service.t('tui.column_date')}:[/bold] "
+            f"{mail.date.strftime('%Y-%m-%d %H:%M')}",
+        ]
+        analysis_summary = record.analysis.summary if record.analysis else ""
+        if analysis_summary:
+            lines.append(
+                f"[bold]{self._service.t('tui.detail_summary')}:[/bold] {escape(analysis_summary)}"
+            )
+        reason = record.analysis.reason if record.analysis else ""
+        if reason:
+            lines.append(
+                f"[bold]{self._service.t('tui.detail_reason')}:[/bold] "
+                f"{escape(self._service.display_text(reason))}"
+            )
+        lines.append(
+            f"[bold]{self._service.t('tui.detail_body')}:[/bold] "
+            f"{escape(body[:800] or '(no body)')}"
+        )
+        node.update("\n".join(lines))
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "action-close":
