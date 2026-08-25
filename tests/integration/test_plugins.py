@@ -880,3 +880,33 @@ class TestIMAPBacklogSkipDefault:
 
     def _uid_handler(self, command: str, *args: Any):
         return "OK", [b"4"]
+
+
+class TestIMAPHtmlOnlyBody:
+    """HTML-only mails (most notification mail) must yield a readable
+    plain body: display, keyword scanning and the LLM prompt all read
+    body_text."""
+
+    def test_parse_mime_derives_text_from_html(self) -> None:
+        from mailflow_mail_imap.plugin import parse_mime
+
+        raw = (
+            "From: noreply@example.com\r\n"
+            "To: me@example.com\r\n"
+            "Subject: html only\r\n"
+            "Message-ID: <html-only@e>\r\n"
+            "MIME-Version: 1.0\r\n"
+            "Content-Type: text/html; charset=utf-8\r\n"
+            "\r\n"
+            "<html><head><style>p{color:red}</style></head><body>"
+            "<p>中转站文件到期提醒</p>"
+            "<a href='x'>点击查看</a>"
+            "<script>alert(1)</script>"
+            "</body></html>"
+        ).encode()
+        mail = parse_mime(raw, "acct-1")
+        assert "中转站文件到期提醒" in mail.body_text
+        assert "点击查看" in mail.body_text
+        assert "alert" not in mail.body_text
+        assert "color:red" not in mail.body_text
+        assert mail.body_html.startswith("<html>")

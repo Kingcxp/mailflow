@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html as html_lib
 import imaplib
 import logging
+import re
 import smtplib
 from datetime import UTC, datetime
 from email import message_from_bytes
@@ -106,7 +108,26 @@ def _extract_body(message: Message) -> tuple[str, str]:
             html_parts.append(content)
         else:
             text_parts.append(content)
-    return "\n".join(text_parts).strip(), "\n".join(html_parts).strip()
+    body_text = "\n".join(text_parts).strip()
+    body_html = "\n".join(html_parts).strip()
+    if not body_text and body_html:
+        # HTML-only mails (most notification mail) must still yield a
+        # readable plain body for display, analysis and keyword scanning
+        body_text = _html_to_text(body_html)
+    return body_text, body_html
+
+
+def _html_to_text(html: str) -> str:
+    """Minimal HTML → text: drop script/style blocks and tags, unescape
+    entities, collapse the whitespace the tag removal leaves behind."""
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p>", "\n\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = re.sub(r"\n\s+\n", "\n\n", text)
+    return text.strip()
 
 
 def parse_mime(raw: bytes, account_id: str, provider: str = "imap") -> MailMessage:

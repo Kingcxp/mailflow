@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import queue as queue_module
+import re
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, ClassVar, cast
@@ -629,9 +630,16 @@ class MailPane(Vertical):
             ]
             actions_text = f"\n[bold]{service.t('tui.action_content')}:[/bold]\n" + "\n".join(lines)
         self._set_static("#mail-actions", actions_text)
-        body = record.mail.body_text.strip() or "(no body)"
+        body = record.mail.body_text.strip()
+        if not body and record.mail.body_html:
+            # mails stored before the HTML-only fallback existed still carry
+            # a readable html body — render it as text instead of "(no body)"
+            body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", record.mail.body_html)
+            body = re.sub(r"<[^>]+>", " ", body)
+            body = re.sub(r"[ \t\r\f\v]+", " ", body).strip()
         self._set_static(
-            "#mail-body", f"[bold]{service.t('tui.detail_body')}:[/bold]\n{escape(body)}"
+            "#mail-body",
+            f"[bold]{service.t('tui.detail_body')}:[/bold]\n{escape(body or '(no body)')}",
         )
         reply_flag = (
             f"\n[bold yellow]{service.t('tui.detail_reply_required', answer=service.t('common.yes'))}[/bold yellow]"
