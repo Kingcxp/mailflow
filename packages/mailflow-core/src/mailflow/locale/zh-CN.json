@@ -593,7 +593,10 @@
       "tui.bots_gateway_reachable": "网关可达",
       "tui.bots_http_status": "HTTP {status}",
       "tui.reply_saved": "已保存",
-      "btn_reparse": "重新解析"
+      "btn_reparse": "重新解析",
+      "urgency_opt_ad": "广告",
+      "reply_preparing": "正在生成草稿并准备确认令牌…",
+      "bots_logged_in_as": "已登录：{name}（{uid}）"
     },
     "update": {
       "applied_title": "已应用的更新",
