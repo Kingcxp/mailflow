@@ -335,11 +335,13 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
                 await pilot.pause(0.05)
             assert "general.reminder_hour" in keys, f"cards rendered: {sorted(keys)[:6]}"
             # searching filters across every section — poll until the filter
-            # has actually been applied (the remount may swap cards late)
+            # has actually been applied. A late remount resets the search
+            # input, so re-type it whenever the box goes empty.
             search = app.query_one("#settings-search", Input)
-            search.value = "reminder_hour"
             filtered: set[str] = set()
-            for _ in range(40):
+            for _ in range(60):
+                if search.value != "reminder_hour":
+                    search.value = "reminder_hour"
                 filtered = {card.spec.key for card in app.query(OptionCard)}
                 if filtered == {"general.reminder_hour"}:
                     break
