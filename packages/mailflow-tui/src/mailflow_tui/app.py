@@ -263,23 +263,49 @@ class ReplyModal(ModalScreen[Any]):
                 self._set_status(str(exc))
             return
         if button_id == "reply-prepare":
-            try:
-                self._draft = await self._service.prepare_reply(self._draft.draft_id)
-            except ValueError as exc:
-                self._set_status(str(exc))
-                return
-            self._set_status(self._t("tui.reply_prepared", token=self._draft.token or ""))
-            self.query_one("#reply-confirm", Button).disabled = False
+            # prepare calls the LLM (seconds to minutes with retries):
+            # a worker keeps the modal painting while it runs
+            draft_id = self._draft.draft_id
+            self._set_status(self._t("tui.reply_preparing"))
+            self.run_worker(
+                self._prepare_reply(draft_id),
+                exclusive=True,
+                group="reply-prepare",
+                exit_on_error=False,
+            )
             return
         if button_id == "reply-confirm":
             assert self._draft is not None and self._draft.token is not None
-            try:
-                await self._service.confirm_reply(self._draft.draft_id, self._draft.token)
-            except PermissionError as exc:
-                self._set_status(str(exc))
-                return
-            self._set_status(self._t("tui.reply_sent"))
+            draft = self._draft
             self.query_one("#reply-confirm", Button).disabled = True
+            self._set_status(self._t("tui.reply_sending"))
+            self.run_worker(
+                self._confirm_reply(draft),
+                exclusive=True,
+                group="reply-confirm",
+                exit_on_error=False,
+            )
+
+    async def _prepare_reply(self, draft_id: str) -> None:
+        try:
+            self._draft = await self._service.prepare_reply(draft_id)
+        except ValueError as exc:
+            self._set_status(str(exc))
+            return
+        self._set_status(self._t("tui.reply_prepared", token=self._draft.token or ""))
+        self.query_one("#reply-confirm", Button).disabled = False
+
+    async def _confirm_reply(self, draft: ReplyDraft) -> None:
+        token = draft.token
+        if token is None:  # pragma: no cover - confirm is gated on prepare
+            return
+        try:
+            await self._service.confirm_reply(draft.draft_id, token)
+        except PermissionError as exc:
+            self._set_status(str(exc))
+            self.query_one("#reply-confirm", Button).disabled = False
+            return
+        self._set_status(self._t("tui.reply_sent"))
 
 
 class ActionModal(ModalScreen[Any]):
@@ -902,8 +928,21 @@ class RuntimePane(Vertical):
         if self._selected_plugin is None:
             return
         button_id = event.button.id
+        if button_id is None:
+            return
+        # enable/disable rebuilds the runtime (bounded), uninstall runs pip:
+        # neither belongs on the UI handler
         status = self.query_one("#runtime-status", Static)
-        plugin_id = self._selected_plugin
+        status.update(self._service.t("tui.loading"))
+        self.run_worker(
+            self._apply_plugin_action(button_id, self._selected_plugin),
+            exclusive=True,
+            group="runtime-plugin-action",
+            exit_on_error=False,
+        )
+
+    async def _apply_plugin_action(self, button_id: str, plugin_id: str) -> None:
+        status = self.query_one("#runtime-status", Static)
         message = ""
         try:
             if button_id == "runtime-plugin-disable":
@@ -929,9 +968,6 @@ class RuntimePane(Vertical):
                 )
             else:
                 return
-        except (KeyError, ValueError, RuntimeError) as exc:
-            status.update(f"[red]{exc}[/red]")
-            return
         except Exception as exc:  # uv failures surface here too
             status.update(f"[red]{exc}[/red]")
             return
@@ -1312,15 +1348,29 @@ class MarketPane(Vertical):
             return
         if self._selected is None:
             return
+        if button_id is None:
+            return
         plugin = self._selected
+        # pip operations and runtime rebuilds take seconds: run them in
+        # an exclusive worker so the market stays interactive
+        self.run_worker(
+            self._apply_plugin_action(button_id, plugin),
+            exclusive=True,
+            group="market-action",
+            exit_on_error=False,
+        )
+
+    async def _apply_plugin_action(self, button_id: str, plugin: MarketPlugin) -> None:
         market = self._service.market
+        status_node = self.query_one("#market-status", Static)
         try:
             if button_id == "market-install":
                 if market.is_installed(plugin.id, package=plugin.package):
-                    self.query_one("#market-status", Static).update(
+                    status_node.update(
                         self._service.t("plugin.already_installed", plugin_id=plugin.id)
                     )
                     return
+                status_node.update(self._service.t("tui.loading"))
                 await market.install(plugin)
                 message_key = "plugin.installed_ok"
             elif button_id == "market-uninstall":
@@ -1335,11 +1385,11 @@ class MarketPane(Vertical):
             else:
                 return
         except (KeyError, ValueError, RuntimeError) as exc:
-            self.query_one("#market-status", Static).update(str(exc))
+            status_node.update(str(exc))
             return
         self._installed.pop(plugin.id, None)  # install state changed
         self._render_entries()
-        self.query_one("#market-status", Static).update(
+        status_node.update(
             self._service.t(message_key, plugin_id=plugin.id)
             + f" ({self._service.t('plugin.restart_note')})"
         )

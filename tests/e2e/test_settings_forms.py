@@ -123,14 +123,29 @@ async def test_llm_form_default_provider_and_extras_rebuild(tmp_path: Path) -> N
             await _wait_until(pilot, lambda: bool(app.screen.query("#extra-base-url")))
             assert app.screen.query_one("#extra-base-url", Input) is not None
 
-            # switching provider rebuilds the extras without DuplicateIds
+            # switching provider rebuilds the extras without DuplicateIds.
+            # Wait on the FULL target state: a partial intermediate render
+            # (one field present, another not yet) must not satisfy the wait
             provider_select.value = "google-vertex"
-            await _wait_until(pilot, lambda: bool(app.screen.query("#extra-project")))
+            await _wait_until(
+                pilot,
+                lambda: (
+                    len(app.screen.query("#extra-project")) == 1
+                    and not app.screen.query("#extra-base-url")
+                    and not app.screen.query("#extra-api-key")
+                ),
+            )
             assert len(app.screen.query("#extra-project")) == 1
             assert len(app.screen.query("#extra-base-url")) == 0
 
             provider_select.value = "openai-completions"
-            await _wait_until(pilot, lambda: bool(app.screen.query("#extra-api-key")))
+            await _wait_until(
+                pilot,
+                lambda: (
+                    len(app.screen.query("#extra-base-url")) == 1
+                    and len(app.screen.query("#extra-api-key")) == 1
+                ),
+            )
             assert len(app.screen.query("#extra-base-url")) == 1
             assert len(app.screen.query("#extra-api-key")) == 1
     finally:

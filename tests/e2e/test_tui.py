@@ -21,7 +21,6 @@ from textual.widgets import (
     Button,
     DataTable,
     Input,
-    ListView,
     Select,
     Static,
     TabbedContent,
@@ -289,30 +288,50 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             tabs = app.query_one(TabbedContent)
             tab_label = tabs.get_tab("tab-mail")  # pyright: ignore[reportUnknownMemberType]
             assert str(tab_label.label) == "邮件"  # pyright: ignore[reportUnknownMemberType]
-            # settings tab: sidebar sections plus one card per option
+            # settings tab: sidebar sections plus one card per option.
+            # The language switch remounts the pane concurrently — re-query
+            # and poll instead of racing the remount.
             from mailflow_tui.settings import OptionCard, SettingsPane
 
-            settings = app.query_one(SettingsPane)
-            await settings.reload()
-            await pilot.pause(0.05)
-            sections = app.query_one("#settings-sections", ListView)
-            assert len(sections.children) >= 5  # general/logging/plugins/storage/i18n
+            sections = None
+            for _ in range(40):
+                panes = app.query(SettingsPane)
+                listings = app.query("#settings-sections")
+                if panes and listings:
+                    await panes.first().reload()
+                    candidate = listings.first()
+                    cards_now = list(app.query(OptionCard))
+                    # only proceed once the language card exists: reloading
+                    # again after interaction starts would swap the Select
+                    # out from under the overlay
+                    if len(list(candidate.children)) >= 5 and any(
+                        card.spec.key == "general.language" for card in cards_now
+                    ):  # general/logging/plugins/storage/i18n
+                        sections = candidate
+                        break
+                await pilot.pause(0.05)
+            assert sections is not None and len(sections.children) >= 5
             # reload() swaps cards asynchronously under a lock — poll instead
             # of racing it
             cards = []
+            keys: set[str] = set()
             for _ in range(40):
                 cards = list(app.query(OptionCard))
-                if cards:
+                keys = {card.spec.key for card in cards}
+                if "general.reminder_hour" in keys:
                     break
                 await pilot.pause(0.05)
-            assert cards, "no option cards rendered"
-            keys = {card.spec.key for card in cards}
-            assert "general.reminder_hour" in keys
-            # searching filters across every section
+            assert "general.reminder_hour" in keys, f"cards rendered: {sorted(keys)[:6]}"
+            # searching filters across every section — poll until the filter
+            # has actually been applied (the remount may swap cards late)
             search = app.query_one("#settings-search", Input)
             search.value = "reminder_hour"
-            await pilot.pause(0.1)
-            filtered = {card.spec.key for card in app.query(OptionCard)}
+            filtered: set[str] = set()
+            for _ in range(40):
+                filtered = {card.spec.key for card in app.query(OptionCard)}
+                if filtered == {"general.reminder_hour"}:
+                    break
+                await pilot.pause(0.05)
             assert filtered == {"general.reminder_hour"}
             search.value = ""
             await pilot.pause(0.1)

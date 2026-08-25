@@ -1475,7 +1475,14 @@ class AccountsPane(Vertical):
             await self._select_all_history()
             return
         if button_id == "history-analyze":
-            await self._analyze_selected()
+            # a batch is minutes of LLM work: an exclusive worker prevents a
+            # second click from starting a parallel duplicate batch
+            self.run_worker(
+                self._analyze_selected(),
+                exclusive=True,
+                group="history-analyze",
+                exit_on_error=False,
+            )
             return
         if button_id == "history-more":
             # network I/O must never run on the UI handler: an exclusive

@@ -130,6 +130,15 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- More UI-blocking operations moved off button handlers into exclusive
+  workers: the Bots tab connection probes (now also run concurrently
+  instead of serial 8s timeouts), the reply modal's prepare (LLM) and
+  confirm (SMTP) steps with staged status text, market
+  install/uninstall/enable/disable (pip + runtime rebuild), and the
+  Runtime tab's plugin actions. Bulk history re-analysis refuses a second
+  click while a batch is running.
+
+
 - Bulk history browsing beyond ~100 mails could crash or freeze the app:
   page loads now run in an exclusive worker (IMAP I/O never blocks the UI
   handler), duplicate message-ids across windows are collapsed to one row

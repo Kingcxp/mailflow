@@ -566,7 +566,9 @@
       "feedback_empty": "Reason must not be empty",
       "feedback_saved": "Feedback recorded: future analyses will follow it",
       "feedback_marker": "Rejected",
-      "feedback_local_only": "Rejecting requires a local service (unsupported remotely)"
+      "feedback_local_only": "Rejecting requires a local service (unsupported remotely)",
+      "tui.reply_preparing": "Drafting and preparing the confirm token…",
+      "tui.reply_sending": "Sending…"
     },
     "update": {
       "applied_title": "Applied updates",

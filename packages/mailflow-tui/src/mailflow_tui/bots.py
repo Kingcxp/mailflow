@@ -6,6 +6,7 @@ Thin adapter over externally-typed frameworks; checked in basic mode."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, ClassVar
 
 import httpx
@@ -152,7 +153,9 @@ class BotsPane(Vertical):
             return
         if button_id != "bots-check":
             return
-        await self._check_all()
+        # probes hit the network (8s timeout each): never run them on the
+        # button handler or a down gateway freezes the whole UI
+        self.run_worker(self._check_all(), exclusive=True, group="bots-check", exit_on_error=False)
 
     async def _delete_selected(self) -> None:
         if getattr(self, "_selected_id", None) is None:
@@ -173,9 +176,19 @@ class BotsPane(Vertical):
     async def _check_all(self) -> None:
         status_node = self.query_one("#bots-status", Static)
         status_node.update(self._service.t("tui.loading"))
+        instances = self._im_instances()
+        # probe every instance concurrently: three down gateways must not
+        # cost 3 x timeout of waiting
         results: dict[str, str] = {}
-        for notifier_id, provider, options in self._im_instances():
-            results[notifier_id] = await _BotStatusProbe.probe(provider, options)
+        if instances:
+            probes = [
+                _BotStatusProbe.probe(provider, options) for _, provider, options in instances
+            ]
+            outcomes = await asyncio.gather(*probes)
+            results = {
+                instance_id: outcome
+                for (instance_id, _, _), outcome in zip(instances, outcomes, strict=True)
+            }
         self._render_rows(results)
         status_node.update(self._service.t("tui.bots_checked"))
 

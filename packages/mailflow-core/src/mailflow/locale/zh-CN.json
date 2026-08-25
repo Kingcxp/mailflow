@@ -566,7 +566,9 @@
       "feedback_empty": "原因不能为空",
       "feedback_saved": "已记录反馈：后续解析将参考此原因",
       "feedback_marker": "已打回",
-      "feedback_local_only": "打回需要本地服务（远程模式暂不支持）"
+      "feedback_local_only": "打回需要本地服务（远程模式暂不支持）",
+      "tui.reply_preparing": "正在生成草稿并准备确认令牌…",
+      "tui.reply_sending": "正在发送…"
     },
     "update": {
       "applied_title": "已应用的更新",
