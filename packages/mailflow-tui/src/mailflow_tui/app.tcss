@@ -77,11 +77,11 @@ Button:focus {
     dock: bottom;
     height: auto;
     padding: 0 1;
+    align-vertical: middle;
 }
 
-#mail-selects {
+#mail-actions-buttons {
     height: auto;
-    align-vertical: middle;
 }
 
 #mail-actions-row1,
@@ -94,9 +94,7 @@ Button:focus {
     height: 1;
 }
 
-#mail-selects Button,
-#mail-actions-row1 Button,
-#mail-actions-row2 Button {
+#mail-controls Button {
     margin-right: 1;
 }
 
