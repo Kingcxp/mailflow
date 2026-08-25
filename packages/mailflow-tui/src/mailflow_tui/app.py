@@ -43,14 +43,6 @@ from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 
-_URGENCY_OPTIONS = [
-    ("ad (gray: ads)", "ad"),
-    ("info (green: useful)", "info"),
-    ("important (orange: read)", "important"),
-    ("urgent (red: act now)", "urgent"),
-    ("auto", "auto"),
-]
-
 _BLANK = ""
 
 
@@ -387,6 +379,10 @@ class MailPane(Vertical):
         self._selected_id: str | None = None
 
     def compose(self) -> ComposeResult:
+        # the urgency Select auto-selects "auto" while mounting and fires
+        # Changed; swallow that programmatic event (and the relabel restore)
+        # so it never stamps an override onto the selected mail
+        self._urgency_suppress = True
         yield Input(placeholder=self._service.t("tui.search_placeholder"), id="mail-search")
         with Horizontal():
             yield DataTable(id="mail-table")
@@ -397,7 +393,12 @@ class MailPane(Vertical):
                 yield Static("", id="mail-body")
                 yield Static("", id="mail-notes")
         with Horizontal(id="mail-controls"):
-            yield Select(_URGENCY_OPTIONS, id="urgency-select")
+            yield Select(
+                self._urgency_options(),
+                id="urgency-select",
+                allow_blank=False,
+                tooltip=self._service.t("tui.urgency_select_tooltip"),
+            )
             yield Select(
                 [("all", "all")] + [(u.value, u.value) for u in Urgency],
                 id="mail-urgency-filter",
@@ -415,8 +416,15 @@ class MailPane(Vertical):
             yield Button(self._service.t("tui.btn_trash"), id="btn-trash", variant="error")
             yield Button(self._service.t("tui.btn_feedback"), id="btn-feedback", variant="warning")
             yield Button(self._service.t("tui.btn_reply"), id="btn-reply", variant="success")
+            yield Button(self._service.t("tui.btn_reparse"), id="btn-reparse", variant="primary")
+            yield Button(
+                self._service.t("tui.btn_reparse_failed"),
+                id="btn-reparse-failed",
+                variant="error",
+            )
 
     async def on_mount(self) -> None:
+        self._urgency_suppress = False
         await self.refresh_mail()
 
     def _mail_table(self) -> DataTable[Any] | None:
@@ -424,6 +432,21 @@ class MailPane(Vertical):
 
     def _urgency_select(self) -> Select[Any] | None:
         return self.query_one_optional("#urgency-select", Select)  # pyright: ignore[reportUnknownVariableType]
+
+    def _urgency_options(self) -> list[tuple[str, str]]:
+        """Localized manual-override labels. "auto" comes FIRST: a Select
+        with allow_blank=False auto-selects its first option on mount and
+        fires Changed — routing that into the reset path is a harmless
+        no-op, while any other level would stamp a bogus manual override
+        onto the selected mail."""
+        t = self._service.t
+        return [
+            (t("tui.urgency_opt_auto"), "auto"),
+            (t("tui.urgency_opt_ad"), "ad"),
+            (t("tui.urgency_opt_info"), "info"),
+            (t("tui.urgency_opt_important"), "important"),
+            (t("tui.urgency_opt_urgent"), "urgent"),
+        ]
 
     def _ensure_columns(self) -> None:
         if getattr(self, "_columns_done", False):
@@ -445,6 +468,11 @@ class MailPane(Vertical):
 
     async def relabel(self) -> None:
         self._columns_done = False
+        self._urgency_suppress = True
+        try:
+            _apply_options(self, "#urgency-select", self._urgency_options())
+        finally:
+            self._urgency_suppress = False
         await self.refresh_mail()
 
     async def refresh_mail(self) -> None:
@@ -482,6 +510,18 @@ class MailPane(Vertical):
         visible_ids = {record.record_id for record in records}
         if self._selected_id not in visible_ids:
             self._selected_id = records[0].record_id if records else None
+        # keep the override dropdown in sync with the selected mail without
+        # re-triggering the mutation handler
+        selected = next((r for r in records if r.record_id == self._selected_id), None)
+        if selected is not None:
+            wanted = "auto" if selected.manual_urgency is None else selected.manual_urgency.value
+            self._urgency_suppress = True
+            try:
+                select = self._urgency_select()
+                if select is not None and str(select.value) != wanted:
+                    select.value = wanted
+            finally:
+                self._urgency_suppress = False
         await self._show_selected()
 
     def _select_value(self, selector: str) -> str:
@@ -522,9 +562,21 @@ class MailPane(Vertical):
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id in ("mail-urgency-filter", "mail-sort"):
             await self.refresh_mail()
-        elif event.select.id == "urgency-select" and self._selected_id is not None:
+        elif (
+            event.select.id == "urgency-select"
+            and self._selected_id is not None
+            and not getattr(self, "_urgency_suppress", False)
+        ):
             value = event.value
-            urgency: Urgency | None = None if value == "auto" else Urgency(str(value))
+            if value is Select.NULL or str(value) == "":
+                # a blank sentinel means "back to automatic": reset the
+                # override instead of constructing an invalid Urgency
+                urgency: Urgency | None = None
+            else:
+                try:
+                    urgency = Urgency(str(value))
+                except ValueError:
+                    return
             await self._service.set_mail_urgency(self._selected_id, urgency)
             await self.refresh_mail()
 
@@ -627,6 +679,25 @@ class MailPane(Vertical):
                 on_feedback,
             )
             return
+        if button_id == "btn-reparse":
+            record = await self._service.get_mail(self._selected_id)
+            if record is None:
+                return
+            self.run_worker(
+                self._reparse_batch([record.mail]),
+                exclusive=True,
+                group="mail-reparse",
+                exit_on_error=False,
+            )
+            return
+        if button_id == "btn-reparse-failed":
+            self.run_worker(
+                self._reparse_failed(),
+                exclusive=True,
+                group="mail-reparse",
+                exit_on_error=False,
+            )
+            return
         if button_id == "btn-reply":
             if getattr(self._service, "remote", False):
                 from mailflow_server.client import RemoteUnsupported
@@ -642,6 +713,49 @@ class MailPane(Vertical):
                 cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
                     ReplyModal(self._service, record)
                 )
+
+    async def _reparse_batch(self, mails: list[Any]) -> None:
+        """Force re-analysis for the given messages, with per-mail progress."""
+        status_node = self.query_one_optional("#mail-notes", Static)
+        total = len(mails)
+        done = 0
+        failed: list[str] = []
+        for position, mail in enumerate(mails, start=1):
+            subject_short = escape((mail.subject or "")[:36])
+            if status_node is not None:
+                status_node.update(
+                    f"[cyan]{self._service.t('tui.history_progress', position=position, total=total)} "
+                    f"{subject_short}[/cyan]"
+                )
+            try:
+                await self._service.process_mail(mail, force=True)
+                done += 1
+            except Exception as exc:
+                failed.append(f"{mail.subject[:40]}: {exc}")
+        await self.refresh_mail()
+        if status_node is None:
+            return
+        if failed:
+            detail = "; ".join(failed[:3])
+            more = f" (+{len(failed) - 3})" if len(failed) > 3 else ""
+            status_node.update(
+                f"[red]{self._service.t('tui.history_failed', count=len(failed))}: "
+                f"{escape(detail)}{more}[/red]"
+            )
+        else:
+            status_node.update(
+                f"[green]{self._service.t('tui.history_reanalyzed', count=done)}[/green]"
+            )
+
+    async def _reparse_failed(self) -> None:
+        failed_records = await self._service.list_failed_mails()
+        if not failed_records:
+            self._set_static(
+                "#mail-notes",
+                f"[green]{self._service.t('tui.reparse_none_failed')}[/green]",
+            )
+            return
+        await self._reparse_batch([record.mail for record in failed_records])
 
     async def _apply_feedback(self, record_id: str, reason: str) -> None:
         await self._service.record_feedback(record_id, reason)

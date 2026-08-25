@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from mailflow.config import ProcessorConfig
 from mailflow.contracts import LLMEnhancer, LLMRouter, ProcessingContext, ProcessorResult
@@ -158,6 +158,60 @@ Calibration rules:
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
+def _as_str(value: Any) -> str:
+    """LLMs emit null/numbers/booleans where the schema wants strings."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1", "是"}
+    return bool(value)
+
+
+def _coerce_analysis_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a model's JSON to the AnalysisPayload schema.
+
+    Strict pydantic validation turned single-field slips (a null summary,
+    "reply_required": "true" as a string, a non-list action_items) into a
+    failed analysis for the whole mail; every field is now coerced and
+    malformed action items are dropped individually.
+    """
+    coerced: dict[str, Any] = dict(raw)
+    for key in ("summary", "urgency", "reason", "suggested_reply", "notes"):
+        if key in coerced:
+            coerced[key] = _as_str(coerced[key])
+    if "reply_required" in coerced:
+        coerced["reply_required"] = _as_bool(coerced["reply_required"])
+    raw_items: Any = coerced.get("action_items")
+    # raw_items comes from model JSON output — genuinely untyped until the
+    # pydantic validation below; the explicit list[Any] is the boundary
+    items: list[Any] = raw_items if isinstance(raw_items, list) else []  # pyright: ignore[reportUnknownVariableType]
+    cleaned: list[dict[str, Any]] = []
+    for unknown_item in items:
+        if not isinstance(unknown_item, dict):
+            continue
+        entry = dict(cast(dict[str, Any], unknown_item))
+        for key in ("summary", "action_type", "notes"):
+            if key in entry:
+                entry[key] = _as_str(entry[key])
+        for key in ("due_at", "due_end"):
+            if key in entry:
+                value = entry[key]
+                entry[key] = "" if value is None else _as_str(value)
+        cleaned.append(entry)
+    coerced["action_items"] = cleaned
+    return coerced
+
+
 class ActionPayload(BaseModel):
     summary: str
     action_type: str = "other"
@@ -280,7 +334,19 @@ class LLMImportanceProcessor:
         clean_text = re.sub(
             r"<think>.*?</think>\s*", "", completion.text, flags=re.DOTALL | re.IGNORECASE
         )
-        payload = AnalysisPayload.model_validate(extract_json(clean_text))
+        raw_payload = extract_json(clean_text)
+        try:
+            payload = AnalysisPayload.model_validate(_coerce_analysis_payload(raw_payload))
+        except ValidationError:
+            # surface what the model actually returned: a silent fallback
+            # summary makes rate-limit-style failures indistinguishable
+            # from prompt problems
+            logger.warning(
+                "llm-importance: unparseable payload for %r: %.400s",
+                mail.message_id,
+                clean_text,
+            )
+            raise
         action_items: list[ActionItem] = []
         for position, item in enumerate(payload.action_items):
             try:

@@ -308,6 +308,19 @@ class MailFlowService:
     async def get_mail(self, record_id: str) -> MailRecord | None:
         return await self.storage.get_mail(record_id)
 
+    async def list_failed_mails(self) -> list[MailRecord]:
+        """Records whose analysis did not complete: no analysis at all, or
+        any processor note marked failed (e.g. an LLM rate limit). These are
+        exactly the mails the bulk re-analysis targets."""
+        failed: list[MailRecord] = []
+        for record in await self.storage.list_mails():
+            if record.analysis is None:
+                failed.append(record)
+                continue
+            if any(note.status == "failed" for note in record.processor_notes):
+                failed.append(record)
+        return failed
+
     async def count_mails(self) -> int:
         return await self.storage.count_mails()
 

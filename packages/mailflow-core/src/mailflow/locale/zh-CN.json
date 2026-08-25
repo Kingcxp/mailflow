@@ -569,7 +569,16 @@
       "feedback_local_only": "打回需要本地服务（远程模式暂不支持）",
       "tui.reply_preparing": "正在生成草稿并准备确认令牌…",
       "tui.reply_sending": "正在发送…",
-      "detail_failed_note": "解析失败"
+      "detail_failed_note": "解析失败",
+      "tui.urgency_opt_ad": "广告",
+      "tui.urgency_opt_info": "信息",
+      "tui.urgency_opt_important": "重要",
+      "tui.urgency_opt_urgent": "紧急",
+      "tui.urgency_opt_auto": "跟随自动判定",
+      "tui.urgency_select_tooltip": "手动覆盖这封邮件的紧急度；“跟随自动判定”恢复 LLM 的判定结果",
+      "tui.btn_reparse": "重新解析",
+      "tui.btn_reparse_failed": "重析失败邮件",
+      "tui.reparse_none_failed": "没有解析失败的邮件"
     },
     "update": {
       "applied_title": "已应用的更新",

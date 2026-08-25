@@ -253,8 +253,10 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             assert table.row_count == 3
             # select the urgent mail row: its urgency cell carries the contract color
             urgent_index = next(
-                i for i in range(table.row_count) if "urgent" in str(table.get_row_at(i)[0])
+                (i for i in range(table.row_count) if "urgent" in str(table.get_row_at(i)[0])),
+                -1,
             )
+            assert urgent_index >= 0, "no urgent row rendered"
             urgent_cell_text = str(table.get_row_at(urgent_index)[0])
             assert "■" in urgent_cell_text
             assert "urgent" in urgent_cell_text
@@ -276,9 +278,19 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             await pilot.pause(0.15)
             from mailflow_tui.settings import OptionCard
 
-            lang_card = next(
-                card for card in app.query(OptionCard) if card.spec.key == "general.language"
-            )
+            # the language-switch remount can swap the cards between reload
+            # and scan: poll for the card instead of a bare next() (a
+            # StopIteration inside a coroutine surfaces as RuntimeError)
+            lang_card = None
+            for _ in range(40):
+                lang_card = next(
+                    (card for card in app.query(OptionCard) if card.spec.key == "general.language"),
+                    None,
+                )
+                if lang_card is not None:
+                    break
+                await pilot.pause(0.05)
+            assert lang_card is not None, "language option card never rendered"
             lang_select = cast(Select[Any], lang_card.query_one(Select))
             await set_select_value(pilot, lang_select, "zh-CN")
             await settings_pane._save("general.language", "zh-CN")  # pyright: ignore[reportPrivateUsage]

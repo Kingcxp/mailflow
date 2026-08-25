@@ -569,7 +569,16 @@
       "feedback_local_only": "Rejecting requires a local service (unsupported remotely)",
       "tui.reply_preparing": "Drafting and preparing the confirm token…",
       "tui.reply_sending": "Sending…",
-      "detail_failed_note": "analysis failed"
+      "detail_failed_note": "analysis failed",
+      "tui.urgency_opt_ad": "Ad",
+      "tui.urgency_opt_info": "Info",
+      "tui.urgency_opt_important": "Important",
+      "tui.urgency_opt_urgent": "Urgent",
+      "tui.urgency_opt_auto": "Follow automatic",
+      "tui.urgency_select_tooltip": "Manually override this mail's urgency; “Follow automatic” restores the LLM verdict",
+      "tui.btn_reparse": "Re-analyze",
+      "tui.btn_reparse_failed": "Re-analyze failed",
+      "tui.reparse_none_failed": "No failed analyses"
     },
     "update": {
       "applied_title": "Applied updates",

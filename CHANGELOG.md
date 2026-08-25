@@ -7,6 +7,12 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **Re-analyze** in the Mail tab: re-run the selected mail through the
+  pipeline, or one-click re-analyze every mail whose analysis did not
+  complete (no analysis or any failed processor note) — with the same
+  per-mail progress reporting as the history browser.
+
+
 - VS Code-style settings editor: `mailflow.settings` turns the typed schema
   into sections (MailFlow's own groups plus one per plugin that owns
   configured components), per-option editors derived from the field type,
@@ -129,6 +135,20 @@ All notable changes are recorded here; the format follows
   The detail view shows the rejection reason; remote mode is unsupported.
 
 ### Fixed
+
+- Resetting a mail's manual urgency back to automatic crashed the app: the
+  Select's blank sentinel flowed into `Urgency(...)` and raised. The
+  dropdown is now allow_blank with an explicit localized "follow automatic"
+  entry (first, so the mount-time auto-selection routes into the harmless
+  reset path), the handler tolerates blank/unknown values, programmatic
+  changes (mount, relabel, selection sync) never stamp overrides, and the
+  dropdown stays in sync with the selected mail's actual override.
+- LLM responses that bend the JSON schema (a null summary, string
+  booleans, non-list action_items) no longer fail the whole analysis:
+  every field is coerced, malformed action items drop individually, and a
+  truly unparseable payload is logged with an excerpt so prompt problems
+  are visible in the Logs tab.
+
 
 - Canned rules-processor phrases ("Advertisement detected by rules",
   "matches advertising keywords", the important-sender reason) are stored
