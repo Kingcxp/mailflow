@@ -568,7 +568,8 @@
       "feedback_marker": "已打回",
       "feedback_local_only": "打回需要本地服务（远程模式暂不支持）",
       "tui.reply_preparing": "正在生成草稿并准备确认令牌…",
-      "tui.reply_sending": "正在发送…"
+      "tui.reply_sending": "正在发送…",
+      "detail_failed_note": "解析失败"
     },
     "update": {
       "applied_title": "已应用的更新",
@@ -587,6 +588,11 @@
       "server.password_env": "存放管理密码的环境变量名",
       "server.port": "管理服务端口",
       "server.username": "管理服务 HTTP Basic 用户名"
+    },
+    "analysis": {
+      "summary_ad_rules": "规则判定为广告",
+      "reason_ad_keywords": "命中广告关键词",
+      "reason_important_sender": "发件人在重要发件人名单中"
     }
   },
   "tui.extras_base_url": "OpenClaw 微信服务地址，例如 http://127.0.0.1:8000"

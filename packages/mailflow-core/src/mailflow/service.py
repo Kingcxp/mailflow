@@ -17,7 +17,7 @@ import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, TextIO, cast
+from typing import Any, ClassVar, TextIO, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -638,6 +638,25 @@ class MailFlowService:
 
     def t(self, key: str, **params: Any) -> str:
         return self.i18n.t(key, **params)
+
+    # Stored analyses carry canned processor prose in English (data, not UI);
+    # render-time mapping keeps the display localized without rewriting
+    # records on every language switch.
+    _CANNED_TEXT_KEYS: ClassVar[dict[str, str]] = {
+        "Advertisement detected by rules": "analysis.summary_ad_rules",
+        "matches advertising keywords": "analysis.reason_ad_keywords",
+        "sender is on the important-senders list": "analysis.reason_important_sender",
+    }
+
+    def display_text(self, text: str | None) -> str:
+        """Localize known canned processor phrases; anything else passes through."""
+        if not text:
+            return text or ""
+        key = self._CANNED_TEXT_KEYS.get(text)
+        if key is None:
+            return text
+        translated = self.t(key)
+        return text if translated == key else translated
 
     # -- configuration inspection and mutation ------------------------------------
 

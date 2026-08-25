@@ -538,12 +538,14 @@ class MailPane(Vertical):
         service = self._service
         self._set_static(
             "#mail-summary",
-            f"[bold]{service.t('tui.detail_summary')}:[/bold] {escape(record.summary)}",
+            f"[bold]{service.t('tui.detail_summary')}:[/bold] "
+            f"{escape(service.display_text(record.summary))}",
         )
         reason = record.analysis.reason if record.analysis else ""
         self._set_static(
             "#mail-reason",
-            f"[bold]{service.t('tui.detail_reason')}:[/bold] {escape(reason or '-')}",
+            f"[bold]{service.t('tui.detail_reason')}:[/bold] "
+            f"{escape(service.display_text(reason) or '-')}",
         )
         actions_text = ""
         if record.action_items:
@@ -572,9 +574,17 @@ class MailPane(Vertical):
                     f"\n[bold yellow]{service.t('tui.feedback_marker')}: "
                     f"{escape(existing)}[/bold yellow]"
                 )
+        failed_notes = [note for note in record.processor_notes if note.status == "failed"]
+        failure_text = ""
+        if failed_notes:
+            shown = "; ".join(f"{note.processor_id}: {note.message}" for note in failed_notes[:2])
+            more = f" (+{len(failed_notes) - 2})" if len(failed_notes) > 2 else ""
+            failure_text = (
+                f"\n[red]{service.t('tui.detail_failed_note')}: {escape(shown + more)}[/red]"
+            )
         self._set_static(
             "#mail-notes",
-            f"{reply_flag}{feedback}\n{service.t('tui.urgency_label')}: "
+            f"{reply_flag}{feedback}{failure_text}\n{service.t('tui.urgency_label')}: "
             f"{record.effective_urgency.value} "
             f"({'manual' if record.manual_urgency is not None else 'auto'})",
         )

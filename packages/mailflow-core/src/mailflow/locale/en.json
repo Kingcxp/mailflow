@@ -568,7 +568,8 @@
       "feedback_marker": "Rejected",
       "feedback_local_only": "Rejecting requires a local service (unsupported remotely)",
       "tui.reply_preparing": "Drafting and preparing the confirm token…",
-      "tui.reply_sending": "Sending…"
+      "tui.reply_sending": "Sending…",
+      "detail_failed_note": "analysis failed"
     },
     "update": {
       "applied_title": "Applied updates",
@@ -587,6 +588,11 @@
       "server.password_env": "Environment variable holding the admin password",
       "server.port": "Admin server port",
       "server.username": "HTTP Basic auth username for the admin server"
+    },
+    "analysis": {
+      "summary_ad_rules": "Advertisement detected by rules",
+      "reason_ad_keywords": "matches advertising keywords",
+      "reason_important_sender": "sender is on the important-senders list"
     }
   },
   "tui.extras_base_url": "OpenClaw WeChat service URL, e.g. http://127.0.0.1:8000"

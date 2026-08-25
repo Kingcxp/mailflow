@@ -450,9 +450,19 @@ class CommandRouter:
             )
         analysis = record.analysis
         if analysis is not None:
-            spans.append(StyleSpan(text=f"\n{self._t('mail.field_summary')}: {analysis.summary}"))
+            spans.append(
+                StyleSpan(
+                    text=f"\n{self._t('mail.field_summary')}: "
+                    f"{self.service.display_text(analysis.summary)}"
+                )
+            )
             if analysis.reason:
-                spans.append(StyleSpan(text=f"\n{self._t('mail.field_reason')}: {analysis.reason}"))
+                spans.append(
+                    StyleSpan(
+                        text=f"\n{self._t('mail.field_reason')}: "
+                        f"{self.service.display_text(analysis.reason)}"
+                    )
+                )
             if analysis.reply_required:
                 spans.append(
                     StyleSpan(

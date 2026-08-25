@@ -130,6 +130,16 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- Canned rules-processor phrases ("Advertisement detected by rules",
+  "matches advertising keywords", the important-sender reason) are stored
+  as English data but now display localized at render time — under zh-CN
+  they read 规则判定为广告 / 命中广告关键词. Free-form LLM text passes
+  through untouched.
+- The mail detail view shows failed processor notes (e.g. an LLM rate
+  limit), which explains mails whose analysis carries no reason: the
+  failure used to be silent.
+
+
 - Summaries ignored the persisted UI language after a restart: the
   pipeline was built from the `[i18n]` bootstrap default (typically `en`)
   before the stored zh-CN preference was ever applied, and the persisted
