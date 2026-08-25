@@ -411,6 +411,7 @@ class MailPane(Vertical):
                 allow_blank=False,
             )
             yield Button(self._service.t("tui.btn_refresh"), id="btn-refresh", variant="primary")
+        with Horizontal(id="mail-actions-row"):
             yield Button(self._service.t("tui.btn_trash"), id="btn-trash", variant="error")
             yield Button(self._service.t("tui.btn_feedback"), id="btn-feedback", variant="warning")
             yield Button(self._service.t("tui.btn_reply"), id="btn-reply", variant="success")
@@ -420,7 +421,6 @@ class MailPane(Vertical):
                 id="btn-reparse-failed",
                 variant="error",
             )
-        yield Static(self._service.t("tui.urgency_select_hint"), id="urgency-hint")
 
     async def on_mount(self) -> None:
         self._urgency_suppress = False
@@ -559,6 +559,11 @@ class MailPane(Vertical):
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self._selected_id = event.row_key.value
+        if self._selected_id is None:
+            return
+        record = await self._service.get_mail(self._selected_id)
+        if record is not None:
+            self._sync_urgency_select(record)
         await self._show_selected()
 
     async def on_select_changed(self, event: Select.Changed) -> None:
@@ -642,6 +647,18 @@ class MailPane(Vertical):
             f"{record.effective_urgency.value} "
             f"({service.t('tui.detail_manual_marker') if record.manual_urgency is not None else service.t('tui.detail_auto_marker')})",
         )
+
+    def _sync_urgency_select(self, record: MailRecord) -> None:
+        """Mirror the selected mail's manual override into the dropdown
+        (suppressed: a programmatic change is not a user mutation)."""
+        wanted = "auto" if record.manual_urgency is None else record.manual_urgency.value
+        self._urgency_suppress = True
+        try:
+            select = self._urgency_select()
+            if select is not None and str(select.value) != wanted:
+                select.value = wanted
+        finally:
+            self._urgency_suppress = False
 
     def _set_static(self, selector: str, content: str) -> None:
         node = self.query_one_optional(selector, Static)
