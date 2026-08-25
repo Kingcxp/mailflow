@@ -579,7 +579,7 @@
       "tui.btn_reparse": "Re-analyze",
       "tui.btn_reparse_failed": "Re-analyze failed",
       "tui.reparse_none_failed": "No failed analyses",
-      "tui.urgency_select_hint": "Manually override the selected mail's urgency; “Follow automatic” restores the LLM verdict",
+      "tui.urgency_select_hint": "Manually override the selected mail's urgency; \"Follow automatic\" restores the LLM verdict",
       "tui.reply_to_label": "To",
       "tui.reply_subject_label": "Subject",
       "tui.detail_manual_marker": "manual",
