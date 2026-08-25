@@ -22,13 +22,15 @@ class _BotStatusProbe:
     OpenClaw). Each returns a human-readable status line."""
 
     @staticmethod
-    async def probe(provider: str, options: dict[str, Any]) -> str:
+    async def probe(provider: str, options: dict[str, Any], t: Any) -> str:
+        def http_status(code: int) -> str:
+            return str(t("tui.bots_http_status", status=code))
 
         try:
             if provider == "onebot":
                 url = str(options.get("http_url", "")).rstrip("/")
                 if not url:
-                    return "not configured"
+                    return str(t("tui.bots_not_configured"))
                 onebot_headers: dict[str, str] = {"Content-Type": "application/json"}
                 token = str(options.get("access_token", ""))
                 if token:
@@ -41,8 +43,8 @@ class _BotStatusProbe:
                     payload_data: dict[str, Any] = dict(response.json().get("data") or {})
                     nickname = str(payload_data.get("nickname", "?"))
                     user_id = str(payload_data.get("user_id", "?"))
-                    return f"logged in as {nickname} ({user_id})"
-                return f"HTTP {response.status_code}"
+                    return str(t("tui.bots_logged_in_as", name=nickname, uid=user_id))
+                return http_status(response.status_code)
             if provider == "wechaty":
                 url = str(options.get("gateway_url", "")).rstrip("/")
                 if not url:
@@ -53,7 +55,11 @@ class _BotStatusProbe:
                     wechaty_headers["Authorization"] = f"Bearer {token_w}"
                 async with httpx.AsyncClient(timeout=8.0) as client:
                     response = await client.get(f"{url}/health", headers=wechaty_headers)
-                return "online" if response.status_code == 200 else f"HTTP {response.status_code}"
+                return str(
+                    t("tui.bots_online")
+                    if response.status_code == 200
+                    else http_status(response.status_code)
+                )
             if provider == "openclaw-weixin":
                 url = str(options.get("base_url", "")).rstrip("/")
                 if not url:
@@ -61,13 +67,13 @@ class _BotStatusProbe:
                 async with httpx.AsyncClient(timeout=8.0) as client:
                     response = await client.get(url)
                 return (
-                    "gateway reachable"
+                    t("tui.bots_gateway_reachable")
                     if response.status_code < 500
-                    else f"HTTP {response.status_code}"
+                    else http_status(response.status_code)
                 )
         except Exception as exc:
-            return f"{type(exc).__name__}: unreachable"
-        return "unknown provider"
+            return str(t("tui.bots_unreachable", error=type(exc).__name__))
+        return str(t("tui.bots_unknown_provider"))
 
 
 class BotsPane(Vertical):
@@ -182,7 +188,8 @@ class BotsPane(Vertical):
         results: dict[str, str] = {}
         if instances:
             probes = [
-                _BotStatusProbe.probe(provider, options) for _, provider, options in instances
+                _BotStatusProbe.probe(provider, options, self._service.t)
+                for _, provider, options in instances
             ]
             outcomes = await asyncio.gather(*probes)
             results = {

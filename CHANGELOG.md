@@ -136,6 +136,20 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- The re-analyze buttons and the urgency dropdown rendered raw locale keys
+  (`tui.btn_reparse`, …): a workspace sync issue kept dropping freshly
+  written key batches from the language packs. All keys are re-pinned and
+  a **locale completeness test** now scans every `t()` call site in the
+  TUI/CLI source and fails when a referenced key is absent from either
+  pack (plus zh/en parity) — this class of silent failure is caught by CI
+  from now on.
+- The manual-urgency dropdown: the widget tooltip no longer lingers over
+  the open overlay (Textual's Select cannot attach per-option tooltips, so
+  the explanation lives in a persistent localized hint line below the
+  controls instead of crammed into option labels), and the bot status
+  probes are localized (logged-in-as / online / unreachable / …).
+
+
 - Resetting a mail's manual urgency back to automatic crashed the app: the
   Select's blank sentinel flowed into `Urgency(...)` and raised. The
   dropdown is now allow_blank with an explicit localized "follow automatic"

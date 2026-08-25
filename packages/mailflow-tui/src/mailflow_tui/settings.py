@@ -1426,7 +1426,7 @@ class AccountsPane(Vertical):
         for mail in self._history:
             record_id = mail.normalized_message_id()
             try:
-                subject = escape(mail.subject or "(no subject)")
+                subject = escape(mail.subject or self._t("tui.mail_no_subject"))
                 sender = escape(mail.sender.address)
                 date_text = mail.date.strftime("%Y-%m-%d %H:%M")
             except Exception:

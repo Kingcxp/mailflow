@@ -110,9 +110,12 @@ class ReplyModal(ModalScreen[Any]):
     def compose(self) -> ComposeResult:
         yield Static(self._service.t("tui.reply.label", default="Reply"), id="reply-title")
         with Vertical(id="reply-dialog"):
-            yield Label(f"To: {escape(self._record.mail.sender.display)}")
             yield Label(
-                f"Subject: {self._service.t('tui.reply.subject_prefix')} {escape(self._record.mail.subject)}"
+                f"{self._t('tui.reply_to_label')}: {escape(self._record.mail.sender.display)}"
+            )
+            yield Label(
+                f"{self._t('tui.reply_subject_label')}: "
+                f"{self._service.t('tui.reply.subject_prefix')} {escape(self._record.mail.subject)}"
             )
             with Horizontal(id="reply-templates"):
                 yield Button(self._t("tui.reply_tpl_cn"), id="reply-tpl-cn", variant="primary")
@@ -250,7 +253,7 @@ class ReplyModal(ModalScreen[Any]):
                 self._draft = await self._service.edit_draft(
                     self._draft.draft_id, self._draft.subject, body
                 )
-                self._set_status("✓ saved")
+                self._set_status(self._t("tui.reply_saved"))
             except ValueError as exc:
                 self._set_status(str(exc))
             return
@@ -393,12 +396,7 @@ class MailPane(Vertical):
                 yield Static("", id="mail-body")
                 yield Static("", id="mail-notes")
         with Horizontal(id="mail-controls"):
-            yield Select(
-                self._urgency_options(),
-                id="urgency-select",
-                allow_blank=False,
-                tooltip=self._service.t("tui.urgency_select_tooltip"),
-            )
+            yield Select(self._urgency_options(), id="urgency-select", allow_blank=False)
             yield Select(
                 [("all", "all")] + [(u.value, u.value) for u in Urgency],
                 id="mail-urgency-filter",
@@ -422,6 +420,7 @@ class MailPane(Vertical):
                 id="btn-reparse-failed",
                 variant="error",
             )
+        yield Static(self._service.t("tui.urgency_select_hint"), id="urgency-hint")
 
     async def on_mount(self) -> None:
         self._urgency_suppress = False
@@ -473,6 +472,9 @@ class MailPane(Vertical):
             _apply_options(self, "#urgency-select", self._urgency_options())
         finally:
             self._urgency_suppress = False
+        hint = self.query_one_optional("#urgency-hint", Static)
+        if hint is not None:
+            hint.update(self._service.t("tui.urgency_select_hint"))
         await self.refresh_mail()
 
     async def refresh_mail(self) -> None:
@@ -502,7 +504,7 @@ class MailPane(Vertical):
             urgency = record.effective_urgency
             table.add_row(
                 RichText(f"■ {urgency.value}", style=urgency.color),
-                escape(record.mail.subject or "(no subject)"),
+                escape(record.mail.subject or self._service.t("tui.mail_no_subject")),
                 escape(record.mail.sender.address),
                 _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
                 key=record.record_id,
@@ -638,7 +640,7 @@ class MailPane(Vertical):
             "#mail-notes",
             f"{reply_flag}{feedback}{failure_text}\n{service.t('tui.urgency_label')}: "
             f"{record.effective_urgency.value} "
-            f"({'manual' if record.manual_urgency is not None else 'auto'})",
+            f"({service.t('tui.detail_manual_marker') if record.manual_urgency is not None else service.t('tui.detail_auto_marker')})",
         )
 
     def _set_static(self, selector: str, content: str) -> None:
