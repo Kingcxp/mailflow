@@ -410,9 +410,11 @@ class MailPane(Vertical):
                 id="mail-sort",
                 allow_blank=False,
             )
-            yield Button(self._service.t("tui.btn_refresh"), id="btn-refresh", variant="primary")
             with Vertical(id="mail-actions-buttons"):
                 with Horizontal(id="mail-actions-row1"):
+                    yield Button(
+                        self._service.t("tui.btn_refresh"), id="btn-refresh", variant="primary"
+                    )
                     yield Button(self._service.t("tui.btn_trash"), id="btn-trash", variant="error")
                     yield Button(
                         self._service.t("tui.btn_feedback"),
