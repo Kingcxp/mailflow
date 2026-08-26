@@ -910,3 +910,58 @@ class TestIMAPHtmlOnlyBody:
         assert "alert" not in mail.body_text
         assert "color:red" not in mail.body_text
         assert mail.body_html.startswith("<html>")
+
+
+class TestIMAPAttachmentBody:
+    """A PDF mislabelled as text/plain is an attachment: its bytes must
+    never become body_text (display, keyword scan, LLM prompt)."""
+
+    def test_attachment_bytes_do_not_poison_body(self) -> None:
+        from mailflow_mail_imap.plugin import parse_mime
+
+        pdf_head = b"%PDF-1.7\n%\xff\xff\n1 0 obj\n<</Metadata 2 0 R>>\nendobj"
+        raw = (
+            "From: fapiao@chsi.com.cn\r\n"
+            "To: me@example.com\r\n"
+            "Subject: invoice\r\n"
+            "Message-ID: <pdf-attach@e>\r\n"
+            "MIME-Version: 1.0\r\n"
+            "Content-Type: multipart/mixed; boundary=B\r\n"
+            "\r\n"
+            "--B\r\n"
+            "Content-Type: text/html; charset=utf-8\r\n"
+            "\r\n"
+            "<html><body><p>electronic invoice enclosed</p></body></html>\r\n"
+            "--B\r\n"
+            "Content-Type: text/plain; name=invoice.pdf\r\n"
+            "Content-Disposition: attachment; filename=invoice.pdf\r\n"
+            "Content-Transfer-Encoding: base64\r\n"
+            "\r\n" + pdf_head.decode("latin-1") + "\r\n--B--\r\n"
+        ).encode("latin-1")
+        mail = parse_mime(raw, "acct-1")
+        assert "electronic invoice" in mail.body_text
+        assert "%PDF" not in mail.body_text
+
+    def test_unlabelled_binary_text_part_is_dropped(self) -> None:
+        from mailflow_mail_imap.plugin import parse_mime
+
+        raw = (
+            "From: fapiao@chsi.com.cn\r\n"
+            "To: me@example.com\r\n"
+            "Subject: invoice\r\n"
+            "Message-ID: <pdf-inline@e>\r\n"
+            "MIME-Version: 1.0\r\n"
+            "Content-Type: multipart/mixed; boundary=B\r\n"
+            "\r\n"
+            "--B\r\n"
+            "Content-Type: text/html; charset=utf-8\r\n"
+            "\r\n"
+            "<html><body><p>invoice body</p></body></html>\r\n"
+            "--B\r\n"
+            "Content-Type: text/plain\r\n"
+            "\r\n"
+            "%PDF-1.7 binary bytes here\r\n--B--\r\n"
+        ).encode("latin-1")
+        mail = parse_mime(raw, "acct-1")
+        assert "%PDF" not in mail.body_text
+        assert "invoice body" in mail.body_text

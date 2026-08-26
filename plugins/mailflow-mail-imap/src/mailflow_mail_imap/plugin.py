@@ -96,6 +96,11 @@ def _extract_body(message: Message) -> tuple[str, str]:
     for part in message.walk():
         if part.get_content_maintype() != "text":
             continue
+        # an attachment mislabelled as text/plain (PDF invoices arrive this
+        # way) is not body prose — its bytes would poison display, keyword
+        # scanning and the LLM prompt
+        if part.get_content_disposition() == "attachment" or part.get_filename():
+            continue
         payload = part.get_payload(decode=True)
         if payload is None:
             continue
@@ -110,6 +115,12 @@ def _extract_body(message: Message) -> tuple[str, str]:
             text_parts.append(content)
     body_text = "\n".join(text_parts).strip()
     body_html = "\n".join(html_parts).strip()
+    from mailflow.domain import looks_binary
+
+    if looks_binary(body_text):
+        # undetectable-at-parse binary bytes (PDF/zip) — drop them; the
+        # html part (when present) becomes the readable body instead
+        body_text = ""
     if not body_text and body_html:
         # HTML-only mails (most notification mail) must still yield a
         # readable plain body for display, analysis and keyword scanning

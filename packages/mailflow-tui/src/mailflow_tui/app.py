@@ -336,8 +336,12 @@ class ActionModal(ModalScreen[Any]):
             node.update(f"[dim]{self._service.t('tui.action_mail_missing')}[/dim]")
             return
         mail = record.mail
+        from mailflow.domain import looks_binary
+
         body = mail.body_text.strip()
-        if not body and mail.body_html:
+        if looks_binary(body):
+            body = self._service.t("tui.detail_binary_body")
+        elif not body and mail.body_html:
             body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", mail.body_html)
             body = re.sub(r"<[^>]+>", " ", body)
             body = re.sub(r"[ \t\r\f\v]+", " ", body).strip()
@@ -672,13 +676,20 @@ class MailPane(Vertical):
             ]
             actions_text = f"\n[bold]{service.t('tui.action_content')}:[/bold]\n" + "\n".join(lines)
         self._set_static("#mail-actions", actions_text)
+        from mailflow.domain import looks_binary
+
         body = record.mail.body_text.strip()
-        if not body and record.mail.body_html:
+        if looks_binary(body):
+            body = service.t("tui.detail_binary_body")
+        elif not body and record.mail.body_html:
             # mails stored before the HTML-only fallback existed still carry
             # a readable html body — render it as text instead of "(no body)"
             body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", record.mail.body_html)
             body = re.sub(r"<[^>]+>", " ", body)
             body = re.sub(r"[ \t\r\f\v]+", " ", body).strip()
+        if len(body) > 4000:
+            # a 200 KB dump into one Static is unusable and slow to render
+            body = body[:4000] + "…"
         self._set_static(
             "#mail-body",
             f"[bold]{service.t('tui.detail_body')}:[/bold]\n{escape(body or '(no body)')}",

@@ -441,3 +441,20 @@ __all__ = [
     "to_utc",
     "utcnow",
 ]
+
+_BINARY_MAGICS = ("%PDF", "PK\x03\x04", "\x89PNG", "GIF8", "\x1f\x8b", "{\\rtf")
+
+
+def looks_binary(text: str) -> bool:
+    """True when ``text`` is binary garbage rather than readable prose —
+    mailers sometimes send attachments (PDF invoices) mislabelled as
+    text/plain parts; such bytes must never reach the UI or the LLM."""
+    if not text:
+        return False
+    if text.startswith(_BINARY_MAGICS):
+        return True
+    sample = text[:4000]
+    if "\x00" in sample:
+        return True
+    control = sum(1 for ch in sample if ord(ch) < 9 or (13 < ord(ch) < 32) or ord(ch) == 27)
+    return control > len(sample) * 0.05
