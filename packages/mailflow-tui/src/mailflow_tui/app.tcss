@@ -99,8 +99,7 @@ Button:focus {
    three selects overflow any reasonable terminal, pushing the third
    button off-screen; size them to their labels instead */
 #mail-controls Select {
-    width: auto;
-    min-width: 14;
+    width: 1fr;
     margin-right: 1;
 }
 
