@@ -323,6 +323,8 @@ class ActionModal(ModalScreen[Any]):
             yield Label(f"{self._service.t('tui.action_source')}: {escape(item.mail_id)}")
             # the source mail's own details load asynchronously below
             yield Static("", id="action-mail-detail")
+        # outside the scroll box: always visible, never scrolls away
+        with Horizontal(id="action-footer"):
             yield Button(self._service.t("tui.btn_close"), id="action-close", variant="primary")
 
     async def on_mount(self) -> None:
