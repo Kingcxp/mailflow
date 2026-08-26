@@ -441,6 +441,7 @@ class MailPane(Vertical):
                 yield Static("", id="mail-reason")
                 yield Static("", id="mail-actions")
                 yield Static("", id="mail-body")
+                yield Static("", id="mail-attachments")
                 yield Static("", id="mail-notes")
         with Horizontal(id="mail-controls"):
             yield Select(self._urgency_options(), id="urgency-select", allow_blank=False)
@@ -694,6 +695,18 @@ class MailPane(Vertical):
             "#mail-body",
             f"[bold]{service.t('tui.detail_body')}:[/bold]\n{escape(body or '(no body)')}",
         )
+        attachment_lines = [
+            f"  {escape(a.filename)} ({a.content_type}, {a.size} B)"
+            for a in record.mail.attachments
+        ]
+        if attachment_lines:
+            self._set_static(
+                "#mail-attachments",
+                f"[bold]{service.t('tui.detail_attachments')}:[/bold]\n"
+                + "\n".join(attachment_lines),
+            )
+        else:
+            self._set_static("#mail-attachments", "")
         reply_flag = (
             f"\n[bold yellow]{service.t('tui.detail_reply_required', answer=service.t('common.yes'))}[/bold yellow]"
             if record.analysis and record.analysis.reply_required

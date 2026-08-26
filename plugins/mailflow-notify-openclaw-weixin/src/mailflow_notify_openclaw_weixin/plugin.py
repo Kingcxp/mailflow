@@ -71,6 +71,11 @@ def format_message(record: MailRecord) -> str:
     ]
     if record.summary:
         lines.append(record.summary[:500])
+    attachments = [a.filename for a in record.mail.attachments if a.filename]
+    if attachments:
+        shown = ", ".join(attachments[:4])
+        more = f" (+{len(attachments) - 4})" if len(attachments) > 4 else ""
+        lines.append(f"Attachments: {shown}{more}")
     return "\n".join(lines)
 
 

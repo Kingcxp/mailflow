@@ -27,7 +27,7 @@ from typing import Any, cast
 
 from mailflow.config import MailAccountConfig
 from mailflow.contracts import MailEmitter
-from mailflow.domain import ComponentKind, MailAddress, MailMessage
+from mailflow.domain import Attachment, ComponentKind, MailAddress, MailMessage
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -90,18 +90,36 @@ def _mail_address(raw: str | None) -> MailAddress:
     return MailAddress(name=_decode(name), address=address)
 
 
-def _extract_body(message: Message) -> tuple[str, str]:
+def _extract_body(
+    message: Message,
+) -> tuple[str, str, list[Attachment]]:
     text_parts: list[str] = []
     html_parts: list[str] = []
+    attachments: list[Attachment] = []
     for part in message.walk():
-        if part.get_content_maintype() != "text":
+        if part.get_content_maintype() == "multipart":
             continue
+        filename = part.get_filename()
+        disposition = part.get_content_disposition()
+        payload = part.get_payload(decode=True)
+        is_text = part.get_content_maintype() == "text"
         # an attachment mislabelled as text/plain (PDF invoices arrive this
         # way) is not body prose — its bytes would poison display, keyword
         # scanning and the LLM prompt
-        if part.get_content_disposition() == "attachment" or part.get_filename():
+        is_body_candidate = is_text and disposition != "attachment" and not filename
+        if not is_body_candidate:
+            # record every attachment (image/pdf/office/...) with metadata;
+            # payloads stay out of memory — storage strips them anyway
+            attachments.append(
+                Attachment(
+                    filename=filename or "unnamed",
+                    content_type=part.get_content_type(),
+                    size=len(bytes(payload)) if payload else 0,
+                    content_id=part.get("Content-ID"),
+                    data=None,
+                )
+            )
             continue
-        payload = part.get_payload(decode=True)
         if payload is None:
             continue
         charset = part.get_content_charset() or "utf-8"
@@ -125,7 +143,7 @@ def _extract_body(message: Message) -> tuple[str, str]:
         # HTML-only mails (most notification mail) must still yield a
         # readable plain body for display, analysis and keyword scanning
         body_text = _html_to_text(body_html)
-    return body_text, body_html
+    return body_text, body_html, attachments
 
 
 def _html_to_text(html: str) -> str:
@@ -156,7 +174,7 @@ def parse_mime(raw: bytes, account_id: str, provider: str = "imap") -> MailMessa
         date = datetime.now(UTC)
     if date.tzinfo is None:
         date = date.replace(tzinfo=UTC)
-    body_text, body_html = _extract_body(message)
+    body_text, body_html, attachments = _extract_body(message)
     return MailMessage(
         message_id=message_id,
         account_id=account_id,
@@ -168,6 +186,7 @@ def parse_mime(raw: bytes, account_id: str, provider: str = "imap") -> MailMessa
         received_at=datetime.now(UTC),
         body_text=body_text,
         body_html=body_html,
+        attachments=attachments,
         provider=provider,
     )
 

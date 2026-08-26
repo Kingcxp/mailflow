@@ -941,6 +941,45 @@ class TestIMAPAttachmentBody:
         mail = parse_mime(raw, "acct-1")
         assert "electronic invoice" in mail.body_text
         assert "%PDF" not in mail.body_text
+        # the mislabelled pdf is recorded as an attachment with metadata
+        assert [a.filename for a in mail.attachments] == ["invoice.pdf"]
+        assert mail.attachments[0].content_type == "text/plain"
+
+
+class TestIMAPImageAttachments:
+    """Image parts are recorded with metadata (never binary in the body)
+    and inline images keep their Content-ID."""
+
+    def test_image_parts_recorded(self) -> None:
+        from mailflow_mail_imap.plugin import parse_mime
+
+        png_head = "\x89PNG\r\n\x1a\n" + "imagedata" * 6
+        raw = (
+            "From: a@example.com\r\n"
+            "To: me@example.com\r\n"
+            "Subject: with image\r\n"
+            "Message-ID: <img@e>\r\n"
+            "MIME-Version: 1.0\r\n"
+            "Content-Type: multipart/mixed; boundary=B\r\n"
+            "\r\n"
+            "--B\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "\r\n"
+            "see the screenshot\r\n"
+            "--B\r\n"
+            "Content-Type: image/png; name=screenshot.png\r\n"
+            "Content-Disposition: attachment; filename=screenshot.png\r\n"
+            "Content-Transfer-Encoding: base64\r\n"
+            "\r\n" + png_head + "\r\n--B--\r\n"
+        ).encode("latin-1")
+        mail = parse_mime(raw, "acct-1")
+        assert mail.body_text == "see the screenshot"
+        assert len(mail.attachments) == 1
+        att = mail.attachments[0]
+        assert att.filename == "screenshot.png"
+        assert att.content_type == "image/png"
+        assert att.size > 0
+        assert att.data is None  # payloads stay out of memory
 
     def test_unlabelled_binary_text_part_is_dropped(self) -> None:
         from mailflow_mail_imap.plugin import parse_mime
