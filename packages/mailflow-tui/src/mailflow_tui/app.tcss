@@ -82,6 +82,7 @@ Button:focus {
 
 #mail-actions-buttons {
     height: auto;
+    width: auto;
 }
 
 #mail-actions-row1,
@@ -94,7 +95,18 @@ Button:focus {
     height: 1;
 }
 
+/* the base Button reserves min-width 16 — six buttons at that width plus
+   three selects overflow any reasonable terminal, pushing the third
+   button off-screen; size them to their labels instead */
+#mail-controls Select {
+    width: auto;
+    min-width: 14;
+    margin-right: 1;
+}
+
 #mail-controls Button {
+    width: auto;
+    min-width: 0;
     margin-right: 1;
 }
 
