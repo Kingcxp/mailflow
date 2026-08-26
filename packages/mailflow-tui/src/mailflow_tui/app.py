@@ -427,6 +427,10 @@ class MailPane(Vertical):
         self._service = service
         self._records: list[MailRecord] = []
         self._selected_id: str | None = None
+        # refresh_mail runs from several entry points (mount worker, filter
+        # changes, reload-all); concurrent clear+add_row passes interleave
+        # into DuplicateKeys — serialize them
+        self._refresh_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
         # the urgency Select auto-selects "auto" while mounting and fires
@@ -485,7 +489,11 @@ class MailPane(Vertical):
 
     async def on_mount(self) -> None:
         self._urgency_suppress = False
-        await self.refresh_mail()
+        # never block startup on storage reads + row rendering: the pane
+        # paints empty and fills in as the exclusive worker delivers
+        self.run_worker(
+            self.refresh_mail(), exclusive=True, group="mail-refresh", exit_on_error=False
+        )
 
     def _mail_table(self) -> DataTable[Any] | None:
         return self.query_one_optional("#mail-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
@@ -539,6 +547,10 @@ class MailPane(Vertical):
         await self.refresh_mail()
 
     async def refresh_mail(self) -> None:
+        async with self._refresh_lock:
+            await self._refresh_mail_unlocked()
+
+    async def _refresh_mail_unlocked(self) -> None:
         table = self._mail_table()
         if table is None:
             return
@@ -561,7 +573,7 @@ class MailPane(Vertical):
         records.sort(key=lambda record: record.mail.received_at, reverse=True)
         if self._select_value("#mail-sort") == "urgency":
             records.sort(key=lambda record: record.effective_urgency.rank, reverse=True)
-        for record in records:
+        for position, record in enumerate(records, start=1):
             urgency = record.effective_urgency
             table.add_row(
                 RichText(f"■ {urgency.value}", style=urgency.color),
@@ -570,6 +582,10 @@ class MailPane(Vertical):
                 _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
                 key=record.record_id,
             )
+            if position % 50 == 0:
+                # yield to the event loop so the UI stays interactive while
+                # a large mailbox renders
+                await asyncio.sleep(0)
         visible_ids = {record.record_id for record in records}
         if self._selected_id not in visible_ids:
             self._selected_id = records[0].record_id if records else None
@@ -881,6 +897,7 @@ class ActionsPane(Vertical):
         super().__init__()
         self._service = service
         self._items: list[ActionItem] = []
+        self._refresh_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="actions-controls"):
@@ -908,7 +925,12 @@ class ActionsPane(Vertical):
         yield Static(self._service.t("tui.empty"), id="actions-hint")
 
     async def on_mount(self) -> None:
-        await self.refresh_actions()
+        self.run_worker(
+            self.refresh_actions(),
+            exclusive=True,
+            group="actions-refresh",
+            exit_on_error=False,
+        )
 
     def _actions_table(self) -> DataTable[Any] | None:
         return self.query_one_optional("#actions-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
@@ -934,6 +956,10 @@ class ActionsPane(Vertical):
         await self.refresh_actions()
 
     async def refresh_actions(self) -> None:
+        async with self._refresh_lock:
+            await self._refresh_actions_unlocked()
+
+    async def _refresh_actions_unlocked(self) -> None:
         table = self._actions_table()
         if table is None:
             return
@@ -1024,6 +1050,7 @@ class RuntimePane(Vertical):
         super().__init__()
         self._service = service
         self._selected_plugin: str | None = None
+        self._refresh_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
         with ScrollableContainer(id="runtime-scroll"):
@@ -1050,7 +1077,12 @@ class RuntimePane(Vertical):
             yield Static("", id="runtime-storage")
 
     async def on_mount(self) -> None:
-        await self.refresh_runtime()
+        self.run_worker(
+            self.refresh_runtime(),
+            exclusive=True,
+            group="runtime-refresh",
+            exit_on_error=False,
+        )
 
     async def relabel(self) -> None:
         self._columns_done = False
@@ -1080,6 +1112,10 @@ class RuntimePane(Vertical):
         self._columns_done = True
 
     async def refresh_runtime(self) -> None:
+        async with self._refresh_lock:
+            await self._refresh_runtime_unlocked()
+
+    async def _refresh_runtime_unlocked(self) -> None:
         snapshot = self._service.snapshot()
         service = self._service
         table = self._plugins_table()

@@ -900,7 +900,9 @@ class SettingsPane(Vertical):
                 yield ScrollableContainer(id="settings-options")
 
     async def on_mount(self) -> None:
-        await self.reload()
+        # settings_sections + card construction are heavy: paint the pane
+        # first and let the exclusive worker fill it in
+        self.run_worker(self.reload(), exclusive=True, group="settings-reload", exit_on_error=False)
 
     async def relabel(self) -> None:
         await self.reload()
