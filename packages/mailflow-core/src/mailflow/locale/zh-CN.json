@@ -328,6 +328,7 @@
       "usage": "trash <list|restore <id>>"
     },
     "tui": {
+      "detail_binary_body": "（该邮件正文为二进制附件内容（如 PDF 发票），请到原邮箱查看）",
       "btn_reparse": "重新解析",
       "btn_reparse_failed": "重析失败邮件",
       "reparse_none_failed": "没有解析失败的邮件",
@@ -617,7 +618,8 @@
       "tui.bots_gateway_reachable": "网关可达",
       "tui.bots_http_status": "HTTP {status}",
       "tui.reply_saved": "已保存",
-      "tui.action_mail_missing": "来源邮件不在邮件列表中（可能已被清理）"
+      "tui.action_mail_missing": "来源邮件不在邮件列表中（可能已被清理）",
+      "tui.detail_binary_body": "（该邮件正文为二进制附件内容（如 PDF 发票），请到原邮箱查看）"
     },
     "update": {
       "applied_title": "已应用的更新",

@@ -617,7 +617,8 @@
       "tui.bots_gateway_reachable": "gateway reachable",
       "tui.bots_http_status": "HTTP {status}",
       "tui.reply_saved": "saved",
-      "tui.action_mail_missing": "source mail is no longer in the mail list (possibly cleaned up)"
+      "tui.action_mail_missing": "source mail is no longer in the mail list (possibly cleaned up)",
+      "tui.detail_binary_body": "(this mail's body is binary attachment content, e.g. a PDF invoice — see the original mailbox)"
     },
     "update": {
       "applied_title": "Applied updates",
