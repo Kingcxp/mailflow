@@ -315,7 +315,7 @@ class ActionModal(ModalScreen[Any]):
     def compose(self) -> ComposeResult:
         item = self._item
         yield Static(self._service.t("tui.action_detail"), id="action-title")
-        with Vertical():
+        with ScrollableContainer(id="action-detail-scroll"):
             yield Label(f"{self._service.t('tui.action_time')}: {escape(item.time_range)}")
             yield Label(f"{self._service.t('tui.action_type')}: {escape(item.action_type)}")
             yield Label(f"{self._service.t('tui.action_content')}: {escape(item.summary)}")
@@ -436,7 +436,7 @@ class MailPane(Vertical):
         yield Input(placeholder=self._service.t("tui.search_placeholder"), id="mail-search")
         with Horizontal():
             yield DataTable(id="mail-table")
-            with Vertical(id="mail-detail"):
+            with ScrollableContainer(id="mail-detail"):
                 yield Static("", id="mail-summary")
                 yield Static("", id="mail-reason")
                 yield Static("", id="mail-actions")
