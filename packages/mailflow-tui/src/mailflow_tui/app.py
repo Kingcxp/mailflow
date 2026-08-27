@@ -1378,7 +1378,8 @@ class MarketDetailScreen(ModalScreen[Any]):
         )
         with Vertical(id="market-detail-dialog"):
             yield Static(self._service.t("tui.market_detail"), id="market-detail-title")
-            yield Markdown(meta + "\n---\n\n" + readme, id="market-detail-readme")
+            with ScrollableContainer(id="market-detail-scroll"):
+                yield Markdown(meta + "\n---\n\n" + readme, id="market-detail-readme")
             yield Static("", id="market-detail-status")
             with Horizontal(id="market-detail-actions"):
                 yield Button(
@@ -1494,7 +1495,8 @@ class MarketPane(Vertical):
                 yield Button(self._service.t("tui.btn_repos"), id="market-repos", variant="primary")
         yield DataTable(id="market-table")
         with Vertical(id="market-detail"):
-            yield Markdown("", id="market-readme")
+            with ScrollableContainer(id="market-detail-scroll"):
+                yield Markdown("", id="market-readme")
             yield Static("", id="market-status")
             with Horizontal(id="market-actions"):
                 yield Button(

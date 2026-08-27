@@ -574,8 +574,13 @@ MarketDetailScreen {
     margin-bottom: 1;
 }
 
-#market-detail-readme {
+#market-detail-scroll {
     height: 1fr;
+    overflow-y: auto;
+}
+
+#market-detail-readme {
+    height: auto;
     border: round $primary;
     padding: 0 1;
 }
