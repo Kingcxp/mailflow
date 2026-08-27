@@ -843,9 +843,18 @@ ListEditScreen, EntryFormScreen {
     padding: 0 1;
 }
 
+#bots-table-wrap {
+    height: 1fr;
+}
+
 #bots-table {
-    height: 50%;
+    height: auto;
+    max-height: 100%;
     border: round $primary;
+}
+
+#bots-login-help {
+    margin-bottom: 1;
 }
 
 #bots-actions {

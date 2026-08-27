@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 import httpx
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.widgets import Button, DataTable, Static
 
@@ -91,7 +91,8 @@ class BotsPane(Vertical):
     def compose(self) -> ComposeResult:
         yield Static(self._service.t("tui.bots_title"), id="bots-title")
         yield Static(escape(self._service.t("tui.bots_login_help")), id="bots-login-help")
-        yield DataTable(id="bots-table", cursor_type="row")  # pyright: ignore[reportUnknownMemberType]
+        with ScrollableContainer(id="bots-table-wrap"):
+            yield DataTable(id="bots-table", cursor_type="row")  # pyright: ignore[reportUnknownMemberType]
         with Horizontal(id="bots-actions"):
             yield Button(self._service.t("tui.btn_add"), id="bots-add", variant="success")
             yield Button(self._service.t("tui.btn_delete"), id="bots-delete", variant="error")
