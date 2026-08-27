@@ -611,7 +611,9 @@
       "tui.browser_disabled": "已禁用网页打开（general.browser_mode = disabled）",
       "tui.browser_render_missing": "图形浏览器未配置：请设置 general.browser_render_url 指向 Carbonyl 渲染服务",
       "tui.browser_graphical_open": "已提交到终端图形浏览器；渲染画面将在支持图像协议的终端中显示",
-      "tui.browser_system_open": "已在系统浏览器中打开"
+      "tui.browser_system_open": "已在系统浏览器中打开",
+      "tui.bots_detecting": "正在探测本机机器人运行时…",
+      "tui.bots_no_runtime": "未在本机发现机器人运行时（NapCat / WeChaty 网关）。请先启动对应服务，或手动填写配置。"
     },
     "update": {
       "applied_title": "已应用的更新",

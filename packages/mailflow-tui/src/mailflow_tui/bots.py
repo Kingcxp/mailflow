@@ -76,6 +76,40 @@ class _BotStatusProbe:
         return str(t("tui.bots_unknown_provider"))
 
 
+async def _probe_local_runtimes() -> list[dict[str, str]]:
+    """Detect bot runtimes on well-known local ports.
+
+    Returns one entry per reachable service:
+    - onebot: NapCat / Lagrange / go-cqhttp HTTP (default 3000, also 5700, 6099)
+    - wechaty: a WeChaty-style gateway (default 8788, also 8080, 10086)
+    """
+    found: list[dict[str, str]] = []
+
+    async def _http(url: str, budget: float = 1.5) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=budget) as client:
+                response = await client.get(url)
+                return response.status_code < 500
+        except Exception:
+            return False
+
+    import asyncio
+
+    probes: list[tuple[str, str, str]] = []
+    for port in ("3000", "5700", "6099", "8081"):
+        probes.append(("onebot", f"http://127.0.0.1:{port}", port))
+    for port in ("8788", "8080", "10086"):
+        probes.append(("wechaty", f"http://127.0.0.1:{port}", port))
+
+    results = await asyncio.gather(
+        *[_http(url) for _kind, url, _port in probes], return_exceptions=True
+    )
+    for (kind, url, port), ok in zip(probes, results, strict=True):
+        if ok:
+            found.append({"provider": kind, "url": url, "port": port})
+    return found
+
+
 class BotsPane(Vertical):
     """平台登录: manage IM bot instances (OneBot/WeChaty/OpenClaw) and
     check their login state. QR scanning happens in the bot runtime itself
@@ -148,12 +182,12 @@ class BotsPane(Vertical):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "bots-add":
-            from mailflow_tui.settings import EntryFormScreen
-
-            self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-                EntryFormScreen(self._service, "notifiers")
+            self.run_worker(
+                self._auto_setup_flow(),
+                exclusive=True,
+                group="bots-setup",
+                exit_on_error=False,
             )
-            self.call_after_refresh(self.refresh_data)
             return
         if button_id == "bots-delete":
             await self._delete_selected()
@@ -163,6 +197,31 @@ class BotsPane(Vertical):
         # probes hit the network (8s timeout each): never run them on the
         # button handler or a down gateway freezes the whole UI
         self.run_worker(self._check_all(), exclusive=True, group="bots-check", exit_on_error=False)
+
+    async def _auto_setup_flow(self) -> None:
+        """Detect local runtimes and guide the user through setup; for
+        NapCat also drive the QR login inside the TUI."""
+        from mailflow_tui.settings import EntryFormScreen
+
+        status = self.query_one("#bots-status", Static)
+        status.update(self._service.t("tui.bots_detecting"))
+        found = await _probe_local_runtimes()
+        if not found:
+            status.update(f"[yellow]{self._service.t('tui.bots_no_runtime')}[/yellow]")
+            return
+        # 探测到多个时优先 onebot
+        chosen = next((f for f in found if f["provider"] == "onebot"), found[0])
+        provider = chosen["provider"]
+        url = chosen["url"]
+        prefill: dict[str, Any] = {"provider": provider, "options": {}}
+        if provider == "onebot":
+            prefill["options"]["http_url"] = url
+        else:
+            prefill["options"]["gateway_url"] = url
+        self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
+            EntryFormScreen(self._service, "notifiers", values=prefill)
+        )
+        self.call_after_refresh(self.refresh_data)
 
     async def _delete_selected(self) -> None:
         if getattr(self, "_selected_id", None) is None:

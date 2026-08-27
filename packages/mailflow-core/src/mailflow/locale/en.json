@@ -611,7 +611,9 @@
       "tui.browser_disabled": "Web links are disabled (general.browser_mode = disabled)",
       "tui.browser_render_missing": "Graphical browser not configured: point general.browser_render_url at a Carbonyl render service",
       "tui.browser_graphical_open": "Submitted to the terminal graphical browser; the rendered page shows on image-capable terminals",
-      "tui.browser_system_open": "Opened in the system browser"
+      "tui.browser_system_open": "Opened in the system browser",
+      "tui.bots_detecting": "Detecting local bot runtimes…",
+      "tui.bots_no_runtime": "No bot runtime (NapCat / WeChaty gateway) found on this machine. Start the service first, or fill the form manually."
     },
     "update": {
       "applied_title": "Applied updates",
