@@ -401,6 +401,14 @@ DataTable > .datatable--cursor {
     color: $text-muted;
 }
 
+#runtime-adapters,
+#runtime-accounts,
+#runtime-llms,
+#runtime-bindings,
+#runtime-storage {
+    margin-bottom: 1;
+}
+
 /* plugin scaffold wizard */
 PluginScaffoldScreen {
     align: center middle;

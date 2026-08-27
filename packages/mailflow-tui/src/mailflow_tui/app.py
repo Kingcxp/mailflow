@@ -16,7 +16,6 @@ from mailflow.domain import ActionItem, MailRecord, ReplyDraft, Urgency
 from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
 from rich.text import Text as RichText
-from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
@@ -1059,7 +1058,11 @@ class RuntimePane(Vertical):
     def compose(self) -> ComposeResult:
         with ScrollableContainer(id="runtime-scroll"):
             yield Static(self._service.t("tui.runtime_plugins"), id="runtime-plugins")
-            yield DataTable(id="runtime-plugins-table")
+            yield _RuntimePluginTable(
+                self._open_plugin_detail,
+                id="runtime-plugins-table",
+                cursor_type="row",
+            )  # pyright: ignore[reportUnknownMemberType]
             yield Static(self._service.t("tui.runtime_plugins_help"), id="runtime-plugins-hint")
             with Horizontal(id="runtime-plugin-actions"):
                 yield Button(
@@ -1194,21 +1197,8 @@ class RuntimePane(Vertical):
             f"{self._service.t('plugin.header_id')}: {plugin_id} — {status}"
         )
 
-    async def on_click(self, event: events.Click) -> None:
-        """Double-clicking a plugin row opens its market detail (readme +
-        install state) when the plugin ships one."""
-        if getattr(event, "chain", 1) < 2:
-            return
-        table = self._plugins_table()
-        if table is None:
-            return
-        meta: dict[str, Any] = dict(getattr(event, "meta", None) or {})
-        row_index = meta.get("row")
-        column_index = meta.get("column", 0) or 0
-        if not isinstance(row_index, int) or row_index < 0 or row_index >= table.row_count:
-            return
-        cell_key = table.coordinate_to_cell_key(Coordinate(row_index, column_index))
-        plugin_id = str(cell_key.row_key.value)
+    def _open_plugin_detail(self, plugin_id: str) -> None:
+        """Open the plugin's market detail (readme + install state)."""
         market_pane = self.query_one_optional(MarketPane)
         plugin = None
         if market_pane is not None:
@@ -1217,11 +1207,18 @@ class RuntimePane(Vertical):
                     plugin = candidate
                     break
         if plugin is None:
-            try:
-                found = await asyncio.to_thread(self._service.market.find, plugin_id)
-            except Exception:
-                found = None
-            plugin = found[1] if found else None
+            self.run_worker(self._open_plugin_detail_async(plugin_id))
+            return
+        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+            MarketDetailScreen(self._service, plugin)
+        )
+
+    async def _open_plugin_detail_async(self, plugin_id: str) -> None:
+        try:
+            found = await asyncio.to_thread(self._service.market.find, plugin_id)
+        except Exception:
+            found = None
+        plugin = found[1] if found else None
         if plugin is None:
             return
         cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
@@ -1351,6 +1348,30 @@ def plugin_doc_readme(info: Any) -> str:
             continue
         lines.append(line)
     return "\n".join(lines).strip()
+
+
+class _RuntimePluginTable(DataTable[Any]):
+    """DataTable whose double-click opens the plugin detail.
+
+    Textual's DataTable stops Click events after handling them, so a
+    double-click can never bubble up to the pane — the table itself
+    recognizes the second click of the chain and calls back."""
+
+    def __init__(self, on_double_click: Any, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._on_double_click = on_double_click
+
+    async def _on_click(self, event: Any) -> None:
+        await super()._on_click(event)
+        if getattr(event, "chain", 1) < 2:
+            return
+        meta: dict[str, Any] = dict(getattr(event, "meta", None) or {})
+        row_index = meta.get("row")
+        column_index = meta.get("column", 0) or 0
+        if not isinstance(row_index, int) or row_index < 0 or row_index >= self.row_count:
+            return
+        key = self.coordinate_to_cell_key(Coordinate(row_index, column_index)).row_key
+        self._on_double_click(str(key.value))
 
 
 class MarketDetailScreen(ModalScreen[Any]):
