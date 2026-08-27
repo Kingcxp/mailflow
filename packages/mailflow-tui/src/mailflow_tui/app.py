@@ -1200,8 +1200,11 @@ class RuntimePane(Vertical):
 
     def _open_plugin_detail(self, plugin_id: str) -> None:
         """Open the plugin's market detail (readme + install state)."""
-        market_pane = self.query_one_optional(MarketPane)
+        if getattr(self, "_detail_open_for", None) == plugin_id:
+            return  # the dialog for this plugin is already up
+        self._detail_open_for = plugin_id
         plugin = None
+        market_pane = self.query_one_optional(MarketPane)
         if market_pane is not None:
             for _repo, candidate in market_pane._entries:  # pyright: ignore[reportPrivateUsage]
                 if candidate.id == plugin_id:
@@ -1379,7 +1382,10 @@ class _RuntimePluginTable(DataTable[Any]):
             return
         last_time, last_row = getattr(self, "_last_click", (0.0, -1))  # pyright: ignore[reportUnknownVariableType]
         self._last_click = (now, row_index)
-        if now - last_time <= 0.45 and last_row == row_index:
+        if now - last_time <= 0.4 and last_row == row_index:
+            # fire once and reset immediately — a 4x rapid click must not
+            # open the dialog four times
+            self._last_click = (0.0, -1)
             key = self.coordinate_to_cell_key(Coordinate(row_index, column_index)).row_key
             self._on_double_click(str(key.value))
 
