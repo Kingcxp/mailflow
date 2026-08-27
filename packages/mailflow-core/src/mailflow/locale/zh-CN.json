@@ -577,7 +577,7 @@
       "history_unpicked": "未选",
       "extras_http_url": "OneBot 11 HTTP 上报地址，例如 http://127.0.0.1:5700（NapCat/Lagrange 等）",
       "extras_access_token": "access_token，与机器人端 access_token 一致时可留空",
-      "extras_gateway_url": "WeChaty 网关服务地址，例如 http://127.0.0.1:8788",
+      "extras_gateway_url": "WeChaty 网关服务地址，例如 http://127.0.0.1:8788；登录需走平板协议（如 WeChatFerry / PaPad 等），官方 puppet-wechat 网页协议已失效且有封号风险",
       "extras_token": "网关鉴权 token",
       "extras_endpoint": "API 路径，默认 /api/v1",
       "extras_targets": "推送目标列表，每行一个，格式见下方说明：QQ 为 user:QQ号 或 group:群号；微信为 wxid_xxx 或 room-id@chatroom",

@@ -577,7 +577,7 @@
       "history_unpicked": "",
       "extras_http_url": "OneBot 11 HTTP endpoint, e.g. http://127.0.0.1:5700 (NapCat/Lagrange)",
       "extras_access_token": "access_token; leave empty when the bot side has none",
-      "extras_gateway_url": "WeChaty gateway URL, e.g. http://127.0.0.1:8788",
+      "extras_gateway_url": "WeChaty gateway URL, e.g. http://127.0.0.1:8788; login requires a pad protocol (WeChatFerry / PaPad etc.) — the official puppet-wechat web protocol is defunct and carries a ban risk",
       "extras_token": "Gateway auth token",
       "extras_endpoint": "API path, default /api/v1",
       "extras_targets": "One target per line: QQ uses user:QQID or group:ROOMID; WeChat uses wxid_xxx or room-id@chatroom",
