@@ -96,6 +96,8 @@
         "accounts[].options": "邮件源专属选项：imap 可设置 preset（qq/163/outlook/gmail）或 imap_host、imap_port，以及 username 与 password。",
         "accounts[].provider": "处理该邮箱的邮件源组件 id（内置：imap、fake）。",
         "general.auto_update": "每天检查 MailFlow 新版本与插件更新，并自动安装。",
+        "general.browser_mode": "TUI 打开外部网页的方式：system 用系统浏览器；graphical 在终端内通过 Carbonyl 渲染服务显示；disabled 关闭。",
+        "general.browser_render_url": "Carbonyl 兼容终端渲染服务地址（如 http://127.0.0.1:8080），browser_mode=graphical 时必填。",
         "general.cleanup_hour": "每日清理执行的本地时间小时（0-23）。",
         "general.cleanup_minute": "每日清理执行的本地时间分钟（0-59）。",
         "general.language": "默认界面语言代码（en、zh-CN 或外部语言包）。",
@@ -605,7 +607,11 @@
       "market_category_llm_backend": "大模型后端",
       "market_category_llm_enhancer": "大模型增强",
       "market_category_storage": "存储",
-      "market_category_bot_exporter": "机器人导出"
+      "market_category_bot_exporter": "机器人导出",
+      "tui.browser_disabled": "已禁用网页打开（general.browser_mode = disabled）",
+      "tui.browser_render_missing": "图形浏览器未配置：请设置 general.browser_render_url 指向 Carbonyl 渲染服务",
+      "tui.browser_graphical_open": "已提交到终端图形浏览器；渲染画面将在支持图像协议的终端中显示",
+      "tui.browser_system_open": "已在系统浏览器中打开"
     },
     "update": {
       "applied_title": "已应用的更新",

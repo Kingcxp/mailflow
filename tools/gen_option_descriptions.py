@@ -22,6 +22,14 @@ EN: dict[str, str] = {
         "Language the LLM writes summaries, reasons and reply drafts in (e.g. zh-CN). "
         "Empty follows the interface language."
     ),
+    "general.browser_mode": (
+        "How the TUI opens external web links: system uses the system browser; "
+        "graphical renders inside the terminal via a Carbonyl service; disabled turns it off."
+    ),
+    "general.browser_render_url": (
+        "Base URL of a Carbonyl-compatible terminal render service (e.g. http://127.0.0.1:8080); "
+        "required when browser_mode = graphical."
+    ),
     "general.timezone": (
         "IANA timezone used for display, the daily cleanup and reminders (e.g. Asia/Shanghai)."
     ),
@@ -157,6 +165,13 @@ ZH: dict[str, str] = {
     "general.language": "默认界面语言代码（en、zh-CN 或外部语言包）。",
     "general.summary_language": (
         "大模型撰写摘要、理由与回复草稿所用的语言（如 zh-CN）。留空则跟随界面语言。"
+    ),
+    "general.browser_mode": (
+        "TUI 打开外部网页的方式：system 用系统浏览器；graphical 在终端内通过 Carbonyl "
+        "渲染服务显示；disabled 关闭。"
+    ),
+    "general.browser_render_url": (
+        "Carbonyl 兼容终端渲染服务地址（如 http://127.0.0.1:8080），browser_mode=graphical 时必填。"
     ),
     "general.timezone": "用于显示、每日清理与提醒的 IANA 时区（如 Asia/Shanghai）。",
     "general.mail_retention_days": "超过该天数的邮件会被每日清理移入回收站；填 0 表示不移动。",

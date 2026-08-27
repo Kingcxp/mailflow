@@ -652,6 +652,34 @@ class MailFlowService:
     def t(self, key: str, **params: Any) -> str:
         return self.i18n.t(key, **params)
 
+    def open_url(self, url: str) -> str:
+        """Open a web URL from the TUI.
+
+        Respects ``general.browser_mode``: ``system`` opens the system
+        browser (webbrowser module — works on desktop hosts), ``graphical``
+        renders inside the terminal via a Carbonyl-compatible service
+        (browser_render_url), ``disabled`` returns an explanation instead.
+        Returns a human-readable status line for the caller to show.
+        """
+        mode = self.config.general.browser_mode
+        if mode == "disabled":
+            return self.t("tui.browser_disabled")
+        if mode == "graphical":
+            render_url = self.config.general.browser_render_url.strip().rstrip("/")
+            if not render_url:
+                return self.t("tui.browser_render_missing")
+            # carbonyl-style: GET {render}/{url} returns a terminal-renderable
+            # page (sixel/kitty or ANSI text); the TUI opens it in a viewer
+            self._pending_graphical_url = f"{render_url}/{url}"
+            return self.t("tui.browser_graphical_open")
+        import webbrowser
+
+        try:
+            webbrowser.open(url)
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}"
+        return self.t("tui.browser_system_open")
+
     # Stored analyses carry canned processor prose in English (data, not UI);
     # render-time mapping keeps the display localized without rewriting
     # records on every language switch.

@@ -1405,6 +1405,15 @@ class MarketDetailScreen(ModalScreen[Any]):
         if status is not None:
             status.update(text)
 
+    async def on_markdown_link_clicked(self, event: Any) -> None:
+        href = str(getattr(event, "href", "") or "")
+        if not href:
+            return
+        result = self._service.open_url(href)
+        link = self.query_one_optional("#market-detail-link", Static)
+        if link is not None:
+            link.update(f"[cyan]{escape(result)}[/cyan]")
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "detail-close":

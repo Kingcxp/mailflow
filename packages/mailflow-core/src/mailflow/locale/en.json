@@ -96,6 +96,8 @@
         "accounts[].options": "Provider options: for imap set preset (qq/163/outlook/gmail) or imap_host and imap_port, plus username and password.",
         "accounts[].provider": "Mail source component id handling this mailbox (built in: imap, fake).",
         "general.auto_update": "Check once a day for MailFlow releases and plugin updates and install them automatically.",
+        "general.browser_mode": "How the TUI opens external web links: system uses the system browser; graphical renders inside the terminal via a Carbonyl service; disabled turns it off.",
+        "general.browser_render_url": "Base URL of a Carbonyl-compatible terminal render service (e.g. http://127.0.0.1:8080); required when browser_mode = graphical.",
         "general.cleanup_hour": "Local-time hour (0-23) at which the daily retention cleanup runs.",
         "general.cleanup_minute": "Local-time minute (0-59) at which the daily retention cleanup runs.",
         "general.language": "Default display language code (en, zh-CN, or an external pack).",
@@ -605,7 +607,11 @@
       "market_category_llm_backend": "LLM backends",
       "market_category_llm_enhancer": "LLM enhancers",
       "market_category_storage": "Storage",
-      "market_category_bot_exporter": "Bot exporters"
+      "market_category_bot_exporter": "Bot exporters",
+      "tui.browser_disabled": "Web links are disabled (general.browser_mode = disabled)",
+      "tui.browser_render_missing": "Graphical browser not configured: point general.browser_render_url at a Carbonyl render service",
+      "tui.browser_graphical_open": "Submitted to the terminal graphical browser; the rendered page shows on image-capable terminals",
+      "tui.browser_system_open": "Opened in the system browser"
     },
     "update": {
       "applied_title": "Applied updates",

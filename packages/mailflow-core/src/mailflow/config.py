@@ -143,6 +143,25 @@ class GeneralConfig(BaseModel):
         description="Language for LLM mail summaries/reasons/replies (e.g. zh-CN, en); "
         "empty follows the interface language",
     )
+    browser_mode: str = Field(
+        default="auto",
+        description=(
+            "How the TUI opens external web links: 'system' opens them in the "
+            "system browser, 'graphical' renders them inside the terminal via a "
+            "Carbonyl-compatible rendering service (needs browser_render_url), "
+            "'disabled' turns link-opening off. Default 'auto' behaves like "
+            "'system' when a graphical browser is available and falls back to "
+            "'system' otherwise."
+        ),
+    )
+    browser_render_url: str = Field(
+        default="",
+        description=(
+            "Base URL of a Carbonyl-compatible terminal web rendering service, "
+            "e.g. http://127.0.0.1:8080. Required when browser_mode = graphical. "
+            "Leave empty for system/disabled modes."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_timezone(self) -> GeneralConfig:
