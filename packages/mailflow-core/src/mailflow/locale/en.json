@@ -612,7 +612,9 @@
       "bots_qr_ok": "Logged in — writing the config…",
       "bots_qr_timeout": "Timed out waiting for the scan (2 min). Start NapCat and click Add again.",
       "bots_already_configured": "This NapCat instance is already configured",
-      "bots_configured_ok": "Configured {instance} (minimum_urgency=important)"
+      "bots_configured_ok": "Configured {instance} (minimum_urgency=important)",
+      "bots_detecting": "Detecting local bot runtimes…",
+      "bots_no_runtime": "No bot runtime (NapCat / WeChaty gateway) found on this machine. Start the service first, or fill the form manually."
     },
     "update": {
       "applied_title": "Applied updates",
