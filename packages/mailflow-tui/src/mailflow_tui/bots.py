@@ -285,11 +285,12 @@ class BotsPane(Vertical):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "bots-add":
-            self.run_worker(
-                self._auto_setup_flow(),
-                exclusive=True,
-                group="bots-setup",
-                exit_on_error=False,
+            # 先填表单：选渠道、填地址与目标；保存后进入连接引导
+            from mailflow_tui.settings import EntryFormScreen
+
+            self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
+                EntryFormScreen(self._service, "notifiers"),
+                callback=self._after_form,
             )
             return
         if button_id == "bots-delete":
@@ -301,68 +302,66 @@ class BotsPane(Vertical):
         # button handler or a down gateway freezes the whole UI
         self.run_worker(self._check_all(), exclusive=True, group="bots-check", exit_on_error=False)
 
-    async def _auto_setup_flow(self) -> None:
-        """Detect local runtimes and guide the user through setup; for
-        NapCat also drive the QR login inside the TUI."""
-        from mailflow_tui.settings import EntryFormScreen
-
-        status = self.query_one("#bots-status", Static)
-        status.update(self._service.t("tui.bots_detecting"))
-        found = await _probe_local_runtimes()
-        if not found:
-            status.update(f"[yellow]{self._service.t('tui.bots_no_runtime')}[/yellow]")
+    def _after_form(self, values: dict[str, Any] | None) -> None:
+        """Form saved → write the entry, then run the connection guide."""
+        if not values:
             return
-        # 探测到多个时优先 onebot
-        chosen = next((f for f in found if f["provider"] == "onebot"), found[0])
-        provider = chosen["provider"]
-        url = chosen["url"]
+        self.run_worker(
+            self._guide_after_save(values),
+            exclusive=True,
+            group="bots-setup",
+            exit_on_error=False,
+        )
+
+    async def _guide_after_save(self, values: dict[str, Any]) -> None:
+
+        provider = str(values.get("provider") or "")
+        options = dict(values.get("options") or {})
+        notifier_id = str(values.get("notifier_id") or "")
+        # 先持久化条目，再引导连接——失败也能保留配置供手动重试
+        await self._service.add_config_entry("notifiers", values)
+        self.refresh_data()
+        status = self.query_one("#bots-status", Static)
         if provider == "onebot":
-            # NapCat：先在 TUI 内完成扫码登录，成功后自动写入配置
+            url = str(options.get("http_url", "")).rstrip("/")
+            if not url:
+                status.update(
+                    f"[yellow]{self._service.t('tui.bots_no_url', provider='OneBot')}[/yellow]"
+                )
+                return
+            status.update(self._service.t("tui.bots_detecting"))
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
                 NapCatQrModal(self._service, url),
-                lambda base: self._finish_onebot_setup(str(base)) if base else None,
+                lambda base: self._mark_connected(str(base)) if base else None,
             )
             return
-        prefill: dict[str, Any] = {"provider": provider, "options": {}}
-        prefill["options"]["gateway_url"] = url
-        self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-            EntryFormScreen(self._service, "notifiers", values=prefill)
-        )
-        self.call_after_refresh(self.refresh_data)
-
-    def _finish_onebot_setup(self, base_url: str) -> None:
-        """Write the detected NapCat instance as a notifier and refresh."""
-
-        self.run_worker(self._persist_onebot(base_url), exclusive=True, group="bots-setup")
-
-    async def _persist_onebot(self, base_url: str) -> None:
-        notifiers = list(self._service.config.notifiers)
-        if any(
-            n.provider == "onebot"
-            and str(n.options.get("http_url", "")).rstrip("/") == base_url.rstrip("/")
-            for n in notifiers
-        ):
-            self.query_one("#bots-status", Static).update(
-                f"[green]{self._service.t('tui.bots_already_configured')}[/green]"
+        if provider == "wechaty":
+            url = str(options.get("gateway_url", "")).rstrip("/")
+            if not url:
+                status.update(
+                    f"[yellow]{self._service.t('tui.bots_no_url', provider='WeChaty')}[/yellow]"
+                )
+                return
+            status.update(self._service.t("tui.bots_detecting"))
+            self.run_worker(
+                self._verify_wechaty(notifier_id, url),
+                exclusive=True,
+                group="bots-setup",
+                exit_on_error=False,
             )
-            self.refresh_data()
             return
-        instance_id = "onebot"
-        suffix = 1
-        while any(n.notifier_id == instance_id for n in notifiers):
-            instance_id = f"onebot-{suffix}"
-            suffix += 1
-        values = {
-            "notifier_id": instance_id,
-            "provider": "onebot",
-            "enabled": True,
-            "minimum_urgency": "important",
-            "options": {"http_url": base_url},
-        }
-        await self._service.add_config_entry("notifiers", values)
-        self.query_one("#bots-status", Static).update(
-            f"[green]{self._service.t('tui.bots_configured_ok', instance=instance_id)}[/green]"
-        )
+        # openclaw / 其他：仅验证可达性
+        status.update(self._service.t("tui.bots_saved_manual"))
+        self.run_worker(self._check_all(), exclusive=True, group="bots-check", exit_on_error=False)
+
+    async def _verify_wechaty(self, notifier_id: str, url: str) -> None:
+        result = await _BotStatusProbe.probe("wechaty", {"gateway_url": url}, self._service.t)
+        status = self.query_one("#bots-status", Static)
+        status.update(f"[cyan]{self._service.t('tui.bots_verify_result', result=result)}[/cyan]")
+
+    def _mark_connected(self, base_url: str) -> None:
+        status = self.query_one("#bots-status", Static)
+        status.update(f"[green]{self._service.t('tui.bots_qr_ok')}[/green]")
         self.refresh_data()
 
     async def _delete_selected(self) -> None:

@@ -614,7 +614,10 @@
       "bots_already_configured": "This NapCat instance is already configured",
       "bots_configured_ok": "Configured {instance} (minimum_urgency=important)",
       "bots_detecting": "Detecting local bot runtimes…",
-      "bots_no_runtime": "No bot runtime (NapCat / WeChaty gateway) found on this machine. Start the service first, or fill the form manually."
+      "bots_no_runtime": "No bot runtime (NapCat / WeChaty gateway) found on this machine. Start the service first, or fill the form manually.",
+      "bots_no_url": "{provider} endpoint missing — fill it in the form and save",
+      "bots_saved_manual": "Saved; press Check to verify the connection",
+      "bots_verify_result": "Connection check: {result}"
     },
     "update": {
       "applied_title": "Applied updates",
