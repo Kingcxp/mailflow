@@ -760,7 +760,7 @@ ListEditScreen, EntryFormScreen {
 }
 
 #accounts-table, #llms-table {
-    height: 30%;
+    height: 1fr;
     margin: 0 1;
     border: round $primary;
 }
@@ -833,7 +833,7 @@ ListEditScreen, EntryFormScreen {
 }
 
 #notify-wrap {
-    height: 45%;
+    height: 1fr;
 }
 
 #notify-feed {
