@@ -617,7 +617,16 @@
       "bots_no_runtime": "未在本机发现机器人运行时（NapCat / WeChaty 网关）。请先启动对应服务，或手动填写配置。",
       "bots_no_url": "未填写{provider}服务地址，请在表单中填写后保存",
       "bots_saved_manual": "已保存配置；可点击“检测”验证连接",
-      "bots_verify_result": "连接检测：{result}"
+      "bots_verify_result": "连接检测：{result}",
+      "bots_wizard_title": "添加机器人平台",
+      "bots_wizard_pick": "选择要接入的平台：",
+      "bots_provider_onebot": "QQ（OneBot / NapCat）",
+      "bots_provider_wechaty": "微信（WeChaty 平板协议）",
+      "bots_provider_openclaw": "微信（OpenClaw）",
+      "bots_wizard_pick_first": "请先选择平台",
+      "bots_wizard_no_runtime": "未发现{provider}运行时，请先启动对应服务后重试",
+      "bots_wizard_manual_needed": "OpenClaw 暂不支持自动配置，请稍后手动添加",
+      "btn_next": "下一步"
     },
     "update": {
       "applied_title": "已应用的更新",

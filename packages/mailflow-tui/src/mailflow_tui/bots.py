@@ -16,7 +16,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Static
+from textual.widgets import Button, DataTable, Label, Select, Static
 
 
 class _BotStatusProbe:
@@ -110,6 +110,109 @@ async def _probe_local_runtimes() -> list[dict[str, str]]:
         if ok:
             found.append({"provider": kind, "url": url, "port": port})
     return found
+
+
+class _BotSetupWizard(ModalScreen[dict[str, Any] | None]):
+    """Two-step bot setup: pick the platform, then connect.
+
+    Step 1 asks only for the provider. Step 2 auto-detects a local
+    runtime (NapCat / WeChaty gateway), prefills the endpoint, and for
+    NapCat drives the QR login inside the TUI. The result is a fully
+    configured notifier — no manual endpoint entry required."""
+
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
+
+    def __init__(self, service: MailFlowService) -> None:
+        super().__init__()
+        self._service = service
+        self._provider = ""
+
+    def _t(self, key: str, **params: Any) -> str:
+        return self._service.t(key, **params)
+
+    def compose(self) -> ComposeResult:
+        yield Static(self._t("tui.bots_wizard_title"), id="wizard-title")
+        with Vertical(id="wizard-body"):
+            yield Label(self._t("tui.bots_wizard_pick"), id="wizard-pick-label")
+            yield Select(
+                [
+                    (self._t("tui.bots_provider_onebot"), "onebot"),
+                    (self._t("tui.bots_provider_wechaty"), "wechaty"),
+                    (self._t("tui.bots_provider_openclaw"), "openclaw-weixin"),
+                ],
+                id="wizard-provider",
+                allow_blank=False,
+            )
+            yield Static("", id="wizard-status")
+            with Horizontal(id="wizard-actions"):
+                yield Button(self._t("tui.btn_next"), id="wizard-next", variant="primary")
+                yield Button(self._t("tui.btn_cancel"), id="wizard-cancel", variant="error")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "wizard-cancel":
+            self.dismiss(None)
+            return
+        if event.button.id != "wizard-next":
+            return
+        select = self.query_one("#wizard-provider", Select)
+        value = select.value
+        if value is Select.NULL:
+            self.query_one("#wizard-status", Static).update(
+                f"[yellow]{self._t('tui.bots_wizard_pick_first')}[/yellow]"
+            )
+            return
+        self._provider = str(value)
+        self.run_worker(
+            self._connect_flow(), exclusive=True, group="wizard-connect", exit_on_error=False
+        )
+
+    async def _connect_flow(self) -> None:
+        status = self.query_one("#wizard-status", Static)
+        status.update(self._t("tui.bots_detecting"))
+        found = await _probe_local_runtimes()
+        url = next(
+            (f["url"] for f in found if f["provider"] == self._provider),
+            "",
+        )
+        if self._provider == "onebot":
+            if not url:
+                status.update(
+                    f"[yellow]{self._t('tui.bots_wizard_no_runtime', provider=self._t('tui.bots_provider_onebot'))}[/yellow]"
+                )
+                return
+            self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
+                NapCatQrModal(self._service, url),
+                callback=self._qr_done,
+            )
+            return
+        if self._provider == "wechaty":
+            if not url:
+                status.update(
+                    f"[yellow]{self._t('tui.bots_wizard_no_runtime', provider=self._t('tui.bots_provider_wechaty'))}[/yellow]"
+                )
+                return
+            await _BotStatusProbe.probe("wechaty", {"gateway_url": url}, self._t)
+            self.dismiss(
+                {
+                    "provider": "wechaty",
+                    "notifier_id": "wechaty",
+                    "options": {"gateway_url": url},
+                }
+            )
+            return
+        # openclaw：先探测，未探测到则提示手动（后续版本支持）
+        status.update(f"[yellow]{self._t('tui.bots_wizard_manual_needed')}[/yellow]")
+
+    def _qr_done(self, base_url: str | None) -> None:
+        if not base_url:
+            return
+        self.dismiss(
+            {
+                "provider": "onebot",
+                "notifier_id": "onebot",
+                "options": {"http_url": base_url},
+            }
+        )
 
 
 class NapCatQrModal(ModalScreen[str | None]):
@@ -285,12 +388,10 @@ class BotsPane(Vertical):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "bots-add":
-            # 先填表单：选渠道、填地址与目标；保存后进入连接引导
-            from mailflow_tui.settings import EntryFormScreen
-
+            # 向导：先选平台，下一步自动探测/预填/扫码，最后写配置
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-                EntryFormScreen(self._service, "notifiers"),
-                callback=self._after_form,
+                _BotSetupWizard(self._service),
+                callback=self._after_wizard,
             )
             return
         if button_id == "bots-delete":
@@ -302,15 +403,29 @@ class BotsPane(Vertical):
         # button handler or a down gateway freezes the whole UI
         self.run_worker(self._check_all(), exclusive=True, group="bots-check", exit_on_error=False)
 
-    def _after_form(self, values: dict[str, Any] | None) -> None:
-        """Form saved → write the entry, then run the connection guide."""
-        if not values:
+    def _after_wizard(self, result: dict[str, Any] | None) -> None:
+        """Wizard finished → persist the notifier and refresh."""
+        if not result:
             return
         self.run_worker(
-            self._guide_after_save(values),
+            self._persist_wizard_result(result),
             exclusive=True,
             group="bots-setup",
             exit_on_error=False,
+        )
+
+    async def _persist_wizard_result(self, result: dict[str, Any]) -> None:
+        values = {
+            "notifier_id": result.get("notifier_id") or "bot",
+            "provider": result.get("provider", ""),
+            "enabled": True,
+            "minimum_urgency": "important",
+            "options": result.get("options") or {},
+        }
+        await self._service.add_config_entry("notifiers", values)
+        self.refresh_data()
+        self.query_one("#bots-status", Static).update(
+            f"[green]{self._service.t('tui.bots_configured_ok', instance=values['notifier_id'])}[/green]"
         )
 
     async def _guide_after_save(self, values: dict[str, Any]) -> None:

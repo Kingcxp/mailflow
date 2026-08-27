@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import queue as queue_module
 import re
+import time
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, ClassVar, cast
@@ -1364,16 +1365,23 @@ class _RuntimePluginTable(DataTable[Any]):
 
     async def on_mouse_down(self, event: Any) -> None:
         await super()._on_mouse_down(event)  # pyright: ignore[reportAttributeAccessIssue]
-        if getattr(event, "chain", 1) < 2:
-            return
+        # MouseDown carries no click chain — detect the double-click by
+        # timing: a second press on the same row within 450ms is a
+        # double-click (Click events are stopped by DataTable before they
+        # bubble, so this is the only reliable signal).
+        now = time.monotonic()
         style = getattr(event, "style", None)
         meta = dict(style.meta or {}) if style is not None else {}
         row_index = meta.get("row")
         column_index = meta.get("column", 0) or 0
         if not isinstance(row_index, int) or row_index < 0 or row_index >= self.row_count:
+            self._last_click = (0.0, -1)
             return
-        key = self.coordinate_to_cell_key(Coordinate(row_index, column_index)).row_key
-        self._on_double_click(str(key.value))
+        last_time, last_row = getattr(self, "_last_click", (0.0, -1))  # pyright: ignore[reportUnknownVariableType]
+        self._last_click = (now, row_index)
+        if now - last_time <= 0.45 and last_row == row_index:
+            key = self.coordinate_to_cell_key(Coordinate(row_index, column_index)).row_key
+            self._on_double_click(str(key.value))
 
 
 class MarketDetailScreen(ModalScreen[Any]):

@@ -617,7 +617,16 @@
       "bots_no_runtime": "No bot runtime (NapCat / WeChaty gateway) found on this machine. Start the service first, or fill the form manually.",
       "bots_no_url": "{provider} endpoint missing — fill it in the form and save",
       "bots_saved_manual": "Saved; press Check to verify the connection",
-      "bots_verify_result": "Connection check: {result}"
+      "bots_verify_result": "Connection check: {result}",
+      "bots_wizard_title": "Add a bot platform",
+      "bots_wizard_pick": "Choose the platform:",
+      "bots_provider_onebot": "QQ (OneBot / NapCat)",
+      "bots_provider_wechaty": "WeChat (WeChaty pad protocol)",
+      "bots_provider_openclaw": "WeChat (OpenClaw)",
+      "bots_wizard_pick_first": "Pick a platform first",
+      "bots_wizard_no_runtime": "No {provider} runtime found — start the service and retry",
+      "bots_wizard_manual_needed": "OpenClaw auto-config is not supported yet — add it manually",
+      "btn_next": "Next"
     },
     "update": {
       "applied_title": "Applied updates",
