@@ -1,13 +1,28 @@
-"""WeChaty gateway notifier.
+"""WeChat notifier via a WeChaty-style gateway backed by the PAD protocol.
 
-Component id ``wechaty``. WeChaty itself is a bot runtime — MailFlow talks
-to a small HTTP gateway in front of it (the repository's
-``examples/wechaty-gateway.js`` contract, also satisfied by any bridge
-implementing the same two endpoints):
+Component id ``wechaty``. MailFlow talks to a small HTTP gateway in front
+of the pad-protocol client (WeChatFerry / PaPad / any bridge implementing
+the same two endpoints):
 
 - ``POST {gateway_url}/send``  body ``{"to": {"type": "contact"|"room",
   "name": …}, "text": …}``
 - ``GET  {gateway_url}/health``
+
+## Login: pad protocol required
+
+The official WeChaty ``puppet-wechat`` (web protocol) is defunct and
+carries a ban risk. Use a **pad protocol** client instead:
+
+1. Install and run **WeChatFerry** (github.com/lich0821/WeChatFerry) with
+   the bundled WeChat 3.9.x client, or a PaPad service; scan the QR to
+   log your bot account in.
+2. Run a thin bridge exposing the two endpoints above (the repository
+   ships ``examples/wechaty-gateway.js`` as a reference).
+3. Fill this notifier's ``gateway_url``/``token`` and press Check in the
+   Bots tab; the status column reports the login session.
+
+Only use a disposable account: non-official WeChat protocols are against
+ToS and any account may be banned.
 
 Options: ``gateway_url``, ``token`` (sent as ``Authorization: Bearer``),
 ``targets`` list of ``contact:<name>`` / ``room:<topic>``.

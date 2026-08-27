@@ -1295,6 +1295,28 @@ class LogsPane(Vertical):
                 log_view.write(line)
 
 
+def plugin_doc_readme(info: Any) -> str:
+    """Turn a plugin's module docstring into the market detail readme."""
+    try:
+        module = __import__(info.plugin_id.replace("-", "_"), fromlist=["plugin"])
+        doc = (module.__doc__ or "").strip()
+    except Exception:
+        doc = ""
+    if not doc:
+        return ""
+    lines: list[str] = []
+    for line in doc.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Options:"):
+            lines.append("")
+            lines.append("## Options")
+            continue
+        if stripped.startswith(("Component id", "Component id:")):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 class MarketDetailScreen(ModalScreen[Any]):
     """VS Code-style full-screen plugin detail: metadata, markdown readme
     and install/uninstall/enable/disable actions."""
@@ -1504,7 +1526,31 @@ class MarketPane(Vertical):
             self._loading = False
             self._set_status(str(exc))
             return
-        self._entries = entries
+        # locally installed plugins (bundled + local folders) are market
+        # entries too: they get a detail view with the plugin's own
+        # documentation, so providers can ship config docs
+        local_repo = Repository("local", "")
+        local_entries: list[tuple[Repository, MarketPlugin]] = []
+        seen = {plugin.id for _repo, plugin in entries}
+        for info in self._service.plugin_manager.enabled_infos():
+            if info.plugin_id in seen:
+                continue
+            local_entries.append(
+                (
+                    local_repo,
+                    MarketPlugin(
+                        id=info.plugin_id,
+                        name=info.name or info.plugin_id,
+                        version=info.version,
+                        description=info.description,
+                        categories=[],
+                        package=info.plugin_id,
+                        source="local",
+                        readme=plugin_doc_readme(info),
+                    ),
+                )
+            )
+        self._entries = [*entries, *local_entries]
         self._installed = {}  # re-derive install state for the new metadata
         self._loading = False
         self._render_entries()

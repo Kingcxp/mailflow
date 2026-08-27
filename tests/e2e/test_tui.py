@@ -360,8 +360,11 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             market_pane = app.query_one(MarketPane)
             await market_pane.refresh_market()
             market_table = cast(DataTable[Any], app.query_one("#market-table", DataTable))
-            assert market_table.row_count == 1
-            market_rows = " ".join(str(cell) for cell in market_table.get_row_at(0))
+            assert market_table.row_count >= 1
+            market_rows = " ".join(
+                " ".join(str(cell) for cell in market_table.get_row_at(i))
+                for i in range(market_table.row_count)
+            )
             assert "Market Test" in market_rows
             assert "browsable from the tui" in market_rows
             # reply modal: confirm is disabled until prepared
