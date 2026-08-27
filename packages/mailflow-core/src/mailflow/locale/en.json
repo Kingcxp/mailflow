@@ -598,7 +598,14 @@
       "tui.market_sort_category": "By category",
       "tui.market_sort_installed": "Installed first",
       "tui.market_sort_enabled": "Enabled first",
-      "tui.market_sort_not_installed": "Not installed first"
+      "tui.market_sort_not_installed": "Not installed first",
+      "tui.market_category_notifier": "Notifiers",
+      "tui.market_category_processor": "Processors",
+      "tui.market_category_mail_source": "Mail sources",
+      "tui.market_category_llm_backend": "LLM backends",
+      "tui.market_category_llm_enhancer": "LLM enhancers",
+      "tui.market_category_storage": "Storage",
+      "tui.market_category_bot_exporter": "Bot exporters"
     },
     "update": {
       "applied_title": "Applied updates",

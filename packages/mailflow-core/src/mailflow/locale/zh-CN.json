@@ -598,7 +598,14 @@
       "tui.market_sort_category": "按分类",
       "tui.market_sort_installed": "已安装优先",
       "tui.market_sort_enabled": "已启用优先",
-      "tui.market_sort_not_installed": "未安装优先"
+      "tui.market_sort_not_installed": "未安装优先",
+      "tui.market_category_notifier": "通知渠道",
+      "tui.market_category_processor": "处理器",
+      "tui.market_category_mail_source": "邮件源",
+      "tui.market_category_llm_backend": "大模型后端",
+      "tui.market_category_llm_enhancer": "大模型增强",
+      "tui.market_category_storage": "存储",
+      "tui.market_category_bot_exporter": "机器人导出"
     },
     "update": {
       "applied_title": "已应用的更新",

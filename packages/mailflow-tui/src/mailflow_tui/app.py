@@ -1546,6 +1546,14 @@ class MarketPane(Vertical):
         self._columns_done = False
         self._render_entries()
 
+    def _category_label(self, category: str) -> str:
+        """Localized label for a known plugin category id; unknown ids stay
+        as-is rather than guessing."""
+        translated = self._service.t(f"tui.market_category_{category}")
+        if translated != f"tui.market_category_{category}":
+            return translated
+        return category
+
     def _market_status_of(self, plugin: MarketPlugin) -> str:
         installed = self._installed.get(plugin.id)
         if installed is None:
@@ -1669,7 +1677,9 @@ class MarketPane(Vertical):
         if categories != getattr(self, "_categories", None):
             select = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
             if select is not None:
-                select.set_options([("all", "all"), *[(c, c) for c in categories]])  # pyright: ignore[reportUnknownMemberType]
+                select.set_options(  # pyright: ignore[reportUnknownMemberType]
+                    [("all", "all"), *[(self._category_label(c), c) for c in categories]]
+                )
                 self._categories = categories
         select = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
         desired = filter_value if filter_value in {*categories, "all"} else "all"
