@@ -12,8 +12,10 @@ from typing import Any, ClassVar
 import httpx
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
+from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Static
 
 
@@ -108,6 +110,113 @@ async def _probe_local_runtimes() -> list[dict[str, str]]:
         if ok:
             found.append({"provider": kind, "url": url, "port": port})
     return found
+
+
+class NapCatQrModal(ModalScreen[str | None]):
+    """Drives the NapCat QR login inside the TUI.
+
+    OneBot action ``get_qrcode`` returns the QR image; we render it as an
+    ASCII block (terminal-agnostic) and poll ``get_login_info`` until the
+    session comes online. Returns the OneBot base URL on success."""
+
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
+
+    def __init__(self, service: MailFlowService, base_url: str) -> None:
+        super().__init__()
+        self._service = service
+        self._base_url = base_url.rstrip("/")
+
+    def _t(self, key: str, **params: Any) -> str:
+        return self._service.t(key, **params)
+
+    def compose(self) -> ComposeResult:
+        yield Static(self._t("tui.bots_qr_title"), id="bots-qr-title")
+        yield Static("", id="bots-qr-image")
+        yield Static("", id="bots-qr-status")
+        with Horizontal(id="bots-qr-actions"):
+            yield Button(self._t("tui.btn_cancel"), id="bots-qr-cancel", variant="error")
+
+    async def on_mount(self) -> None:
+        self.run_worker(
+            self._login_loop(), exclusive=True, group="napcat-qr", exit_on_error=False
+        )
+
+    async def _login_loop(self) -> None:
+        headers = {"Content-Type": "application/json"}
+        for _ in range(120):  # 2 minutes of polling
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    qr = await client.post(
+                        f"{self._base_url}/get_qrcode", json={}, headers=headers
+                    )
+                    qr.raise_for_status()
+                    data = qr.json().get("data") or {}
+                    image = data.get("qrcode") or data.get("image") or ""
+                    if image:
+                        self.query_one("#bots-qr-image", Static).update(
+                            _ascii_qr(image)
+                        )
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    login = await client.post(
+                        f"{self._base_url}/get_login_info", json={}, headers=headers
+                    )
+                    login.raise_for_status()
+                    payload = login.json().get("data") or {}
+                    if payload.get("user_id"):
+                        self.query_one("#bots-qr-status", Static).update(
+                            f"[green]{self._t('tui.bots_qr_ok')}[/green]"
+                        )
+                        self.dismiss(self._base_url)
+                        return
+            except Exception as exc:
+                self.query_one("#bots-qr-status", Static).update(
+                    f"[yellow]{escape(str(exc)[:120])}[/yellow]"
+                )
+            await asyncio.sleep(1.0)
+        self.query_one("#bots-qr-status", Static).update(
+            f"[red]{self._t('tui.bots_qr_timeout')}[/red]"
+        )
+
+
+def _ascii_qr(image: str) -> str:
+    """Render a QR image payload as an ASCII block.
+
+    Accepts base64 PNG data or an image URL; the URL case is rendered as a
+    hint since the TUI cannot fetch binary images without extra deps."""
+    import base64 as _b64
+
+    if not image:
+        return "(empty)"
+    if image.startswith(("http://", "https://")):
+        return f"(qr image: {image[:80]})"
+    try:
+        raw = _b64.b64decode(image, validate=False)
+    except Exception:
+        return f"(qr payload {image[:40]}…)"
+    # PNG → 8x8 luminance blocks: decode the IDAT via zlib (small QR PNGs)
+    import struct
+    import zlib
+
+    try:
+        pos = raw.find(b"IDAT") + 4
+        compressed = raw[pos : raw.find(b"IEND")]
+        pixels = zlib.decompress(compressed)
+        width = struct.unpack(">I", raw[16:20])[0]
+        height = struct.unpack(">I", raw[20:24])[0]
+        # RGBA scanlines with a filter byte each; skip filter bytes
+        stride = width * 4 + 1
+        out: list[str] = []
+        for y in range(0, min(height, 40), 2):
+            row: list[str] = []
+            for x in range(0, min(width, 80), 2):
+                idx = y * stride + 1 + x * 4
+                if idx + 2 < len(pixels):
+                    r, g, b = pixels[idx], pixels[idx + 1], pixels[idx + 2]
+                    row.append("  " if (r + g + b) // 3 > 128 else "██")
+            out.append("".join(row))
+        return "\n".join(out) or "(qr)"
+    except Exception:
+        return f"(qr payload {len(raw)} bytes)"
 
 
 class BotsPane(Vertical):
@@ -213,15 +322,51 @@ class BotsPane(Vertical):
         chosen = next((f for f in found if f["provider"] == "onebot"), found[0])
         provider = chosen["provider"]
         url = chosen["url"]
-        prefill: dict[str, Any] = {"provider": provider, "options": {}}
         if provider == "onebot":
-            prefill["options"]["http_url"] = url
-        else:
-            prefill["options"]["gateway_url"] = url
+            # NapCat：先在 TUI 内完成扫码登录，成功后自动写入配置
+            self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
+                NapCatQrModal(self._service, url),
+                lambda base: self._finish_onebot_setup(str(base)) if base else None,
+            )
+            return
+        prefill: dict[str, Any] = {"provider": provider, "options": {}}
+        prefill["options"]["gateway_url"] = url
         self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
             EntryFormScreen(self._service, "notifiers", values=prefill)
         )
         self.call_after_refresh(self.refresh_data)
+
+    def _finish_onebot_setup(self, base_url: str) -> None:
+        """Write the detected NapCat instance as a notifier and refresh."""
+        from mailflow.config import NotifierConfig
+
+        self.run_worker(self._persist_onebot(base_url), exclusive=True, group="bots-setup")
+
+    async def _persist_onebot(self, base_url: str) -> None:
+        notifiers = list(self._service.config.notifiers)
+        if any(n.provider == "onebot" and str(n.options.get("http_url", "")).rstrip("/") == base_url.rstrip("/") for n in notifiers):
+            self.query_one("#bots-status", Static).update(
+                f"[green]{self._service.t('tui.bots_already_configured')}[/green]"
+            )
+            self.refresh_data()
+            return
+        instance_id = "onebot"
+        suffix = 1
+        while any(n.notifier_id == instance_id for n in notifiers):
+            instance_id = f"onebot-{suffix}"
+            suffix += 1
+        values = {
+            "notifier_id": instance_id,
+            "provider": "onebot",
+            "enabled": True,
+            "minimum_urgency": "important",
+            "options": {"http_url": base_url},
+        }
+        await self._service.add_config_entry("notifiers", values)
+        self.query_one("#bots-status", Static).update(
+            f"[green]{self._service.t('tui.bots_configured_ok', instance=instance_id)}[/green]"
+        )
+        self.refresh_data()
 
     async def _delete_selected(self) -> None:
         if getattr(self, "_selected_id", None) is None:
