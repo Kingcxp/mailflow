@@ -591,7 +591,14 @@
       "feedback_saved": "Feedback recorded: future analyses will follow it",
       "feedback_marker": "Rejected",
       "feedback_local_only": "Rejecting requires a local service (unsupported remotely)",
-      "detail_failed_note": "analysis failed"
+      "detail_failed_note": "analysis failed",
+      "tui.market_sort_label": "Sort",
+      "tui.market_sort_status": "By status",
+      "tui.market_sort_name": "By name",
+      "tui.market_sort_category": "By category",
+      "tui.market_sort_installed": "Installed first",
+      "tui.market_sort_enabled": "Enabled first",
+      "tui.market_sort_not_installed": "Not installed first"
     },
     "update": {
       "applied_title": "Applied updates",

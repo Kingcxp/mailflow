@@ -16,9 +16,11 @@ from mailflow.domain import ActionItem, MailRecord, ReplyDraft, Urgency
 from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
 from rich.text import Text as RichText
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.coordinate import Coordinate
 from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -606,7 +608,7 @@ class MailPane(Vertical):
         await self._show_selected()
 
     def _select_value(self, selector: str) -> str:
-        select = _typed_select(self, selector)
+        select = _typed_select(self, selector if selector.startswith("#") else f"#{selector}")
         if select is not None:
             value = select.value
             if value is not Select.NULL:
@@ -1192,6 +1194,40 @@ class RuntimePane(Vertical):
             f"{self._service.t('plugin.header_id')}: {plugin_id} — {status}"
         )
 
+    async def on_click(self, event: events.Click) -> None:
+        """Double-clicking a plugin row opens its market detail (readme +
+        install state) when the plugin ships one."""
+        if getattr(event, "chain", 1) < 2:
+            return
+        table = self._plugins_table()
+        if table is None:
+            return
+        meta: dict[str, Any] = dict(getattr(event, "meta", None) or {})
+        row_index = meta.get("row")
+        column_index = meta.get("column", 0) or 0
+        if not isinstance(row_index, int) or row_index < 0 or row_index >= table.row_count:
+            return
+        cell_key = table.coordinate_to_cell_key(Coordinate(row_index, column_index))
+        plugin_id = str(cell_key.row_key.value)
+        market_pane = self.query_one_optional(MarketPane)
+        plugin = None
+        if market_pane is not None:
+            for _repo, candidate in market_pane._entries:  # pyright: ignore[reportPrivateUsage]
+                if candidate.id == plugin_id:
+                    plugin = candidate
+                    break
+        if plugin is None:
+            try:
+                found = await asyncio.to_thread(self._service.market.find, plugin_id)
+            except Exception:
+                found = None
+            plugin = found[1] if found else None
+        if plugin is None:
+            return
+        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+            MarketDetailScreen(self._service, plugin)
+        )
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._selected_plugin is None:
             return
@@ -1428,6 +1464,18 @@ class MarketPane(Vertical):
                     id="market-search",
                 )
                 yield Select([], id="market-category")
+                yield Select(
+                    [
+                        (self._service.t("tui.market_sort_name"), "name"),
+                        (self._service.t("tui.market_sort_status"), "status"),
+                        (self._service.t("tui.market_sort_category"), "category"),
+                        (self._service.t("tui.market_sort_installed"), "installed"),
+                        (self._service.t("tui.market_sort_enabled"), "enabled"),
+                        (self._service.t("tui.market_sort_not_installed"), "not-installed"),
+                    ],
+                    id="market-sort",
+                    allow_blank=False,
+                )
             with Horizontal(id="market-controls-buttons"):
                 yield Button(
                     self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary"
@@ -1467,6 +1515,12 @@ class MarketPane(Vertical):
 
     def _market_table(self) -> DataTable[Any] | None:
         return self.query_one_optional("#market-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+
+    def _select_value(self, selector: str) -> str:
+        select = _typed_select(self, selector)
+        if select is not None and select.value is not Select.NULL:
+            return str(select.value)
+        return "name"
 
     def _set_status(self, text: str) -> None:
         status = self.query_one_optional("#market-status", Static)
@@ -1567,7 +1621,36 @@ class MarketPane(Vertical):
         search = self.query_one_optional("#market-search", Input)
         query = search.value.strip().lower() if search is not None else ""
         language = self._service.i18n.language
-        for _repo, plugin in self._entries:
+        sort_mode = self._select_value("#market-sort")
+        ordered = list(self._entries)
+        if sort_mode == "name":
+            ordered.sort(key=lambda item: (item[1].name or item[1].id).lower())
+        elif sort_mode == "category":
+            ordered.sort(key=lambda item: sorted(item[1].categories)[:1])
+        elif sort_mode == "installed":
+            ordered.sort(
+                key=lambda item: (
+                    not self._market_status_of(item[1]).startswith(
+                        self._service.t("plugin.installed")
+                    ),
+                    (item[1].name or item[1].id).lower(),
+                )
+            )
+        elif sort_mode == "enabled":
+            ordered.sort(
+                key=lambda item: (
+                    self._market_status_of(item[1]) != self._service.t("tui.plugin_status_enabled"),
+                    (item[1].name or item[1].id).lower(),
+                )
+            )
+        elif sort_mode == "not-installed":
+            ordered.sort(
+                key=lambda item: (
+                    self._market_status_of(item[1]).startswith(self._service.t("plugin.installed")),
+                    (item[1].name or item[1].id).lower(),
+                )
+            )
+        for _repo, plugin in ordered:
             if filter_value and filter_value != "all" and filter_value not in plugin.categories:
                 continue
             if query:
@@ -1634,7 +1717,7 @@ class MarketPane(Vertical):
             self._show_detail(plugin)
 
     async def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "market-category":
+        if event.select.id in ("market-category", "market-sort"):
             self._render_entries()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:

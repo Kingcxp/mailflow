@@ -318,31 +318,49 @@ DataTable > .datatable--cursor {
 }
 
 #market-controls {
-    padding: 0 1;
+    padding: 0 1 1 1;
+}
+
+#market-controls-top {
+    height: auto;
+    align-vertical: middle;
+}
+
+#market-controls-buttons {
+    height: auto;
+    margin-top: 1;
+    align-vertical: middle;
 }
 
 #market-search {
-    width: 50%;
+    width: 2fr;
+    margin-right: 1;
 }
 
 #market-category {
-    width: 24%;
+    width: 1fr;
+    margin-right: 1;
+}
+
+#market-sort {
+    width: 1fr;
 }
 
 #market-table {
-    height: 45%;
+    height: 1fr;
     border: round $primary;
 }
 
 #market-detail {
-    height: 45%;
+    height: 1fr;
     border: round $secondary;
     margin: 0 1;
 }
 
 #market-readme {
-    height: 80%;
+    height: 1fr;
     padding: 0 1;
+    overflow-y: auto;
 }
 
 #market-status {
@@ -362,7 +380,7 @@ DataTable > .datatable--cursor {
 }
 
 #runtime-plugins-table {
-    height: 8;
+    height: 1fr;
     border: round $primary;
     margin: 0 0 1 0;
 }
