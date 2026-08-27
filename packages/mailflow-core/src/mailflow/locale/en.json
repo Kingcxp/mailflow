@@ -613,7 +613,17 @@
       "tui.browser_graphical_open": "Submitted to the terminal graphical browser; the rendered page shows on image-capable terminals",
       "tui.browser_system_open": "Opened in the system browser",
       "tui.bots_detecting": "Detecting local bot runtimes…",
-      "tui.bots_no_runtime": "No bot runtime (NapCat / WeChaty gateway) found on this machine. Start the service first, or fill the form manually."
+      "tui.bots_no_runtime": "No bot runtime (NapCat / WeChaty gateway) found on this machine. Start the service first, or fill the form manually.",
+      "tui.bots_qr_title": "NapCat QR login (approximate rendering — widen the terminal for a clearer code)",
+      "tui.bots_qr_ok": "Logged in — writing the config…",
+      "tui.bots_qr_timeout": "Timed out waiting for the scan (2 min). Start NapCat and click Add again.",
+      "tui.bots_already_configured": "This NapCat instance is already configured",
+      "tui.bots_configured_ok": "Configured {instance} (minimum_urgency=important)",
+      "bots_qr_title": "NapCat QR login (approximate rendering — widen the terminal for a clearer code)",
+      "bots_qr_ok": "Logged in — writing the config…",
+      "bots_qr_timeout": "Timed out waiting for the scan (2 min). Start NapCat and click Add again.",
+      "bots_already_configured": "This NapCat instance is already configured",
+      "bots_configured_ok": "Configured {instance} (minimum_urgency=important)"
     },
     "update": {
       "applied_title": "Applied updates",
