@@ -442,6 +442,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             with Horizontal(classes="dialog-actions"):
                 if self._group == "llms" or self._group == "accounts":
                     yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
+                if self._group == "notifiers":
+                    # 选好提供商后进入连接引导（保持在同一表单内）
+                    yield Button(self._t("tui.btn_next"), id="entry-form-next", variant="primary")
                 yield Button(self._t("tui.btn_save"), id="entry-form-save", variant="success")
                 yield Button(self._t("tui.btn_back"), id="entry-form-back", variant="primary")
 
@@ -783,6 +786,17 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 self.run_worker(
                     self._test_llm(), exclusive=True, group="llm-test", exit_on_error=False
                 )
+            return
+        if button_id == "entry-form-next" and self._group == "notifiers":
+            # 表单内引导：收集当前值 → 保存并进入连接引导（保持同一表单）
+            try:
+                values = self._collect()
+            except SettingsError as exc:
+                self.query_one("#entry-form-status", Static).update(
+                    f"[red]{escape(exc.message)}[/red]"
+                )
+                return
+            self.dismiss({**self._values, **values, "_guided": True})
             return
         if button_id != "entry-form-save":
             return

@@ -350,9 +350,7 @@ class BotsPane(Vertical):
         table: DataTable[Any] = self.query_one("#bots-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         table.clear(columns=True)
         table.add_column(self._service.t("plugin.header_name"), key="name")
-        table.add_column(
-            self._service.t("plugin.market_provider", default="provider"), key="provider"
-        )
+        table.add_column(self._service.t("tui.market_provider", default="provider"), key="provider")
         table.add_column(self._service.t("tui.bots_targets"), key="targets")
         table.add_column(self._service.t("tui.bots_status"), key="status")
 
@@ -388,7 +386,7 @@ class BotsPane(Vertical):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "bots-add":
-            # 用原有表单（选渠道、填地址与目标）；保存后自动进入连接引导
+            # 表单内先选提供商，点“下一步”进入连接引导（同一表单界面）
             from mailflow_tui.settings import EntryFormScreen
 
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
@@ -406,19 +404,29 @@ class BotsPane(Vertical):
         self.run_worker(self._check_all(), exclusive=True, group="bots-check", exit_on_error=False)
 
     def _after_form(self, values: dict[str, Any] | None) -> None:
-        """Form saved → write the entry, then run the connection guide."""
+        """Form dismissed → persist and run the connection guide."""
         if not values:
             return
+        guided = values.pop("_guided", False)
         self.run_worker(
-            self._guide_after_save(values),
+            self._guide_after_save(values, guided=guided),
             exclusive=True,
             group="bots-setup",
             exit_on_error=False,
         )
 
-    async def _guide_after_save(self, values: dict[str, Any]) -> None:
+    async def _guide_after_save(self, values: dict[str, Any], guided: bool = False) -> None:
         provider = str(values.get("provider") or "")
         options = dict(values.get("options") or {})
+        # 探测本地运行时并预填缺失的端点（引导模式）
+        if guided:
+            found = await _probe_local_runtimes()
+            match = next((f for f in found if f["provider"] == provider), None)
+            if match is not None:
+                key = "http_url" if provider == "onebot" else "gateway_url"
+                if not str(options.get(key, "")).strip():
+                    options[key] = match["url"]
+                    values["options"] = options
         await self._service.add_config_entry("notifiers", values)
         self.refresh_data()
         status = self.query_one("#bots-status", Static)
