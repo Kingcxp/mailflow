@@ -406,7 +406,7 @@ DataTable > .datatable--cursor {
 #runtime-llms,
 #runtime-bindings,
 #runtime-storage {
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 
 /* plugin scaffold wizard */

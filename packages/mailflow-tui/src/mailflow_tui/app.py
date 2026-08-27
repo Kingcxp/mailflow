@@ -1353,19 +1353,21 @@ def plugin_doc_readme(info: Any) -> str:
 class _RuntimePluginTable(DataTable[Any]):
     """DataTable whose double-click opens the plugin detail.
 
-    Textual's DataTable stops Click events after handling them, so a
-    double-click can never bubble up to the pane — the table itself
-    recognizes the second click of the chain and calls back."""
+    Textual's DataTable stops Click events while handling them, so the
+    double-click never reaches the pane; MouseDown, however, is delivered
+    before Click synthesis and is not stopped — recognize the second
+    MouseDown of the chain here and call back with the row key."""
 
     def __init__(self, on_double_click: Any, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._on_double_click = on_double_click
 
-    async def _on_click(self, event: Any) -> None:
-        await super()._on_click(event)
+    async def on_mouse_down(self, event: Any) -> None:
+        await super()._on_mouse_down(event)  # pyright: ignore[reportAttributeAccessIssue]
         if getattr(event, "chain", 1) < 2:
             return
-        meta: dict[str, Any] = dict(getattr(event, "meta", None) or {})
+        style = getattr(event, "style", None)
+        meta = dict(style.meta or {}) if style is not None else {}
         row_index = meta.get("row")
         column_index = meta.get("column", 0) or 0
         if not isinstance(row_index, int) or row_index < 0 or row_index >= self.row_count:
