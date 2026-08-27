@@ -128,6 +128,47 @@ mailbox history browser (analyze a picked mail, skip a known one), the
 repository dialog's Back button, and that a processed-mail event refreshes the
 panes without a manual refresh.
 
+## Opening web links (browser_mode)
+
+`general.browser_mode` controls how the TUI opens external web links
+(plugin homepage, documentation links in readmes):
+
+- `system` (default): the system browser via `webbrowser` — works on
+  desktop hosts; on headless servers this silently does nothing visible.
+- `graphical`: renders the page inside the terminal through a
+  **Carbonyl-compatible rendering service**; set `general.browser_render_url`
+  to its base URL (e.g. `http://127.0.0.1:8080`). The service renders the
+  page server-side and streams a terminal-compatible representation
+  (Sixel / Kitty graphics or ANSI text) to the TUI.
+- `disabled`: link clicks show an explanatory status instead of opening.
+
+### Running a Carbonyl render service
+
+For headless hosts (PVE LXC containers, servers) run Carbonyl as a
+service that the TUI calls:
+
+```bash
+# example: dockerized carbonyl (graphical render endpoint)
+docker run -d -p 8080:8080 --name carbonyl \
+  fathyb/carbonyl --chromium-arg=--no-sandbox
+```
+
+Then set in the config:
+
+```toml
+[general]
+browser_mode = "graphical"
+browser_render_url = "http://127.0.0.1:8080"
+```
+
+Notes:
+
+- The terminal must support the image protocol Carbonyl emits (Kitty
+  graphics or Sixel); otherwise fall back to `system` mode.
+- Any service implementing Carbonyl's render contract (`GET {render}/{url}`
+  returning terminal-renderable output) can be used in place of Carbonyl.
+- `browser_mode` changes apply on restart.
+
 ## Remote mode and embedded server
 
 `mailflow tui --local` starts the TUI together with the embedded
