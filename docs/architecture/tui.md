@@ -15,10 +15,16 @@ without it the service has no file to write to.
 ## Tabs
 
 - **Mail**: search `Input` with placeholder; urgency-colored `DataTable`
-  (■ + value in the contract color); detail pane with summary, reason,
-  action items, **original body** and processor notes; urgency `Select`
-  with a one-line help tooltip (`ad`/`info`/`important`/`urgent`/`auto`);
-  Refresh / Trash / Reply buttons. Reply opens the confirmation-gated modal.
+  (■ + value in the contract color) that fills the pane height; the scrollable
+  detail pane shows summary, reason, action items, the **original body**
+  (HTML rendered as text, binary attachment payloads detected and replaced
+  by an explanatory note, bodies truncated at 4000 chars), attachment
+  metadata (name/type/size) and failed processor notes. The bottom control
+  row holds the three selects (manual urgency — a localized
+  `ad/info/important/urgent/follow-automatic` dropdown that mirrors the
+  selected mail — plus urgency filter and sort) and a two-row button
+  container (refresh/trash/feedback then reply/re-analyze/re-analyze-failed)
+  with equal-width buttons. Reply opens the confirmation-gated modal.
 - **Mailboxes** (`settings.py: AccountsPane`): accounts table with
   Add / Edit / Delete (forms, not TOML editing) plus the **history browser** —
   Load history pages a mailbox newest-first through
@@ -32,10 +38,13 @@ without it the service has no file to write to.
   analysis receives (`feedback.guidelines`, most recent 20 kept), and the
   detail view marks the mail with its rejection reason.
 - **Actions**: time / type / content / notes / source-mail columns; row
-  selection opens a detail modal; **Delete** removes the selected entry.
-  User-created todos are deleted for real; mail-derived todos are dismissed
-  by their stable identity (mail id + due time + type), so re-analyzing the
-  source mail keeps them hidden instead of resurrecting them.
+  selection opens a detail modal that fills the screen — a scrollable box
+  with the action plus the **source mail** (subject, sender, date, analysis
+  summary/reason and the original body, HTML-as-text) and a close button
+  pinned outside the scroll area. **Delete** removes the selected entry:
+  user-created todos are deleted for real, mail-derived ones are dismissed
+  by their stable identity (mail id + due time + type) so re-analyzing the
+  source mail keeps them hidden.
 - **LLMs** (`settings.py: LLMPane`): the ordered fallback chain. Add / Edit /
   Delete plus Move up / Move down; the first row is the default and each row
   falls back to the ones below it, so `default` and `fallback` are never typed
@@ -45,18 +54,24 @@ without it the service has no file to write to.
   `mailflow.mail.processed` event. Raw LLM request logging lives in the main
   Logs tab — the router and backends log routing decisions and retries at
   INFO so the full LLM activity is visible there.
-- **Runtime**: a plugins table (id/name/kinds/status) with quick
-  Disable/Enable buttons (persisted, applies on next start), plus mail
-  adapters, accounts (status/errors), LLMs, processor → LLM/fallback
-  bindings and storage provider — all read from the service snapshot.
-- **Market**: VS Code-style plugin store — search input, category filter,
-  a list of plugin name + description + version + status, and a detail pane
-  rendering the plugin's markdown readme with Install / Uninstall / Enable /
-  Disable buttons acting on the selected plugin. The repository fetch runs in
-  an exclusive worker, and search/category filtering renders from the cached
-  entries, so the UI stays interactive and typing never triggers a network
-  round-trip per keystroke. **New** opens the plugin wizard (`scaffold.py`);
-  **Export** opens the bot-framework export wizard (`export.py`).
+- **Runtime**: a plugins table (id/name/kinds/status) filling the pane
+  height with quick Disable/Enable/Uninstall buttons, plus mail adapters,
+  accounts (status/errors), LLMs, processor → LLM/fallback bindings and
+  storage provider — all read from the service snapshot. **Double-clicking
+  a plugin row opens the same plugin-detail dialog as the Market tab.**
+  Every pane loads asynchronously (mount workers) so startup never blocks.
+- **Market**: VS Code-style plugin store — search input, localized category
+  filter (known ids render through the language packs), a **sort dropdown**
+  (name / status / category / installed-first / enabled-first /
+  not-installed-first), a list of plugin name + description + version +
+  status, and a detail pane rendering the plugin's markdown readme
+  (scrollable; links are clickable and route through `general.browser_mode`)
+  with Install / Uninstall / Enable / Disable buttons. **Locally installed
+  and bundled plugins appear as entries too**, their docstrings becoming the
+  detail readme, so chat providers can ship setup docs. The repository fetch
+  runs in an exclusive worker and filtering renders from the cached entries.
+  **New** opens the plugin wizard (`scaffold.py`); **Export** opens the
+  bot-framework export wizard (`export.py`).
 - **Export wizard** (`BotExportScreen`): framework `Select` (every
   registered `BOT_EXPORTER` plugin), `DirectoryTree` folder pick, optional
   subfolder checkbox + input, and a Generate button running
@@ -185,9 +200,12 @@ require a locally attached service.
 ## Bots tab
 
 The Bots tab lists configured onebot/wechaty/openclaw-weixin notifier
-instances and probes their login state on demand. QR scanning happens
-in the bot runtime itself (NapCat, WeChaty gateway, OpenClaw); the tab
-verifies the session MailFlow sends through. The add form is a real
+instances (table fills the tab height) and probes their login state on
+demand with **concurrent** checks run in a worker. QR scanning happens in
+the bot runtime itself (NapCat, WeChaty via the **pad protocol** — see the
+plugin's market doc, OpenClaw); the tab verifies the session MailFlow sends
+through. Probe statuses are localized (logged-in-as / online / unreachable /
+HTTP status). The add form is a real
 `EntryFormScreen`: the provider is a dropdown limited to the IM providers,
 each provider renders its own option fields (endpoint URL, token, targets)
 with bilingual descriptions, and a help line above the table explains the

@@ -134,7 +134,33 @@ All notable changes are recorded here; the format follows
   into every future LLM analysis, so the same mistake is not repeated.
   The detail view shows the rejection reason; remote mode is unsupported.
 
+### Changed
+
+- Mail tab controls: the three selects (manual urgency / filter / sort)
+  share the row with a two-row equal-width button container; the urgency
+  dropdown mirrors the selected mail and its options are localized.
+- Market tab: sort dropdown (name/status/category/installed-first/
+  enabled-first/not-installed-first), localized category filter labels,
+  locally installed/bundled plugins appear as entries with their
+  docstring as the detail readme, plugin-readme links are clickable and
+  route through `general.browser_mode` (system / Carbonyl terminal
+  rendering / disabled).
+- Runtime tab: double-clicking a plugin row opens the same plugin-detail
+  dialog as the Market tab (a DataTable subclass recognizes the second
+  click of the chain — the stock widget stops Click events at the table).
+- All panes load asynchronously on mount (exclusive workers) with
+  serialized refresh locks; the mail table renders in 50-row chunks so
+  large mailboxes never freeze the UI.
+
 ### Fixed
+
+- `general.browser_mode` / `browser_render_url` were missing from the
+  option-description generator (bilingual `config.desc` entries are
+  test-enforced) — added and regenerated.
+- The todo detail modal's close button was inside the scroll box and
+  could scroll away; it now lives in a pinned footer and the preview
+  fills the modal.
+
 
 - Urgent notifications survive transient transport failures: the runtime
   retries each notifier three times (2s/4s backoff) before logging the
