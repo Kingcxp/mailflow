@@ -137,25 +137,19 @@ class NapCatQrModal(ModalScreen[str | None]):
             yield Button(self._t("tui.btn_cancel"), id="bots-qr-cancel", variant="error")
 
     async def on_mount(self) -> None:
-        self.run_worker(
-            self._login_loop(), exclusive=True, group="napcat-qr", exit_on_error=False
-        )
+        self.run_worker(self._login_loop(), exclusive=True, group="napcat-qr", exit_on_error=False)
 
     async def _login_loop(self) -> None:
         headers = {"Content-Type": "application/json"}
         for _ in range(120):  # 2 minutes of polling
             try:
                 async with httpx.AsyncClient(timeout=8.0) as client:
-                    qr = await client.post(
-                        f"{self._base_url}/get_qrcode", json={}, headers=headers
-                    )
+                    qr = await client.post(f"{self._base_url}/get_qrcode", json={}, headers=headers)
                     qr.raise_for_status()
                     data = qr.json().get("data") or {}
                     image = data.get("qrcode") or data.get("image") or ""
                     if image:
-                        self.query_one("#bots-qr-image", Static).update(
-                            _ascii_qr(image)
-                        )
+                        self.query_one("#bots-qr-image", Static).update(_ascii_qr(image))
                 async with httpx.AsyncClient(timeout=8.0) as client:
                     login = await client.post(
                         f"{self._base_url}/get_login_info", json={}, headers=headers
@@ -338,13 +332,16 @@ class BotsPane(Vertical):
 
     def _finish_onebot_setup(self, base_url: str) -> None:
         """Write the detected NapCat instance as a notifier and refresh."""
-        from mailflow.config import NotifierConfig
 
         self.run_worker(self._persist_onebot(base_url), exclusive=True, group="bots-setup")
 
     async def _persist_onebot(self, base_url: str) -> None:
         notifiers = list(self._service.config.notifiers)
-        if any(n.provider == "onebot" and str(n.options.get("http_url", "")).rstrip("/") == base_url.rstrip("/") for n in notifiers):
+        if any(
+            n.provider == "onebot"
+            and str(n.options.get("http_url", "")).rstrip("/") == base_url.rstrip("/")
+            for n in notifiers
+        ):
             self.query_one("#bots-status", Static).update(
                 f"[green]{self._service.t('tui.bots_already_configured')}[/green]"
             )
