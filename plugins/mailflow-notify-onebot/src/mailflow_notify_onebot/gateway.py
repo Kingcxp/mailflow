@@ -166,9 +166,15 @@ def _detect_qq() -> str | None:
         # fall back to the running QQ process
         try:
             result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-Process QQ -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path)"],
-                capture_output=True, text=True, timeout=10,
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "(Get-Process QQ -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path)",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             path = (result.stdout or "").strip()
             if path and Path(path).exists():
@@ -270,9 +276,11 @@ class NapCatProvisioner:
             )
         target = _instance_dir(instance_id)
         if await asyncio.to_thread(
-            lambda: _path_exists(target / "package.json")
-            or _path_exists(target / "main")
-            or (os.name != "nt" and _path_exists(_QQ_INSTALL_DIR / "qq"))
+            lambda: (
+                _path_exists(target / "package.json")
+                or _path_exists(target / "main")
+                or (os.name != "nt" and _path_exists(_QQ_INSTALL_DIR / "qq"))
+            )
         ):
             logger.info("napcat %s already installed at %s", instance_id, target)
             return
@@ -312,9 +320,7 @@ class NapCatProvisioner:
             archive.unlink(missing_ok=True)
         logger.info("napcat %s: installed %d files at %s", instance_id, len(entries), target)
 
-    async def _install_linux_qq(
-        self, instance_id: str, options: dict[str, Any]
-    ) -> None:
+    async def _install_linux_qq(self, instance_id: str, options: dict[str, Any]) -> None:
         """Install xvfb/xauth and the Linux QQ deb (root required)."""
         import shutil as _sh
 
@@ -389,9 +395,9 @@ class NapCatProvisioner:
         loader = qq_app / "loadNapCat.cjs"
         loader.write_text(
             'const path = require("path");\n'
-            'const CurrentPath = path.dirname(__filename);\n'
+            "const CurrentPath = path.dirname(__filename);\n"
             'const hasNapcatParam = process.argv.includes("--no-sandbox");\n'
-            'if (hasNapcatParam) {\n'
+            "if (hasNapcatParam) {\n"
             '  (async () => { await import("file://" + path.join(CurrentPath, "./napcat/napcat.mjs")); })();\n'
             "} else {\n"
             '  require("./application/app_launcher/index.js");\n'
