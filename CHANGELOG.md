@@ -53,6 +53,12 @@ All notable changes are recorded here; the format follows
   — the OneBot HTTP API only listens after the QQ session logs in, which
   is now stated in the error. Already-running gateways on the target
   port are reused instead of starting a conflicting process.
+- NapCat auto-deploy works on headless Linux (Debian containers):
+  installs xvfb + xauth + the Linux QQ deb, places NapCat.Shell inside
+  QQ's resources/app, patches the app entry (official BootWay03 flow)
+  and launches `xvfb-run qq --no-sandbox`. Windows keeps the inject
+  mode via NapCatWinBootMain.exe. Without a QQ client the error now
+  says so immediately instead of timing out.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

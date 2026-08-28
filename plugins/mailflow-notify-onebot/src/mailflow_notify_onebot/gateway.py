@@ -39,6 +39,11 @@ _NAPCAT_VERSION = "4.18.19"
 _NAPCAT_ASSET = "NapCat.Shell.zip"
 _NAPCAT_API = "https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest"
 _NAPCAT_SIZE_MB = 29.5  # approximate; the log is informational
+# Linux QQ (NTQQ) deb; headless containers run it under xvfb. The URL is a
+# known rolling build; override with options.qq_deb_url if it moves.
+_QQ_DEB_URL = "https://dldir1.qq.com/qqfile/qq/QQNT/Linux/QQ_3.2.15_240902_x86_64_01.deb"
+_QQ_INSTALL_DIR = Path("/opt/QQ")
+_WEBUI_PORT = 6099
 _BASE_PORT = 3000
 _READY_TIMEOUT = 30.0
 
@@ -53,6 +58,11 @@ def _data_root() -> Path:
     """Gateway data root; mirrors the storage db directory layout."""
     # resolve from the current working directory like the rest of the app
     return Path("data") / "gateways"
+
+
+def _path_exists(path: Path) -> bool:
+    """Sync existence check (Path.exists in async functions trips ASYNC240)."""
+    return path.exists()
 
 
 def _safe_token(instance_id: str) -> str:
@@ -116,6 +126,58 @@ def _find_node() -> str | None:
     except ValueError:
         return None
     return node if major >= 18 else None
+
+
+def _detect_qq() -> str | None:
+    """Path to a local QQ client (NapCat injects into it).
+
+    Windows: registry UninstallString like the official launcher.bat, or
+    the QQ process path. Linux: qq / linuxqq on PATH. None when no QQ
+    client is found — NapCat cannot work without one.
+    """
+    import os
+    import shutil
+
+    if os.name == "nt":
+        try:
+            import winreg
+
+            keys = [
+                r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\QQ",
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\QQ",
+            ]
+            for key in keys:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as handle:
+                        value, _ = winreg.QueryValueEx(handle, "UninstallString")
+                    path = str(value)
+                    # UninstallString points into the QQ install dir
+                    import re as _re
+
+                    m = _re.search(r"(?i)([A-Za-z]:\\[^\\]*)", path)
+                    if m:
+                        candidate = Path(m.group(1)) / "QQ.exe"
+                        if candidate.exists():
+                            return str(candidate)
+                except OSError:
+                    continue
+        except Exception:
+            pass
+        # fall back to the running QQ process
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-Process QQ -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path)"],
+                capture_output=True, text=True, timeout=10,
+            )
+            path = (result.stdout or "").strip()
+            if path and Path(path).exists():
+                return path
+        except Exception:
+            pass
+        return None
+    # POSIX: look for the Linux QQ binaries
+    return shutil.which("qq") or shutil.which("linuxqq")
 
 
 class NapCatProvisioner:
@@ -199,22 +261,39 @@ class NapCatProvisioner:
         return False
 
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:
+        import os
+
         node = _find_node()
         if node is None:
             raise RuntimeError(
                 "NapCat needs Node.js >= 18; install Node first (or set options.node_path)"
             )
         target = _instance_dir(instance_id)
-        if (target / "package.json").exists() or (target / "main").exists():
+        if await asyncio.to_thread(
+            lambda: _path_exists(target / "package.json")
+            or _path_exists(target / "main")
+            or (os.name != "nt" and _path_exists(_QQ_INSTALL_DIR / "qq"))
+        ):
             logger.info("napcat %s already installed at %s", instance_id, target)
             return
         target.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            # Linux headless: install xvfb + the Linux QQ deb, then place
+            # NapCat.shell inside QQ's resources/app/napcat and patch the
+            # app entry point (official BootWay03 flow).
+            await self._install_linux_qq(instance_id, options)
+            await self._install_napcat_package(instance_id, options, target)
+            return
+        await self._install_napcat_package(instance_id, options, target)
+
+    async def _install_napcat_package(
+        self, instance_id: str, options: dict[str, Any], target: Path
+    ) -> None:
+        """Download + unpack the NapCat.Shell package into ``target``."""
         requested = str(options.get("napcat_version") or "").strip()
         if requested == "latest":
             version = _latest_napcat_version()
         else:
-            # pinned default (or an explicit tag): no GitHub API call, so
-            # installs cannot hit the anonymous rate limit
             version = requested or _NAPCAT_VERSION
         url = _release_url(version)
         archive = target / "napcat.zip"
@@ -232,6 +311,94 @@ class NapCatProvisioner:
         finally:
             archive.unlink(missing_ok=True)
         logger.info("napcat %s: installed %d files at %s", instance_id, len(entries), target)
+
+    async def _install_linux_qq(
+        self, instance_id: str, options: dict[str, Any]
+    ) -> None:
+        """Install xvfb/xauth and the Linux QQ deb (root required)."""
+        import shutil as _sh
+
+        if _sh.which("xvfb-run") is None:
+            logger.info("napcat %s: installing xvfb + xauth…", instance_id)
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["apt-get", "update", "-qq"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"apt-get update failed: {(result.stderr or result.stdout).strip()[:300]}"
+                )
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["apt-get", "install", "-y", "-qq", "xvfb", "xauth"],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"apt-get install xvfb failed: {(result.stderr or result.stdout).strip()[:300]}"
+                )
+        if not _path_exists(_QQ_INSTALL_DIR) or not _path_exists(_QQ_INSTALL_DIR / "qq"):
+            logger.info("napcat %s: downloading Linux QQ…", instance_id)
+            deb_url = str(options.get("qq_deb_url") or _QQ_DEB_URL)
+            deb_path = Path("/tmp") / f"qq-{instance_id}.deb"
+            await asyncio.to_thread(self._download, deb_url, deb_path)
+            logger.info("napcat %s: installing QQ deb…", instance_id)
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["apt-get", "install", "-y", "-qq", str(deb_path)],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            deb_path.unlink(missing_ok=True)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"QQ deb install failed: {(result.stderr or result.stdout).strip()[:300]}"
+                )
+        # place NapCat inside QQ's app dir
+        qq_app = _QQ_INSTALL_DIR / "resources" / "app"
+        napcat_dir = qq_app / "napcat"
+        if not _path_exists(napcat_dir / "napcat.mjs"):
+            qq_app.mkdir(parents=True, exist_ok=True)
+            requested = str(options.get("napcat_version") or "").strip()
+            version = requested or _NAPCAT_VERSION
+            archive = Path("/tmp") / f"napcat-{instance_id}.zip"
+            await asyncio.to_thread(self._download, _release_url(version), archive)
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(napcat_dir)
+            archive.unlink(missing_ok=True)
+            logger.info("napcat %s: NapCat placed at %s", instance_id, napcat_dir)
+        # patch package.json main -> loadNapCat.cjs (BootWay03)
+        pkg = qq_app / "package.json"
+        if _path_exists(pkg):
+            text = pkg.read_text(encoding="utf-8", errors="replace")
+            if "loadNapCat.cjs" not in text:
+                import re as _re
+
+                patched = _re.sub(
+                    r'"main"\s*:\s*"[^"]*"', '"main": "./loadNapCat.cjs"', text, count=1
+                )
+                pkg.write_text(patched, encoding="utf-8")
+                logger.info("napcat %s: patched QQ package.json main", instance_id)
+        # write the loader that imports napcat.mjs when --no-sandbox is passed
+        loader = qq_app / "loadNapCat.cjs"
+        loader.write_text(
+            'const path = require("path");\n'
+            'const CurrentPath = path.dirname(__filename);\n'
+            'const hasNapcatParam = process.argv.includes("--no-sandbox");\n'
+            'if (hasNapcatParam) {\n'
+            '  (async () => { await import("file://" + path.join(CurrentPath, "./napcat/napcat.mjs")); })();\n'
+            "} else {\n"
+            '  require("./application/app_launcher/index.js");\n'
+            "}\n",
+            encoding="utf-8",
+        )
+        logger.info("napcat %s: Linux QQ + NapCat ready", instance_id)
 
     @staticmethod
     def _download(url: str, destination: Path) -> None:
@@ -265,14 +432,17 @@ class NapCatProvisioner:
 
         NapCat.Shell ships `napcat.mjs` at the root (with package.json
         next to it); older layouts used main.js or a nested
-        NapCat.Shell/main.js — try them in order.
+        NapCat.Shell/main.js — try them in order. Returns an ABSOLUTE
+        path: node resolves a relative script against the child's cwd,
+        which would double the data/gateways prefix.
         """
+        base = target.resolve()
         candidates = [
-            target / "napcat.mjs",
-            target / "loadNapCat.js",
-            target / "main.js",
-            target / "NapCat.Shell" / "main.js",
-            target / "bin" / "main.js",
+            base / "napcat.mjs",
+            base / "loadNapCat.js",
+            base / "main.js",
+            base / "NapCat.Shell" / "main.js",
+            base / "bin" / "main.js",
         ]
         for candidate in candidates:
             if candidate.exists():
@@ -280,11 +450,26 @@ class NapCatProvisioner:
         raise RuntimeError(f"napcat {instance_id}: no entry point found under {target}")
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
+        import os
+
         node = _find_node()
         if node is None:
             raise RuntimeError("NapCat needs Node.js >= 18; install Node first")
+        if os.name == "nt":
+            qq = _detect_qq()
+            if qq is None:
+                raise RuntimeError(
+                    "NapCat needs a local QQ client to log in (it injects "
+                    "into QQ's process), but none was found on this machine. "
+                    "Install QQ for your platform first."
+                )
+        elif not _path_exists(_QQ_INSTALL_DIR / "qq"):
+            raise RuntimeError(
+                "NapCat is not installed on this Linux host: run the "
+                "auto-install first (it installs Linux QQ + xvfb + NapCat)."
+            )
         target = _instance_dir(instance_id)
-        if not target.exists():
+        if not _path_exists(target):
             raise RuntimeError(f"napcat {instance_id} is not installed")
         port = int(options.get("port") or self._port_for(instance_id))
         # already running on this port (another instance or a self-hosted
@@ -323,24 +508,37 @@ class NapCatProvisioner:
             ),
             encoding="utf-8",
         )
-        # launch: NapCat shell entry. Run as a standalone node process
-        # (NAPCAT_FORCE_NODE_PROCESS) so no QQ injection is required to
-        # start; stdout/stderr go to a per-instance log file so startup
-        # failures are diagnosable instead of invisible.
         entry: Path | None = await asyncio.to_thread(self._find_entry, target, instance_id)
         assert entry is not None
         env = dict(options.get("env") or {})
         env.setdefault("NAPCAT_UID", instance_id)
         env.setdefault("NAPCAT_PORT", str(port))
-        env.setdefault("NAPCAT_FORCE_NODE_PROCESS", "1")
         log_file = target / "napcat.log"
 
         def _launch() -> subprocess.Popen[Any]:
             with open(log_file, "ab") as handle:
-                # the child inherits the fd; closing the parent copy is fine
+                if os.name == "nt":
+                    # Windows with a QQ client: inject like the official
+                    # launcher.bat (NapCatWinBootMain.exe starts QQ with
+                    # the hook), the only mode where NapCat's worker runs.
+                    assert qq is not None
+                    boot_main = target / "NapCatWinBootMain.exe"
+                    hook = target / "NapCatWinBootHook.dll"
+                    env.setdefault("NAPCAT_PATCH_PACKAGE", str(target / "qqnt.json"))
+                    env.setdefault("NAPCAT_LOAD_PATH", str(target / "loadNapCat.js"))
+                    env.setdefault("NAPCAT_INJECT_PATH", str(hook))
+                    env.setdefault("NAPCAT_LAUNCHER_PATH", str(boot_main))
+                    env.setdefault("NAPCAT_MAIN_PATH", str(entry))
+                    command = [str(boot_main), qq, str(hook)]
+                    cwd = str(target)
+                else:
+                    # Linux headless: run the patched QQ under xvfb with
+                    # --no-sandbox; loadNapCat.cjs imports napcat.mjs.
+                    command = ["xvfb-run", "-a", str(_QQ_INSTALL_DIR / "qq"), "--no-sandbox"]
+                    cwd = str(_QQ_INSTALL_DIR)
                 return subprocess.Popen(
-                    [node, str(entry)],
-                    cwd=str(entry.parent),
+                    command,
+                    cwd=cwd,
                     env={**__import__("os").environ, **env},
                     stdout=handle,
                     stderr=subprocess.STDOUT,
@@ -354,7 +552,7 @@ class NapCatProvisioner:
         # the OneBot HTTP API only listens after the QQ session logs in;
         # wait for the process being alive + the WebUI port (6099) as the
         # readiness signal, and report the login requirement clearly
-        webui_port = int(options.get("webui_port") or 6099)
+        webui_port = int(options.get("webui_port") or _WEBUI_PORT)
         ready = await self._wait_http_port(webui_port, wait_seconds=_READY_TIMEOUT)
         endpoint = self._endpoint(instance_id)
         if not ready:
