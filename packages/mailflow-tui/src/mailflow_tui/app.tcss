@@ -901,8 +901,10 @@ ListEditScreen, EntryFormScreen {
 }
 
 #guide-dialog {
-    width: 80;
-    height: 24;
+    width: 90%;
+    height: 85%;
+    max-width: 120;
+    max-height: 40;
     border: round $accent;
     background: $surface;
     padding: 1 2;
@@ -910,7 +912,8 @@ ListEditScreen, EntryFormScreen {
 }
 
 #guide-log-wrap {
-    height: 16;
+    height: 1fr;
+    min-height: 8;
     border: round $primary;
     margin-bottom: 1;
 }

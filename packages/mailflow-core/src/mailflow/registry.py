@@ -56,7 +56,7 @@ class ComponentRegistry:
     """Holds typed factories plus the ownership snapshot for each component."""
 
     def __init__(self) -> None:
-        self._snapshots: dict[str, ComponentSnapshot] = {}
+        self._snapshots: dict[tuple[ComponentKind, str], ComponentSnapshot] = {}
         self._factories: dict[ComponentKind, dict[str, Factory]] = {
             kind: {} for kind in ComponentKind
         }
@@ -64,12 +64,17 @@ class ComponentRegistry:
     def register(
         self, kind: ComponentKind, component_id: str, plugin_id: str, factory: Factory
     ) -> None:
-        if component_id in self._snapshots:
+        # the key is (kind, component_id): one id may legitimately appear in
+        # several kinds (e.g. 'wechaty' is both a NOTIFIER and a
+        # GATEWAY_PROVISIONER), and a conflict is only a conflict within the
+        # same kind
+        key = (kind, component_id)
+        if key in self._snapshots:
             raise ValueError(
                 f"component {component_id!r} already registered by plugin "
-                f"{self._snapshots[component_id].plugin_id!r}"
+                f"{self._snapshots[key].plugin_id!r}"
             )
-        self._snapshots[component_id] = ComponentSnapshot(
+        self._snapshots[key] = ComponentSnapshot(
             component_id=component_id, kind=kind, plugin_id=plugin_id
         )
         self._factories[kind][component_id] = factory
@@ -108,8 +113,10 @@ class ComponentRegistry:
         )
 
     def plugin_for(self, component_id: str) -> str | None:
-        snapshot = self._snapshots.get(component_id)
-        return snapshot.plugin_id if snapshot is not None else None
+        for snapshot in self._snapshots.values():
+            if snapshot.component_id == component_id:
+                return snapshot.plugin_id
+        return None
 
     def has(self, kind: ComponentKind, component_id: str) -> bool:
         return component_id in self._factories[kind]

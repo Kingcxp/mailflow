@@ -620,7 +620,7 @@
       "bots_verify_result": "Connection check: {result}",
       "bots_wizard_title": "Add a bot platform",
       "bots_wizard_pick": "Choose the platform:",
-      "bots_provider_onebot": "QQ (OneBot / NapCat)",
+      "bots_provider_onebot": "QQ (OneBot)",
       "bots_provider_wechaty": "WeChat (WeChaty pad protocol)",
       "bots_provider_openclaw": "WeChat (OpenClaw)",
       "bots_wizard_pick_first": "Pick a platform first",
@@ -641,7 +641,7 @@
       "bots_basics_next": "Next",
       "bots_provider_pick": "Choose the platform:",
       "bots_provider_missing": "No gateway provisioner available for this platform",
-      "bots_provider_napcat": "QQ (OneBot / NapCat)",
+      "bots_provider_napcat": "QQ (NapCat auto-deploy)",
       "bots_guide_starting": "Starting {provider} setup…"
     },
     "update": {

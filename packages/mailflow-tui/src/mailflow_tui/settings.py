@@ -384,15 +384,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         return selected or str(self._values.get("provider", "")) or self._default_provider
 
     def _choice_label(self, choice: Any) -> str:
-        """Localized provider label; the auto-deploy napcat choice is
-        marked so self-hosted users know it installs the gateway."""
+        """Localized provider label (e.g. 'QQ (OneBot)' vs
+        'QQ (NapCat auto-deploy)'); unknown ids stay raw."""
         value = str(choice)
         key = f"tui.bots_provider_{value}"
         translated = self._service.t(key)
-        label = translated if translated != key else value
-        if value == "napcat":
-            return f"{label}（自动部署）"
-        return label
+        return translated if translated != key else value
 
     def _extras_for(self, provider: str) -> tuple[_Extra, ...]:
         if self._group == "llms":

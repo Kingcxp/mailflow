@@ -25,6 +25,12 @@ All notable changes are recorded here; the format follows
   (timestamp + level, scrollable) and the QR inside the frame, buttons
   outside; the provider dropdown offers `napcat` (auto-deploy) separately
   from the manual `onebot` form.
+- ComponentRegistry keys are now (kind, component_id): an id that is both
+  a notifier and a gateway provisioner (`wechaty`) no longer fails the
+  whole plugin's registration with "already registered".
+- The bot guide dialog sizes itself to the terminal (percent-based)
+  instead of a fixed box; provider labels distinguish manual OneBot from
+  NapCat auto-deploy.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
