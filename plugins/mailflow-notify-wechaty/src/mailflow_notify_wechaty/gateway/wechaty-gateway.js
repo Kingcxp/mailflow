@@ -1,0 +1,137 @@
+#!/usr/bin/env node
+/**
+ * WeChaty gateway bridge for MailFlow.
+ *
+ * Runs a WeChaty pad-protocol bot and exposes the two endpoints the
+ * mailflow-notify-wechaty notifier expects, plus a QR endpoint for the
+ * Bots-tab login flow:
+ *
+ *   GET  /health        -> 200 when the bot session is logged in
+ *   POST /send          -> {"to": {"type": "contact"|"room", "name": ...},
+ *                           "text": ...}  forwards to the WeChaty contact/room
+ *   GET  /qr            -> {"qrcode": "<base64 png>"} during login,
+ *                          {"status": "logged_in"} once a session exists
+ *
+ * Usage:
+ *   WECHATY_TOKEN=<pad token> node wechaty-gateway.js [--port 8788]
+ *
+ * The pad-protocol token comes from your WeChaty puppet provider (e.g.
+ * wechaty-puppet-padlocal). Without a token the gateway starts but never
+ * completes login — the QR endpoint reports the error.
+ *
+ * This is a reference bridge: any service implementing the same three
+ * endpoints works with MailFlow.
+ */
+
+const http = require("http");
+const { WechatyBuilder } = require("wechaty");
+
+const PORT = parseInt(process.argv[2] || process.env.GATEWAY_PORT || "8788", 10);
+const TOKEN = process.env.WECHATY_TOKEN || "";
+
+let bot = null;
+let lastQr = "";
+let lastQrStatus = "pending";
+let loginError = "";
+
+function startBot() {
+  if (!TOKEN) {
+    loginError = "WECHATY_TOKEN not set: pad-protocol token required";
+    lastQrStatus = "error";
+    return;
+  }
+  bot = WechatyBuilder.build({
+    name: "mailflow-gateway",
+    puppet: "wechaty-puppet-padlocal",
+    puppetOptions: { token: TOKEN },
+  });
+
+  bot.on("scan", (qrcode, status) => {
+    lastQr = qrcode;
+    lastQrStatus = "scanning";
+    loginError = "";
+  });
+  bot.on("login", (user) => {
+    lastQr = "";
+    lastQrStatus = "logged_in";
+    loginError = `logged in as ${user.name()}`;
+  });
+  bot.on("logout", () => {
+    lastQrStatus = "pending";
+  });
+  bot.on("error", (err) => {
+    loginError = String(err && err.message || err);
+    lastQrStatus = "error";
+  });
+
+  bot.start().catch((err) => {
+    loginError = String(err && err.message || err);
+    lastQrStatus = "error";
+  });
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let data = "";
+    req.on("data", (chunk) => { data += chunk; });
+    req.on("end", () => {
+      try { resolve(JSON.parse(data || "{}")); }
+      catch { resolve({}); }
+    });
+  });
+}
+
+async function findTarget(type, name) {
+  if (!bot) return null;
+  if (type === "room") {
+    const room = await bot.Room.find({ topic: name });
+    return room;
+  }
+  const contact = await bot.Contact.find({ name });
+  return contact;
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+  const sendJson = (code, payload) => {
+    res.writeHead(code, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(payload));
+  };
+
+  if (req.method === "GET" && url.pathname === "/health") {
+    const loggedIn = lastQrStatus === "logged_in";
+    return sendJson(200, { ok: true, logged_in: loggedIn, status: lastQrStatus, error: loginError || undefined });
+  }
+
+  if (req.method === "GET" && url.pathname === "/qr") {
+    if (lastQrStatus === "logged_in") return sendJson(200, { status: "logged_in" });
+    if (lastQrStatus === "error") return sendJson(200, { status: "error", error: loginError });
+    if (lastQr) return sendJson(200, { status: "scanning", qrcode: lastQr });
+    return sendJson(200, { status: "pending" });
+  }
+
+  if (req.method === "POST" && url.pathname === "/send") {
+    if (lastQrStatus !== "logged_in" || !bot) {
+      return sendJson(503, { ok: false, error: "not logged in" });
+    }
+    const body = await readBody(req);
+    const target = body.to || {};
+    const text = String(body.text || "");
+    if (!text) return sendJson(400, { ok: false, error: "text required" });
+    try {
+      const recipient = await findTarget(target.type, target.name);
+      if (!recipient) return sendJson(404, { ok: false, error: `no ${target.type} named ${target.name}` });
+      await recipient.say(text);
+      return sendJson(200, { ok: true });
+    } catch (err) {
+      return sendJson(500, { ok: false, error: String(err && err.message || err) });
+    }
+  }
+
+  return sendJson(404, { ok: false, error: "not found" });
+});
+
+startBot();
+server.listen(PORT, "127.0.0.1", () => {
+  console.log(`wechaty gateway listening on http://127.0.0.1:${PORT}`);
+});

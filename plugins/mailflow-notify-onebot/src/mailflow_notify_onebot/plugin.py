@@ -112,6 +112,9 @@ class NotifierPlugin:
 
     def mailflow_register(self, registrar: PluginRegistrar, config: Any) -> None:
         registrar.add_notifier("onebot", OneBotNotifier)
+        from mailflow_notify_onebot.gateway import NapCatProvisioner
+
+        registrar.add_gateway_provisioner("napcat", NapCatProvisioner)
 
 
 plugin = NotifierPlugin()

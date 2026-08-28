@@ -1,0 +1,290 @@
+"""NapCat gateway provisioner: auto-install, launch and supervise a NapCat
+QQ bot (OneBot v11 HTTP) for the Bots tab.
+
+Install model:
+- NapCat is a Node.js app distributed as a release zip (GitHub). We pin a
+  version, download the zip into ``<data>/gateways/napcat-<instance>/``,
+  unpack it, and run it with the system ``node``.
+- Each instance gets its own directory and its own HTTP port (base 3000 +
+  instance offset), so "Add" always starts an independent bot session.
+- The QR login is driven through the OneBot HTTP API (``get_qrcode`` +
+  ``get_login_info`` polling); the TUI renders the payload.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import shutil
+import subprocess
+import urllib.request
+import zipfile
+from pathlib import Path
+from typing import Any
+
+import httpx
+from mailflow.contracts import GatewayInstance
+
+logger = logging.getLogger("mailflow.gateway.napcat")
+
+_NAPCAT_VERSION = "4.1.3"
+_NAPCAT_RELEASE = (
+    f"https://github.com/NapNeko/NapCatQQ/releases/download/v{_NAPCAT_VERSION}/NapCat.Shell.zip"
+)
+_BASE_PORT = 3000
+_READY_TIMEOUT = 30.0
+
+
+def _data_root() -> Path:
+    """Gateway data root; mirrors the storage db directory layout."""
+    # resolve from the current working directory like the rest of the app
+    return Path("data") / "gateways"
+
+
+def _instance_dir(instance_id: str) -> Path:
+    return _data_root() / f"napcat-{instance_id}"
+
+
+def _find_node() -> str | None:
+    """Path to a usable ``node`` binary (NapCat needs Node >= 18)."""
+    node = shutil.which("node")
+    if node is None:
+        return None
+    try:
+        result = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=10)
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    version = (result.stdout or "").strip().lstrip("v")
+    try:
+        major = int(version.split(".")[0])
+    except ValueError:
+        return None
+    return node if major >= 18 else None
+
+
+class NapCatProvisioner:
+    """OneBot v11 gateway backed by a local NapCat process."""
+
+    backend_id = "napcat"
+
+    def __init__(self) -> None:
+        self._processes: dict[str, subprocess.Popen[Any]] = {}
+
+    # -- helpers ---------------------------------------------------------------
+
+    @staticmethod
+    def _port_for(instance_id: str) -> int:
+        # deterministic per instance id: stable across restarts
+        try:
+            suffix = int(instance_id.split("-")[-1])
+        except ValueError:
+            suffix = 0
+        return _BASE_PORT + (suffix % 100)
+
+    def _endpoint(self, instance_id: str) -> str:
+        return f"http://127.0.0.1:{self._port_for(instance_id)}"
+
+    async def _wait_http(self, instance_id: str, wait_seconds: float = _READY_TIMEOUT) -> bool:
+        url = self._endpoint(instance_id)
+        deadline = asyncio.get_running_loop().time() + wait_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    response = await client.get(url)
+                if response.status_code < 500:
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(1.0)
+        return False
+
+    # -- GatewayProvisioner ----------------------------------------------------
+
+    async def detect(self) -> str:
+        node = _find_node()
+        if node is None:
+            return "node not found (NapCat needs Node.js >= 18)"
+        installed = any(_instance_dir(p.name) for p in _data_root().glob("napcat-*"))
+        running = await self._any_running()
+        parts = [f"node {node}"]
+        parts.append("installed" if installed else "not installed")
+        parts.append("running" if running else "not running")
+        return "; ".join(parts)
+
+    async def _any_running(self) -> bool:
+        for directory in _data_root().glob("napcat-*"):
+            if not directory.is_dir():
+                continue
+            instance_id = directory.name[len("napcat-") :]
+            if await self._wait_http(instance_id, wait_seconds=2.0):
+                return True
+        return False
+
+    async def install(self, instance_id: str, options: dict[str, Any]) -> None:
+        node = _find_node()
+        if node is None:
+            raise RuntimeError(
+                "NapCat needs Node.js >= 18; install Node first (or set options.node_path)"
+            )
+        target = _instance_dir(instance_id)
+        if (target / "package.json").exists() or (target / "main").exists():
+            logger.info("napcat %s already installed at %s", instance_id, target)
+            return
+        target.mkdir(parents=True, exist_ok=True)
+        archive = target / "napcat.zip"
+        logger.info("napcat %s: downloading %s", instance_id, _NAPCAT_RELEASE)
+        await asyncio.to_thread(self._download, _NAPCAT_RELEASE, archive)
+        try:
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(target)
+        finally:
+            archive.unlink(missing_ok=True)
+        logger.info("napcat %s: installed at %s", instance_id, target)
+
+    @staticmethod
+    def _download(url: str, destination: Path) -> None:
+        request = urllib.request.Request(url, headers={"User-Agent": "mailflow"})
+        with (
+            urllib.request.urlopen(request, timeout=120) as response,
+            open(destination, "wb") as handle,
+        ):
+            shutil.copyfileobj(response, handle)
+
+    @staticmethod
+    def _find_entry(target: Path, instance_id: str) -> Path:
+        """Locate the NapCat entry point inside the unpacked tree."""
+        candidates = [
+            target / "main.js",
+            target / "NapCat.Shell" / "main.js",
+            target / "bin" / "main.js",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        raise RuntimeError(f"napcat {instance_id}: no entry point found under {target}")
+
+    async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
+        node = _find_node()
+        if node is None:
+            raise RuntimeError("NapCat needs Node.js >= 18; install Node first")
+        target = _instance_dir(instance_id)
+        if not target.exists():
+            raise RuntimeError(f"napcat {instance_id} is not installed")
+        port = int(options.get("port") or self._port_for(instance_id))
+        # config for NapCat: HTTP server on the instance port
+        config_dir = target / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        http_config = config_dir / "onebot11_http.json"
+        http_config.write_text(
+            json.dumps(
+                {
+                    "network": {
+                        "httpServers": [
+                            {
+                                "enable": True,
+                                "port": port,
+                                "host": "127.0.0.1",
+                                "enableCors": False,
+                                "enableWebsocket": False,
+                                "token": "",
+                                "debug": False,
+                            }
+                        ]
+                    }
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        # launch: NapCat shell entry
+        entry: Path | None = await asyncio.to_thread(self._find_entry, target, instance_id)
+        assert entry is not None
+        env = dict(options.get("env") or {})
+        env.setdefault("NAPCAT_UID", instance_id)
+        env.setdefault("NAPCAT_PORT", str(port))
+        try:
+            process = await asyncio.to_thread(
+                subprocess.Popen,
+                [node, str(entry)],
+                cwd=str(entry.parent),
+                env={**__import__("os").environ, **env},
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"failed to launch napcat {instance_id}: {exc}") from exc
+        self._processes[instance_id] = process
+        ready = await self._wait_http(instance_id, wait_seconds=_READY_TIMEOUT)
+        endpoint = self._endpoint(instance_id)
+        if not ready:
+            self._terminate(instance_id)
+            raise RuntimeError(f"napcat {instance_id} did not answer on {endpoint} in time")
+        return GatewayInstance(
+            provider="napcat",
+            instance_id=instance_id,
+            status="running",
+            endpoint=endpoint,
+            extra={"port": port, "pid": process.pid},
+        )
+
+    def _terminate(self, instance_id: str) -> None:
+        process = self._processes.pop(instance_id, None)
+        if process is None:
+            return
+        if process.poll() is None:
+            with __import__("contextlib").suppress(Exception):
+                process.terminate()
+            try:
+                process.wait(timeout=5)
+            except Exception:
+                with __import__("contextlib").suppress(Exception):
+                    process.kill()
+
+    async def stop(self, instance_id: str) -> None:
+        self._terminate(instance_id)
+
+    async def status(self, instance_id: str) -> GatewayInstance:
+        endpoint = self._endpoint(instance_id)
+        running = await self._wait_http(instance_id, wait_seconds=2.0)
+        if running:
+            return GatewayInstance(
+                provider="napcat",
+                instance_id=instance_id,
+                status="running",
+                endpoint=endpoint,
+            )
+        process = self._processes.get(instance_id)
+        if process is not None and process.poll() is None:
+            return GatewayInstance(
+                provider="napcat",
+                instance_id=instance_id,
+                status="starting",
+                error="HTTP not answering yet",
+                endpoint=endpoint,
+            )
+        return GatewayInstance(
+            provider="napcat",
+            instance_id=instance_id,
+            status="stopped",
+            error="process not running",
+        )
+
+    async def qr(self, instance_id: str) -> str:
+        """Ask the running NapCat for its login QR (base64 PNG)."""
+        endpoint = self._endpoint(instance_id)
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.post(f"{endpoint}/get_qrcode", json={})
+                response.raise_for_status()
+                payload: Any = response.json().get("data") or {}
+                image = payload.get("qrcode") or payload.get("image") or ""
+                return str(image)
+        except Exception as exc:
+            logger.warning("napcat %s get_qrcode failed: %s", instance_id, exc)
+            return ""
+
+
+__all__ = ["NapCatProvisioner", "_find_node"]

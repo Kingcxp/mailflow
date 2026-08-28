@@ -110,6 +110,9 @@ class NotifierPlugin:
 
     def mailflow_register(self, registrar: PluginRegistrar, config: Any) -> None:
         registrar.add_notifier("wechaty", WechatyNotifier)
+        from mailflow_notify_wechaty.gateway import WechatyGatewayProvisioner
+
+        registrar.add_gateway_provisioner("wechaty", WechatyGatewayProvisioner)
 
 
 plugin = NotifierPlugin()
