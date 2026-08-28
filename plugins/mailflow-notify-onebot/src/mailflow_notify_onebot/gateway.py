@@ -244,8 +244,15 @@ class NapCatProvisioner:
 
     @staticmethod
     def _find_entry(target: Path, instance_id: str) -> Path:
-        """Locate the NapCat entry point inside the unpacked tree."""
+        """Locate the NapCat entry point inside the unpacked tree.
+
+        NapCat.Shell ships `napcat.mjs` at the root (with package.json
+        next to it); older layouts used main.js or a nested
+        NapCat.Shell/main.js — try them in order.
+        """
         candidates = [
+            target / "napcat.mjs",
+            target / "loadNapCat.js",
             target / "main.js",
             target / "NapCat.Shell" / "main.js",
             target / "bin" / "main.js",
