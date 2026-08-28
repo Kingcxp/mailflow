@@ -882,6 +882,36 @@ class MailFlowService:
 
         self.market = PluginMarket([Repository(r.name, r.url) for r in remaining])
 
+    # -- marketplace cache (offline translations for the detail dialog) -----------
+
+    _MARKET_CACHE_PREF = "market.cache.entries"
+
+    async def market_cache_save(self, entries: list[Any]) -> None:
+        """Persist the fetched marketplace entries so the plugin detail
+        dialog keeps its translations even before (or without) a fresh
+        network fetch on the next run."""
+        try:
+            payload = [entry.model_dump(mode="json") for _repo, entry in entries]
+            await self.storage.set_preference(
+                self._MARKET_CACHE_PREF, json.dumps(payload, ensure_ascii=False)
+            )
+        except Exception as exc:
+            logger.debug("market cache save failed: %s", exc)
+
+    async def market_cache_load(self) -> list[Any]:
+        """Previously fetched marketplace entries ('' when none)."""
+        raw = await self.storage.get_preference(self._MARKET_CACHE_PREF)
+        if not raw:
+            return []
+        try:
+            from mailflow.plugin_market import MarketPlugin
+
+            payload = json.loads(raw)
+            return [MarketPlugin.model_validate(item) for item in payload]
+        except Exception as exc:
+            logger.debug("market cache load failed: %s", exc)
+            return []
+
     # -- plugin lifecycle: enable / disable / uninstall -----------------------------
 
     async def _require_known_plugin(self, plugin_id: str) -> None:

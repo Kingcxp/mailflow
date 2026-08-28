@@ -1454,6 +1454,26 @@ class MarketDetailScreen(ModalScreen[Any]):
     async def _load_content(self) -> None:
         plugin = self._plugin
         language = self._service.i18n.language
+        # the app-wide cache may have been populated after this dialog was
+        # pushed (preload finished, market fetched): re-resolve the readme
+        # from the shared entry so both tabs always render the identical,
+        # best-available (translated) content
+        app = cast(MailFlowApp, self.app)  # pyright: ignore[reportUnknownMemberType]
+        with contextlib.suppress(Exception):
+            cached = app.plugin_entry(plugin.id)  # pyright: ignore[reportUnknownMemberType]
+            if cached is not None and cached.readme_for(language):
+                readme = await asyncio.to_thread(self._readme_for, cached, language)
+                meta = (
+                    f"**{cached.name or cached.id}** v{cached.version} — `{cached.id}`\n\n"
+                    f"{self._service.t('plugin.field_author')}: {cached.author or '-'} · "
+                    f"{self._service.t('plugin.field_updated')}: {cached.updated or '-'}\n"
+                    f"{self._service.t('plugin.field_homepage')}: {cached.homepage or '-'}\n"
+                )
+                node = self.query_one_optional("#market-detail-readme", Markdown)
+                if node is not None:
+                    node.update(meta + "\n---\n\n" + readme)
+                self._content_loaded = True
+                return
         readme = await asyncio.to_thread(self._readme_for, plugin, language)
         meta = (
             f"**{plugin.name or plugin.id}** v{plugin.version} — `{plugin.id}`\n\n"
@@ -1716,8 +1736,10 @@ class MarketPane(Vertical):
         self._loading = False
         # share with the Runtime tab: both tabs now resolve the detail from
         # the same entries (market readme + translations for remote plugins,
-        # docstring for local-only ones)
+        # docstring for local-only ones); persist them so a later session
+        # keeps the translations without a fresh network fetch
         cast(MailFlowApp, self.app).set_plugin_entries(self._entries)  # pyright: ignore[reportUnknownMemberType]
+        await self._service.market_cache_save(self._entries)
         self._render_entries()
 
     def _render_entries(self) -> None:
@@ -2014,9 +2036,44 @@ class MailFlowApp(App[None]):
         self.title = self._service.t("tui.title")
         self.sub_title = f"v{self._service.snapshot().version}"
         self._log_timer = self.set_interval(1.0, self._drain_logs)
+        # preload the persisted marketplace cache so the Runtime tab's
+        # plugin detail keeps its translations before the first fetch
+        self.run_worker(
+            self._preload_market_cache(), exclusive=True, group="market-cache", exit_on_error=False
+        )
+        # eagerly fetch the marketplace in the background too: the very
+        # first session gets translations for the Runtime detail without
+        # having to open the Market tab first
+        self.run_worker(
+            self._eager_market_fetch(), exclusive=True, group="market-eager", exit_on_error=False
+        )
         self._refresh_lock = asyncio.Lock()
         self._service.on("mailflow.mail.processed", self._on_mail_processed)
         self._service.on("language.changed", self._on_language_changed)
+
+    async def _preload_market_cache(self) -> None:
+        """Load persisted marketplace entries into the shared cache."""
+        try:
+            entries = await self._service.market_cache_load()
+        except Exception:
+            entries = []
+        if entries:
+            self.set_plugin_entries(
+                [(Repository("cache", ""), cast("MarketPlugin", entry)) for entry in entries]  # pyright: ignore[reportUnknownVariableType]
+            )
+
+    async def _eager_market_fetch(self) -> None:
+        """Background marketplace fetch at startup: fills the shared cache
+        (and the persisted cache) so the Runtime tab's plugin detail shows
+        translated readmes without the user opening the Market tab."""
+        try:
+            entries = await asyncio.to_thread(self._service.market.list_plugins)
+        except Exception:
+            return
+        if entries:
+            self.set_plugin_entries(entries)
+            with contextlib.suppress(Exception):
+                await self._service.market_cache_save(entries)
 
     async def _on_language_changed(self, event: str, **payload: Any) -> None:
         # the service runs on the same loop as the app: schedule directly
