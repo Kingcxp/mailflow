@@ -140,7 +140,11 @@ def _detect_qq() -> str | None:
 
     if os.name == "nt":
         try:
-            import winreg
+            # winreg is Windows-only; import dynamically so mypy on Linux
+            # (where the module has no stub) does not fail
+            import importlib
+
+            winreg = importlib.import_module("winreg")
 
             keys = [
                 r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\QQ",

@@ -13,7 +13,7 @@ from mailflow.commands import CommandRouter
 from mailflow.config import MailFlowConfig
 from mailflow.service import MailFlowService
 from mailflow_bundled import create_plugin_manager
-from mailflow_tui.app import MailFlowApp
+from mailflow_tui.app import FeedbackModal, MailFlowApp
 from textual.widgets import Button, Input, Select, Static, TabbedContent
 
 
@@ -342,9 +342,16 @@ async def test_reject_mail_with_reason_feeds_guidelines(tmp_path: Path) -> None:
             assert table.row_count >= 1
 
             app.query_one("#btn-feedback", Button).press()
-            await pilot.pause()
             from textual.widgets import TextArea
 
+            # the modal mounts asynchronously: poll for its fields instead
+            # of a single pause (flaky on slow CI runners)
+            for _ in range(60):
+                if isinstance(app.screen, FeedbackModal) and app.screen.query_one_optional(
+                    "#feedback-reason", TextArea
+                ):
+                    break
+                await pilot.pause(0.05)
             area = app.screen.query_one("#feedback-reason", TextArea)
             area.text = "这是营销广告，不是紧急事务\n永远归为 ad"
             app.screen.query_one("#feedback-save", Button).press()
