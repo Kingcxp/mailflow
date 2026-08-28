@@ -312,6 +312,7 @@ class ComponentKind(StrEnum):
     NOTIFIER = "notifier"
     STORAGE = "storage"
     BOT_EXPORTER = "bot_exporter"
+    GATEWAY_PROVISIONER = "gateway_provisioner"
 
 
 class PluginSnapshot(BaseModel):

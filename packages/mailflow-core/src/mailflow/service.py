@@ -56,6 +56,7 @@ from mailflow.domain import (
     utcnow,
 )
 from mailflow.events import EventBus
+from mailflow.gateway import GatewayManager
 from mailflow.i18n import I18n
 from mailflow.letters import build_letter
 from mailflow.llm import LLMRouterImpl
@@ -175,6 +176,7 @@ class MailFlowService:
         self.market = PluginMarket(
             [Repository(repo.name, repo.url) for repo in config.plugins.repositories]
         )
+        self.gateways = GatewayManager(config, registry, storage)
         self._started = False
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
@@ -188,6 +190,7 @@ class MailFlowService:
         await self.storage.initialize()
         await self._load_persisted_language()
         await self.runtime.start()
+        await self.gateways.start()
         self._started = True
         self._stopped_event = asyncio.Event()
         self._update_task = asyncio.create_task(self._update_loop(), name="updates")
@@ -197,6 +200,7 @@ class MailFlowService:
         self._stopped_event.set()
         if self._update_task is not None:
             self._update_task.cancel()
+        await self.gateways.stop()
         await self.runtime.stop()
         await self.storage.close()
         self._started = False
@@ -210,6 +214,7 @@ class MailFlowService:
         registry = self.plugin_manager.build_registry()
         register_builtin_processors(registry)
         self.registry = registry
+        self.gateways = GatewayManager(self.config, registry, self.storage)
         sources = _build_sources(self.config, registry)
         backends, llm_configs = _build_llms(self.config, registry)
         router = LLMRouterImpl(backends, llm_configs)
@@ -1017,6 +1022,39 @@ class MailFlowService:
                 )
                 setattr(self.config, group, kept)
         return removed
+
+    # -- gateway provisioning (Bots tab) ----------------------------------------------
+
+    def gateway_providers(self) -> list[str]:
+        """Registered gateway provisioner component ids (napcat, wechaty, ...)."""
+        return self.gateways.providers()
+
+    async def gateway_instances(self) -> list[Any]:
+        """Every managed gateway instance (for the Bots tab table)."""
+        return await self.gateways.instances()
+
+    async def gateway_detect(self, provider: str) -> str:
+        """Status line for the guide's first step (installed/running?)."""
+        return await self.gateways.detect(provider)
+
+    async def gateway_provision(
+        self,
+        provider: str,
+        instance_id: str,
+        options: dict[str, Any],
+        *,
+        autostart: bool = True,
+    ) -> Any:
+        """Install (if needed), start and supervise one gateway instance."""
+        return await self.gateways.provision(provider, instance_id, options, autostart=autostart)
+
+    async def gateway_qr(self, provider: str, instance_id: str) -> str:
+        """QR payload for the login step ('' when not supported)."""
+        return await self.gateways.qr(provider, instance_id)
+
+    async def gateway_shutdown(self, provider: str, instance_id: str) -> None:
+        """Stop one gateway instance and stop supervising it."""
+        await self.gateways.shutdown_instance(provider, instance_id)
 
     # -- reply workflow ---------------------------------------------------------------------
 

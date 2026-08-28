@@ -169,6 +169,58 @@ class Notifier(Protocol):
     async def notify(self, record: MailRecord) -> None: ...
 
 
+class GatewayInstance(BaseModel):
+    """One managed gateway instance: provider + instance id + state."""
+
+    provider: str  # gateway provisioner component id (e.g. "napcat")
+    instance_id: str  # unique per provider (e.g. "napcat-1")
+    status: str = "unknown"  # detected | installing | starting | running | error | stopped
+    error: str = ""
+    endpoint: str = ""  # http base URL once running (e.g. http://127.0.0.1:3001)
+    extra: dict[str, Any] = Field(default_factory=lambda: {})
+
+
+class GatewayProvisioner(Protocol):
+    """Installs, starts and supervises one chat-platform gateway process.
+
+    The provisioner owns the *how* (download NapCat, npm-install WeChaty,
+    launch the child); ``mailflow.gateway.GatewayManager`` owns the
+    lifecycle (persist state, restart on crash, stop on shutdown).
+    Implementations are plugins (component kind GATEWAY_PROVISIONER), so a
+    new chat platform is a marketplace install, not a core change.
+    """
+
+    async def detect(self) -> str:
+        """Return a status line: whether the gateway runtime is installed
+        and/or already running (used to prefill the guide)."""
+        ...
+
+    async def install(self, instance_id: str, options: dict[str, Any]) -> None:
+        """Install the gateway runtime for one instance. No-op when already
+        installed; raises with a clear message on failure."""
+        ...
+
+    async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
+        """Launch the gateway process for one instance and wait until its
+        HTTP endpoint answers; returns the running instance (endpoint set)."""
+        ...
+
+    async def stop(self, instance_id: str) -> None:
+        """Terminate the gateway process for one instance (no-op when not
+        running)."""
+        ...
+
+    async def status(self, instance_id: str) -> GatewayInstance:
+        """Current state: running endpoint, or error with a readable
+        message."""
+        ...
+
+    async def qr(self, instance_id: str) -> str:
+        """A QR payload (base64 PNG or URL) for the login step; '' when the
+        platform has no in-TUI QR flow."""
+        ...
+
+
 class StorageBackend(Protocol):
     """Durable persistence for records, trash, drafts and preferences."""
 
@@ -209,6 +261,8 @@ class StorageBackend(Protocol):
 
 
 __all__ = [
+    "GatewayInstance",
+    "GatewayProvisioner",
     "HistoryCapableSource",
     "LLMBackend",
     "LLMCompletion",

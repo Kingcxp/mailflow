@@ -20,6 +20,7 @@ from mailflow.config import (
     StorageConfig,
 )
 from mailflow.contracts import (
+    GatewayProvisioner,
     LLMBackend,
     LLMEnhancer,
     LLMRouter,
@@ -37,6 +38,7 @@ NotifierFactory = Callable[[NotifierConfig], Notifier]
 StorageFactory = Callable[[StorageConfig], StorageBackend]
 BotExporterFactory = Callable[[BotExportContext], BotExportResult]
 LLMEnhancerFactory = Callable[[ProcessorConfig], LLMEnhancer]
+GatewayProvisionerFactory = Callable[[], GatewayProvisioner]
 
 Factory = (
     SourceFactory
@@ -46,6 +48,7 @@ Factory = (
     | StorageFactory
     | BotExporterFactory
     | LLMEnhancerFactory
+    | GatewayProvisionerFactory
 )
 
 
@@ -92,11 +95,17 @@ class ComponentRegistry:
     def storage_factory(self, component_id: str) -> StorageFactory:
         return cast(StorageFactory, self.factory(ComponentKind.STORAGE, component_id))
 
+    def llm_enhancer_factory(self, component_id: str) -> LLMEnhancerFactory:
+        return cast(LLMEnhancerFactory, self.factory(ComponentKind.LLM_ENHANCER, component_id))
+
     def bot_exporter_factory(self, component_id: str) -> BotExporterFactory:
         return cast(BotExporterFactory, self.factory(ComponentKind.BOT_EXPORTER, component_id))
 
-    def llm_enhancer_factory(self, component_id: str) -> LLMEnhancerFactory:
-        return cast(LLMEnhancerFactory, self.factory(ComponentKind.LLM_ENHANCER, component_id))
+    def gateway_provisioner_factory(self, component_id: str) -> GatewayProvisionerFactory:
+        return cast(
+            GatewayProvisionerFactory,
+            self.factory(ComponentKind.GATEWAY_PROVISIONER, component_id),
+        )
 
     def plugin_for(self, component_id: str) -> str | None:
         snapshot = self._snapshots.get(component_id)
@@ -156,6 +165,14 @@ class PluginRegistrar:
         LLM analysis (system prompt, extra messages, output post-processing)."""
         self._register(ComponentKind.LLM_ENHANCER, component_id, factory)
 
+    def add_gateway_provisioner(
+        self, component_id: str, factory: GatewayProvisionerFactory
+    ) -> None:
+        """Register a gateway provisioner: installs/start/supervises one
+        chat-platform bot runtime (e.g. ``napcat``, ``wechaty``). The
+        component id is the provider key used by the Bots tab."""
+        self._register(ComponentKind.GATEWAY_PROVISIONER, component_id, factory)
+
     @property
     def config(self) -> MailFlowConfig:
         return self._config
@@ -165,6 +182,7 @@ __all__ = [
     "BotExporterFactory",
     "ComponentRegistry",
     "Factory",
+    "GatewayProvisionerFactory",
     "LLMEnhancerFactory",
     "LLMFactory",
     "NotifierFactory",
