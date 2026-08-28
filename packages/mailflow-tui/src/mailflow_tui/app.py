@@ -1355,12 +1355,23 @@ class LogsPane(Vertical):
 
 
 def plugin_doc_readme(info: Any) -> str:
-    """Turn a plugin's module docstring into the market detail readme."""
-    try:
-        module = __import__(info.plugin_id.replace("-", "_"), fromlist=["plugin"])
+    """Turn a plugin's module docstring into the market detail readme.
+
+    The real documentation lives in ``<package>.plugin`` (the module that
+    registers the components), not in the package ``__init__`` whose
+    docstring is a one-line description — import the submodule first and
+    fall back to the package docstring only when it is missing.
+    """
+    package = info.plugin_id.replace("-", "_")
+    doc = ""
+    for candidate in (f"{package}.plugin", package):
+        try:
+            module = __import__(candidate, fromlist=["plugin"])
+        except Exception:
+            continue
         doc = (module.__doc__ or "").strip()
-    except Exception:
-        doc = ""
+        if doc:
+            break
     if not doc:
         return ""
     lines: list[str] = []
