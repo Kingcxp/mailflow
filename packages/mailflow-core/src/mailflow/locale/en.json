@@ -642,7 +642,9 @@
       "bots_provider_pick": "Choose the platform:",
       "bots_provider_missing": "No gateway provisioner available for this platform",
       "bots_provider_napcat": "QQ (NapCat auto-deploy)",
-      "bots_guide_starting": "Starting {provider} setup…"
+      "bots_guide_starting": "Starting {provider} setup…",
+      "bots_provider_wechaty-manual": "WeChat (WeChaty manual)",
+      "bots_manual_doc": "Manual setup: run your own WeChaty gateway bridge — see {url}"
     },
     "update": {
       "applied_title": "Applied updates",

@@ -902,6 +902,7 @@ ListEditScreen, EntryFormScreen {
 
 #guide-dialog {
     width: 90;
+    min-width: 80%;
     max-width: 95%;
     height: 85%;
     border: round $accent;
@@ -911,15 +912,15 @@ ListEditScreen, EntryFormScreen {
 
 #guide-title {
     content-align: center middle;
+    height: 1;
 }
 
 #guide-log-wrap {
+    /* the log pane takes all vertical space the other rows leave:
+       it grows with the dialog height instead of leaving a gap */
     height: 1fr;
-    min-height: 8;
     border: round $primary;
-    margin-bottom: 1;
-    /* RichLog scrolls inside its own frame; the frame never grows past
-       the dialog, so the page itself never scrolls */
+    margin: 0 0 1 0;
     overflow-y: auto;
 }
 
@@ -936,11 +937,18 @@ ListEditScreen, EntryFormScreen {
 }
 
 #guide-status {
+    height: 1;
     color: $text;
     margin-bottom: 1;
 }
 
 #guide-actions {
     align: center middle;
-    margin: 1 0 2 0;
+    height: 3;
+    margin: 0;
+}
+
+#guide-actions Button {
+    height: 3;
+    min-width: 12;
 }

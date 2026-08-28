@@ -304,6 +304,11 @@ _IMAP_PRESET_HOSTS: dict[str, tuple[str, int, bool]] = {
 }
 
 
+def _wechaty_doc_link() -> str:
+    """The WeChaty gateway bridge documentation URL shown for manual setup."""
+    return "https://github.com/Kingcxp/mailflow-repo/tree/main/notifier/mailflow-notify-wechaty"
+
+
 class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
     """Provider-aware form for one structured entry (mailbox, LLM, ...).
 
@@ -360,6 +365,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             # notifier id (onebot) so self-hosted users keep the form
             choices = set(BotsPane.IM_PROVIDERS)
             choices.update(service.gateway_providers())
+            # manual WeChaty (bring your own gateway) is a distinct choice
+            choices.add("wechaty-manual")
             self._provider_choices = tuple(sorted(choices))
         else:
             self._provider_choices = ()
@@ -409,6 +416,14 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 return (
                     _Extra("base_url", required=True),
                     _Extra("endpoint", default="/api/v1"),
+                    _Extra("targets", required=True),
+                )
+            if provider == "wechaty-manual":
+                # manual WeChaty: user runs their own gateway/bridge; the
+                # fields match the wechaty notifier options
+                return (
+                    _Extra("gateway_url", required=True),
+                    _Extra("token", kind="password", secret=True),
                     _Extra("targets", required=True),
                 )
             if self._gateway_for(provider) is not None:
@@ -523,6 +538,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         extras = self._extras_for(provider)
         if extras:
             yield Label(self._t("tui.provider_section", provider=provider), classes="field-label")
+        if provider == "wechaty-manual":
+            # manual setup: point the user at the gateway documentation
+            yield Static(
+                self._t("tui.bots_manual_doc", url=_wechaty_doc_link()),
+                classes="field-desc",
+            )
         for extra in extras:
             widget_id = f"extra-{_slug(extra.field_id)}"
             marker = " *" if extra.required else ""
@@ -666,6 +687,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
     def _collect(self) -> dict[str, Any]:
         values = self._collect_core()
         values.update(self._collect_extras())
+        if values.get("provider") == "wechaty-manual":
+            # manual WeChaty still targets the 'wechaty' notifier component;
+            # 'wechaty-manual' is only a form-level distinction
+            values["provider"] = "wechaty"
         return values
 
     # -- llm connectivity test ---------------------------------------------------

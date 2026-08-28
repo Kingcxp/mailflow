@@ -38,8 +38,20 @@ def _data_root() -> Path:
     return Path("data") / "gateways"
 
 
+def _safe_token(instance_id: str) -> str:
+    """Instance id -> filesystem/port-safe token (spaces, parentheses and
+    other characters cannot appear in directory names or integer parsing);
+    a short hash keeps distinct ids distinct after sanitizing."""
+    import hashlib
+    import re
+
+    cleaned = re.sub(r"[^0-9A-Za-z_-]+", "-", instance_id).strip("-") or "gw"
+    digest = hashlib.sha1(instance_id.encode("utf-8")).hexdigest()[:6]
+    return f"{cleaned}-{digest}"
+
+
 def _instance_dir(instance_id: str) -> Path:
-    return _data_root() / f"wechaty-{instance_id}"
+    return _data_root() / f"wechaty-{_safe_token(instance_id)}"
 
 
 def _find_node() -> str | None:
@@ -73,8 +85,8 @@ class WechatyGatewayProvisioner:
     @staticmethod
     def _port_for(instance_id: str) -> int:
         try:
-            suffix = int(instance_id.split("-")[-1])
-        except ValueError:
+            suffix = int(_safe_token(instance_id).split("-")[-2])
+        except (ValueError, IndexError):
             suffix = 0
         return _BASE_PORT + (suffix % 100)
 
@@ -112,9 +124,29 @@ class WechatyGatewayProvisioner:
         for directory in _data_root().glob("wechaty-*"):
             if not directory.is_dir():
                 continue
-            instance_id = directory.name[len("wechaty-") :]
-            if await self._wait_http(instance_id, wait_seconds=2.0):
+            token = directory.name[len("wechaty-") :]
+            try:
+                suffix = int(token.split("-")[-2])
+            except (ValueError, IndexError):
+                continue
+            port = _BASE_PORT + (suffix % 100)
+            if await self._wait_http_port(port, wait_seconds=2.0):
                 return True
+        return False
+
+    @staticmethod
+    async def _wait_http_port(port: int, wait_seconds: float = 2.0) -> bool:
+        url = f"http://127.0.0.1:{port}"
+        deadline = asyncio.get_running_loop().time() + wait_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    response = await client.get(f"{url}/health")
+                if response.status_code < 500:
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(0.3)
         return False
 
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:

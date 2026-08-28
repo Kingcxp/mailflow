@@ -39,6 +39,14 @@ All notable changes are recorded here; the format follows
   ("WeChat (WeChaty pad protocol, auto-deploy)"); the guide dialog is
   centered (single-child ModalScreen) and its log pane scrolls inside
   the frame.
+- Gateway instance ids are sanitized for filesystem paths and ports
+  (spaces/parentheses in user-chosen names no longer break installs:
+  "A Bot (NapCat)" used to fail with "no entry point found"); a short
+  hash keeps distinct ids distinct.
+- A manual WeChaty choice ("WeChat (WeChaty manual)") joins the
+  auto-deploy one, with a documentation link shown in the form; the
+  guide dialog is at least 80% of the terminal width and its log pane
+  fills the dialog height (the actions row no longer steals space).
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

@@ -642,7 +642,9 @@
       "bots_provider_pick": "选择要接入的平台：",
       "bots_provider_missing": "该平台没有可用的网关配置器",
       "bots_provider_napcat": "QQ（NapCat 自动部署）",
-      "bots_guide_starting": "开始 {provider} 部署…"
+      "bots_guide_starting": "开始 {provider} 部署…",
+      "bots_provider_wechaty-manual": "微信（WeChaty 手动配置）",
+      "bots_manual_doc": "手动配置：自行运行 WeChaty 网关桥 — 参见 {url}"
     },
     "update": {
       "applied_title": "已应用的更新",
