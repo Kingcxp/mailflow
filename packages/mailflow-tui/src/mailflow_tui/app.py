@@ -1200,21 +1200,17 @@ class RuntimePane(Vertical):
         )
 
     def _open_plugin_detail(self, plugin_id: str) -> None:
-        """Open the plugin's market detail (readme + install state).
+        """Open the plugin's detail dialog instantly.
 
-        The dialog is synchronous: the market cache (when loaded) or the
-        local plugin metadata/docstring is used, never a network fetch — a
-        double-click must open instantly even before the market has loaded."""
+        The dialog renders its content in a worker from the app-wide
+        plugin-entry cache — the same entries the Market tab uses — so the
+        Runtime and Market details are always identical (readme +
+        translations). No network and no import happens on the click path.
+        """
         if getattr(self, "_detail_open_for", None) == plugin_id:
             return  # the dialog for this plugin is already up
         self._detail_open_for = plugin_id
-        plugin = None
-        market_pane = self.query_one_optional(MarketPane)
-        if market_pane is not None:
-            for _repo, candidate in market_pane._entries:  # pyright: ignore[reportPrivateUsage]
-                if candidate.id == plugin_id:
-                    plugin = candidate
-                    break
+        plugin = cast(MailFlowApp, self.app).plugin_entry(plugin_id)
         if plugin is None:
             plugin = self._local_market_plugin(plugin_id)
         if plugin is None:
@@ -1233,24 +1229,8 @@ class RuntimePane(Vertical):
             self._detail_open_for = None
 
     def _local_market_plugin(self, plugin_id: str) -> MarketPlugin | None:
-        """Build a market entry for a locally loaded plugin (bundled or
-        installed). The readme stays empty here: importing the plugin
-        module and rendering its docstring is deferred to the detail
-        dialog's worker so the double-click never blocks on it."""
-        for info in self._service.plugin_manager.enabled_infos():
-            if info.plugin_id != plugin_id:
-                continue
-            return MarketPlugin(
-                id=info.plugin_id,
-                name=info.name or info.plugin_id,
-                version=info.version,
-                description=info.description,
-                categories=[k.value for k in info.kinds],
-                package=info.plugin_id,
-                source="local",
-                readme="",
-            )
-        return None
+        """App-wide local entry builder (shared with the Market tab)."""
+        return cast(MailFlowApp, self.app).local_plugin_entry(plugin_id)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._selected_plugin is None:
@@ -1723,24 +1703,21 @@ class MarketPane(Vertical):
         for info in self._service.plugin_manager.enabled_infos():
             if info.plugin_id in seen:
                 continue
-            local_entries.append(
-                (
-                    local_repo,
-                    MarketPlugin(
-                        id=info.plugin_id,
-                        name=info.name or info.plugin_id,
-                        version=info.version,
-                        description=info.description,
-                        categories=[],
-                        package=info.plugin_id,
-                        source="local",
-                        readme=plugin_doc_readme(info),
-                    ),
-                )
-            )
+            local = cast(MailFlowApp, self.app).local_plugin_entry(info.plugin_id)
+            if local is not None:
+                # fill the docstring here (this whole method runs in the
+                # market-fetch worker): the market pane's inline preview
+                # needs it synchronously, and the shared app cache then
+                # carries it to the Runtime tab as well
+                local.readme = plugin_doc_readme(info)
+                local_entries.append((local_repo, local))
         self._entries = [*entries, *local_entries]
         self._installed = {}  # re-derive install state for the new metadata
         self._loading = False
+        # share with the Runtime tab: both tabs now resolve the detail from
+        # the same entries (market readme + translations for remote plugins,
+        # docstring for local-only ones)
+        cast(MailFlowApp, self.app).set_plugin_entries(self._entries)
         self._render_entries()
 
     def _render_entries(self) -> None:
@@ -1970,6 +1947,41 @@ class MailFlowApp(App[None]):
         self._log_queue = log_queue
         self._remote = remote
         self._log_timer: Any = None
+        # shared plugin-entry cache: the single source of truth for the
+        # detail dialog. MarketPane writes its fetched entries here, and
+        # the Runtime tab reads from here, so both tabs show the exact
+        # same detail (same readme, same translations).
+        self._plugin_entries: dict[str, MarketPlugin] = {}
+
+    def set_plugin_entries(self, entries: list[tuple[Repository, MarketPlugin]]) -> None:
+        """Record the market entries (called by MarketPane after a fetch)."""
+        for _repo, plugin in entries:
+            self._plugin_entries[plugin.id] = plugin
+
+    def plugin_entry(self, plugin_id: str) -> MarketPlugin | None:
+        """The shared entry for a plugin id ('' when unknown)."""
+        return self._plugin_entries.get(plugin_id)
+
+    def local_plugin_entry(self, plugin_id: str) -> MarketPlugin | None:
+        """A market entry for a locally loaded plugin (bundled or installed).
+
+        The readme stays empty: importing the plugin module and rendering
+        its docstring is deferred to the detail dialog's worker, so neither
+        tab's click path ever blocks on it."""
+        for info in self._service.plugin_manager.enabled_infos():
+            if info.plugin_id != plugin_id:
+                continue
+            return MarketPlugin(
+                id=info.plugin_id,
+                name=info.name or info.plugin_id,
+                version=info.version,
+                description=info.description,
+                categories=[k.value for k in info.kinds],
+                package=info.plugin_id,
+                source="local",
+                readme="",
+            )
+        return None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
