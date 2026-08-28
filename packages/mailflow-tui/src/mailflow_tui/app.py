@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import queue as queue_module
 import re
+import time
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, ClassVar, cast
@@ -1365,21 +1366,25 @@ class _RuntimePluginTable(DataTable[Any]):
         super().__init__(**kwargs)
         self._on_double_click = on_double_click
 
-    async def _on_click(self, event: Any) -> None:
-        await super()._on_click(event)
-        # Textual's Click carries the chain counter (2 = double click) and
-        # the widget's own handler still runs even though the event is
-        # stopped afterwards — fire the dialog immediately on chain == 2.
-        if getattr(event, "chain", 1) != 2:
-            return
+    async def on_mouse_down(self, event: Any) -> None:
+        # The second MouseDown of a double-click is delivered immediately —
+        # waiting for Click chain synthesis costs the double-click timeout
+        # (~0.5s). Fire on the second press: instant dialog.
+        await super()._on_mouse_down(event)  # pyright: ignore[reportAttributeAccessIssue]
+        now = time.monotonic()
         style = getattr(event, "style", None)
         meta = dict(style.meta or {}) if style is not None else {}
         row_index = meta.get("row")
         column_index = meta.get("column", 0) or 0
         if not isinstance(row_index, int) or row_index < 0 or row_index >= self.row_count:
+            self._last_press = (0.0, -1)
             return
-        key = self.coordinate_to_cell_key(Coordinate(row_index, column_index)).row_key
-        self._on_double_click(str(key.value))
+        last_time, last_row = getattr(self, "_last_press", (0.0, -1))  # pyright: ignore[reportUnknownVariableType, reportUnknownVariableType]
+        self._last_press = (now, row_index)
+        if now - last_time <= 0.5 and last_row == row_index:
+            self._last_press = (0.0, -1)
+            key = self.coordinate_to_cell_key(Coordinate(row_index, column_index)).row_key
+            self._on_double_click(str(key.value))
 
 
 class MarketDetailScreen(ModalScreen[Any]):
