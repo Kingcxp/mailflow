@@ -58,7 +58,11 @@ without it the service has no file to write to.
   height with quick Disable/Enable/Uninstall buttons, plus mail adapters,
   accounts (status/errors), LLMs, processor → LLM/fallback bindings and
   storage provider — all read from the service snapshot. **Double-clicking
-  a plugin row opens the same plugin-detail dialog as the Market tab.**
+  a plugin row opens the same plugin-detail dialog as the Market tab**;
+  the dialog opens instantly from the market's cached entries when they
+  are loaded, otherwise from the locally loaded plugin metadata (the
+  module docstring becomes the readme) — no network fetch happens on the
+  double-click path.
   Every pane loads asynchronously (mount workers) so startup never blocks.
 - **Market**: VS Code-style plugin store — search input, localized category
   filter (known ids render through the language packs), a **sort dropdown**

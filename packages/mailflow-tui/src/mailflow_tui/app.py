@@ -1054,6 +1054,7 @@ class RuntimePane(Vertical):
         super().__init__()
         self._service = service
         self._selected_plugin: str | None = None
+        self._detail_open_for: str | None = None
         self._refresh_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
@@ -1199,7 +1200,11 @@ class RuntimePane(Vertical):
         )
 
     def _open_plugin_detail(self, plugin_id: str) -> None:
-        """Open the plugin's market detail (readme + install state)."""
+        """Open the plugin's market detail (readme + install state).
+
+        The dialog is synchronous: the market cache (when loaded) or the
+        local plugin metadata/docstring is used, never a network fetch — a
+        double-click must open instantly even before the market has loaded."""
         if getattr(self, "_detail_open_for", None) == plugin_id:
             return  # the dialog for this plugin is already up
         self._detail_open_for = plugin_id
@@ -1211,23 +1216,40 @@ class RuntimePane(Vertical):
                     plugin = candidate
                     break
         if plugin is None:
-            self.run_worker(self._open_plugin_detail_async(plugin_id))
+            plugin = self._local_market_plugin(plugin_id)
+        if plugin is None:
+            self.query_one("#runtime-status", Static).update(
+                f"[yellow]{self._service.t('plugin.unknown_plugin', plugin_id=plugin_id)}[/yellow]"
+            )
             return
         cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-            MarketDetailScreen(self._service, plugin)
+            MarketDetailScreen(self._service, plugin),
+            callback=lambda _result: self._detail_closed(plugin_id),
         )
 
-    async def _open_plugin_detail_async(self, plugin_id: str) -> None:
-        try:
-            found = await asyncio.to_thread(self._service.market.find, plugin_id)
-        except Exception:
-            found = None
-        plugin = found[1] if found else None
-        if plugin is None:
-            return
-        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-            MarketDetailScreen(self._service, plugin)
-        )
+    def _detail_closed(self, plugin_id: str) -> None:
+        """Release the double-open guard when the detail dialog closes."""
+        if self._detail_open_for == plugin_id:
+            self._detail_open_for = None
+
+    def _local_market_plugin(self, plugin_id: str) -> MarketPlugin | None:
+        """Build a market entry for a locally loaded plugin (bundled or
+        installed): the module docstring becomes the readme, so the detail
+        dialog works offline and before the marketplace fetch completes."""
+        for info in self._service.plugin_manager.enabled_infos():
+            if info.plugin_id != plugin_id:
+                continue
+            return MarketPlugin(
+                id=info.plugin_id,
+                name=info.name or info.plugin_id,
+                version=info.version,
+                description=info.description,
+                categories=[k.value for k in info.kinds],
+                package=info.plugin_id,
+                source="local",
+                readme=plugin_doc_readme(info),
+            )
+        return None
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._selected_plugin is None:
@@ -1499,6 +1521,7 @@ class MarketPane(Vertical):
         self._selected: MarketPlugin | None = None
         self._installed: dict[str, bool] = {}
         self._loading = False
+        self._detail_open_for: str | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="market-controls"):
@@ -1760,11 +1783,21 @@ class MarketPane(Vertical):
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         plugin = next((p for _r, p in self._entries if p.id == event.row_key.value), None)
-        if plugin is not None:
-            self._show_detail(plugin)
-            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-                MarketDetailScreen(self._service, plugin)
-            )
+        if plugin is None:
+            return
+        if self._detail_open_for == plugin.id:
+            return  # a double-click fires RowSelected twice: one dialog
+        self._detail_open_for = plugin.id
+        self._show_detail(plugin)
+        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+            MarketDetailScreen(self._service, plugin),
+            callback=lambda _result: self._detail_closed(plugin.id),
+        )
+
+    def _detail_closed(self, plugin_id: str) -> None:
+        """Release the double-open guard when the detail dialog closes."""
+        if self._detail_open_for == plugin_id:
+            self._detail_open_for = None
 
     async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         plugin = next((p for _r, p in self._entries if p.id == event.row_key.value), None)
