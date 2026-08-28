@@ -88,8 +88,11 @@ def create_app(service: MailFlowService) -> FastAPI:
         return _jsonable(service.snapshot())
 
     @app.get("/mails")
-    def mails(limit: int | None = None, _: None = Depends(guard)) -> Any:
-        return JSONResponse(_jsonable(asyncio.run(service.list_mails(limit=limit))))
+    async def mails(limit: int | None = None, _: None = Depends(guard)) -> Any:
+        # async route: the service's storage lock is bound to the server's
+        # event loop; asyncio.run in a sync route would attach a new loop
+        # and fail with "attached to a different loop"
+        return JSONResponse(_jsonable(await service.list_mails(limit=limit)))
 
     @app.get("/mails/{record_id}")
     async def get_mail(record_id: str, _: None = Depends(guard)) -> Any:

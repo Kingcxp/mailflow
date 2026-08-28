@@ -57,7 +57,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from zoneinfo import ZoneInfo
 from typing import Any
 
 from nonebot import get_driver, on_message
@@ -132,7 +131,7 @@ async def _send_digest(event: str, **payload: Any) -> None:
     """Forward the daily digest as paginated chat messages."""
     items = payload.get("items") or []
     lines = [
-                f"{i.due_at.astimezone(ZoneInfo(_service.config.general.timezone)):%m-%d %H:%M}"
+        f"{i.due_at.astimezone(ZoneInfo(_service.config.general.timezone)):%m-%d %H:%M}"
         f" ({i.action_type}) {i.summary}"
         for i in items
     ]

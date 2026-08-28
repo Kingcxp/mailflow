@@ -51,8 +51,8 @@ class OneBotNotifier:
     async def notify(self, record: MailRecord) -> None:
         if not self._url or not self._targets:
             logger.warning(
-                "onebot notifier %r: http_url/targets not configured; skipping",
-                getattr(self, "_config_id", "<onebot>"),
+                "onebot notifier: http_url/targets not configured; skipping (record %s)",
+                record.record_id,
             )
             return
         text = format_message(record)

@@ -144,9 +144,10 @@ class AnthropicBackend:
                 async with httpx.AsyncClient(timeout=self._config.timeout_seconds) as client:
                     response = await client.post(url, json=body, headers=headers)
                     if response.status_code >= 400:
-                        raise RuntimeError(
-                            f"anthropic api error {response.status_code}: {response.text[:200]}"
-                        )
+                        # status code only: the response body may echo the
+                        # request (including the API key) and must never
+                        # reach persisted processor notes
+                        raise RuntimeError(f"anthropic api error {response.status_code}")
                     return self._parse(response.json())
             except Exception as exc:
                 last_error = exc
