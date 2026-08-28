@@ -12,11 +12,9 @@ from typing import Any, ClassVar
 import httpx
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
-from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Input, Label, Select, Static
+from textual.widgets import Button, DataTable, Static
 
 from mailflow_tui.gateway_guide import GatewayGuideModal
 
@@ -78,96 +76,6 @@ class _BotStatusProbe:
         except Exception as exc:
             return str(t("tui.bots_unreachable", error=type(exc).__name__))
         return str(t("tui.bots_unknown_provider"))
-
-
-class BotBasicsModal(ModalScreen[dict[str, Any] | None]):
-    """Step 1 of the bot setup: ask for the instance name/id only."""
-
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
-
-    def __init__(self, service: MailFlowService) -> None:
-        super().__init__()
-        self._service = service
-
-    def _t(self, key: str, **params: Any) -> str:
-        return self._service.t(key, **params)
-
-    def compose(self) -> ComposeResult:
-        yield Static(self._t("tui.bots_basics_title"), id="basics-title")
-        with Vertical(id="basics-body"):
-            yield Label(self._t("tui.bots_basics_id"), classes="field-label")
-            yield Input(placeholder="bot-1", id="basics-id")
-            yield Static("", id="basics-status")
-            with Horizontal(id="basics-actions"):
-                yield Button(self._t("tui.bots_basics_next"), id="basics-next", variant="primary")
-                yield Button(self._t("tui.btn_cancel"), id="basics-cancel", variant="error")
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "basics-cancel":
-            self.dismiss(None)
-            return
-        if event.button.id != "basics-next":
-            return
-        instance_id = self.query_one("#basics-id", Input).value.strip()
-        if not instance_id:
-            self.query_one("#basics-status", Static).update(
-                f"[yellow]{self._t('tui.bots_basics_id')} required[/yellow]"
-            )
-            return
-        self.dismiss({"instance_id": instance_id})
-
-
-class BotProviderModal(ModalScreen[dict[str, Any] | None]):
-    """Step 2 of the bot setup: pick the platform from the available
-    gateway provisioners (plus notifier-only platforms)."""
-
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
-
-    def __init__(self, service: MailFlowService, instance_id: str) -> None:
-        super().__init__()
-        self._service = service
-        self._instance_id = instance_id
-
-    def _t(self, key: str, **params: Any) -> str:
-        return self._service.t(key, **params)
-
-    @staticmethod
-    def _provider_label(service: MailFlowService, provider: str) -> str:
-        """Localized label for a known provider id; unknown ids stay raw."""
-        key = f"tui.bots_provider_{provider}"
-        translated = service.t(key)
-        return translated if translated != key else provider
-
-    def compose(self) -> ComposeResult:
-        providers = self._service.gateway_providers()
-        # notifier-only platforms (e.g. openclaw) stay selectable but are
-        # configured manually
-        from mailflow_tui.bots import BotsPane
-
-        choices = [(self._provider_label(self._service, p), p) for p in providers]
-        for extra in sorted(BotsPane.IM_PROVIDERS - set(providers)):
-            choices.append((self._provider_label(self._service, extra), extra))
-        yield Static(self._t("tui.bots_wizard_pick"), id="provider-title")
-        with Vertical(id="provider-body"):
-            yield Select(choices, id="provider-select", allow_blank=False)
-            yield Static("", id="provider-status")
-            with Horizontal(id="provider-actions"):
-                yield Button(self._t("tui.btn_next"), id="provider-next", variant="primary")
-                yield Button(self._t("tui.btn_cancel"), id="provider-cancel", variant="error")
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "provider-cancel":
-            self.dismiss(None)
-            return
-        if event.button.id != "provider-next":
-            return
-        select = self.query_one("#provider-select", Select)
-        if select.value is Select.NULL:
-            self.query_one("#provider-status", Static).update(
-                f"[yellow]{self._t('tui.bots_wizard_pick_first')}[/yellow]"
-            )
-            return
-        self.dismiss({"provider": str(select.value)})
 
 
 class BotsPane(Vertical):
@@ -240,10 +148,15 @@ class BotsPane(Vertical):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "bots-add":
-            # three-step setup: basics → provider → guided gateway
+            # the standard notifier form: basics + provider dropdown. The
+            # Next button inside the form routes gateway-backed platforms
+            # (napcat/wechaty) into the guided setup, and saves manually
+            # configured ones (openclaw) directly.
+            from mailflow_tui.settings import EntryFormScreen
+
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-                BotBasicsModal(self._service),
-                callback=self._after_basics,
+                EntryFormScreen(self._service, "notifiers"),
+                callback=self._after_form,
             )
             return
         if button_id == "bots-delete":
@@ -255,35 +168,37 @@ class BotsPane(Vertical):
         # button handler or a down gateway freezes the whole UI
         self.run_worker(self._check_all(), exclusive=True, group="bots-check", exit_on_error=False)
 
-    def _after_basics(self, values: dict[str, Any] | None) -> None:
-        """Step 1 done → pick the provider."""
-        if not values:
-            return
-        self._pending_instance_id = str(values.get("instance_id") or "bot-1")
-        self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-            BotProviderModal(self._service, self._pending_instance_id),
-            callback=self._after_provider,
-        )
+    @staticmethod
+    def _gateway_for(service: MailFlowService, provider: str) -> str | None:
+        """The gateway provisioner id backing a notifier provider
+        (onebot -> napcat; others map 1:1). None when manual-only."""
+        if provider == "onebot":
+            return "napcat" if "napcat" in service.gateway_providers() else None
+        if provider in service.gateway_providers():
+            return provider
+        return None
 
-    def _after_provider(self, values: dict[str, Any] | None) -> None:
-        """Step 2 done → run the guided gateway setup."""
+    def _after_form(self, values: dict[str, Any] | None) -> None:
+        """Form dismissed → persist, or run the guided gateway setup."""
         if not values:
             return
+        guided = values.pop("_guided", False)
         provider = str(values.get("provider") or "")
-        instance_id = str(getattr(self, "_pending_instance_id", "bot-1"))
-        if provider in self._service.gateway_providers():
-            # gateway-backed platform: provision + QR, then save the notifier
+        gateway = self._gateway_for(self._service, provider)
+        if guided and gateway is not None:
+            # gateway-backed platform: the form asked only the basics; the
+            # guide installs/starts the gateway and shows the QR
+            instance_id = str(values.get("notifier_id") or f"{gateway}-1")
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-                GatewayGuideModal(self._service, provider, instance_id, {}),
-                callback=lambda result: self._after_guide(provider, instance_id, result),
+                GatewayGuideModal(self._service, gateway, instance_id, {}),
+                callback=lambda result: self._after_guide(gateway, instance_id, result),
             )
             return
-        # notifier-only platform (openclaw): manual form as before
-        from mailflow_tui.settings import EntryFormScreen
-
-        self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-            EntryFormScreen(self._service, "notifiers", values={"provider": provider}),
-            callback=self._after_manual_form,
+        self.run_worker(
+            self._save_manual_notifier(values),
+            exclusive=True,
+            group="bots-setup",
+            exit_on_error=False,
         )
 
     def _after_guide(self, provider: str, instance_id: str, result: dict[str, Any] | None) -> None:
@@ -320,17 +235,6 @@ class BotsPane(Vertical):
         self.refresh_data()
         self.query_one("#bots-status", Static).update(
             f"[green]{self._service.t('tui.bots_configured_ok', instance=instance_id)}[/green]"
-        )
-
-    def _after_manual_form(self, values: dict[str, Any] | None) -> None:
-        """Notifier-only platform form dismissed → persist."""
-        if not values:
-            return
-        self.run_worker(
-            self._save_manual_notifier(values),
-            exclusive=True,
-            group="bots-setup",
-            exit_on_error=False,
         )
 
     async def _save_manual_notifier(self, values: dict[str, Any]) -> None:

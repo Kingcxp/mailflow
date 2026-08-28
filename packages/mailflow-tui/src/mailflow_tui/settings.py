@@ -391,6 +391,18 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 _Extra("limit", default="20"),
             )
         if self._group == "notifiers":
+            if provider == "openclaw-weixin":
+                # notifier-only platform: no gateway, endpoints are manual
+                return (
+                    _Extra("base_url", required=True),
+                    _Extra("endpoint", default="/api/v1"),
+                    _Extra("targets", required=True),
+                )
+            if self._gateway_for(provider) is not None:
+                # gateway-backed platform (onebot->napcat, wechaty): the
+                # endpoint, token and targets are produced by the guided
+                # setup after Next — the form only asks for the basics
+                return ()
             if provider == "onebot":
                 return (
                     _Extra("http_url", required=True),
@@ -403,13 +415,19 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     _Extra("token", kind="password", secret=True),
                     _Extra("targets", required=True),
                 )
-            if provider == "openclaw-weixin":
-                return (
-                    _Extra("base_url", required=True),
-                    _Extra("endpoint", default="/api/v1"),
-                    _Extra("targets", required=True),
-                )
         return ()
+
+    def _gateway_for(self, provider: str) -> str | None:
+        """The gateway provisioner id backing a notifier provider.
+
+        ``onebot`` (notifier) is provisioned by the ``napcat`` gateway;
+        other providers map 1:1 by id (``wechaty`` -> ``wechaty``).
+        Returns None when the platform has no gateway provisioner."""
+        if provider == "onebot":
+            return "napcat" if "napcat" in self._service.gateway_providers() else None
+        if provider in self._service.gateway_providers():
+            return provider
+        return None
 
     def _core_value(self, label: str) -> Any:
         spec = next((s for s in self._specs if s.label == label), None)
