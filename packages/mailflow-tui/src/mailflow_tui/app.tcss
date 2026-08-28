@@ -891,3 +891,47 @@ ListEditScreen, EntryFormScreen {
     height: auto;
     padding: 0 1;
 }
+
+/* Gateway guide dialog: bordered frame, log pane, QR + status inside,
+   buttons outside the frame */
+#guide-title {
+    content-align: center middle;
+    text-style: bold;
+    margin: 1 0;
+}
+
+#guide-dialog {
+    width: 80;
+    height: 24;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+    margin: 0 4;
+}
+
+#guide-log-wrap {
+    height: 16;
+    border: round $primary;
+    margin-bottom: 1;
+}
+
+#guide-log {
+    height: 100%;
+}
+
+#guide-qr {
+    height: auto;
+    max-height: 10;
+    color: $text;
+    margin-bottom: 1;
+}
+
+#guide-status {
+    color: $text;
+    margin-bottom: 1;
+}
+
+#guide-actions {
+    align: center middle;
+    margin: 1 0 2 0;
+}

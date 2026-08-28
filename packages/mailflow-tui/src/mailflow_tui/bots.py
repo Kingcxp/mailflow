@@ -171,9 +171,7 @@ class BotsPane(Vertical):
     @staticmethod
     def _gateway_for(service: MailFlowService, provider: str) -> str | None:
         """The gateway provisioner id backing a notifier provider
-        (onebot -> napcat; others map 1:1). None when manual-only."""
-        if provider == "onebot":
-            return "napcat" if "napcat" in service.gateway_providers() else None
+        (napcat, wechaty map 1:1). None when manual-only."""
         if provider in service.gateway_providers():
             return provider
         return None

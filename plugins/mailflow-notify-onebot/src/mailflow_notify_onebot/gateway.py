@@ -18,6 +18,7 @@ import json
 import logging
 import shutil
 import subprocess
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -28,18 +29,47 @@ from mailflow.contracts import GatewayInstance
 
 logger = logging.getLogger("mailflow.gateway.napcat")
 
-_NAPCAT_VERSION = "4.1.3"
-_NAPCAT_RELEASE = (
-    f"https://github.com/NapNeko/NapCatQQ/releases/download/v{_NAPCAT_VERSION}/NapCat.Shell.zip"
-)
+_NAPCAT_VERSION = ""  # resolved from the latest GitHub release at install time
+_NAPCAT_ASSET = "NapCat.Shell.zip"
+_NAPCAT_API = "https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest"
 _BASE_PORT = 3000
 _READY_TIMEOUT = 30.0
+
+_latest_version: str | None = None
+
+
+def _release_url(version: str) -> str:
+    return f"https://github.com/NapNeko/NapCatQQ/releases/download/v{version}/{_NAPCAT_ASSET}"
 
 
 def _data_root() -> Path:
     """Gateway data root; mirrors the storage db directory layout."""
     # resolve from the current working directory like the rest of the app
     return Path("data") / "gateways"
+
+
+def _latest_napcat_version() -> str:
+    """Latest NapCat release tag (cached per process); raises with a clear
+    message when the GitHub API is unreachable."""
+    global _latest_version
+    if _latest_version:
+        return _latest_version
+    request = urllib.request.Request(
+        _NAPCAT_API, headers={"User-Agent": "mailflow", "Accept": "application/vnd.github+json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(
+            f"could not look up the latest NapCat release ({exc}); "
+            "check the network or pin options.napcat_version"
+        ) from exc
+    tag = str(payload.get("tag_name", "")).lstrip("v")
+    if not tag:
+        raise RuntimeError("NapCat release lookup returned no version tag")
+    _latest_version = tag
+    return tag
 
 
 def _instance_dir(instance_id: str) -> Path:
@@ -134,9 +164,11 @@ class NapCatProvisioner:
             logger.info("napcat %s already installed at %s", instance_id, target)
             return
         target.mkdir(parents=True, exist_ok=True)
+        version = str(options.get("napcat_version") or "").strip() or _latest_napcat_version()
+        url = _release_url(version)
         archive = target / "napcat.zip"
-        logger.info("napcat %s: downloading %s", instance_id, _NAPCAT_RELEASE)
-        await asyncio.to_thread(self._download, _NAPCAT_RELEASE, archive)
+        logger.info("napcat %s: downloading %s", instance_id, url)
+        await asyncio.to_thread(self._download, url, archive)
         try:
             with zipfile.ZipFile(archive) as zf:
                 zf.extractall(target)
@@ -147,11 +179,18 @@ class NapCatProvisioner:
     @staticmethod
     def _download(url: str, destination: Path) -> None:
         request = urllib.request.Request(url, headers={"User-Agent": "mailflow"})
-        with (
-            urllib.request.urlopen(request, timeout=120) as response,
-            open(destination, "wb") as handle,
-        ):
-            shutil.copyfileobj(response, handle)
+        try:
+            with (
+                urllib.request.urlopen(request, timeout=120) as response,
+                open(destination, "wb") as handle,
+            ):
+                shutil.copyfileobj(response, handle)
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"download failed: HTTP {exc.code} {exc.reason} for {url}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"download failed: {exc.reason} for {url}") from exc
+        except OSError as exc:
+            raise RuntimeError(f"download failed: {exc} for {url}") from exc
 
     @staticmethod
     def _find_entry(target: Path, instance_id: str) -> Path:

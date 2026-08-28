@@ -355,7 +355,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         elif group == "notifiers":
             from mailflow_tui.bots import BotsPane
 
-            self._provider_choices = tuple(sorted(BotsPane.IM_PROVIDERS))
+            # gateway-auto-deploy platforms first, then manual ones; the
+            # gateway id (napcat) is a separate choice from the manual
+            # notifier id (onebot) so self-hosted users keep the form
+            choices = set(BotsPane.IM_PROVIDERS)
+            choices.update(service.gateway_providers())
+            self._provider_choices = tuple(sorted(choices))
         else:
             self._provider_choices = ()
 
@@ -377,6 +382,17 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         except Exception:
             selected = ""
         return selected or str(self._values.get("provider", "")) or self._default_provider
+
+    def _choice_label(self, choice: Any) -> str:
+        """Localized provider label; the auto-deploy napcat choice is
+        marked so self-hosted users know it installs the gateway."""
+        value = str(choice)
+        key = f"tui.bots_provider_{value}"
+        translated = self._service.t(key)
+        label = translated if translated != key else value
+        if value == "napcat":
+            return f"{label}（自动部署）"
+        return label
 
     def _extras_for(self, provider: str) -> tuple[_Extra, ...]:
         if self._group == "llms":
@@ -420,11 +436,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
     def _gateway_for(self, provider: str) -> str | None:
         """The gateway provisioner id backing a notifier provider.
 
-        ``onebot`` (notifier) is provisioned by the ``napcat`` gateway;
-        other providers map 1:1 by id (``wechaty`` -> ``wechaty``).
-        Returns None when the platform has no gateway provisioner."""
-        if provider == "onebot":
-            return "napcat" if "napcat" in self._service.gateway_providers() else None
+        ``napcat`` (auto-deploy) and ``wechaty`` map 1:1 to their gateway
+        provisioner; ``onebot`` is the manual notifier id and has no
+        gateway. Returns None when the platform is manual-only."""
         if provider in self._service.gateway_providers():
             return provider
         return None
@@ -487,7 +501,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             # the first option when blank is not allowed, instead of crashing
             initial_value: Any = initial if initial is not None else Select.NULL
             yield Select(
-                [(str(choice), str(choice)) for choice in choices],
+                [(self._choice_label(choice), str(choice)) for choice in choices],
                 value=initial_value,
                 id=widget_id,
                 allow_blank=False,

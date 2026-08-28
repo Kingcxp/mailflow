@@ -18,6 +18,13 @@ All notable changes are recorded here; the format follows
 - The onebot and wechaty plugins now register gateway provisioners
   (`napcat` / `wechaty`) alongside their notifiers; the WeChaty bridge
   reference (`wechaty-gateway.js`) ships in the plugin package.
+- NapCat's release version is resolved from the latest GitHub release at
+  install time (a pinned version could 404); download errors now include
+  the URL and HTTP status.
+- The bot setup guide is a bordered dialog with a live log pane
+  (timestamp + level, scrollable) and the QR inside the frame, buttons
+  outside; the provider dropdown offers `napcat` (auto-deploy) separately
+  from the manual `onebot` form.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

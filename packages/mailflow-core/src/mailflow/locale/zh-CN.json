@@ -641,7 +641,8 @@
       "bots_basics_next": "下一步",
       "bots_provider_pick": "选择要接入的平台：",
       "bots_provider_missing": "该平台没有可用的网关配置器",
-      "bots_provider_napcat": "QQ（OneBot / NapCat）"
+      "bots_provider_napcat": "QQ（OneBot / NapCat）",
+      "bots_guide_starting": "开始 {provider} 部署…"
     },
     "update": {
       "applied_title": "已应用的更新",

@@ -5,11 +5,19 @@ WeChaty pad protocol) with as little manual work as possible: the user picks
 a platform in a form, and MailFlow installs, starts and configures the
 gateway — including driving the QR login inside the TUI.
 
-Status: implemented (round 1). NapCat (via the `napcat` provisioner in
-mailflow-notify-onebot) and WeChaty (via the `wechaty` provisioner in
+Status: implemented (round 1 + fixes). NapCat (via the `napcat` provisioner
+in mailflow-notify-onebot) and WeChaty (via the `wechaty` provisioner in
 mailflow-notify-wechaty) are auto-installed, launched and supervised by the
-GatewayManager; the Bots tab walks through basics → provider → guided QR
-login. openclaw-weixin remains manual.
+GatewayManager. The Bots tab's Add button opens the standard notifier
+form: the provider dropdown lists `napcat` (auto-deploy, labeled
+"QQ (OneBot / NapCat)") as a separate choice from the manual `onebot`
+notifier id, so self-hosted users keep the endpoint form. Choosing a
+gateway-backed provider and pressing Next opens the guided setup — a
+bordered dialog with a live timestamped/level-tagged log pane (scrollable)
+and the QR login inside the frame, buttons outside. openclaw-weixin
+remains manual. NapCat's version is resolved from the latest GitHub
+release at install time (no more pinned, possibly-404 URLs); download
+errors carry the URL and HTTP status.
 
 ## Goals
 
