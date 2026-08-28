@@ -1210,7 +1210,7 @@ class RuntimePane(Vertical):
         if getattr(self, "_detail_open_for", None) == plugin_id:
             return  # the dialog for this plugin is already up
         self._detail_open_for = plugin_id
-        plugin = cast(MailFlowApp, self.app).plugin_entry(plugin_id)
+        plugin = cast(MailFlowApp, self.app).plugin_entry(plugin_id)  # pyright: ignore[reportUnknownMemberType]
         if plugin is None:
             plugin = self._local_market_plugin(plugin_id)
         if plugin is None:
@@ -1230,7 +1230,7 @@ class RuntimePane(Vertical):
 
     def _local_market_plugin(self, plugin_id: str) -> MarketPlugin | None:
         """App-wide local entry builder (shared with the Market tab)."""
-        return cast(MailFlowApp, self.app).local_plugin_entry(plugin_id)
+        return cast(MailFlowApp, self.app).local_plugin_entry(plugin_id)  # pyright: ignore[reportUnknownMemberType]
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._selected_plugin is None:
@@ -1703,7 +1703,7 @@ class MarketPane(Vertical):
         for info in self._service.plugin_manager.enabled_infos():
             if info.plugin_id in seen:
                 continue
-            local = cast(MailFlowApp, self.app).local_plugin_entry(info.plugin_id)
+            local = cast(MailFlowApp, self.app).local_plugin_entry(info.plugin_id)  # pyright: ignore[reportUnknownMemberType]
             if local is not None:
                 # fill the docstring here (this whole method runs in the
                 # market-fetch worker): the market pane's inline preview
@@ -1717,7 +1717,7 @@ class MarketPane(Vertical):
         # share with the Runtime tab: both tabs now resolve the detail from
         # the same entries (market readme + translations for remote plugins,
         # docstring for local-only ones)
-        cast(MailFlowApp, self.app).set_plugin_entries(self._entries)
+        cast(MailFlowApp, self.app).set_plugin_entries(self._entries)  # pyright: ignore[reportUnknownMemberType]
         self._render_entries()
 
     def _render_entries(self) -> None:
