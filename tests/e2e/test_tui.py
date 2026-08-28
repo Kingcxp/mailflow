@@ -705,8 +705,14 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
             market_table.action_select_cursor()  # equivalent of pressing Enter
             await pilot.pause(0.2)
             assert isinstance(app.screen, MarketDetailScreen)
+            # the readme renders in a worker now: poll until it lands
             readme = app.screen.query_one("#market-detail-readme", Markdown)  # pyright: ignore[reportUnknownMemberType]
-            content = str(getattr(readme, "_markdown", ""))  # pyright: ignore[reportUnknownMemberType]
+            content = ""
+            for _ in range(40):
+                content = str(getattr(readme, "_markdown", ""))  # pyright: ignore[reportUnknownMemberType]
+                if "Full markdown body" in content:
+                    break
+                await pilot.pause(0.05)
             assert "Test Author" in content
             assert "2026-08-01" in content
             assert "Full markdown body" in content

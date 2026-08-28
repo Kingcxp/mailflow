@@ -1234,8 +1234,9 @@ class RuntimePane(Vertical):
 
     def _local_market_plugin(self, plugin_id: str) -> MarketPlugin | None:
         """Build a market entry for a locally loaded plugin (bundled or
-        installed): the module docstring becomes the readme, so the detail
-        dialog works offline and before the marketplace fetch completes."""
+        installed). The readme stays empty here: importing the plugin
+        module and rendering its docstring is deferred to the detail
+        dialog's worker so the double-click never blocks on it."""
         for info in self._service.plugin_manager.enabled_infos():
             if info.plugin_id != plugin_id:
                 continue
@@ -1247,7 +1248,7 @@ class RuntimePane(Vertical):
                 categories=[k.value for k in info.kinds],
                 package=info.plugin_id,
                 source="local",
-                readme=plugin_doc_readme(info),
+                readme="",
             )
         return None
 
@@ -1430,23 +1431,16 @@ class MarketDetailScreen(ModalScreen[Any]):
         super().__init__()
         self._service = service
         self._plugin = plugin
+        self._content_loaded = False
 
     def compose(self) -> ComposeResult:
-        plugin = self._plugin
-        language = self._service.i18n.language
-        readme = plugin.readme_for(language) or (
-            f"# {plugin.name or plugin.id}\n\n{plugin.description_for(language)}"
-        )
-        meta = (
-            f"**{plugin.name or plugin.id}** v{plugin.version} — `{plugin.id}`\n\n"
-            f"{self._service.t('plugin.field_author')}: {plugin.author or '-'} · "
-            f"{self._service.t('plugin.field_updated')}: {plugin.updated or '-'}\n"
-            f"{self._service.t('plugin.field_homepage')}: {plugin.homepage or '-'}\n"
-        )
+        # skeleton first: the dialog opens instantly, the readme renders in
+        # a worker (on_mount) so a large/missing readme never blocks the
+        # double-click response
         with Vertical(id="market-detail-dialog"):
             yield Static(self._service.t("tui.market_detail"), id="market-detail-title")
             with ScrollableContainer(id="market-detail-scroll"):
-                yield Markdown(meta + "\n---\n\n" + readme, id="market-detail-readme")
+                yield Markdown(self._t("tui.loading"), id="market-detail-readme")
             yield Static("", id="market-detail-status")
             with Horizontal(id="market-detail-actions"):
                 yield Button(
@@ -1466,6 +1460,59 @@ class MarketDetailScreen(ModalScreen[Any]):
                     self._service.t("tui.btn_disable"), id="detail-disable", variant="error"
                 )
                 yield Button(self._service.t("tui.btn_close"), id="detail-close", variant="primary")
+
+    def _t(self, key: str, **params: Any) -> str:
+        return self._service.t(key, **params)
+
+    async def on_mount(self) -> None:
+        # build the readme off the UI thread: docstring import + markdown
+        # assembly can be slow for bundled plugins without a market entry
+        self.run_worker(
+            self._load_content(), exclusive=True, group="detail-load", exit_on_error=False
+        )
+
+    async def _load_content(self) -> None:
+        plugin = self._plugin
+        language = self._service.i18n.language
+        readme = await asyncio.to_thread(self._readme_for, plugin, language)
+        meta = (
+            f"**{plugin.name or plugin.id}** v{plugin.version} — `{plugin.id}`\n\n"
+            f"{self._service.t('plugin.field_author')}: {plugin.author or '-'} · "
+            f"{self._service.t('plugin.field_updated')}: {plugin.updated or '-'}\n"
+            f"{self._service.t('plugin.field_homepage')}: {plugin.homepage or '-'}\n"
+        )
+        node = self.query_one_optional("#market-detail-readme", Markdown)
+        if node is not None:
+            node.update(meta + "\n---\n\n" + readme)
+        self._content_loaded = True
+
+    @staticmethod
+    def _readme_for(plugin: MarketPlugin, language: str) -> str:
+        """Localized readme for the detail dialog.
+
+        Priority: market readme (may carry translations) > the plugin
+        module's docstring (full local documentation) > the one-line
+        description. The docstring import runs here, in the worker, never
+        on the click path."""
+        readme = plugin.readme_for(language)
+        if readme:
+            return readme
+        if plugin.source == "local":
+            from mailflow.plugins import PluginInfo
+
+            info = PluginInfo(
+                plugin_id=plugin.id,
+                name=plugin.name,
+                version=plugin.version,
+                description=plugin.description,
+            )
+            doc = plugin_doc_readme(info)
+            if doc:
+                return f"# {plugin.name or plugin.id}\n\n{doc}"
+        description = plugin.description_for(language)
+        if description:
+            return f"# {plugin.name or plugin.id}\n\n{description}"
+        return ""
 
     def _set_status(self, text: str) -> None:
         status = self.query_one_optional("#market-detail-status", Static)
