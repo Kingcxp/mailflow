@@ -621,7 +621,7 @@
       "bots_wizard_title": "添加机器人平台",
       "bots_wizard_pick": "选择要接入的平台：",
       "bots_provider_onebot": "QQ（OneBot）",
-      "bots_provider_wechaty": "微信（WeChaty 平板协议）",
+      "bots_provider_wechaty": "微信（WeChaty 平板协议 · 自动部署）",
       "bots_provider_openclaw": "微信（OpenClaw）",
       "bots_wizard_pick_first": "请先选择平台",
       "bots_wizard_no_runtime": "未发现{provider}运行时，请先启动对应服务后重试",

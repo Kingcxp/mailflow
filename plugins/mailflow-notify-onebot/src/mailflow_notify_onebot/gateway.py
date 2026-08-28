@@ -29,7 +29,12 @@ from mailflow.contracts import GatewayInstance
 
 logger = logging.getLogger("mailflow.gateway.napcat")
 
-_NAPCAT_VERSION = ""  # resolved from the latest GitHub release at install time
+# Default NapCat release: pinned to a known-good version so installs never
+# depend on the GitHub API (anonymous rate limit is 60 req/hr and can be
+# exhausted by retries/multiple sessions). Set options.napcat_version to a
+# specific tag, or to "latest" to resolve from the GitHub API at install
+# time.
+_NAPCAT_VERSION = "4.18.19"
 _NAPCAT_ASSET = "NapCat.Shell.zip"
 _NAPCAT_API = "https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest"
 _BASE_PORT = 3000
@@ -50,7 +55,7 @@ def _data_root() -> Path:
 
 def _latest_napcat_version() -> str:
     """Latest NapCat release tag (cached per process); raises with a clear
-    message when the GitHub API is unreachable."""
+    message when the GitHub API is unreachable or rate-limited."""
     global _latest_version
     if _latest_version:
         return _latest_version
@@ -63,7 +68,8 @@ def _latest_napcat_version() -> str:
     except Exception as exc:
         raise RuntimeError(
             f"could not look up the latest NapCat release ({exc}); "
-            "check the network or pin options.napcat_version"
+            f"the default pinned version {_NAPCAT_VERSION} is used instead "
+            "— remove options.napcat_version or pin a specific tag"
         ) from exc
     tag = str(payload.get("tag_name", "")).lstrip("v")
     if not tag:
@@ -164,7 +170,13 @@ class NapCatProvisioner:
             logger.info("napcat %s already installed at %s", instance_id, target)
             return
         target.mkdir(parents=True, exist_ok=True)
-        version = str(options.get("napcat_version") or "").strip() or _latest_napcat_version()
+        requested = str(options.get("napcat_version") or "").strip()
+        if requested == "latest":
+            version = _latest_napcat_version()
+        else:
+            # pinned default (or an explicit tag): no GitHub API call, so
+            # installs cannot hit the anonymous rate limit
+            version = requested or _NAPCAT_VERSION
         url = _release_url(version)
         archive = target / "napcat.zip"
         logger.info("napcat %s: downloading %s", instance_id, url)

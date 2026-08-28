@@ -31,6 +31,14 @@ All notable changes are recorded here; the format follows
 - The bot guide dialog sizes itself to the terminal (percent-based)
   instead of a fixed box; provider labels distinguish manual OneBot from
   NapCat auto-deploy.
+- NapCat installs use a pinned default release (4.18.19) instead of the
+  GitHub API, which hit the anonymous rate limit (403) after a few
+  calls; the API is only consulted when `napcat_version = "latest"` is
+  set explicitly.
+- The WeChaty provider label marks it as auto-deploy
+  ("WeChat (WeChaty pad protocol, auto-deploy)"); the guide dialog is
+  centered (single-child ModalScreen) and its log pane scrolls inside
+  the frame.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

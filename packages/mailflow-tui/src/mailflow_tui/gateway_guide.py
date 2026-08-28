@@ -32,6 +32,12 @@ _LEVEL_COLORS = {
 class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     """One gateway instance: provision (install/start) and show the QR."""
 
+    DEFAULT_CSS = """
+    GatewayGuideModal {
+        align: center middle;
+    }
+    """
+
     BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
 
     def __init__(
@@ -52,19 +58,21 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         return self._service.t(key, **params)
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            self._t("tui.bots_guide_title", provider=self._provider),
-            id="guide-title",
-        )
+        # one single child (the dialog) so Textual's ModalScreen centers it
+        # like every other MailFlow dialog (entry-form etc.)
         with Vertical(id="guide-dialog"):
+            yield Static(
+                self._t("tui.bots_guide_title", provider=self._provider),
+                id="guide-title",
+            )
             with Vertical(id="guide-log-wrap"):
                 yield RichLog(
                     id="guide-log", wrap=True, highlight=True, markup=True, max_lines=2000
                 )
             yield Static("", id="guide-qr")
             yield Static("", id="guide-status")
-        with Horizontal(id="guide-actions"):
-            yield Button(self._t("tui.btn_cancel"), id="guide-cancel", variant="error")
+            with Horizontal(id="guide-actions"):
+                yield Button(self._t("tui.btn_cancel"), id="guide-cancel", variant="error")
 
     async def on_mount(self) -> None:
         self._log(
