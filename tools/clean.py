@@ -2,6 +2,10 @@
 
 Keeps complex deletion logic out of the Makefile so it behaves the same
 on Windows and POSIX shells.
+
+Local runtime data is deliberately KEPT: ``data/`` (the mail database,
+trash and preferences) and ``logs/`` (rotating logs) are user data, not
+build output. ``make clean`` must never delete a user's mailbox history.
 """
 
 from __future__ import annotations
@@ -10,6 +14,12 @@ import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Subdirectories holding user data; their contents are never removed.
+_PRESERVED_DIRS = (
+    "data",
+    "logs",
+)
 
 DIR_PATTERNS = (
     # NOTE: the root .venv is intentionally NOT removed: `make clean` runs
@@ -36,23 +46,28 @@ FILE_PATTERNS = (
 )
 
 
+def _preserved(rel: Path) -> bool:
+    """True when ``rel`` sits under a preserved user-data directory."""
+    return bool(rel.parts) and rel.parts[0] in _PRESERVED_DIRS
+
+
 def main() -> None:
     removed_dirs: list[Path] = []
     removed_files: list[Path] = []
 
     for pattern in DIR_PATTERNS:
         for path in ROOT.glob(pattern):
-            if path.is_dir():
+            if path.is_dir() and not _preserved(path.relative_to(ROOT)):
                 shutil.rmtree(path, ignore_errors=True)
                 removed_dirs.append(path)
     for pattern in DIR_PATTERNS:
         for path in ROOT.rglob(pattern):
-            if path.is_dir() and path != ROOT:
+            if path.is_dir() and path != ROOT and not _preserved(path.relative_to(ROOT)):
                 shutil.rmtree(path, ignore_errors=True)
                 removed_dirs.append(path)
     for pattern in FILE_PATTERNS:
         for path in ROOT.rglob(pattern):
-            if path.is_file():
+            if path.is_file() and not _preserved(path.relative_to(ROOT)):
                 path.unlink()
                 removed_files.append(path)
 

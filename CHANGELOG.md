@@ -152,14 +152,44 @@ All notable changes are recorded here; the format follows
   serialized refresh locks; the mail table renders in 50-row chunks so
   large mailboxes never freeze the UI.
 
-### Fixed
-
-- `general.browser_mode` / `browser_render_url` were missing from the
-  option-description generator (bilingual `config.desc` entries are
-  test-enforced) — added and regenerated.
-- The todo detail modal's close button was inside the scroll box and
-  could scroll away; it now lives in a pinned footer and the preview
-  fills the modal.
+- Plugin detail dialogs (Runtime tab and Market tab) open instantly:
+  double-clicking a plugin row no longer triggers a marketplace network
+  fetch. Runtime rows fall back to the locally loaded plugin metadata
+  (module docstring readme) when the market has not loaded yet, and both
+  panes guard against the double-click firing the dialog twice.
+- `make clean` no longer deletes user data: `data/` (mail database,
+  trash, preferences) and `logs/` are preserved; only caches and build
+  output are removed.
+- `action add <summary> --due 2026-09-01 09:00` parses the unquoted
+  date+time pair correctly (the time token was previously dropped and
+  the command always failed with "invalid due time").
+- Re-analyzing a history mail (`process_mail(force=True)`) emits
+  `mailflow.mail.processed` exactly once (it was emitted twice — once by
+  the pipeline path and again by the force wrapper).
+- A fired reminder marker is persisted before the reminder event is
+  emitted, so a crash or a failing event handler can no longer cause the
+  same reminder to fire again on the next tick.
+- The daily auto-update check marks the day as checked only after the
+  check succeeds; a transient network failure now retries later in the
+  day instead of silently skipping.
+- Uninstalling a plugin also removes config entries (accounts, LLMs,
+  processors, notifiers) that referenced its components, instead of
+  leaving them to be silently skipped on every reload.
+- Enabling a plugin that was disabled (or installed since startup) now
+  auto-creates its notifier instances: the auto-instance scan builds the
+  registry the way the reload will, so components of a not-yet-loaded
+  plugin are found.
+- `move_entry` shifts env-placeholder paths for *all* affected entries
+  (multi-step moves previously remapped only the two endpoints, so
+  `${VAR}` secrets could be written back under the wrong LLM).
+- The Anthropic LLM backend no longer includes the response body in
+  error text (the body can echo the API key into persisted processor
+  notes); errors carry the status code only.
+- The exported NoneBot plugin module had a duplicate `zoneinfo` import
+  and a mis-indented digest comprehension that would not compile; both
+  are fixed.
+- The OneBot notifier's "not configured" log referenced a nonexistent
+  `_config_id` attribute; it now logs the record id.
 
 
 - Urgent notifications survive transient transport failures: the runtime

@@ -82,7 +82,7 @@ validation script (tools/validate_plugin.py) and a PR validation workflow.
 | `check_docs.py` | the docs gate: mandatory documents present, and every doc cross-checked against the code (paths, make targets, event names, service methods, plugin ids) |
 | `gen_option_descriptions.py` | regenerates the `config.desc.*` block of both locale packs; refuses to write when the en/zh key sets differ |
 | `build_all.py`, `build_exe.py` | wheels for every package; Nuitka standalone/onefile |
-| `clean.py` | remove caches, build output and local runtime data |
+| `clean.py` | remove caches and build output; keeps `data/` and `logs/` (user data) |
 | `annotate_pytest_failures.py` | turn pytest failures into CI annotations |
 
 ## Dependency direction

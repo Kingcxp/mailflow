@@ -40,8 +40,5 @@ Release notes:
   alongside the executable or use absolute paths.
 - `tools/frozen_entry.py` is the stable entry point (calls the CLI `main`).
 
-## Cleanup
-
-```bash
-make clean          # tools/clean.py: caches, dist, build, local db/logs
+make clean          # tools/clean.py: caches, dist, build — keeps data/ and logs/
 ```
