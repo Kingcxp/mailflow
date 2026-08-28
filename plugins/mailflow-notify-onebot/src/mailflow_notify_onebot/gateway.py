@@ -38,6 +38,7 @@ logger = logging.getLogger("mailflow.gateway.napcat")
 _NAPCAT_VERSION = "4.18.19"
 _NAPCAT_ASSET = "NapCat.Shell.zip"
 _NAPCAT_API = "https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest"
+_NAPCAT_SIZE_MB = 29.5  # approximate; the log is informational
 _BASE_PORT = 3000
 _READY_TIMEOUT = 30.0
 
@@ -217,14 +218,20 @@ class NapCatProvisioner:
             version = requested or _NAPCAT_VERSION
         url = _release_url(version)
         archive = target / "napcat.zip"
-        logger.info("napcat %s: downloading %s", instance_id, url)
+        logger.info("napcat %s: downloading %s (%.1f MB)", instance_id, url, _NAPCAT_SIZE_MB)
         await asyncio.to_thread(self._download, url, archive)
+        logger.info(
+            "napcat %s: downloaded %d bytes; unpacking…",
+            instance_id,
+            archive.stat().st_size if archive.exists() else 0,
+        )
         try:
             with zipfile.ZipFile(archive) as zf:
+                entries = zf.namelist()
                 zf.extractall(target)
         finally:
             archive.unlink(missing_ok=True)
-        logger.info("napcat %s: installed at %s", instance_id, target)
+        logger.info("napcat %s: installed %d files at %s", instance_id, len(entries), target)
 
     @staticmethod
     def _download(url: str, destination: Path) -> None:
@@ -241,6 +248,16 @@ class NapCatProvisioner:
             raise RuntimeError(f"download failed: {exc.reason} for {url}") from exc
         except OSError as exc:
             raise RuntimeError(f"download failed: {exc} for {url}") from exc
+
+    @staticmethod
+    def _tail_log(log_file: Path, lines: int = 8) -> str:
+        """Last N log lines, formatted for error messages ('' when empty)."""
+        try:
+            content = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            tail = content[-lines:]
+            return "\n  log: " + "\n  log: ".join(tail) if tail else ""
+        except OSError:
+            return ""
 
     @staticmethod
     def _find_entry(target: Path, instance_id: str) -> Path:
@@ -270,6 +287,17 @@ class NapCatProvisioner:
         if not target.exists():
             raise RuntimeError(f"napcat {instance_id} is not installed")
         port = int(options.get("port") or self._port_for(instance_id))
+        # already running on this port (another instance or a self-hosted
+        # NapCat)? reuse it instead of starting a conflicting process
+        if await self._wait_http_port(port, wait_seconds=1.0):
+            logger.info("napcat %s: reusing already-running gateway on :%d", instance_id, port)
+            return GatewayInstance(
+                provider="napcat",
+                instance_id=instance_id,
+                status="running",
+                endpoint=f"http://127.0.0.1:{port}",
+                extra={"port": port, "reused": True},
+            )
         # config for NapCat: HTTP server on the instance port
         config_dir = target / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -295,29 +323,54 @@ class NapCatProvisioner:
             ),
             encoding="utf-8",
         )
-        # launch: NapCat shell entry
+        # launch: NapCat shell entry. Run as a standalone node process
+        # (NAPCAT_FORCE_NODE_PROCESS) so no QQ injection is required to
+        # start; stdout/stderr go to a per-instance log file so startup
+        # failures are diagnosable instead of invisible.
         entry: Path | None = await asyncio.to_thread(self._find_entry, target, instance_id)
         assert entry is not None
         env = dict(options.get("env") or {})
         env.setdefault("NAPCAT_UID", instance_id)
         env.setdefault("NAPCAT_PORT", str(port))
+        env.setdefault("NAPCAT_FORCE_NODE_PROCESS", "1")
+        log_file = target / "napcat.log"
+
+        def _launch() -> subprocess.Popen[Any]:
+            with open(log_file, "ab") as handle:
+                # the child inherits the fd; closing the parent copy is fine
+                return subprocess.Popen(
+                    [node, str(entry)],
+                    cwd=str(entry.parent),
+                    env={**__import__("os").environ, **env},
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                )
+
         try:
-            process = await asyncio.to_thread(
-                subprocess.Popen,
-                [node, str(entry)],
-                cwd=str(entry.parent),
-                env={**__import__("os").environ, **env},
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except FileNotFoundError as exc:
+            process = await asyncio.to_thread(_launch)
+        except OSError as exc:
             raise RuntimeError(f"failed to launch napcat {instance_id}: {exc}") from exc
         self._processes[instance_id] = process
-        ready = await self._wait_http(instance_id, wait_seconds=_READY_TIMEOUT)
+        # the OneBot HTTP API only listens after the QQ session logs in;
+        # wait for the process being alive + the WebUI port (6099) as the
+        # readiness signal, and report the login requirement clearly
+        webui_port = int(options.get("webui_port") or 6099)
+        ready = await self._wait_http_port(webui_port, wait_seconds=_READY_TIMEOUT)
         endpoint = self._endpoint(instance_id)
         if not ready:
+            log_tail = self._tail_log(log_file)
             self._terminate(instance_id)
-            raise RuntimeError(f"napcat {instance_id} did not answer on {endpoint} in time")
+            raise RuntimeError(
+                f"napcat {instance_id} started but its WebUI did not answer on "
+                f"http://127.0.0.1:{webui_port} in {_READY_TIMEOUT:.0f}s; "
+                f"see {log_file}{log_tail}"
+            )
+        logger.info(
+            "napcat %s: WebUI up on :%d (OneBot HTTP on :%d after the QQ session logs in)",
+            instance_id,
+            webui_port,
+            port,
+        )
         return GatewayInstance(
             provider="napcat",
             instance_id=instance_id,

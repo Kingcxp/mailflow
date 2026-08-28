@@ -47,6 +47,12 @@ All notable changes are recorded here; the format follows
   auto-deploy one, with a documentation link shown in the form; the
   guide dialog is at least 80% of the terminal width and its log pane
   fills the dialog height (the actions row no longer steals space).
+- NapCat provisioning: downloads log progress, the child process writes
+  to a per-instance napcat.log (startup failures now show the log tail
+  instead of a bare timeout), readiness waits on the WebUI port (6099)
+  — the OneBot HTTP API only listens after the QQ session logs in, which
+  is now stated in the error. Already-running gateways on the target
+  port are reused instead of starting a conflicting process.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
