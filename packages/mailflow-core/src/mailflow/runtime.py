@@ -277,9 +277,9 @@ class MailFlowRuntime:
         if force:
             record_id = mail.normalized_message_id()
             self._seen_ids.discard(record_id)
-            record = await self._process_one(mail, _skip_dedup=True)
-            await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
-            return record
+            # _process_one emits mailflow.mail.processed on success; emitting
+            # again here would double-notify every re-analysis.
+            return await self._process_one(mail, _skip_dedup=True)
         return await self._process_one(mail)
 
     async def _process_one(
@@ -503,6 +503,10 @@ class MailFlowRuntime:
             key = f"reminder.{item.item_id}.{item.due_at.date().isoformat()}.{kind}"
             if await self._storage.get_preference(key):
                 continue
+            # Persist the fired marker BEFORE emitting: a crash (or an event
+            # handler that raises) between emit and save must not cause the
+            # same reminder to fire again on the next tick.
+            await self._storage.set_preference(key, "fired")
             await self._events.emit(
                 f"{_EVENT_PREFIX}action.reminder",
                 item=item,
@@ -519,7 +523,6 @@ class MailFlowRuntime:
                 source,
                 f"; notes: {item.notes}" if item.notes else "",
             )
-            await self._storage.set_preference(key, "fired")
             fired += 1
         return fired
 

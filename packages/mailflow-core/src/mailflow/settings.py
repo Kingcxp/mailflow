@@ -360,7 +360,8 @@ def _carried_placeholders(
 ) -> dict[tuple[str | int, ...], str]:
     """Placeholder map for a mutated config: ``drop`` removes one leaf,
     ``group_removed`` drops the entry's own placeholders and closes the gap,
-    ``group_swapped`` follows one entry moving inside its list."""
+    ``group_swapped`` follows entries across a list move (all affected
+    indices shift, not just the two endpoints)."""
     carried: dict[tuple[str | int, ...], str] = {}
     for path, placeholder in config.env_placeholders.items():
         if drop is not None and path == drop:
@@ -379,11 +380,26 @@ def _carried_placeholders(
             if group_swapped is not None:
                 swapped_group, source, destination = group_swapped
                 if group == swapped_group and isinstance(entry_index, int):
-                    if entry_index == source:
-                        carried[(swapped_group, destination, *path[2:])] = placeholder
-                        continue
-                    if entry_index == destination:
-                        carried[(swapped_group, source, *path[2:])] = placeholder
+                    # entries.insert(destination, entries.pop(source)) —
+                    # map every old index to its new position so
+                    # placeholders follow their entry across multi-step
+                    # moves, not just the two endpoints.
+                    if source < destination:
+                        if entry_index == source:
+                            new_index = destination
+                        elif source < entry_index <= destination:
+                            new_index = entry_index - 1
+                        else:
+                            new_index = entry_index
+                    else:
+                        if entry_index == source:
+                            new_index = destination
+                        elif destination <= entry_index < source:
+                            new_index = entry_index + 1
+                        else:
+                            new_index = entry_index
+                    if new_index != entry_index:
+                        carried[(swapped_group, new_index, *path[2:])] = placeholder
                         continue
         carried[path] = placeholder
     return carried

@@ -652,6 +652,15 @@ class CommandRouter:
                     return self._err(self._t("action.add_usage"))
                 value = args[index + 1]
                 if arg == "--due":
+                    # `--due 2026-09-01 09:00` arrives as two tokens: join
+                    # the time when the next token looks like HH:MM.
+                    if (
+                        index + 2 < len(args)
+                        and self._looks_like_date(value)
+                        and self._looks_like_clock(args[index + 2])
+                    ):
+                        value = f"{value} {args[index + 2]}"
+                        index += 1
                     due_raw = value
                 elif arg == "--type":
                     action_type = value
@@ -687,6 +696,24 @@ class CommandRouter:
             return None
         zone = ZoneInfo(self.service.config.general.timezone)
         return naive.replace(tzinfo=zone).astimezone(UTC)
+
+    @staticmethod
+    def _looks_like_date(raw: str) -> bool:
+        """True when ``raw`` is a bare ``YYYY-MM-DD`` date token."""
+        try:
+            datetime.strptime(raw, "%Y-%m-%d")
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _looks_like_clock(raw: str) -> bool:
+        """True when ``raw`` is a bare ``HH:MM`` clock token."""
+        try:
+            datetime.strptime(raw, "%H:%M")
+            return True
+        except ValueError:
+            return False
 
     async def _find_action(self, item_id: str) -> ActionItem | None:
         """Exact id wins; otherwise a unique prefix (the list truncates ids

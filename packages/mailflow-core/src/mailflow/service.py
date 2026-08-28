@@ -511,8 +511,10 @@ class MailFlowService:
         today = datetime.now(ZoneInfo(self.config.general.timezone)).date().isoformat()
         if await self.storage.get_preference(f"update.check.{today}"):
             return
-        await self.storage.set_preference(f"update.check.{today}", "done")
         report = await self.check_updates()
+        # Mark the day as checked only after the check succeeded: a network
+        # failure must not suppress today's remaining retry windows.
+        await self.storage.set_preference(f"update.check.{today}", "done")
         await self.events.emit(
             "mailflow.update.checked",
             mailflow_current=report.mailflow_current,
@@ -920,7 +922,12 @@ class MailFlowService:
         returns how many instances were created. Sources and LLM backends
         need credentials and are deliberately left to the user."""
         created = 0
-        for component in self.registry.snapshots():
+        # The live registry only holds *loaded* plugins: a plugin that was
+        # disabled (or installed since startup) has no components in it, so
+        # build the registry the way reload_runtime will, with this plugin
+        # enabled, and derive its notifier components from that.
+        registry = self.plugin_manager.build_registry()
+        for component in registry.snapshots():
             if component.plugin_id != plugin_id:
                 continue
             if component.kind != ComponentKind.NOTIFIER:
@@ -969,7 +976,13 @@ class MailFlowService:
         return "enabled" if plugin_id in loaded else "not_loaded"
 
     async def plugin_uninstall(self, plugin_id: str) -> str:
-        """Uninstall a marketplace plugin (uv pip uninstall of its package)."""
+        """Uninstall a marketplace plugin (uv pip uninstall of its package).
+
+        Config entries that referenced the plugin's components are removed
+        too: accounts/LLMs/processors/notifiers whose provider belonged to
+        this plugin would otherwise be silently skipped on every reload
+        after the package is gone.
+        """
         from mailflow.plugin_market import PluginMarket
 
         found = await asyncio.to_thread(self.market.find, plugin_id)
@@ -978,7 +991,32 @@ class MailFlowService:
             raise KeyError(f"plugin {plugin_id!r} not found in any repository")
         if not PluginMarket.is_installed(plugin_id, package=plugin.package):
             return f"{plugin_id} is not installed"
-        return await self.market.uninstall(plugin)
+        output = await self.market.uninstall(plugin)
+        removed = await self._drop_config_entries_for(plugin_id)
+        if removed:
+            await self._persist_config(self.config, f"plugin.{plugin_id}")
+            logger.info(
+                "uninstalled %r; removed %d stale config entries: %s",
+                plugin_id,
+                len(removed),
+                ", ".join(removed),
+            )
+        return output
+
+    async def _drop_config_entries_for(self, plugin_id: str) -> list[str]:
+        """Remove accounts/llms/processors/notifiers whose provider component
+        belongs to ``plugin_id``; returns the removed entry ids."""
+        owned = {c.component_id for c in self.registry.snapshots() if c.plugin_id == plugin_id}
+        removed: list[str] = []
+        for group in ("accounts", "llms", "processors", "notifiers"):
+            entries = getattr(self.config, group)
+            kept = [entry for entry in entries if entry.provider not in owned]
+            if len(kept) != len(entries):
+                removed.extend(
+                    f"{group}:{entry.provider}" for entry in entries if entry not in kept
+                )
+                setattr(self.config, group, kept)
+        return removed
 
     # -- reply workflow ---------------------------------------------------------------------
 
