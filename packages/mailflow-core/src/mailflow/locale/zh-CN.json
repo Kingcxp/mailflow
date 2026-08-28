@@ -626,7 +626,22 @@
       "bots_wizard_pick_first": "请先选择平台",
       "bots_wizard_no_runtime": "未发现{provider}运行时，请先启动对应服务后重试",
       "bots_wizard_manual_needed": "OpenClaw 暂不支持自动配置，请稍后手动添加",
-      "btn_next": "下一步"
+      "btn_next": "下一步",
+      "bots_guide_title": "设置 {provider}",
+      "bots_guide_detecting": "正在检测本机运行时…",
+      "bots_guide_detected": "运行时检测：{status}",
+      "bots_guide_provisioning": "正在安装/启动网关（首次使用可能需要几分钟）…",
+      "bots_guide_running": "网关已运行：{endpoint}",
+      "bots_guide_qr_wait": "等待登录二维码…",
+      "bots_guide_qr_scan": "请用手机扫描二维码登录",
+      "bots_guide_logged_in": "登录成功，可以开始使用",
+      "bots_guide_qr_timeout": "等待扫码超时（2 分钟）。请取消后重试。",
+      "bots_basics_title": "添加机器人平台",
+      "bots_basics_id": "实例名称（id）",
+      "bots_basics_next": "下一步",
+      "bots_provider_pick": "选择要接入的平台：",
+      "bots_provider_missing": "该平台没有可用的网关配置器",
+      "bots_provider_napcat": "QQ（OneBot / NapCat）"
     },
     "update": {
       "applied_title": "已应用的更新",

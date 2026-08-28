@@ -7,6 +7,18 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **Bot platform auto-provisioning** (`GATEWAY_PROVISIONER` component kind,
+  `mailflow.gateway.GatewayManager`): the Bots tab now walks through a
+  three-step setup — basics (instance name) → provider dropdown (napcat,
+  wechaty, plus notifier-only platforms) → guided gateway provisioning.
+  NapCat is downloaded and launched automatically; WeChaty installs the
+  pad-protocol gateway bridge via npm and runs it as a managed child; both
+  show the login QR inside the TUI. Instances are supervised (restart with
+  backoff), persisted in storage preferences and resumed on boot.
+- The onebot and wechaty plugins now register gateway provisioners
+  (`napcat` / `wechaty`) alongside their notifiers; the WeChaty bridge
+  reference (`wechaty-gateway.js`) ships in the plugin package.
+
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
   complete (no analysis or any failed processor note) — with the same

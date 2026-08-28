@@ -626,7 +626,22 @@
       "bots_wizard_pick_first": "Pick a platform first",
       "bots_wizard_no_runtime": "No {provider} runtime found — start the service and retry",
       "bots_wizard_manual_needed": "OpenClaw auto-config is not supported yet — add it manually",
-      "btn_next": "Next"
+      "btn_next": "Next",
+      "bots_guide_title": "Set up {provider}",
+      "bots_guide_detecting": "Checking for a local runtime…",
+      "bots_guide_detected": "Runtime check: {status}",
+      "bots_guide_provisioning": "Installing / starting the gateway (first use may take a few minutes)…",
+      "bots_guide_running": "Gateway running at {endpoint}",
+      "bots_guide_qr_wait": "Waiting for the login QR…",
+      "bots_guide_qr_scan": "Scan the QR with your phone to log in",
+      "bots_guide_logged_in": "Logged in — ready to use",
+      "bots_guide_qr_timeout": "Timed out waiting for the scan (2 min). Cancel and try again.",
+      "bots_basics_title": "Add a bot platform",
+      "bots_basics_id": "Instance name (id)",
+      "bots_basics_next": "Next",
+      "bots_provider_pick": "Choose the platform:",
+      "bots_provider_missing": "No gateway provisioner available for this platform",
+      "bots_provider_napcat": "QQ (OneBot / NapCat)"
     },
     "update": {
       "applied_title": "Applied updates",

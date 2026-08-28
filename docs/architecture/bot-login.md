@@ -5,9 +5,11 @@ WeChaty pad protocol) with as little manual work as possible: the user picks
 a platform in a form, and MailFlow installs, starts and configures the
 gateway — including driving the QR login inside the TUI.
 
-Status: design (next development round). The current implementation only
-probes for *already-running* gateways on well-known ports and requires the
-user to install/start NapCat or a WeChaty gateway themselves.
+Status: implemented (round 1). NapCat (via the `napcat` provisioner in
+mailflow-notify-onebot) and WeChaty (via the `wechaty` provisioner in
+mailflow-notify-wechaty) are auto-installed, launched and supervised by the
+GatewayManager; the Bots tab walks through basics → provider → guided QR
+login. openclaw-weixin remains manual.
 
 ## Goals
 
@@ -133,16 +135,17 @@ Add platform
 - A provisioner install failure leaves the instance dir removable; the Bots
   tab shows the failing step instead of a silent half-configuration.
 
-## Open questions (next round)
+## Open questions (next rounds)
 
-- Node.js detection: NapCat and WeChaty both need a Node runtime. Bundle a
-  portable Node (like `node-bin-setup`) or require a system Node and check
-  `node --version` up front? (User confirmed: auto-install with Node
-  required; a bundled Node is the more robust option on Windows.)
+- Node.js detection currently requires a system `node >= 18` (checked by
+  the provisioners). Bundling a portable Node is the more robust option on
+  Windows and remains open.
 - NapCat download mirror for China networks (GitHub releases are slow
   there).
 - Whether openclaw-weixin gets a provisioner later (out of scope for the
   first round; stays manual).
+- WeChaty pad-protocol tokens are user-provided (paid service); the bridge
+  reports login errors through `/qr` and `/health`.
 
 ## See also
 

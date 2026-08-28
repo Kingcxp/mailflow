@@ -16,7 +16,9 @@ from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Static
+from textual.widgets import Button, DataTable, Input, Label, Select, Static
+
+from mailflow_tui.gateway_guide import GatewayGuideModal
 
 
 class _BotStatusProbe:
@@ -78,139 +80,94 @@ class _BotStatusProbe:
         return str(t("tui.bots_unknown_provider"))
 
 
-async def _probe_local_runtimes() -> list[dict[str, str]]:
-    """Detect bot runtimes on well-known local ports.
-
-    Returns one entry per reachable service:
-    - onebot: NapCat / Lagrange / go-cqhttp HTTP (default 3000, also 5700, 6099)
-    - wechaty: a WeChaty-style gateway (default 8788, also 8080, 10086)
-    """
-    found: list[dict[str, str]] = []
-
-    async def _http(url: str, budget: float = 1.5) -> bool:
-        try:
-            async with httpx.AsyncClient(timeout=budget) as client:
-                response = await client.get(url)
-                return response.status_code < 500
-        except Exception:
-            return False
-
-    import asyncio
-
-    probes: list[tuple[str, str, str]] = []
-    for port in ("3000", "5700", "6099", "8081"):
-        probes.append(("onebot", f"http://127.0.0.1:{port}", port))
-    for port in ("8788", "8080", "10086"):
-        probes.append(("wechaty", f"http://127.0.0.1:{port}", port))
-
-    results = await asyncio.gather(
-        *[_http(url) for _kind, url, _port in probes], return_exceptions=True
-    )
-    for (kind, url, port), ok in zip(probes, results, strict=True):
-        if ok:
-            found.append({"provider": kind, "url": url, "port": port})
-    return found
-
-
-class NapCatQrModal(ModalScreen[str | None]):
-    """Drives the NapCat QR login inside the TUI.
-
-    OneBot action ``get_qrcode`` returns the QR image; we render it as an
-    ASCII block (terminal-agnostic) and poll ``get_login_info`` until the
-    session comes online. Returns the OneBot base URL on success."""
+class BotBasicsModal(ModalScreen[dict[str, Any] | None]):
+    """Step 1 of the bot setup: ask for the instance name/id only."""
 
     BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
 
-    def __init__(self, service: MailFlowService, base_url: str) -> None:
+    def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
-        self._base_url = base_url.rstrip("/")
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
 
     def compose(self) -> ComposeResult:
-        yield Static(self._t("tui.bots_qr_title"), id="bots-qr-title")
-        yield Static("", id="bots-qr-image")
-        yield Static("", id="bots-qr-status")
-        with Horizontal(id="bots-qr-actions"):
-            yield Button(self._t("tui.btn_cancel"), id="bots-qr-cancel", variant="error")
+        yield Static(self._t("tui.bots_basics_title"), id="basics-title")
+        with Vertical(id="basics-body"):
+            yield Label(self._t("tui.bots_basics_id"), classes="field-label")
+            yield Input(placeholder="bot-1", id="basics-id")
+            yield Static("", id="basics-status")
+            with Horizontal(id="basics-actions"):
+                yield Button(self._t("tui.bots_basics_next"), id="basics-next", variant="primary")
+                yield Button(self._t("tui.btn_cancel"), id="basics-cancel", variant="error")
 
-    async def on_mount(self) -> None:
-        self.run_worker(self._login_loop(), exclusive=True, group="napcat-qr", exit_on_error=False)
-
-    async def _login_loop(self) -> None:
-        headers = {"Content-Type": "application/json"}
-        for _ in range(120):  # 2 minutes of polling
-            try:
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    qr = await client.post(f"{self._base_url}/get_qrcode", json={}, headers=headers)
-                    qr.raise_for_status()
-                    data = qr.json().get("data") or {}
-                    image = data.get("qrcode") or data.get("image") or ""
-                    if image:
-                        self.query_one("#bots-qr-image", Static).update(_ascii_qr(image))
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    login = await client.post(
-                        f"{self._base_url}/get_login_info", json={}, headers=headers
-                    )
-                    login.raise_for_status()
-                    payload = login.json().get("data") or {}
-                    if payload.get("user_id"):
-                        self.query_one("#bots-qr-status", Static).update(
-                            f"[green]{self._t('tui.bots_qr_ok')}[/green]"
-                        )
-                        self.dismiss(self._base_url)
-                        return
-            except Exception as exc:
-                self.query_one("#bots-qr-status", Static).update(
-                    f"[yellow]{escape(str(exc)[:120])}[/yellow]"
-                )
-            await asyncio.sleep(1.0)
-        self.query_one("#bots-qr-status", Static).update(
-            f"[red]{self._t('tui.bots_qr_timeout')}[/red]"
-        )
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "basics-cancel":
+            self.dismiss(None)
+            return
+        if event.button.id != "basics-next":
+            return
+        instance_id = self.query_one("#basics-id", Input).value.strip()
+        if not instance_id:
+            self.query_one("#basics-status", Static).update(
+                f"[yellow]{self._t('tui.bots_basics_id')} required[/yellow]"
+            )
+            return
+        self.dismiss({"instance_id": instance_id})
 
 
-def _ascii_qr(image: str) -> str:
-    """Render a QR image payload as an ASCII block.
+class BotProviderModal(ModalScreen[dict[str, Any] | None]):
+    """Step 2 of the bot setup: pick the platform from the available
+    gateway provisioners (plus notifier-only platforms)."""
 
-    Accepts base64 PNG data or an image URL; the URL case is rendered as a
-    hint since the TUI cannot fetch binary images without extra deps."""
-    import base64 as _b64
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
 
-    if not image:
-        return "(empty)"
-    if image.startswith(("http://", "https://")):
-        return f"(qr image: {image[:80]})"
-    try:
-        raw = _b64.b64decode(image, validate=False)
-    except Exception:
-        return f"(qr payload {image[:40]}…)"
-    # PNG → 8x8 luminance blocks: decode the IDAT via zlib (small QR PNGs)
-    import struct
-    import zlib
+    def __init__(self, service: MailFlowService, instance_id: str) -> None:
+        super().__init__()
+        self._service = service
+        self._instance_id = instance_id
 
-    try:
-        pos = raw.find(b"IDAT") + 4
-        compressed = raw[pos : raw.find(b"IEND")]
-        pixels = zlib.decompress(compressed)
-        width = struct.unpack(">I", raw[16:20])[0]
-        height = struct.unpack(">I", raw[20:24])[0]
-        # RGBA scanlines with a filter byte each; skip filter bytes
-        stride = width * 4 + 1
-        out: list[str] = []
-        for y in range(0, min(height, 40), 2):
-            row: list[str] = []
-            for x in range(0, min(width, 80), 2):
-                idx = y * stride + 1 + x * 4
-                if idx + 2 < len(pixels):
-                    r, g, b = pixels[idx], pixels[idx + 1], pixels[idx + 2]
-                    row.append("  " if (r + g + b) // 3 > 128 else "██")
-            out.append("".join(row))
-        return "\n".join(out) or "(qr)"
-    except Exception:
-        return f"(qr payload {len(raw)} bytes)"
+    def _t(self, key: str, **params: Any) -> str:
+        return self._service.t(key, **params)
+
+    @staticmethod
+    def _provider_label(service: MailFlowService, provider: str) -> str:
+        """Localized label for a known provider id; unknown ids stay raw."""
+        key = f"tui.bots_provider_{provider}"
+        translated = service.t(key)
+        return translated if translated != key else provider
+
+    def compose(self) -> ComposeResult:
+        providers = self._service.gateway_providers()
+        # notifier-only platforms (e.g. openclaw) stay selectable but are
+        # configured manually
+        from mailflow_tui.bots import BotsPane
+
+        choices = [(self._provider_label(self._service, p), p) for p in providers]
+        for extra in sorted(BotsPane.IM_PROVIDERS - set(providers)):
+            choices.append((self._provider_label(self._service, extra), extra))
+        yield Static(self._t("tui.bots_wizard_pick"), id="provider-title")
+        with Vertical(id="provider-body"):
+            yield Select(choices, id="provider-select", allow_blank=False)
+            yield Static("", id="provider-status")
+            with Horizontal(id="provider-actions"):
+                yield Button(self._t("tui.btn_next"), id="provider-next", variant="primary")
+                yield Button(self._t("tui.btn_cancel"), id="provider-cancel", variant="error")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "provider-cancel":
+            self.dismiss(None)
+            return
+        if event.button.id != "provider-next":
+            return
+        select = self.query_one("#provider-select", Select)
+        if select.value is Select.NULL:
+            self.query_one("#provider-status", Static).update(
+                f"[yellow]{self._t('tui.bots_wizard_pick_first')}[/yellow]"
+            )
+            return
+        self.dismiss({"provider": str(select.value)})
 
 
 class BotsPane(Vertical):
@@ -283,12 +240,10 @@ class BotsPane(Vertical):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "bots-add":
-            # 表单内先选提供商，点“下一步”进入连接引导（同一表单界面）
-            from mailflow_tui.settings import EntryFormScreen
-
+            # three-step setup: basics → provider → guided gateway
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-                EntryFormScreen(self._service, "notifiers"),
-                callback=self._after_form,
+                BotBasicsModal(self._service),
+                callback=self._after_basics,
             )
             return
         if button_id == "bots-delete":
@@ -300,64 +255,94 @@ class BotsPane(Vertical):
         # button handler or a down gateway freezes the whole UI
         self.run_worker(self._check_all(), exclusive=True, group="bots-check", exit_on_error=False)
 
-    def _after_form(self, values: dict[str, Any] | None) -> None:
-        """Form dismissed → persist and run the connection guide."""
+    def _after_basics(self, values: dict[str, Any] | None) -> None:
+        """Step 1 done → pick the provider."""
         if not values:
             return
-        guided = values.pop("_guided", False)
+        self._pending_instance_id = str(values.get("instance_id") or "bot-1")
+        self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
+            BotProviderModal(self._service, self._pending_instance_id),
+            callback=self._after_provider,
+        )
+
+    def _after_provider(self, values: dict[str, Any] | None) -> None:
+        """Step 2 done → run the guided gateway setup."""
+        if not values:
+            return
+        provider = str(values.get("provider") or "")
+        instance_id = str(getattr(self, "_pending_instance_id", "bot-1"))
+        if provider in self._service.gateway_providers():
+            # gateway-backed platform: provision + QR, then save the notifier
+            self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
+                GatewayGuideModal(self._service, provider, instance_id, {}),
+                callback=lambda result: self._after_guide(provider, instance_id, result),
+            )
+            return
+        # notifier-only platform (openclaw): manual form as before
+        from mailflow_tui.settings import EntryFormScreen
+
+        self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
+            EntryFormScreen(self._service, "notifiers", values={"provider": provider}),
+            callback=self._after_manual_form,
+        )
+
+    def _after_guide(self, provider: str, instance_id: str, result: dict[str, Any] | None) -> None:
+        """Gateway provisioned and logged in → persist the notifier entry."""
+        if not result:
+            return
         self.run_worker(
-            self._guide_after_save(values, guided=guided),
+            self._save_guided_notifier(provider, instance_id, result),
             exclusive=True,
             group="bots-setup",
             exit_on_error=False,
         )
 
-    async def _guide_after_save(self, values: dict[str, Any], guided: bool = False) -> None:
-        provider = str(values.get("provider") or "")
-        options = dict(values.get("options") or {})
-        # 探测本地运行时并预填缺失的端点（引导模式）
-        if guided:
-            found = await _probe_local_runtimes()
-            match = next((f for f in found if f["provider"] == provider), None)
-            if match is not None:
-                key = "http_url" if provider == "onebot" else "gateway_url"
-                if not str(options.get(key, "")).strip():
-                    options[key] = match["url"]
-                    values["options"] = options
-        await self._service.add_config_entry("notifiers", values)
+    async def _save_guided_notifier(
+        self, provider: str, instance_id: str, result: dict[str, Any]
+    ) -> None:
+        """Persist the notifier config for a provisioned gateway."""
+        endpoint = str(result.get("endpoint") or "")
+        options: dict[str, Any] = {}
+        if provider == "napcat":
+            options["http_url"] = endpoint
+        else:
+            options["gateway_url"] = endpoint
+        values = {
+            "notifier_id": instance_id,
+            "provider": "onebot" if provider == "napcat" else provider,
+            "options": options,
+        }
+        try:
+            await self._service.add_config_entry("notifiers", values)
+        except Exception as exc:
+            self.query_one("#bots-status", Static).update(f"[red]{exc}[/red]")
+            return
         self.refresh_data()
-        status = self.query_one("#bots-status", Static)
-        if provider == "onebot":
-            url = str(options.get("http_url", "")).rstrip("/")
-            if not url:
-                status.update(
-                    f"[yellow]{self._service.t('tui.bots_no_url', provider='OneBot')}[/yellow]"
-                )
-                return
-            status.update(self._service.t("tui.bots_detecting"))
-            self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-                NapCatQrModal(self._service, url),
-                lambda base: self._mark_connected(str(base)) if base else None,
-            )
-            return
-        if provider == "wechaty":
-            url = str(options.get("gateway_url", "")).rstrip("/")
-            if not url:
-                status.update(
-                    f"[yellow]{self._service.t('tui.bots_no_url', provider='WeChaty')}[/yellow]"
-                )
-                return
-            status.update(self._service.t("tui.bots_detecting"))
-            await _BotStatusProbe.probe("wechaty", {"gateway_url": url}, self._service.t)
-            status.update(self._service.t("tui.bots_saved_manual"))
-            return
-        status.update(self._service.t("tui.bots_saved_manual"))
-        self.run_worker(self._check_all(), exclusive=True, group="bots-check", exit_on_error=False)
+        self.query_one("#bots-status", Static).update(
+            f"[green]{self._service.t('tui.bots_configured_ok', instance=instance_id)}[/green]"
+        )
 
-    def _mark_connected(self, base_url: str) -> None:
-        status = self.query_one("#bots-status", Static)
-        status.update(f"[green]{self._service.t('tui.bots_qr_ok')}[/green]")
+    def _after_manual_form(self, values: dict[str, Any] | None) -> None:
+        """Notifier-only platform form dismissed → persist."""
+        if not values:
+            return
+        self.run_worker(
+            self._save_manual_notifier(values),
+            exclusive=True,
+            group="bots-setup",
+            exit_on_error=False,
+        )
+
+    async def _save_manual_notifier(self, values: dict[str, Any]) -> None:
+        try:
+            await self._service.add_config_entry("notifiers", values)
+        except Exception as exc:
+            self.query_one("#bots-status", Static).update(f"[red]{exc}[/red]")
+            return
         self.refresh_data()
+        self.query_one("#bots-status", Static).update(
+            f"[green]{self._service.t('tui.bots_saved_manual')}[/green]"
+        )
 
     async def _delete_selected(self) -> None:
         if getattr(self, "_selected_id", None) is None:
