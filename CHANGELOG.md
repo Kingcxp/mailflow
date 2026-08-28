@@ -190,6 +190,14 @@ All notable changes are recorded here; the format follows
   are fixed.
 - The OneBot notifier's "not configured" log referenced a nonexistent
   `_config_id` attribute; it now logs the record id.
+- IMAP polling watermarks are now persisted (per-account, in storage
+  preferences): a restart resumes where polling left off instead of
+  re-seeding at the newest UID, which silently skipped every mail that
+  arrived while the service was down. The runtime injects the store into
+  sources that expose `set_watermark_store`.
+- The built-in LLM processor tolerates a missing `urgency` in the model's
+  JSON (defaults to `info`): a single omitted field no longer fails the
+  whole mail's analysis.
 
 
 - Urgent notifications survive transient transport failures: the runtime

@@ -218,6 +218,7 @@ class IMAPSource:
         self._limit = int(account.options.get("limit", 20))
         self._seen: set[str] = set()
         self._last_uid: int | None = None
+        self._watermark_save: Any | None = None
         # default behavior: seed the watermark at first poll WITHOUT emitting
         # the existing backlog — only mail arriving afterwards is analyzed.
         # Set options.analyze_backlog = true to restore legacy full-backlog
@@ -225,6 +226,25 @@ class IMAPSource:
         self._analyze_backlog = bool(account.options.get("analyze_backlog", False))
         self._username = str(account.options.get("username") or account.email)
         self._password = str(account.options.get("password") or "")
+
+    def set_watermark_store(self, load: Any, save: Any) -> None:
+        """Inject a persistent watermark store (host-provided).
+
+        ``load() -> int | None`` restores the last seen UID across restarts;
+        ``save(uid)`` persists the watermark after every advance. Without a
+        store the watermark is in-memory only and a restart re-seeds it at
+        the newest UID — silently skipping every mail that arrived while the
+        service was down.
+        """
+        self._watermark_save = save
+        try:
+            stored = load()
+        except Exception:
+            stored = None
+        if isinstance(stored, int) and stored >= 0:
+            self._last_uid = stored
+        elif isinstance(stored, str) and stored.strip().isdigit():
+            self._last_uid = int(stored)
 
     def _imap_client(self) -> imaplib.IMAP4:
         host = str(self._settings.get("imap_host", ""))
@@ -266,6 +286,7 @@ class IMAPSource:
                 wanted = []
                 if all_uids:
                     self._last_uid = max(all_uids)
+                    self._persist_watermark()
             messages: list[MailMessage] = []
             for uid_int in wanted:
                 _status, fetch = client.uid("fetch", str(uid_int), "(RFC822)")
@@ -278,6 +299,7 @@ class IMAPSource:
                 # Advance only once the mail is in hand: an exception above
                 # retries the same uid on the next poll instead of skipping it.
                 self._last_uid = uid_int
+                self._persist_watermark()
                 if mail.normalized_message_id() not in self._seen:
                     self._seen.add(mail.normalized_message_id())
                     messages.append(mail)
@@ -289,6 +311,15 @@ class IMAPSource:
         finally:
             with contextlib.suppress(Exception):
                 client.logout()
+
+    def _persist_watermark(self) -> None:
+        """Persist the current watermark via the injected store (no-op when
+        no store was provided)."""
+        if self._watermark_save is not None and self._last_uid is not None:
+            try:
+                self._watermark_save(self._last_uid)
+            except Exception:
+                logger.warning("imap watermark save failed for %r", self._account.account_id)
 
     def _fetch_history(self, limit: int, offset: int) -> list[MailMessage]:
         """Newest-first window over the mailbox, independent of the poll

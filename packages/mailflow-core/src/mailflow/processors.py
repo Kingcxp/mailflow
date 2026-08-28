@@ -221,8 +221,8 @@ class ActionPayload(BaseModel):
 
 
 class AnalysisPayload(BaseModel):
-    summary: str
-    urgency: str
+    summary: str = ""
+    urgency: str = "info"
     reason: str = ""
     reply_required: bool = False
     suggested_reply: str = ""

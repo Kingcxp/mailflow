@@ -95,11 +95,24 @@ class MailFlowRuntime:
         # workers (storage lookup alone would race). Cross-restart dedup is
         # covered by the storage lookup in _process_one.
         self._seen_ids: set[str] = set()
+        # account_id -> persisted UID watermark (read at start, written by
+        # the injected store); lets IMAP polling resume across restarts.
+        self._stored_watermarks: dict[str, str] = {}
 
     # -- lifecycle --------------------------------------------------------------
 
     async def start(self) -> None:
         self._started_at = datetime.now()
+        loop = asyncio.get_running_loop()
+        # preload persisted IMAP watermarks so source factories can resume
+        # polling where the previous run left off
+        for account in self._account_configs:
+            try:
+                raw = await self._storage.get_preference(f"imap.watermark.{account.account_id}")
+            except Exception:
+                raw = None
+            if raw is not None:
+                self._stored_watermarks[account.account_id] = str(raw)
         for account in self._account_configs:
             if not account.enabled:
                 self._account_status[account.account_id] = "stopped"
@@ -117,6 +130,7 @@ class MailFlowRuntime:
                     account.provider,
                 )
                 continue
+            self._inject_watermark_store(source, account.account_id, loop)
             self._tasks.append(
                 asyncio.create_task(
                     self._run_source(account, source), name=f"source-{account.account_id}"
@@ -209,6 +223,7 @@ class MailFlowRuntime:
                 )
                 continue
             self._account_status[account.account_id] = "starting"
+            self._inject_watermark_store(adapter, account.account_id, asyncio.get_running_loop())
             self._tasks.append(
                 asyncio.create_task(
                     self._run_source(account, adapter), name=f"source-{account.account_id}"
@@ -216,6 +231,37 @@ class MailFlowRuntime:
             )
         await self._events.emit(f"{_EVENT_PREFIX}runtime.reconfigured")
         logger.info("runtime reconfigured: %d accounts", len(self._account_configs))
+
+    # -- source tasks ------------------------------------------------------------
+
+    def _inject_watermark_store(self, source: MailSource, account_id: str, loop: Any) -> None:
+        """Give a source (duck-typed) a persistent UID watermark backed by
+        storage preferences, so a restart resumes where polling left off
+        instead of re-seeding at the newest UID and silently skipping every
+        mail that arrived while the service was down.
+
+        Sources without ``set_watermark_store`` are untouched (the fake
+        source has no UIDs to persist).
+        """
+        inject = getattr(source, "set_watermark_store", None)
+        if inject is None:
+            return
+        key = f"imap.watermark.{account_id}"
+
+        def load() -> int | None:
+            raw = self._stored_watermarks.get(account_id)
+            if raw is None:
+                return None
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return None
+
+        def save(uid: int) -> None:
+            self._stored_watermarks[account_id] = str(uid)
+            asyncio.run_coroutine_threadsafe(self._storage.set_preference(key, str(uid)), loop)
+
+        inject(load, save)
 
     # -- source tasks ------------------------------------------------------------
 
