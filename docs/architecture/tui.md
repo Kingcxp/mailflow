@@ -188,19 +188,6 @@ Notes:
   returning terminal-renderable output) can be used in place of Carbonyl.
 - `browser_mode` changes apply on restart.
 
-## Remote mode and embedded server
-
-`mailflow tui --local` starts the TUI together with the embedded
-admin REST+WS server (`mailflow_server.create_app`, credentials in
-`[server]`, auto-provisioned for the session). Other frontends —
-another TUI, a chat bot — attach with `mailflow tui --remote URL`:
-the login screen remembers address/username in
-`~/.mailflow/tui-session.json`, optionally stores the password and
-auto-logins until authentication fails. Remote sessions drive mail,
-actions, runtime toggles, logs (websocket relay) and scalar settings;
-mailbox history browsing, LLM chain editing and marketplace installs
-require a locally attached service.
-
 ## Bots tab
 
 The Bots tab lists configured onebot/wechaty/openclaw-weixin notifier
@@ -214,3 +201,21 @@ HTTP status). The add form is a real
 each provider renders its own option fields (endpoint URL, token, targets)
 with bilingual descriptions, and a help line above the table explains the
 external-runtime login model.
+
+A planned rework (see `bot-login.md`) turns this into an auto-provisioning
+flow: the form asks for basics first, then the provider, then guides the
+user through installing/starting the gateway (NapCat / WeChaty) with the QR
+login inside the TUI.
+
+## Remote mode and embedded server
+
+`mailflow tui --local` starts the TUI together with the embedded
+admin REST+WS server (`mailflow_server.create_app`, credentials in
+`[server]`, auto-provisioned for the session). Other frontends —
+another TUI, a chat bot — attach with `mailflow tui --remote URL`:
+the login screen remembers address/username in
+`~/.mailflow/tui-session.json`, optionally stores the password and
+auto-logins until authentication fails. Remote sessions drive mail,
+actions, runtime toggles, logs (websocket relay) and scalar settings;
+mailbox history browsing, LLM chain editing and marketplace installs
+require a locally attached service.
