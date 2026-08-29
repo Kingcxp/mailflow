@@ -307,10 +307,17 @@ def _ascii_qr(image: str) -> str:
         width: int = struct.unpack(">I", raw[16:20])[0]
         height: int = struct.unpack(">I", raw[20:24])[0]
         stride = width * 4 + 1
+        # fit the QR to the dialog: derive the module size from the
+        # source width (<=32 modules across) and sample the centre of
+        # each module so the QR stays scannable at small size. 32
+        # modules = 64 terminal columns (each module is two columns).
+        step = max(1, width // 32)
         out: list[str] = []
-        for y in range(0, min(height, 40), 2):
+        for my in range(min(height // step, 32)):
             row: list[str] = []
-            for x in range(0, min(width, 80), 2):
+            for mx in range(min(width // step, 32)):
+                y = (my * step) + step // 2
+                x = (mx * step) + step // 2
                 idx = y * stride + 1 + x * 4
                 if idx + 2 < len(pixels):
                     r: int = pixels[idx]

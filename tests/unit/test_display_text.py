@@ -44,3 +44,38 @@ def test_free_text_passes_through_untouched() -> None:
     assert zh.display_text("领学生证需要本人到场") == "领学生证需要本人到场"
     assert zh.display_text(None) == ""
     assert zh.display_text("") == ""
+
+
+def test_ascii_qr_fits_dialog() -> None:
+    """The QR render must fit the guide dialog (<=32 rows, <=64 cols)
+    while staying module-aligned so it remains scannable."""
+    import base64
+    import struct
+    import zlib
+
+    from mailflow_tui.gateway_guide import _ascii_qr
+
+    width = height = 256
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        for x in range(width):
+            mx, my = x // 8, y // 8
+            dark = (mx % 2) == (my % 2)
+            raw += bytes((0, 0, 0)) if dark else bytes((255, 255, 255))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        block = tag + data
+        return struct.pack(">I", len(data)) + block + struct.pack(">I", zlib.crc32(block))
+
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    png += chunk(b"IDAT", zlib.compress(bytes(raw)))
+    png += chunk(b"IEND", b"")
+
+    rendered = _ascii_qr(base64.b64encode(png).decode())
+    lines = rendered.splitlines()
+    assert len(lines) <= 32
+    assert len(lines[0]) <= 64
+    # finder pattern (top-left 7x7 dark/light blocks) must survive
+    assert "██" in lines[0]

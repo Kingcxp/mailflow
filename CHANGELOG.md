@@ -150,6 +150,10 @@ All notable changes are recorded here; the format follows
   warning, not an error.
 - Install progress lines now name the file being downloaded
   ('downloading: QQ-...AppImage — 45 / 190 MB').
+- The guide QR is much smaller and module-aligned: sampled from the
+  centre of each QR module (<=32 modules = 64 columns x 32 rows) so the
+  whole code fits the dialog and stays scannable — previously the 2px
+  sampling blew it up past the pane width and only a few rows showed.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
