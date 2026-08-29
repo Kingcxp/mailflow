@@ -61,6 +61,20 @@ def _data_root() -> Path:
     return Path("data") / "gateways"
 
 
+def _available_memory_mb() -> float | None:
+    """Free system memory in MB (Linux /proc/meminfo); None when unknown."""
+    import os
+
+    if os.name != "nt":
+        try:
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                if line.startswith("MemAvailable:"):
+                    return float(line.split()[1]) / 1024.0
+        except OSError:
+            return None
+    return None
+
+
 def _path_exists(path: Path) -> bool:
     """Sync existence check (Path.exists in async functions trips ASYNC240)."""
     return path.exists()
@@ -483,6 +497,19 @@ class NapCatProvisioner:
                 "NapCat is not installed on this Linux host: run the "
                 "auto-install first (it installs Linux QQ + xvfb + NapCat)."
             )
+        else:
+            # NapCat launches the full QQ NT client (Electron): it needs
+            # roughly 1.5-2 GB of RAM. Refuse to start on hosts without
+            # enough free memory instead of letting the OOM killer take
+            # down the whole VM.
+            mem_mb = _available_memory_mb()
+            if mem_mb is not None and mem_mb < 1500:
+                raise RuntimeError(
+                    f"NapCat needs ~1.5-2 GB of free RAM (it runs the full "
+                    f"QQ client), but this host has only {mem_mb:.0f} MB "
+                    "available. Free memory or pick a lighter platform "
+                    "(e.g. WeChaty) on this machine."
+                )
         # the runnable NapCat lives in QQ's app dir on Linux (installed by
         # the BootWay03 flow) and in data/gateways on Windows
         run_target = (
