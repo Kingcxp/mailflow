@@ -279,24 +279,22 @@ class NapCatProvisioner:
                 "NapCat needs Node.js >= 18; install Node first (or set options.node_path)"
             )
         target = _instance_dir(instance_id)
+        # installed means MailFlow's own copy (data/gateways) is in place;
+        # Linux additionally mirrors it into QQ's app dir during install.
+        # data/gateways is the source of truth so make clean-gateways
+        # forces a full reinstall (QQ alone must not count as installed).
         if await asyncio.to_thread(
-            lambda: (
-                _path_exists(target / "package.json")
-                or _path_exists(target / "main")
-                or (os.name != "nt" and _path_exists(_QQ_INSTALL_DIR / "qq"))
-            )
+            lambda: _path_exists(target / "napcat.mjs") or _path_exists(target / "main")
         ):
             logger.info("napcat %s already installed at %s", instance_id, target)
             return
         target.mkdir(parents=True, exist_ok=True)
-        if os.name != "nt":
-            # Linux headless: install xvfb + the Linux QQ deb, then place
-            # NapCat.shell inside QQ's resources/app/napcat and patch the
-            # app entry point (official BootWay03 flow).
-            await self._install_linux_qq(instance_id, options)
-            await self._install_napcat_package(instance_id, options, target)
-            return
         await self._install_napcat_package(instance_id, options, target)
+        if os.name != "nt":
+            # Linux headless: verify the runtime (xvfb + QQ deb), mirror
+            # NapCat into QQ's resources/app/napcat and patch the app
+            # entry point (official BootWay03 flow).
+            await self._install_linux_qq(instance_id, options, target)
 
     async def _install_napcat_package(
         self, instance_id: str, options: dict[str, Any], target: Path
@@ -324,9 +322,11 @@ class NapCatProvisioner:
             archive.unlink(missing_ok=True)
         logger.info("napcat %s: installed %d files at %s", instance_id, len(entries), target)
 
-    async def _install_linux_qq(self, instance_id: str, options: dict[str, Any]) -> None:
-        """Verify the Linux runtime (xvfb + QQ deb) and place NapCat inside
-        QQ's app dir.
+    async def _install_linux_qq(
+        self, instance_id: str, options: dict[str, Any], target: Path
+    ) -> None:
+        """Verify the Linux runtime (xvfb + QQ deb) and mirror the already
+        downloaded NapCat package into QQ's app dir.
 
         MailFlow never installs system packages itself: missing runtime
         pieces are reported with the exact install command so the operator
@@ -346,19 +346,15 @@ class NapCatProvisioner:
                 + "\n  - ".join(missing)
                 + "\n(example: apt-get install -y xvfb xauth, then dpkg -i QQ_*.deb)"
             )
-        # place NapCat inside QQ's app dir
+        # mirror the freshly unpacked package into QQ's app dir
         qq_app = _QQ_INSTALL_DIR / "resources" / "app"
         napcat_dir = qq_app / "napcat"
         if not _path_exists(napcat_dir / "napcat.mjs"):
             qq_app.mkdir(parents=True, exist_ok=True)
-            requested = str(options.get("napcat_version") or "").strip()
-            version = requested or _NAPCAT_VERSION
-            archive = Path("/tmp") / f"napcat-{instance_id}.zip"
-            await asyncio.to_thread(self._download, _release_url(version), archive)
-            with zipfile.ZipFile(archive) as zf:
-                zf.extractall(napcat_dir)
-            archive.unlink(missing_ok=True)
-            logger.info("napcat %s: NapCat placed at %s", instance_id, napcat_dir)
+            if napcat_dir.exists():
+                shutil.rmtree(napcat_dir, ignore_errors=True)
+            shutil.copytree(target, napcat_dir, dirs_exist_ok=True)
+            logger.info("napcat %s: NapCat mirrored to %s", instance_id, napcat_dir)
         # patch package.json main -> loadNapCat.cjs (BootWay03)
         pkg = qq_app / "package.json"
         if _path_exists(pkg):
@@ -459,9 +455,19 @@ class NapCatProvisioner:
                 "NapCat is not installed on this Linux host: run the "
                 "auto-install first (it installs Linux QQ + xvfb + NapCat)."
             )
-        target = _instance_dir(instance_id)
-        if not _path_exists(target):
-            raise RuntimeError(f"napcat {instance_id} is not installed")
+        # the runnable NapCat lives in QQ's app dir on Linux (installed by
+        # the BootWay03 flow) and in data/gateways on Windows
+        run_target = (
+            _QQ_INSTALL_DIR / "resources" / "app" / "napcat"
+            if os.name != "nt"
+            else _instance_dir(instance_id)
+        )
+        if not _path_exists(run_target / "napcat.mjs"):
+            raise RuntimeError(
+                f"napcat {instance_id} is not installed (no napcat.mjs under "
+                f"{run_target}); run the setup again to install it"
+            )
+        target = run_target
         port = int(options.get("port") or self._port_for(instance_id))
         # already running on this port (another instance or a self-hosted
         # NapCat)? reuse it instead of starting a conflicting process
