@@ -89,6 +89,13 @@ class GeneralConfig(BaseModel):
     language: str = Field(
         default="en", description="Default display language code (en, zh-CN, or an external pack)"
     )
+    command_prefix: str = Field(
+        default="/",
+        min_length=1,
+        max_length=8,
+        description="Prefix that marks a chat-platform message as a MailFlow "
+        "command (e.g. '/mail list'); messages without it are ignored",
+    )
     timezone: str = Field(
         default="UTC", description="IANA timezone used for display, cleanup and reminders"
     )

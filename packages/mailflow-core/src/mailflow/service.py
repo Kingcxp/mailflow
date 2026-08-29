@@ -191,6 +191,10 @@ class MailFlowService:
         await self._load_persisted_language()
         await self.runtime.start()
         await self.gateways.start()
+        from mailflow.bot_server import BotServer
+
+        self.bot_server = BotServer(self)
+        await self.bot_server.start()
         self._started = True
         self._stopped_event = asyncio.Event()
         self._update_task = asyncio.create_task(self._update_loop(), name="updates")
@@ -201,6 +205,8 @@ class MailFlowService:
         if self._update_task is not None:
             self._update_task.cancel()
         await self.gateways.stop()
+        if getattr(self, "bot_server", None) is not None:
+            await self.bot_server.stop()
         await self.runtime.stop()
         await self.storage.close()
         self._started = False
@@ -1085,6 +1091,28 @@ class MailFlowService:
     async def gateway_shutdown(self, provider: str, instance_id: str) -> None:
         """Stop one gateway instance and stop supervising it."""
         await self.gateways.shutdown_instance(provider, instance_id)
+
+    # -- chat command dispatch ---------------------------------------------------------------
+
+    def command_prefix(self) -> str:
+        """Configured command prefix for chat-platform messages."""
+        return self.config.general.command_prefix
+
+    async def command_dispatch(self, text: str) -> str | None:
+        """Handle one chat-platform message.
+
+        Returns the reply text when the message is a MailFlow command
+        (starts with the configured prefix), else None. Transport-neutral:
+        the caller (a gateway bridge) sends the reply back to the chat.
+        """
+        prefix = self.command_prefix()
+        if not text.startswith(prefix):
+            return None
+        line = text[len(prefix) :].strip()
+        if self.commands is None:
+            return "MailFlow command router is not wired"
+        response = await self.commands.execute(line)
+        return str(response.render())
 
     # -- reply workflow ---------------------------------------------------------------------
 

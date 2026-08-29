@@ -161,7 +161,10 @@
         "processors[].timeout_seconds": "该处理器处理单封邮件的超时秒数。",
         "storage.options": "后端专属选项，每行一条“键 = 值”，或填写 JSON 对象。",
         "storage.path": "数据库文件路径。相对路径基于当前工作目录解析。",
-        "storage.provider": "存储后端组件 id（内置：sqlite）。"
+        "storage.provider": "存储后端组件 id（内置：sqlite）。",
+        "general": {
+          "command_prefix": "聊天平台消息的命令前缀（如 /mail list）；不以它开头的消息会被忽略"
+        }
       },
       "description": "说明",
       "legend": "* 表示机密字段，输出中已隐藏。带 [] 的是列表项（显示第一项）；列表请在 TOML 文件中编辑。",

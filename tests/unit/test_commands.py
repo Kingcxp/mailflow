@@ -929,3 +929,48 @@ class TestMailWipe:
         assert response.ok
         assert len(storage.mails) == 0
         assert len(storage.trash) == 0
+
+
+@pytest.mark.asyncio
+async def test_command_dispatch_prefix_filtering() -> None:
+    """Chat messages only dispatch when they start with the prefix."""
+    from mailflow.config import MailFlowConfig
+    from mailflow.domain import CommandResponse
+    from mailflow.service import MailFlowService
+
+    cfg = MailFlowConfig()
+    cfg.general.command_prefix = "/"
+    service = MailFlowService.__new__(MailFlowService)
+    service.config = cfg
+
+    calls: list[str] = []
+
+    class FakeRouter:
+        async def execute(self, line: str) -> CommandResponse:
+            calls.append(line)
+            return CommandResponse.plain(f"ok:{line}")
+
+    service.commands = FakeRouter()
+    assert await service.command_dispatch("/mail list") == "ok:mail list"
+    assert await service.command_dispatch("hello") is None
+    assert await service.command_dispatch("/help") == "ok:help"
+    assert calls == ["mail list", "help"]
+
+    # custom prefix
+    cfg.general.command_prefix = "!"
+    assert await service.command_dispatch("!mail list") == "ok:mail list"
+    assert await service.command_dispatch("/mail list") is None
+
+
+@pytest.mark.asyncio
+async def test_command_dispatch_no_router() -> None:
+    from mailflow.config import MailFlowConfig
+    from mailflow.service import MailFlowService
+
+    cfg = MailFlowConfig()
+    cfg.general.command_prefix = "/"
+    service = MailFlowService.__new__(MailFlowService)
+    service.config = cfg
+    service.commands = None
+    assert await service.command_dispatch("/mail") == "MailFlow command router is not wired"
+    assert await service.command_dispatch("x") is None

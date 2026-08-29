@@ -161,7 +161,10 @@
         "processors[].timeout_seconds": "Per-mail timeout for this processor, in seconds.",
         "storage.options": "Backend-specific options, one 'key = value' per line or a JSON object.",
         "storage.path": "Database file path. Relative paths resolve against the working directory.",
-        "storage.provider": "Storage backend component id (built in: sqlite)."
+        "storage.provider": "Storage backend component id (built in: sqlite).",
+        "general": {
+          "command_prefix": "Command prefix for chat-platform messages (e.g. /mail list); messages without it are ignored"
+        }
       },
       "description": "DESCRIPTION",
       "legend": "* marks secret fields, redacted from output. Entries with [] are list items (first configured entry shown); edit lists in the TOML file.",

@@ -85,6 +85,31 @@ function startBot() {
   bot.on("logout", () => {
     lastQrStatus = "pending";
   });
+  bot.on("message", async (msg) => {
+    // chat command flow: forward text messages to the MailFlow bot
+    // endpoint; the reply is sent back to the same chat
+    const BOT_URL = process.env.MAILFLOW_BOT_URL || "";
+    if (!BOT_URL) return;
+    if (msg.self()) return;
+    const text = msg.text();
+    if (!text) return;
+    try {
+      const res = await fetch(BOT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.reply) {
+        const room = msg.room();
+        if (room) await room.say(data.reply);
+        else await msg.talker().say(data.reply);
+      }
+    } catch (err) {
+      console.error("[wechaty-gateway] bot dispatch failed:", err && err.message || err);
+    }
+  });
   bot.on("error", (err) => {
     loginError = String(err && err.message || err);
     lastQrStatus = "error";

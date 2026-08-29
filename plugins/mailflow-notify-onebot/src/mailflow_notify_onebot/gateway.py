@@ -846,16 +846,38 @@ class NapCatProvisioner:
         Returns the base64 PNG (data URL stripped), the logged-in sentinel,
         or '' when the QR file does not exist yet."""
         qr_file = _instance_dir(instance_id) / "cache" / "qrcode.png"
-        # logged in? -> sentinel; a failed probe just means not yet ready
+        # logged in? -> sentinel; a failed probe just means not yet ready.
+        # Probe the configured OneBot port first, then the WebUI port
+        # (NapCat also answers get_login_info there once a session is up).
+        # Log the probe target + status on change so a misconfigured port
+        # is visible in the guide instead of silently waiting forever.
         logged_in = False
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                login = await client.post(f"{self._endpoint(instance_id)}/get_login_info", json={})
-                login.raise_for_status()
-                login_data: Any = login.json().get("data") or {}
-                logged_in = bool(login_data.get("user_id"))
-        except Exception:
-            logged_in = False
+        endpoints = [self._endpoint(instance_id)]
+        webui = self._webui_ports.get(instance_id)
+        webui_url = f"http://127.0.0.1:{webui}" if webui else ""
+        if webui_url and webui_url not in endpoints:
+            endpoints.append(webui_url)
+        probe = ""
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            for endpoint in endpoints:
+                try:
+                    login = await client.post(f"{endpoint}/get_login_info", json={})
+                    login.raise_for_status()
+                    login_data: Any = login.json().get("data") or {}
+                    logged_in = bool(login_data.get("user_id"))
+                    probe = f"{endpoint} HTTP {login.status_code}"
+                    if logged_in:
+                        break
+                except Exception as exc:
+                    probe = f"{endpoint} ERR {type(exc).__name__}"
+        if probe != getattr(self, "_last_probe", None):
+            self._last_probe = probe
+            logger.info(
+                "napcat %s: login probe -> %s (%s)",
+                instance_id,
+                "logged in" if logged_in else "waiting",
+                probe,
+            )
         if logged_in:
             return _QR_LOGGED_IN
         # not logged in: the QR png (refreshed by NapCat on expiry)

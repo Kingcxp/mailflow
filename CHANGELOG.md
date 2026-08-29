@@ -188,6 +188,17 @@ All notable changes are recorded here; the format follows
   ~15 rows tall and fits the panel whole. Buttons and title are pinned
   to 1 row in on_mount (CSS-only height rules are overridden by
   Textual's Button variant styles), and the QR panel is centered.
+- Chat command flow: new `general.command_prefix` setting (default /)
+  and a local bot endpoint (127.0.0.1:18789/bot/message, auto-bumping
+  port on conflict) that dispatches prefixed messages through the
+  CommandRouter; the WeChaty bridge now forwards incoming chat messages
+  there and replies back in the same chat. Messages without the prefix
+  are ignored, so normal conversation is never treated as commands.
+- NapCat login probe now checks both the OneBot port and the WebUI port
+  and logs the probed endpoint/status on change, so a misconfigured
+  port is visible in the guide instead of silently never enabling Done.
+- The guide QR poll interval is 5s (was 3s) to reduce memory churn on
+  low-RAM VMs where the QQ client already uses ~1.5 GB.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

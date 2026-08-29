@@ -288,7 +288,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     self._log("WARN", message)
                     self._last_qr_diag = message
                 self._set_status(message, "yellow")
-                await asyncio.sleep(3.0)
+                await asyncio.sleep(5.0)
                 continue
             if qr == self._QR_LOGGED_IN:
                 self._set_qr("")
@@ -314,7 +314,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._set_status(
                     self._t("tui.bots_guide_qr_pending", provider=self._provider), "yellow"
                 )
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(5.0)
         self._log("ERROR", self._t("tui.bots_guide_qr_timeout"))
         self._set_status(self._t("tui.bots_guide_qr_timeout"), "red")
 

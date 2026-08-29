@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -206,6 +207,10 @@ class WechatyGatewayProvisioner:
         env = dict(options.get("env") or {})
         env["WECHATY_TOKEN"] = token
         env["GATEWAY_PORT"] = str(port)
+        # chat command dispatch endpoint (see mailflow.bot_server)
+        bot_url = str(options.get("bot_url") or os.environ.get("MAILFLOW_BOT_URL") or "")
+        if bot_url:
+            env["MAILFLOW_BOT_URL"] = bot_url
         try:
             process = await asyncio.to_thread(
                 subprocess.Popen,
