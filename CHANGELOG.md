@@ -73,6 +73,13 @@ All notable changes are recorded here; the format follows
   a broken gateway install can be redone) and `make clean-config`
   (delete local config files so they regenerate from the example); both
   ask for confirmation interactively and accept -y.
+- NapCat QR login: the OneBot `get_qrcode` endpoint does not exist in
+  NapCat (it was a 404 all along), so the guide now reads the login QR
+  NapCat writes to `<workdir>/cache/qrcode.png` (NAPCAT_WORKDIR is
+  pinned to the instance dir). NapCat refreshes that file when the QR
+  expires, so the TUI shows the new QR automatically; login is still
+  decided by get_login_info, never by QR absence. WeChaty's bridge
+  already re-emits `scan` with a fresh QR on expiry.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

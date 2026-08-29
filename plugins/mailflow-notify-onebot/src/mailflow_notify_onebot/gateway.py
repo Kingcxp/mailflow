@@ -538,6 +538,9 @@ class NapCatProvisioner:
         env = dict(options.get("env") or {})
         env.setdefault("NAPCAT_UID", instance_id)
         env.setdefault("NAPCAT_PORT", str(port))
+        # NapCat writes its login QR to <workdir>/cache/qrcode.png; pin the
+        # workdir to the instance dir so qr() can find and refresh it
+        env.setdefault("NAPCAT_WORKDIR", str(target))
         log_file = target / "napcat.log"
 
         def _launch() -> subprocess.Popen[Any]:
@@ -645,30 +648,36 @@ class NapCatProvisioner:
         )
 
     async def qr(self, instance_id: str) -> str:
-        """Login state for the guide: a QR payload while waiting, a sentinel
-        when the session is logged in, '' when no QR is available yet.
+        """Login state for the guide.
 
-        ``get_qrcode`` returns an empty payload both before the QR exists
-        and after login, so login is decided by ``get_login_info`` (a
-        user_id means logged in), never by the absence of a QR."""
-        endpoint = self._endpoint(instance_id)
+        NapCat writes its login QR to ``<workdir>/cache/qrcode.png`` (see
+        NAPCAT_WORKDIR) and refreshes it automatically when it expires.
+        Login is decided by the OneBot ``get_login_info`` probe (a user_id
+        means logged in), never by the presence/absence of a QR file.
+        Returns the base64 PNG (data URL stripped), the logged-in sentinel,
+        or '' when the QR file does not exist yet."""
+        target = _instance_dir(instance_id)
+        qr_file = target / "cache" / "qrcode.png"
+        # logged in? -> sentinel; a failed probe just means not yet ready
+        logged_in = False
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
-                # logged in? -> sentinel (never confuse with "no QR")
-                login = await client.post(f"{endpoint}/get_login_info", json={})
+                login = await client.post(f"{self._endpoint(instance_id)}/get_login_info", json={})
                 login.raise_for_status()
                 login_data: Any = login.json().get("data") or {}
-                if login_data.get("user_id"):
-                    return _QR_LOGGED_IN
-                # not logged in: ask for the QR
-                qr = await client.post(f"{endpoint}/get_qrcode", json={})
-                qr.raise_for_status()
-                payload: Any = qr.json().get("data") or {}
-                image = payload.get("qrcode") or payload.get("image") or ""
-                return str(image)
-        except Exception as exc:
-            logger.warning("napcat %s login-state probe failed: %s", instance_id, exc)
+                logged_in = bool(login_data.get("user_id"))
+        except Exception:
+            logged_in = False
+        if logged_in:
+            return _QR_LOGGED_IN
+        # not logged in: the QR png (refreshed by NapCat on expiry)
+        try:
+            raw = qr_file.read_bytes()
+        except OSError:
             return ""
+        import base64 as _b64
+
+        return _b64.b64encode(raw).decode("ascii")
 
 
 __all__ = ["NapCatProvisioner", "_find_node"]
