@@ -245,6 +245,15 @@ All notable changes are recorded here; the format follows
   one per line in the bot form) can run commands; subscribing adds the
   chat to the notifier targets so mail notifications land there.
   Subscriptions persist across restarts (gateway.sub.* preferences).
+- The bot form's list options (admins/targets) use an interactive list
+  editor: one input + add button, items shown with a remove button.
+- Gateway instances running at shutdown resume automatically on
+  startup: the supervisor starts them once even when the status probe
+  reports stopped (a fresh process is not running yet).
+- NapCat OneBot config now uses the correct filename (onebot11.json,
+  v4.5.3+ default load) with the full httpServers shape (name/enable/
+  port/host/messagePostFormat) written to the instance dir and the
+  per-user NapCat config dir, so the HTTP endpoint actually starts.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

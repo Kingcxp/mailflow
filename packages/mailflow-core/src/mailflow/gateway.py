@@ -124,7 +124,8 @@ class GatewayManager:
             self._instances[self._key(instance.provider, instance.instance_id)] = instance
             if instance.status == _STATUS_RUNNING and instance.extra.get("autostart", True):
                 self._supervise_tasks[instance.instance_id] = asyncio.create_task(
-                    self._supervise(instance), name=f"gateway-{instance.instance_id}"
+                    self._supervise(instance, resume=True),
+                    name=f"gateway-{instance.instance_id}",
                 )
 
     async def _list_persisted(self) -> list[GatewayInstance]:
@@ -167,9 +168,15 @@ class GatewayManager:
                 instance.status = "stopped"
                 await self._save_state(instance)
 
-    async def _supervise(self, instance: GatewayInstance) -> None:
-        """Restart a crashed gateway with bounded backoff."""
+    async def _supervise(self, instance: GatewayInstance, *, resume: bool = False) -> None:
+        """Restart a crashed gateway with bounded backoff.
+
+        ``resume`` is True for instances restored at startup: the
+        process is not running yet, so a 'stopped' status must trigger a
+        start (a plain stopped status would be treated as user-stopped
+        and never restarted)."""
         backoff = 5
+        first = True
         while not self._stop_event.is_set():
             try:
                 current = await self.provisioner(instance.provider).status(instance.instance_id)
@@ -188,8 +195,18 @@ class GatewayManager:
                     continue
                 return
             if current.status == "stopped":
-                # user stopped it: stop supervising
-                return
+                if resume and first:
+                    # startup resume: the gateway was running at shutdown
+                    # but is not now — start it once
+                    first = False
+                    logger.info(
+                        "gateway %s.%s: resuming (was running at shutdown)",
+                        instance.provider,
+                        instance.instance_id,
+                    )
+                else:
+                    # user stopped it: stop supervising
+                    return
             # error/unknown: restart after backoff
             logger.warning(
                 "gateway %s.%s not running (%s); restarting in %ds",
@@ -208,6 +225,7 @@ class GatewayManager:
                 self._instances[self._key(started.provider, started.instance_id)] = started
                 await self._save_state(started)
                 backoff = 5
+                first = False
             except Exception as exc:
                 logger.error(
                     "gateway %s.%s restart failed: %s", instance.provider, instance.instance_id, exc

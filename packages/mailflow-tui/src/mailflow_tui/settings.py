@@ -457,7 +457,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
 
         ``napcat`` (auto-deploy) and ``wechaty`` map 1:1 to their gateway
         provisioner; ``onebot`` is the manual notifier id and has no
-        gateway. Returns None when the platform is manual-only."""
+        gateway. When editing a gateway-backed entry (saved with
+        options.gateway), that marker wins over the notifier provider.
+        Returns None when the platform is manual-only."""
+        marker = str(self._values.get("options", {}).get("gateway") or "") if self._values else ""
+        if marker in self._service.gateway_providers():
+            return marker
         if provider in self._service.gateway_providers():
             return provider
         return None
@@ -605,7 +610,16 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     allow_blank=False,
                 )
             elif extra.kind == "lines":
-                yield TextArea(self._extra_value(extra), id=widget_id, classes="field-multiline")
+                from mailflow_tui.list_editor import ListEditor
+
+                current_lines = [
+                    ln.strip() for ln in (self._extra_value(extra) or "").splitlines() if ln.strip()
+                ]
+                yield ListEditor(
+                    current_lines,
+                    placeholder=str(extra.default or "one item per line"),
+                    id=widget_id,
+                )
             elif extra.secret:
                 # mounted via mount_all (outside compose), so children are
                 # attached explicitly instead of with-block composition
@@ -697,6 +711,13 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 parsed = self._split_mapping(raw)
                 if parsed:
                     collected[extra.field_id] = parsed
+                continue
+            from mailflow_tui.list_editor import ListEditor
+
+            if isinstance(node, ListEditor):
+                items = node.value()
+                if items:
+                    collected["options"][extra.field_id] = items
                 continue
             text = raw.strip()
             if not text:

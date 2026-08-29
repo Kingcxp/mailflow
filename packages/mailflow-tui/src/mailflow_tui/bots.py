@@ -237,6 +237,13 @@ class BotsPane(Vertical):
             return provider
         return None
 
+    @staticmethod
+    def _gateway_from_options(options: dict[str, Any]) -> str | None:
+        """Gateway id recorded in a notifier's options (gateway-backed
+        entries carry it so editing shows the admins form)."""
+        gateway = options.get("gateway")
+        return str(gateway) if gateway else None
+
     def _after_form(self, values: dict[str, Any] | None) -> None:
         """Form dismissed → persist, or run the guided gateway setup."""
         if not values:
@@ -284,8 +291,11 @@ class BotsPane(Vertical):
             options["gateway_url"] = endpoint
         values = {
             "notifier_id": instance_id,
+            # the notifier component id (onebot) differs from the gateway
+            # id (napcat); record the gateway so editing the entry still
+            # knows it is gateway-backed (admins form, not targets)
             "provider": "onebot" if provider == "napcat" else provider,
-            "options": options,
+            "options": {**options, "gateway": provider},
         }
         try:
             # the same instance id may already exist (a previous attempt

@@ -104,7 +104,41 @@ Add form (basics) → Next → provider guide
 Crash handling: the runtime's gateway supervisor restarts a dead child with
 backoff (like the pipeline's retry policy); after N failures the instance
 is marked `error` in the Bots tab. `stop()` terminates every managed child
-(graceful SIGTERM, then kill).
+(graceful SIGTERM, then kill). On startup, instances that were running at
+shutdown are resumed automatically (the supervisor starts them once even
+when the status probe reports stopped).
+
+## Chat commands (subscriptions & operations)
+
+MailFlow bots answer chat commands in groups and private chats. The
+prefix is configurable (`general.command_prefix`, default `/`). Only
+users listed in the notifier's `admins` option (QQ number / wxid, one
+per item in the bot form's list editor) may run commands; others get a
+permission-denied reply.
+
+```
+/ mailflow help          - full command help
+/ mailflow subscribe     - receive mail notifications in this chat
+/ mailflow unsubscribe   - stop notifications in this chat
+/ mailflow status        - bot status + subscribed chat count
+/ mail list              - list recent mail
+/ action list            - pending action items
+/ help                   - full MailFlow command help
+```
+
+Subscribing adds the chat (group id / contact id) to the notifier's
+targets and persists it (`gateway.sub.<provider>.<instance>` in the
+preferences store), so notifications arrive after a restart too.
+
+## NapCat OneBot HTTP endpoint
+
+NapCat v4.5.3+ loads `config/onebot11.json` as its default OneBot
+config. The provisioner writes this file (with the full `httpServers`
+shape: name/enable/port/host) both into the instance dir and the
+standard NapCat per-user config dir
+(`~/.config/QQ/NapCat/config/`), so the OneBot HTTP server listens on
+the instance port after login — this is what the guide's connectivity
+check and the notifier talk to.
 
 ## TUI flow (reworked form)
 

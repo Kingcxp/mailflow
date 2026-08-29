@@ -611,26 +611,41 @@ class NapCatProvisioner:
         # config for NapCat: HTTP server on the instance port
         config_dir = target / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
-        http_config = config_dir / "onebot11_http.json"
+        # v4.5.3+ loads ./config/onebot11.json as the default OneBot
+        # config; the per-account file is onebot11_<qq>.json. Use the
+        # default name (we do not know the QQ number before login) with
+        # the full server shape NapCat expects (name + enable required).
         payload = {
             "network": {
                 "httpServers": [
                     {
+                        "name": "mailflow-http",
                         "enable": True,
                         "port": port,
                         "host": "127.0.0.1",
                         "enableCors": False,
                         "enableWebsocket": False,
+                        "messagePostFormat": "array",
                         "token": "",
                         "debug": False,
                     }
-                ]
-            }
+                ],
+                "httpClients": [],
+                "websocketServers": [],
+                "websocketClients": [],
+            },
+            "musicSignUrl": "",
+            "enableLocalFile2Url": False,
+            "parseMultMsg": False,
         }
-        http_config.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        config_dir.mkdir(parents=True, exist_ok=True)
+        for target_dir in (config_dir,):
+            (target_dir / "onebot11.json").write_text(
+                json.dumps(payload, indent=2), encoding="utf-8"
+            )
         # NapCat also reads its config from the standard per-user dir
-        # (~/.config/QQ/NapCat/config/); mirror the HTTP server config
-        # there so the OneBot endpoint actually starts on headless hosts
+        # (~/.config/QQ/NapCat/config/); mirror the OneBot config there
+        # so the HTTP endpoint actually starts on headless hosts
         if not _IS_WINDOWS:
             import os as _os
 
@@ -638,7 +653,7 @@ class NapCatProvisioner:
             napcat_config = Path(home) / ".config" / "QQ" / "NapCat" / "config"
             try:
                 napcat_config.mkdir(parents=True, exist_ok=True)
-                (napcat_config / "onebot11_http.json").write_text(
+                (napcat_config / "onebot11.json").write_text(
                     json.dumps(payload, indent=2), encoding="utf-8"
                 )
                 logger.info(

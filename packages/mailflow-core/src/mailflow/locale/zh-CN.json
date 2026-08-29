@@ -585,7 +585,7 @@
       "extras_gateway_url": "WeChaty 网关服务地址，例如 http://127.0.0.1:8788；登录需走平板协议（如 WeChatFerry / PaPad 等），官方 puppet-wechat 网页协议已失效且有封号风险",
       "extras_token": "网关鉴权 token",
       "extras_endpoint": "API 路径，默认 /api/v1",
-      "extras_targets": "推送目标列表，每行一个，格式见下方说明：QQ 为 user:QQ号 或 group:群号；微信为 wxid_xxx 或 room-id@chatroom",
+      "extras_targets": "通知投递目标:group:<群号> / user:<QQ号>(onebot)或 room:<群名> / contact:<联系人>(wechaty)。",
       "bots_login_help": "登录方式：扫码在机器人运行时里完成——先启动 NapCat / WeChaty 网关 / OpenClaw 并扫码登录，再在这里点“添加”填写它的地址与推送目标；状态列显示连接测试结果。",
       "notify_title": "最新邮件通知",
       "btn_feedback": "打回",
@@ -664,7 +664,8 @@
       "bots_guide_downloading": "正在下载并安装 {provider}…",
       "bots_guide_downloaded": "安装完成。",
       "bots_guide_logged_in_btn": "我已登录",
-      "bots_select_first": "请先选中一个 bot 行"
+      "bots_select_first": "请先选中一个 bot 行",
+      "extras_admins": "允许执行聊天命令的平台用户 ID(QQ 号或微信号),每项一个。请添加你自己。"
     },
     "update": {
       "applied_title": "已应用的更新",
