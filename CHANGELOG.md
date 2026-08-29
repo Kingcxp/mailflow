@@ -199,6 +199,12 @@ All notable changes are recorded here; the format follows
   port is visible in the guide instead of silently never enabling Done.
 - The guide QR poll interval is 5s (was 3s) to reduce memory churn on
   low-RAM VMs where the QQ client already uses ~1.5 GB.
+- NapCat login detection is more robust: get_login_info accepts any id
+  field (user_id/uin/account), probes both the OneBot and WebUI ports,
+  and falls back to 'QR file unchanged for 90s + HTTP reachable' as a
+  logged-in signal after a successful scan — Done should now enable
+  right after scanning. The QR panel is vertically centered and the
+  waiting text explains that login confirmation follows the scan.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

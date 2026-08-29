@@ -53,7 +53,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     #guide-qr {
         padding: 0 1;
         margin: 0;
-        content-align: center top;
+        content-align: center middle;
         text-align: center;
     }
     #guide-log {
