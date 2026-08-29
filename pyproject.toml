@@ -24,6 +24,7 @@ mailflow-llm-openai-compatible = { workspace = true }
 mailflow-llm-anthropic = { workspace = true }
 mailflow-notify-console = { workspace = true }
 mailflow-notify-onebot = { workspace = true }
+mailflow-notify-openwechat = { workspace = true }
 mailflow-notify-wechaty = { workspace = true }
 mailflow-notify-openclaw-weixin = { workspace = true }
 mailflow-export-nonebot = { workspace = true }
@@ -79,6 +80,7 @@ mypy_path = [
   "plugins/mailflow-export-astrbot/src",
   "plugins/mailflow-notify-telegram/src",
   "plugins/mailflow-notify-onebot/src",
+  "plugins/mailflow-notify-openwechat/src",
   "plugins/mailflow-notify-wechaty/src",
   "plugins/mailflow-notify-openclaw-weixin/src",
   "plugins/mailflow-llm-google-generative-ai/src",
@@ -107,6 +109,7 @@ extraPaths = [
   "plugins/mailflow-export-astrbot/src",
   "plugins/mailflow-notify-telegram/src",
   "plugins/mailflow-notify-onebot/src",
+  "plugins/mailflow-notify-openwechat/src",
   "plugins/mailflow-notify-wechaty/src",
   "plugins/mailflow-notify-openclaw-weixin/src",
   "plugins/mailflow-llm-google-generative-ai/src",

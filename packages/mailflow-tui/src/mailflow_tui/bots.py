@@ -83,7 +83,9 @@ class BotsPane(Vertical):
     check their login state. QR scanning happens in the bot runtime itself
     (NapCat / WeChaty gateway / OpenClaw) — this tab verifies the session."""
 
-    IM_PROVIDERS: ClassVar[frozenset[str]] = frozenset({"onebot", "wechaty", "openclaw-weixin"})
+    IM_PROVIDERS: ClassVar[frozenset[str]] = frozenset(
+        {"onebot", "wechaty", "openwechat", "openclaw-weixin"}
+    )
 
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()

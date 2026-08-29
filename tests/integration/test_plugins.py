@@ -354,6 +354,7 @@ class TestBundledRegistration:
             "mailflow-notify-console",
             "mailflow-notify-onebot",
             "mailflow-notify-wechaty",
+            "mailflow-notify-openwechat",
             "mailflow-notify-openclaw-weixin",
             "mailflow-export-nonebot",
             "mailflow-export-astrbot",

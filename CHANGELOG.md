@@ -107,6 +107,20 @@ All notable changes are recorded here; the format follows
   a cryptic dbus/bus.cc error with no QR and an empty log.
 - Process-tree teardown on Linux is recursive (pgrep walk) so
   dbus-run-session > xvfb-run > QQ chains are fully killed.
+- New gateway: `openwechat` — WeChat scan-to-login with no platform
+  token. The provisioner builds a small Go bridge on install (requires a
+  Go toolchain; reports the exact apt command when missing); the bridge
+  renders the login QR to a PNG served at /qr (shown inline in the
+  guide), hot-reloads the session across restarts, and exposes
+  /health + /send for the notifier. Added as a provider choice in the
+  Bots form (mailflow-notify-openwechat).
+- NapCat on Linux now installs the official AppImage (QQ NT + NapCat
+  bundled, ~190 MB) instead of the QQ deb + /opt/QQ mirror + dbus:
+  only xvfb + fuse are needed, and the QR cache lives next to the
+  AppImage in the instance dir. The Shell zip flow stays for Windows.
+- The WeChaty bridge renders the scan QR text to a PNG (qrcode npm
+  package) so the guide shows a real scannable QR — previously a bare
+  URL appeared for users with no route to the gateway host.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

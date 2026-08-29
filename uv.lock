@@ -22,6 +22,7 @@ members = [
     "mailflow-notify-console",
     "mailflow-notify-onebot",
     "mailflow-notify-openclaw-weixin",
+    "mailflow-notify-openwechat",
     "mailflow-notify-telegram",
     "mailflow-notify-wechaty",
     "mailflow-server",
@@ -681,6 +682,17 @@ requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
 name = "mailflow-notify-openclaw-weixin"
 version = "0.1.0"
 source = { editable = "plugins/mailflow-notify-openclaw-weixin" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
+
+[[package]]
+name = "mailflow-notify-openwechat"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-notify-openwechat" }
 dependencies = [
     { name = "httpx" },
 ]

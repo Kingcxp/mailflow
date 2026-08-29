@@ -8,16 +8,19 @@ gateway — including driving the QR login inside the TUI.
 Status: implemented (round 1 + fixes). NapCat (via the `napcat` provisioner
 in mailflow-notify-onebot) and WeChaty (via the `wechaty` provisioner in
 mailflow-notify-wechaty) are auto-installed, launched and supervised by the
-GatewayManager. The Bots tab's Add button opens the standard notifier
-form: the provider dropdown lists `napcat` (auto-deploy, labeled
-"QQ (OneBot / NapCat)") as a separate choice from the manual `onebot`
-notifier id, so self-hosted users keep the endpoint form. Choosing a
-gateway-backed provider and pressing Next opens the guided setup — a
-bordered dialog with a live timestamped/level-tagged log pane (scrollable)
-and the QR login inside the frame, buttons outside. openclaw-weixin
-remains manual. NapCat's version is resolved from the latest GitHub
-release at install time (no more pinned, possibly-404 URLs); download
-errors carry the URL and HTTP status.
+GatewayManager. openwechat (via the `openwechat` provisioner in
+mailflow-notify-openwechat) is a third gateway: a Go bridge built on
+install that logs into WeChat with a plain QR scan — no platform token.
+The Bots tab's Add button opens the standard notifier form: the provider
+dropdown lists `napcat` (auto-deploy, labeled "QQ (OneBot / NapCat)") as
+a separate choice from the manual `onebot` notifier id, so self-hosted
+users keep the endpoint form. Choosing a gateway-backed provider and
+pressing Next opens the guided setup — a bordered dialog with a live
+timestamped/level-tagged log pane (scrollable) and the QR login inside
+the frame, buttons outside. openclaw-weixin remains manual. NapCat's
+version is resolved from the latest GitHub release at install time (no
+more pinned, possibly-404 URLs); download errors carry the URL and HTTP
+status.
 
 ## Goals
 
@@ -25,10 +28,16 @@ errors carry the URL and HTTP status.
    install Node packages, download binaries or hand-edit configs.
    - NapCat (OneBot v11 HTTP): auto-download + install + launch on first
      use; scan the QR inside the TUI.
-   - WeChaty pad-protocol gateway: auto-install the WeChaty package and the
-     gateway bridge, run it as a managed child process, surface the QR in
-     the TUI. The pad-protocol token is a config option the user must
-     provide (paid service), everything else is automatic.
+   - WeChaty gateway: auto-install the WeChaty package and the gateway
+     bridge, run it as a managed child process, surface the QR in the
+     TUI. With a pad-protocol token configured the pad puppet is used
+     (paid service); without one the free web-protocol puppet
+     (wechat4u) is tried — Tencent shut that protocol down, so it may
+     never emit a QR, but some accounts still work.
+   - openwechat gateway: scan-to-login with no platform token. The
+     provisioner requires a Go toolchain (reports the exact apt command
+     when missing), builds the bridge, and the bridge serves the QR as a
+     PNG plus a hot-reload session (no re-scan on restart).
 2. **Second instance**: when the platform is already installed, "Add"
      starts *another* independent instance (own data dir, own HTTP port)
      instead of reusing the first — one account per instance by default,
@@ -72,10 +81,15 @@ existing notifiers (mailflow-notify-onebot / mailflow-notify-wechaty)
 Add form (basics) → Next → provider guide
   1. detect: provisioner.is_available()  (installed? running? which port?)
   2. install (first use only): provisioner.install() in a worker
-       - NapCat: download release zip → unpack under
-         <data>/gateways/napcat-<instance>/ → launch with `node`
+       - NapCat: on Windows download the release zip → unpack under
+         <data>/gateways/napcat-<instance>/ → launch with the boot exe;
+         on Linux download the official AppImage (QQ + NapCat bundled,
+         only xvfb + fuse needed) into the instance dir and launch with
+         `xvfb-run ./…AppImage --no-sandbox`
        - WeChaty: `npm install wechaty` + gateway bridge under
          <data>/gateways/wechaty-<instance>/ → launch with `node`
+       - openwechat: `go build` the bridge under
+         <data>/gateways/openwechat-<instance>/ → launch the binary
   3. start: provisioner.start(instance) → managed child process
        - per-instance state dir + HTTP port (3001, 3002, ... or a fixed
          base port + instance offset; stored in preferences)
