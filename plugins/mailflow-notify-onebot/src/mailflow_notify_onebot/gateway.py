@@ -608,8 +608,12 @@ class NapCatProvisioner:
             ),
             encoding="utf-8",
         )
-        entry: Path | None = await asyncio.to_thread(self._find_entry, target, instance_id)
-        assert entry is not None
+        # Linux runs the bundled AppImage directly; only the Windows Shell
+        # package needs its node entry point located inside the tree
+        if os.name != "nt":
+            entry = entry_path
+        else:
+            entry = await asyncio.to_thread(self._find_entry, target, instance_id)
         # instance data dir: logs + the QR cache live here (on Linux this
         # differs from the QQ app dir where the package is mirrored)
         data_dir = _instance_dir(instance_id)

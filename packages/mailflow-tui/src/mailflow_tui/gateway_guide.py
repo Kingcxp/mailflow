@@ -72,14 +72,15 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             )
             # QR first so it is never pushed off by the log pane
             yield Static("", id="guide-qr")
-            # download/install progress (shown only while installing)
-            yield ProgressBar(
-                total=100,
-                show_percentage=True,
-                id="guide-progress",
-            )
-            yield Static("", id="guide-progress-label")
             with Vertical(id="guide-log-wrap"):
+                # download/install progress lives inside the log pane so
+                # it reads as part of the stream, not a separate widget
+                yield ProgressBar(
+                    total=100,
+                    show_percentage=True,
+                    id="guide-progress",
+                )
+                yield Static("", id="guide-progress-label")
                 yield RichLog(
                     id="guide-log", wrap=True, highlight=True, markup=True, max_lines=2000
                 )
@@ -142,6 +143,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         label = self.query_one_optional("#guide-progress-label", Static)
         if label is not None:
             label.update(message)
+        # throttle log lines: one per ~5% so the pane scrolls instead of
+        # flooding on every 64 KB chunk
+        bucket = int(percent // 5)
+        if bucket != getattr(self, "_progress_bucket", -1):
+            self._progress_bucket = bucket
+            self._log("INFO", f"{percent:.0f}% — {message}")
 
     # -- guide flow --------------------------------------------------------------
 

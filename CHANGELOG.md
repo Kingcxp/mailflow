@@ -125,7 +125,13 @@ All notable changes are recorded here; the format follows
   GatewayManager injects a shared InstallProgress into the provisioner's
   install options; provisioner download loops report bytes/percent
   (Content-Length when available), and the guide polls and renders it
-  (NapCat AppImage ~190 MB, Shell zip, openwechat Go build stages).
+  (NapCat AppImage ~190 MB, Shell zip, openwechat Go build stages). The
+  bar lives inside the log pane and throttled lines (one per 5%) scroll
+  through the log.
+- Fix: NapCat on Linux downloaded the AppImage but start still looked
+  for a node entry point (napcat.mjs) and failed with 'no entry point
+  found'. Start now runs the AppImage directly on Linux and only
+  resolves the Shell-package node entry on Windows.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
