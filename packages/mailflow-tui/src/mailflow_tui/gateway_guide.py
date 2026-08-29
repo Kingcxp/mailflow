@@ -170,13 +170,11 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         if node is None:
             return
         node.update(text)
-        # pin the panel to the rendered row count + 1: an odd module QR
-        # (29) ends on a half-row and the extra line keeps the bottom
-        # edge visible instead of clipping the last pixel row
+        # pin the panel to the exact rendered row count so nothing clips
         rows = len(text.splitlines()) if text else 0
         if rows:
-            node.styles.height = rows + 1  # pyright: ignore[reportUnknownMemberType]
-            node.styles.min_height = rows + 1  # pyright: ignore[reportUnknownMemberType]
+            node.styles.height = rows  # pyright: ignore[reportUnknownMemberType]
+            node.styles.min_height = rows  # pyright: ignore[reportUnknownMemberType]
 
     # -- install progress ---------------------------------------------------------
 
@@ -564,10 +562,12 @@ def _ascii_qr(image: str) -> str:
                     row_chars.append(" ")
             out.append("".join(row_chars))
         # the sampled block is the code itself; the source PNG's quiet
-        # zone was skipped, so re-add one light row/column around it —
-        # without it the bottom/right edge can look truncated
-        pad_row = " " * len(out[0])
-        out = [pad_row] + [f" {row} " for row in out] + [pad_row]
+        # zone was skipped, so re-add ONE light row below and one light
+        # column each side — the bottom white band completes the QR.
+        while out and not out[-1].strip():
+            out.pop()
+        pad_row = " " * (len(out[0]) + 2)
+        out = [f" {row} " for row in out] + [pad_row]
         return "\n".join(out) or "(qr)"
     except Exception:
         return f"(qr payload {len(raw)} bytes)"
