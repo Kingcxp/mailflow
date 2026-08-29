@@ -42,7 +42,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     }
     #guide-dialog {
         width: 92%;
-        height: 95%;
+        height: 98%;
         padding: 0 1;
     }
     #guide-title {
@@ -51,28 +51,31 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         margin: 0 0 0 0;
     }
     #guide-qr {
-        height: auto;
+        height: 20;
         padding: 0 1;
         margin: 0;
+        content-align: center top;
+        text-align: center;
     }
     #guide-log {
         height: 1fr;
-        min-height: 3;
+        min-height: 1;
     }
     #guide-status {
         height: 1;
         padding: 0 1;
     }
     #guide-actions {
-        height: 1;
+        height: auto;
         padding: 0 1;
         align: center middle;
     }
-    #guide-actions Button {
+    #guide-done, #guide-cancel {
         height: 1;
         min-height: 1;
         padding: 0 2;
         margin: 0;
+        border: none;
     }
     """
 
@@ -121,6 +124,17 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 yield Button(self._t("tui.btn_cancel"), id="guide-cancel", variant="error")
 
     async def on_mount(self) -> None:
+        # pin the chrome sizes in code: Textual's Button variant CSS can
+        # override height declarations, so set them directly here
+        for button_id in ("guide-done", "guide-cancel"):
+            button = self.query_one(f"#{button_id}", Button)
+            button.styles.height = 1  # pyright: ignore[reportUnknownMemberType]
+            button.styles.min_height = 1  # pyright: ignore[reportUnknownMemberType]
+        actions = self.query_one("#guide-actions", Horizontal)
+        actions.styles.height = 1  # pyright: ignore[reportUnknownMemberType]
+        actions.styles.min_height = 1  # pyright: ignore[reportUnknownMemberType]
+        title = self.query_one("#guide-title", Static)
+        title.styles.margin = (0, 0, 0, 0)  # pyright: ignore[reportUnknownMemberType]
         self._log(
             "INFO",
             self._t("tui.bots_guide_starting", provider=self._provider),
@@ -455,11 +469,11 @@ def _ascii_qr(image: str) -> str:
                 return (v, v, v)
             return (0, 0, 0)
 
-        step = max(1, width // 25)
+        step = max(1, width // 20)
         out: list[str] = []
-        for my in range(min(height // step, 25)):
+        for my in range(min(height // step, 20)):
             row_chars: list[str] = []
-            for mx in range(min(width // step, 25)):
+            for mx in range(min(width // step, 20)):
                 y = (my * step) + step // 2
                 x = (mx * step) + step // 2
                 r, g, b = sample(x, y)
