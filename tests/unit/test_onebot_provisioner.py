@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+import urllib.error
+import urllib.request as _ur
 from pathlib import Path
 from typing import Any
 
@@ -95,3 +97,51 @@ def _fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
 
 async def _async_false() -> bool:
     return False
+
+
+@pytest.mark.asyncio
+async def test_appimage_install_falls_back_when_api_unreachable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Release API failure must not abort the install: it falls back to
+    the pinned AppImage URL instead of raising."""
+    monkeypatch.chdir(tmp_path)
+    instance = _instance_dir("A-Bot-NapCat-5baf4a")  # pyright: ignore[reportPrivateUsage]
+    instance.mkdir(parents=True, exist_ok=True)
+
+    # API lookup raises (network unreachable) and the fallback download
+    # writes the pinned asset
+    def boom(*args: Any, **kwargs: Any) -> Any:  # pyright: ignore[reportUnknownParameterType]
+        raise urllib.error.URLError("network unreachable")
+
+    monkeypatch.setattr(_ur, "urlopen", boom)
+
+    downloads: dict[str, Path] = {}
+
+    def fake_download(url: str, destination: Path, progress: Any = None, **kw: Any) -> None:
+        downloads[url] = destination
+        destination.write_bytes(b"#!fake-appimage")
+
+    monkeypatch.setattr(NapCatProvisioner, "_download", staticmethod(fake_download))
+
+    # the runtime preflight checks xvfb-run/fusermount with shutil.which
+    def _fake_which(name: str) -> str:
+        return f"/usr/bin/{name}"
+
+    monkeypatch.setattr(gw_mod.shutil, "which", _fake_which)
+
+    prov = NapCatProvisioner()
+    await prov._install_linux_appimage(  # pyright: ignore[reportPrivateUsage]
+        "A-Bot-NapCat-5baf4a", {}, instance
+    )
+
+    # exactly one download, from the pinned release URL (no raise)
+    assert len(downloads) == 1
+    url = next(iter(downloads))
+    assert url.startswith(
+        "https://github.com/NapNeko/NapCatAppImageBuild/releases/download/v4.18.19/"
+    )
+    assert url.endswith(".AppImage")
+    # file written with the pinned asset name
+    appimage = instance / "QQ-50969_NapCat-v4.18.19-amd64.AppImage"
+    assert appimage.exists()

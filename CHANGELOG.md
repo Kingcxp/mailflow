@@ -139,6 +139,11 @@ All notable changes are recorded here; the format follows
 - The install progress bar widget is gone; progress is a single line at
   the top of the log pane, updated in place (never appended to the
   stream).
+- NapCat AppImage install no longer hard-fails when the GitHub release
+  API is unreachable: it falls back to the pinned known release URL
+  (v4.18.19) with a warning, and the latest-asset lookup now also
+  carries the asset name (previously the file kept the old pinned
+  name).
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

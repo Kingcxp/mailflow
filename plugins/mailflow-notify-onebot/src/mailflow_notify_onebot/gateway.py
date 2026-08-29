@@ -390,7 +390,9 @@ class NapCatProvisioner:
                 + "\n  - ".join(missing)
                 + "\n(example: apt-get install -y xvfb xauth fuse libfuse2)"
             )
-        # resolve the latest amd64 AppImage asset name from the release API
+        # resolve the latest amd64 AppImage asset name from the release
+        # API; when the API is unreachable we fall back to the pinned
+        # known release below
         requested = str(options.get("napcat_appimage_url") or "").strip()
         url = requested
         asset = _NAPCAT_APPIMAGE_ASSET
@@ -399,23 +401,31 @@ class NapCatProvisioner:
                 import json as _json
                 import urllib.request as _ur
 
-                def _lookup() -> str:
+                def _lookup() -> tuple[str, str]:
                     req = _ur.Request(_NAPCAT_APPIMAGE_API, headers={"User-Agent": "mailflow"})
                     with _ur.urlopen(req, timeout=30) as resp:
                         data = _json.loads(resp.read().decode("utf-8"))
                     for a in data.get("assets", []):
                         name: str = a["name"]
                         if "amd64" in name and name.endswith(".AppImage"):
-                            return str(a["browser_download_url"])
-                    return ""
+                            return str(a["browser_download_url"]), name
+                    return "", _NAPCAT_APPIMAGE_ASSET
 
-                url = await asyncio.to_thread(_lookup)
+                resolved = await asyncio.to_thread(_lookup)
+                url, asset = resolved
             except Exception as exc:
                 logger.warning("napcat %s: AppImage release lookup failed (%s)", instance_id, exc)
         if not url:
-            raise RuntimeError(
-                "Could not resolve the NapCat AppImage download URL "
-                "(release API unreachable); set options.napcat_appimage_url"
+            # pinned fallback (same asset the API resolves for this tag);
+            # never hard-fail on a transient network/rate-limit issue
+            url = (
+                "https://github.com/NapNeko/NapCatAppImageBuild/releases/download/"
+                f"v{_NAPCAT_VERSION}/{_NAPCAT_APPIMAGE_ASSET}"
+            )
+            logger.warning(
+                "napcat %s: release API unreachable — falling back to the pinned AppImage %s",
+                instance_id,
+                _NAPCAT_APPIMAGE_ASSET,
             )
         appimage = target / asset
         progress = options.get("_progress")
