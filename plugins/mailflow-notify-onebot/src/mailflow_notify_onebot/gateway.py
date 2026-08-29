@@ -350,8 +350,9 @@ class NapCatProvisioner:
             version = requested or _NAPCAT_VERSION
         url = _release_url(version)
         archive = target / "napcat.zip"
+        progress = options.get("_progress")
         logger.info("napcat %s: downloading %s (%.1f MB)", instance_id, url, _NAPCAT_SIZE_MB)
-        await asyncio.to_thread(self._download, url, archive)
+        await asyncio.to_thread(self._download, url, archive, progress)
         logger.info(
             "napcat %s: downloaded %d bytes; unpacking…",
             instance_id,
@@ -417,8 +418,11 @@ class NapCatProvisioner:
                 "(release API unreachable); set options.napcat_appimage_url"
             )
         appimage = target / asset
+        progress = options.get("_progress")
+        if progress is not None:
+            progress.update(0.0, f"downloading {asset} (~190 MB)", "downloading")
         logger.info("napcat %s: downloading AppImage %s", instance_id, url)
-        await asyncio.to_thread(self._download, url, appimage)
+        await asyncio.to_thread(self._download, url, appimage, progress)
         await asyncio.to_thread(appimage.chmod, 0o755)
         logger.info(
             "napcat %s: AppImage ready (%d MB)",
@@ -428,14 +432,44 @@ class NapCatProvisioner:
         logger.info("napcat %s: Linux QQ + NapCat ready", instance_id)
 
     @staticmethod
-    def _download(url: str, destination: Path) -> None:
+    def _download(
+        url: str,
+        destination: Path,
+        progress: Any | None = None,
+        *,
+        stage: str = "downloading",
+    ) -> None:
+        """Download ``url`` to ``destination``.
+
+        ``progress`` is an InstallProgress-like object with an ``update``
+        method (percent, message); the total size comes from the
+        Content-Length header when available, otherwise the bar advances
+        by bytes seen.
+        """
         request = urllib.request.Request(url, headers={"User-Agent": "mailflow"})
         try:
             with (
                 urllib.request.urlopen(request, timeout=120) as response,
                 open(destination, "wb") as handle,
             ):
-                shutil.copyfileobj(response, handle)
+                total = int(response.headers.get("Content-Length") or 0)
+                seen = 0
+                chunk = 64 * 1024
+                while True:
+                    block = response.read(chunk)
+                    if not block:
+                        break
+                    handle.write(block)
+                    seen += len(block)
+                    if progress is not None:
+                        if total:
+                            pct = 100.0 * seen / total
+                            mb = seen / (1024 * 1024)
+                            progress.update(
+                                pct, f"{mb:.0f} / {total / (1024 * 1024):.0f} MB", stage
+                            )
+                        else:
+                            progress.update(0.0, f"{seen / (1024 * 1024):.0f} MB downloaded", stage)
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"download failed: HTTP {exc.code} {exc.reason} for {url}") from exc
         except urllib.error.URLError as exc:

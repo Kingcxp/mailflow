@@ -134,3 +134,43 @@ async def test_providers_lists_registered() -> None:
     assert manager.providers() == ["fake-gw"]
     with pytest.raises(KeyError):
         manager.provisioner("missing")
+
+
+def test_install_progress_updates_and_clamps() -> None:
+    from mailflow.gateway import InstallProgress
+
+    progress = InstallProgress()
+    progress.update(10.0, "downloading")
+    assert progress.percent == 10.0
+    assert progress.message == "downloading"
+    # clamp out-of-range
+    progress.update(150.0, "over")
+    assert progress.percent == 100.0
+    progress.update(-5.0, "under")
+    assert progress.percent == 0.0
+    progress.finish("done")
+    assert progress.percent == 100.0
+    assert progress._done  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_provision_injects_progress_into_install_options() -> None:
+    """The manager passes a shared InstallProgress to the provisioner's
+    install() so the TUI can render a live download bar."""
+    from mailflow.gateway import InstallProgress
+
+    captured: dict[str, Any] = {}
+
+    class RecordingProvisioner(FakeProvisioner):
+        async def install(self, instance_id: str, options: dict[str, Any]) -> None:
+            captured.update(options)
+            await super().install(instance_id, options)
+
+    provisioner = RecordingProvisioner()
+    manager, _storage = _manager(provisioner)  # type: ignore[arg-type]
+    await manager.provision("fake-gw", "gw-1", {"x": 1})
+    progress = captured.get("_progress")
+    assert isinstance(progress, InstallProgress)
+    assert captured["x"] == 1
+    # original options dict untouched (copy)
+    assert "_progress" not in {"x": 1}

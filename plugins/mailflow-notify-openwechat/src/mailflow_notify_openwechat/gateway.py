@@ -121,6 +121,9 @@ class OpenWechatProvisioner(GatewayProvisioner):
         if bridge.exists():
             logger.info("openwechat %s: bridge already built", instance_id)
             return
+        progress = options.get("_progress")
+        if progress is not None:
+            progress.update(5.0, "building Go bridge (first run downloads Go modules)", "building")
         logger.info("openwechat %s: building bridge with %s", instance_id, go)
         result = await asyncio.to_thread(
             subprocess.run,

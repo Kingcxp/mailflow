@@ -657,7 +657,9 @@
       "bots_guide_qr_pending": "Waiting for the login QR to appear ({provider} is starting)…",
       "bots_guide_qr_wait_scan": "Scan the QR with your phone; it refreshes automatically when expired",
       "bots_guide_no_token": "{provider} needs a pad-protocol token: Tencent shut down the free web protocol, so there is no token-free WeChat login anymore. Add a padlocal token in the form and retry.",
-      "bots_provider_openwechat": "WeChat (openwechat scan-to-login)"
+      "bots_provider_openwechat": "WeChat (openwechat scan-to-login)",
+      "bots_guide_downloading": "Downloading and installing {provider}…",
+      "bots_guide_downloaded": "Install complete."
     },
     "update": {
       "applied_title": "Applied updates",

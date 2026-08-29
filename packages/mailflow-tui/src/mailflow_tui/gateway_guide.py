@@ -19,7 +19,12 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, RichLog, Static  # pyright: ignore[reportUnknownVariableType]
+from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
+    Button,
+    ProgressBar,
+    RichLog,
+    Static,
+)
 
 _LEVEL_COLORS = {
     "DEBUG": "dim",
@@ -67,6 +72,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             )
             # QR first so it is never pushed off by the log pane
             yield Static("", id="guide-qr")
+            # download/install progress (shown only while installing)
+            yield ProgressBar(
+                total=100,
+                show_percentage=True,
+                id="guide-progress",
+            )
+            yield Static("", id="guide-progress-label")
             with Vertical(id="guide-log-wrap"):
                 yield RichLog(
                     id="guide-log", wrap=True, highlight=True, markup=True, max_lines=2000
@@ -114,6 +126,23 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         if node is not None:
             node.update(text)
 
+    # -- install progress ---------------------------------------------------------
+
+    def _show_progress(self, visible: bool) -> None:
+        bar = self.query_one_optional("#guide-progress", ProgressBar)
+        label = self.query_one_optional("#guide-progress-label", Static)
+        for node in (bar, label):
+            if node is not None:
+                node.display = visible
+
+    def _update_progress(self, percent: float, message: str) -> None:
+        bar = self.query_one_optional("#guide-progress", ProgressBar)
+        if bar is not None:
+            bar.progress = percent  # pyright: ignore[reportUnknownMemberType]
+        label = self.query_one_optional("#guide-progress-label", Static)
+        if label is not None:
+            label.update(message)
+
     # -- guide flow --------------------------------------------------------------
 
     async def _run_guide(self) -> None:
@@ -127,9 +156,18 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             detected = await service.gateway_detect(provider)
             self._log("INFO", detected or self._t("tui.bots_guide_detected"))
             await asyncio.sleep(0.2)
-            # 2. provision (install + start)
+            # 2. provision (install + start); while the provisioner works,
+            # poll the shared InstallProgress (injected into its options)
+            # to render a live download/install progress bar
             self._log("INFO", self._t("tui.bots_guide_provisioning"))
-            instance = await service.gateway_provision(provider, self._instance_id, self._options)
+            self._update_progress(
+                0.0, self._t("tui.bots_guide_downloading", provider=self._provider)
+            )
+            self._show_progress(True)
+            try:
+                instance = await self._provision_with_progress(service, provider)
+            finally:
+                self._show_progress(False)
             self._log("INFO", self._t("tui.bots_guide_running", endpoint=instance.endpoint))
             self._set_status(self._t("tui.bots_guide_running", endpoint=instance.endpoint), "green")
             # 3. QR login loop (NapCat / WeChaty)
@@ -144,6 +182,34 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             self._log("ERROR", str(exc))
             self._set_status(str(exc), "red")
             return
+
+    async def _provision_with_progress(self, service: MailFlowService, provider: str) -> Any:
+        from mailflow.gateway import InstallProgress
+
+        progress: InstallProgress | None = None
+        last_pct = -1.0
+
+        def _poll() -> None:
+            nonlocal progress, last_pct
+            if progress is None or progress._done:  # pyright: ignore[reportPrivateUsage]
+                return
+            if progress.percent != last_pct or progress.message:
+                last_pct = progress.percent
+                self._update_progress(progress.percent, progress.message)
+
+        # keep the TUI live while the provisioner installs
+        task = asyncio.create_task(
+            service.gateway_provision(provider, self._instance_id, self._options)
+        )
+        while not task.done():
+            await asyncio.sleep(0.2)
+            # the provisioner mutates the options dict in place? no — it
+            # receives a copy with _progress injected; read it from the
+            # options copy the service made? Simplest: re-inject by
+            # querying the manager — use the service's last progress
+            progress = getattr(service.gateways, "_last_progress", None)
+            _poll()
+        return await task
 
     _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 

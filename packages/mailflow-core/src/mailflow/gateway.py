@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 from mailflow.config import MailFlowConfig
@@ -27,6 +28,30 @@ logger = logging.getLogger("mailflow.gateway")
 
 _PREF_PREFIX = "gateway.instance."
 _STATUS_RUNNING = "running"
+
+
+@dataclass
+class InstallProgress:
+    """Shared install progress: written by a provisioner's download loop
+    (any thread), polled by the TUI guide to render a progress bar."""
+
+    stage: str = "pending"
+    message: str = ""
+    percent: float = 0.0  # 0..100
+    _done: bool = field(default=False, repr=False)
+
+    def update(self, percent: float, message: str | None = None, stage: str | None = None) -> None:
+        self.percent = min(max(percent, 0.0), 100.0)
+        if message is not None:
+            self.message = message
+        if stage is not None:
+            self.stage = stage
+
+    def finish(self, message: str = "") -> None:
+        self.percent = 100.0
+        if message:
+            self.message = message
+        self._done = True
 
 
 class GatewayManager:
@@ -219,8 +244,11 @@ class GatewayManager:
         instance.status = "installing"
         instance.error = ""
         await self._save_state(instance)
+        progress = InstallProgress()
+        self._last_progress = progress  # polled by the TUI guide
+        install_options = {**options, "_progress": progress}
         try:
-            await provisioner.install(instance_id, options)
+            await provisioner.install(instance_id, install_options)
         except Exception as exc:
             instance.status = "error"
             instance.error = f"install failed: {exc}"

@@ -121,6 +121,11 @@ All notable changes are recorded here; the format follows
 - The WeChaty bridge renders the scan QR text to a PNG (qrcode npm
   package) so the guide shows a real scannable QR — previously a bare
   URL appeared for users with no route to the gateway host.
+- The gateway guide now shows a live download/install progress bar:
+  GatewayManager injects a shared InstallProgress into the provisioner's
+  install options; provisioner download loops report bytes/percent
+  (Content-Length when available), and the guide polls and renders it
+  (NapCat AppImage ~190 MB, Shell zip, openwechat Go build stages).
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
