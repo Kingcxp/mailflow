@@ -147,3 +147,53 @@ async def test_appimage_install_falls_back_when_api_unreachable(
     # file written with the pinned asset name
     appimage = instance / "QQ-50969_NapCat-v4.18.19-amd64.AppImage"
     assert appimage.exists()
+
+
+@pytest.mark.asyncio
+async def test_qr_stable_signal_logs_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A QR file unchanged for 60s is treated as logged in (NapCat stops
+    refreshing it after a successful scan)."""
+    monkeypatch.chdir(tmp_path)
+    instance = _instance_dir("A-Bot-NapCat-5baf4a")  # pyright: ignore[reportPrivateUsage]
+    (instance / "cache").mkdir(parents=True, exist_ok=True)
+    qr_file = instance / "cache" / "qrcode.png"
+    qr_file.write_bytes(b"x" * 200)
+
+    import time as _time
+
+    old_mtime = _time.time() - 120
+    import os as _os
+
+    _os.utime(qr_file, (old_mtime, old_mtime))
+
+    prov = NapCatProvisioner()
+    # make the HTTP login probe fail (server down) so only the stable
+    # signal can fire
+    def _dead_endpoint(iid: str) -> str:
+        return "http://127.0.0.1:1"
+
+    monkeypatch.setattr(prov, "_endpoint", _dead_endpoint)
+
+    result = await prov.qr("A-Bot-NapCat-5baf4a")
+    assert result == "__MAILFLOW_LOGGED_IN__"
+
+
+@pytest.mark.asyncio
+async def test_qr_fresh_keeps_waiting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A recently updated QR keeps returning its payload (not logged in)."""
+    monkeypatch.chdir(tmp_path)
+    instance = _instance_dir("A-Bot-NapCat-5baf4a")  # pyright: ignore[reportPrivateUsage]
+    (instance / "cache").mkdir(parents=True, exist_ok=True)
+    qr_file = instance / "cache" / "qrcode.png"
+    qr_file.write_bytes(b"y" * 200)
+
+    prov = NapCatProvisioner()
+    # HTTP probe fails (no server) -> falls through to QR payload
+    def _dead_endpoint(iid: str) -> str:
+        return "http://127.0.0.1:1"
+
+    monkeypatch.setattr(prov, "_endpoint", _dead_endpoint)
+
+    result = await prov.qr("A-Bot-NapCat-5baf4a")
+    assert result != "__MAILFLOW_LOGGED_IN__"
+    assert result  # the QR payload

@@ -301,7 +301,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._set_qr(_ascii_qr(qr))
                 self._log("INFO", self._t("tui.bots_guide_qr_scan", provider=self._provider))
             elif qr:
-                # same QR as before: still waiting for the scan
+                # same QR as before: still waiting for the scan (or the
+                # provisioner's stable-QR login signal is about to fire)
                 self._set_status(
                     self._t("tui.bots_guide_qr_wait_scan", provider=self._provider), "yellow"
                 )
