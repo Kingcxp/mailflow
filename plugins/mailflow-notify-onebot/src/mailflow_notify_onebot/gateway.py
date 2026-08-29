@@ -84,6 +84,20 @@ def _path_exists(path: Path) -> bool:
     return path.exists()
 
 
+def _installed_marker(target: Path) -> bool:
+    """True when ``target`` holds a usable NapCat install for this host.
+
+    Windows: the Shell package entry point. Linux: any bundled AppImage
+    (the asset name changes with each QQ/NapCat release, so glob rather
+    than pin the exact filename).
+    """
+    import os
+
+    if os.name != "nt":
+        return any(p.suffix == ".AppImage" for p in target.glob("*.AppImage"))
+    return _path_exists(target / "napcat.mjs") or _path_exists(target / "main")
+
+
 def _safe_token(instance_id: str) -> str:
     """Instance id -> filesystem/port-safe token.
 
@@ -299,18 +313,17 @@ class NapCatProvisioner:
                 "NapCat needs Node.js >= 18; install Node first (or set options.node_path)"
             )
         target = _instance_dir(instance_id)
-        # installed means MailFlow's own copy (data/gateways) is in place;
-        # Linux additionally mirrors it into QQ's app dir during install.
-        # data/gateways is the source of truth so make clean-gateways
-        # forces a full reinstall (QQ alone must not count as installed).
-        if await asyncio.to_thread(
-            lambda: _path_exists(target / "napcat.mjs") or _path_exists(target / "main")
-        ):
+        # installed means MailFlow's own copy (data/gateways) is in place:
+        # the Shell zip entry point on Windows, or a bundled AppImage on
+        # Linux. data/gateways is the source of truth so make clean-gateways
+        # forces a full reinstall.
+        if await asyncio.to_thread(_installed_marker, target):
             logger.info("napcat %s already installed at %s", instance_id, target)
             return
         # a leftover directory without the real entry point means a broken
         # or partial install: wipe it so the fresh download starts clean
-        # (covers the case where data/gateways was half-removed)
+        # (covers the case where data/gateways was half-removed, and old
+        # QQ-deb installs that predate the AppImage flow)
         if await asyncio.to_thread(lambda: _path_exists(target)):
             logger.warning(
                 "napcat %s: %s exists but is incomplete — removing it for a clean reinstall",
@@ -482,7 +495,9 @@ class NapCatProvisioner:
                     "into QQ's process), but none was found on this machine. "
                     "Install QQ for your platform first."
                 )
-        elif not _path_exists(_instance_dir(instance_id) / _NAPCAT_APPIMAGE_ASSET):
+        elif not any(
+            p.suffix == ".AppImage" for p in _instance_dir(instance_id).glob("*.AppImage")
+        ):
             raise RuntimeError(
                 "NapCat is not installed on this Linux host: run the "
                 "auto-install first (it downloads the official NapCat "
@@ -505,14 +520,22 @@ class NapCatProvisioner:
         # the instance dir; on Linux the AppImage holds QQ + NapCat and
         # writes its cache/QR next to itself
         run_target = _instance_dir(instance_id)
-        entry_path = (
-            run_target / _NAPCAT_APPIMAGE_ASSET if os.name != "nt" else run_target / "napcat.mjs"
-        )
-        if not _path_exists(entry_path):
-            raise RuntimeError(
-                f"napcat {instance_id} is not installed (missing {entry_path}); "
-                f"run the setup again to install it"
-            )
+        if os.name != "nt":
+            # the AppImage asset name changes with each release: glob it
+            appimages = list(run_target.glob("*.AppImage"))
+            if not appimages:
+                raise RuntimeError(
+                    f"napcat {instance_id} is not installed (no .AppImage "
+                    f"under {run_target}); run the setup again to install it"
+                )
+            entry_path = appimages[0]
+        else:
+            entry_path = run_target / "napcat.mjs"
+            if not _path_exists(entry_path):
+                raise RuntimeError(
+                    f"napcat {instance_id} is not installed (missing "
+                    f"{entry_path}); run the setup again to install it"
+                )
         target = run_target
         port = int(options.get("port") or self._port_for(instance_id))
         # already running on this port (another instance or a self-hosted
@@ -588,7 +611,7 @@ class NapCatProvisioner:
                     command = [
                         "xvfb-run",
                         "-a",
-                        str(run_target / _NAPCAT_APPIMAGE_ASSET),
+                        str(entry_path),
                         "--no-sandbox",
                     ]
                     cwd = str(run_target)
