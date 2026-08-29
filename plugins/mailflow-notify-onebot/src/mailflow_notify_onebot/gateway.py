@@ -722,7 +722,9 @@ class NapCatProvisioner:
             )
             return ""
         if len(raw) < 100:
-            logger.info("napcat %s: QR file exists but is empty/short (%d bytes)", instance_id, len(raw))
+            logger.info(
+                "napcat %s: QR file exists but is empty/short (%d bytes)", instance_id, len(raw)
+            )
             return ""
         import base64 as _b64
 
