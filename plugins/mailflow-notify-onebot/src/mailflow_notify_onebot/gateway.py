@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -35,6 +36,9 @@ logger = logging.getLogger("mailflow.gateway.napcat")
 # exhausted by retries/multiple sessions). Set options.napcat_version to a
 # specific tag, or to "latest" to resolve from the GitHub API at install
 # time.
+# module-level so tests can flip the host platform
+_IS_WINDOWS = os.name == "nt"
+
 _NAPCAT_VERSION = "4.18.19"
 _NAPCAT_ASSET = "NapCat.Shell.zip"
 _NAPCAT_API = "https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest"
@@ -67,9 +71,8 @@ def _data_root() -> Path:
 
 def _available_memory_mb() -> float | None:
     """Free system memory in MB (Linux /proc/meminfo); None when unknown."""
-    import os
 
-    if os.name != "nt":
+    if not _IS_WINDOWS:
         try:
             for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
                 if line.startswith("MemAvailable:"):
@@ -91,9 +94,8 @@ def _installed_marker(target: Path) -> bool:
     (the asset name changes with each QQ/NapCat release, so glob rather
     than pin the exact filename).
     """
-    import os
 
-    if os.name != "nt":
+    if not _IS_WINDOWS:
         return any(p.suffix == ".AppImage" for p in target.glob("*.AppImage"))
     return _path_exists(target / "napcat.mjs") or _path_exists(target / "main")
 
@@ -168,10 +170,9 @@ def _detect_qq() -> str | None:
     the QQ process path. Linux: qq / linuxqq on PATH. None when no QQ
     client is found — NapCat cannot work without one.
     """
-    import os
     import shutil
 
-    if os.name == "nt":
+    if _IS_WINDOWS:
         try:
             # winreg is Windows-only; import dynamically so mypy on Linux
             # (where the module has no stub) does not fail
@@ -305,7 +306,6 @@ class NapCatProvisioner:
         return False
 
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:
-        import os
 
         node = _find_node()
         if node is None:
@@ -332,7 +332,7 @@ class NapCatProvisioner:
             )
             await asyncio.to_thread(shutil.rmtree, target, True)
         target.mkdir(parents=True, exist_ok=True)
-        if os.name != "nt":
+        if not _IS_WINDOWS:
             # Linux headless: download the official AppImage (bundles
             # QQ NT + NapCat); no QQ deb, no /opt/QQ mirroring
             await self._install_linux_appimage(instance_id, options, target)
@@ -516,12 +516,12 @@ class NapCatProvisioner:
         )
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
-        import os
 
         node = _find_node()
         if node is None:
             raise RuntimeError("NapCat needs Node.js >= 18; install Node first")
-        if os.name == "nt":
+        qq: str | None = None
+        if _IS_WINDOWS:
             qq = _detect_qq()
             if qq is None:
                 raise RuntimeError(
@@ -554,7 +554,7 @@ class NapCatProvisioner:
         # the instance dir; on Linux the AppImage holds QQ + NapCat and
         # writes its cache/QR next to itself
         run_target = _instance_dir(instance_id)
-        if os.name != "nt":
+        if not _IS_WINDOWS:
             # the AppImage asset name changes with each release: glob it
             appimages = list(run_target.glob("*.AppImage"))
             if not appimages:
@@ -562,7 +562,10 @@ class NapCatProvisioner:
                     f"napcat {instance_id} is not installed (no .AppImage "
                     f"under {run_target}); run the setup again to install it"
                 )
-            entry_path = appimages[0]
+            # absolute path: the child's cwd is the instance dir, so a
+            # relative data/gateways/... path would double-prefix and
+            # 'not found' at launch
+            entry_path = appimages[0].resolve()
         else:
             entry_path = run_target / "napcat.mjs"
             if not _path_exists(entry_path):
@@ -570,6 +573,7 @@ class NapCatProvisioner:
                     f"napcat {instance_id} is not installed (missing "
                     f"{entry_path}); run the setup again to install it"
                 )
+            entry_path = entry_path.resolve()
         target = run_target
         port = int(options.get("port") or self._port_for(instance_id))
         # already running on this port (another instance or a self-hosted
@@ -610,7 +614,7 @@ class NapCatProvisioner:
         )
         # Linux runs the bundled AppImage directly; only the Windows Shell
         # package needs its node entry point located inside the tree
-        if os.name != "nt":
+        if not _IS_WINDOWS:
             entry = entry_path
         else:
             entry = await asyncio.to_thread(self._find_entry, target, instance_id)
@@ -628,7 +632,7 @@ class NapCatProvisioner:
 
         def _launch() -> subprocess.Popen[Any]:
             with open(log_file, "ab") as handle:
-                if os.name == "nt":
+                if _IS_WINDOWS:
                     # Windows with a QQ client: inject like the official
                     # launcher.bat (NapCatWinBootMain.exe starts QQ with
                     # the hook), the only mode where NapCat's worker runs.
@@ -641,7 +645,7 @@ class NapCatProvisioner:
                     env.setdefault("NAPCAT_LAUNCHER_PATH", str(boot_main))
                     env.setdefault("NAPCAT_MAIN_PATH", str(entry))
                     command = [str(boot_main), qq, str(hook)]
-                    cwd = str(target)
+                    cwd = str(target.resolve())
                 else:
                     # Linux headless: run the AppImage (QQ + NapCat
                     # bundled) under xvfb. The AppImage is self-contained;
@@ -652,7 +656,7 @@ class NapCatProvisioner:
                         str(entry_path),
                         "--no-sandbox",
                     ]
-                    cwd = str(run_target)
+                    cwd = str(run_target.resolve())
                 return subprocess.Popen(
                     command,
                     cwd=cwd,
@@ -743,9 +747,7 @@ class NapCatProvisioner:
         # on Windows): kill the whole tree so no orphan QQ process remains.
         # pkill -P only hits direct children, so walk the tree recursively.
         try:
-            import os
-
-            if os.name == "nt":
+            if _IS_WINDOWS:
                 subprocess.run(
                     ["taskkill", "/F", "/T", "/PID", str(process.pid)],
                     capture_output=True,

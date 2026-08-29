@@ -21,7 +21,6 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
     Button,
-    ProgressBar,
     RichLog,
     Static,
 )
@@ -73,13 +72,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             # QR first so it is never pushed off by the log pane
             yield Static("", id="guide-qr")
             with Vertical(id="guide-log-wrap"):
-                # download/install progress lives inside the log pane so
-                # it reads as part of the stream, not a separate widget
-                yield ProgressBar(
-                    total=100,
-                    show_percentage=True,
-                    id="guide-progress",
-                )
+                # download/install progress: a single in-place line at the
+                # top of the log pane (updated, never appended repeatedly)
                 yield Static("", id="guide-progress-label")
                 yield RichLog(
                     id="guide-log", wrap=True, highlight=True, markup=True, max_lines=2000
@@ -130,25 +124,15 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     # -- install progress ---------------------------------------------------------
 
     def _show_progress(self, visible: bool) -> None:
-        bar = self.query_one_optional("#guide-progress", ProgressBar)
-        label = self.query_one_optional("#guide-progress-label", Static)
-        for node in (bar, label):
-            if node is not None:
-                node.display = visible
-
-    def _update_progress(self, percent: float, message: str) -> None:
-        bar = self.query_one_optional("#guide-progress", ProgressBar)
-        if bar is not None:
-            bar.progress = percent  # pyright: ignore[reportUnknownMemberType]
         label = self.query_one_optional("#guide-progress-label", Static)
         if label is not None:
-            label.update(message)
-        # throttle log lines: one per ~5% so the pane scrolls instead of
-        # flooding on every 64 KB chunk
-        bucket = int(percent // 5)
-        if bucket != getattr(self, "_progress_bucket", -1):
-            self._progress_bucket = bucket
-            self._log("INFO", f"{percent:.0f}% — {message}")
+            label.display = visible
+
+    def _update_progress(self, percent: float, message: str) -> None:
+        # one line, updated in place — never appended to the log stream
+        label = self.query_one_optional("#guide-progress-label", Static)
+        if label is not None:
+            label.update(f"{percent:.0f}% — {message}")
 
     # -- guide flow --------------------------------------------------------------
 

@@ -132,6 +132,13 @@ All notable changes are recorded here; the format follows
   for a node entry point (napcat.mjs) and failed with 'no entry point
   found'. Start now runs the AppImage directly on Linux and only
   resolves the Shell-package node entry on Windows.
+- Fix: launching the AppImage failed with '...AppImage: not found' —
+  the entry path and child cwd were relative, so the child resolved
+  data/gateways/... against its own cwd and double-prefixed. Both are
+  now absolute.
+- The install progress bar widget is gone; progress is a single line at
+  the top of the log pane, updated in place (never appended to the
+  stream).
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
