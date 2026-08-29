@@ -154,6 +154,13 @@ class OpenWechatProvisioner(GatewayProvisioner):
                 endpoint=f"http://127.0.0.1:{port}",
                 extra={"port": port, "reused": True},
             )
+            return GatewayInstance(
+                provider="openwechat",
+                instance_id=instance_id,
+                status="running",
+                endpoint=f"http://127.0.0.1:{port}",
+                extra={"port": port, "reused": True},
+            )
         log_file = target / "openwechat.log"
 
         def _launch() -> subprocess.Popen[Any]:

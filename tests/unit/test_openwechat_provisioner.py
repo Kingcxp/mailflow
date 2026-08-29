@@ -86,11 +86,12 @@ async def test_start_reuses_running_port(monkeypatch: pytest.MonkeyPatch) -> Non
         def log_message(self, *args: Any) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
             pass
 
+    http.server.HTTPServer.allow_reuse_address = True
     server = http.server.HTTPServer(("127.0.0.1", port), H)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         prov = OpenWechatProvisioner()
-        instance = await prov.start("wx-1", {})
+        instance = await prov.start("wx-1", {"port": str(port)})
         assert instance.status == "running"
         assert instance.extra and instance.extra.get("reused")
     finally:
@@ -114,6 +115,7 @@ async def test_qr_surfaces_bridge_error(monkeypatch: pytest.MonkeyPatch) -> None
         def log_message(self, *args: Any) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
             pass
 
+    http.server.HTTPServer.allow_reuse_address = True
     server = http.server.HTTPServer(("127.0.0.1", port), H)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
