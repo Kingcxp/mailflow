@@ -88,6 +88,16 @@ All notable changes are recorded here; the format follows
   instead of hardcoding NapCat; when no QR appears the guide shows the
   provisioner's diagnosis (QR file path + napcat.log tail) instead of
   waiting silently.
+- Fix: NapCat's NAPCAT_WORKDIR and log file pointed at the QQ app dir on
+  Linux (after target was switched to the run dir), so the QR cache and
+  logs went to a root-owned path and qr()/tail never saw them. They now
+  use the instance data dir (data/gateways/<id>) consistently.
+- Fix: cancelling the gateway guide froze the TUI — terminate() blocks up
+  to 5s waiting for the process; it now runs off the event loop and kills
+  the whole process tree (taskkill /T, pkill -P) so no orphan QQ remains.
+- WeChaty: Tencent shut down the web protocol, so the token-free
+  wechat4u puppet is removed; the guide requires the pad-protocol token
+  and explains that no token-free WeChat login exists anymore.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

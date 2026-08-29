@@ -120,8 +120,10 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         service = self._service
         provider = self._provider
         try:
-            # WeChaty: pad protocol when a token is set, else the free web
-            # protocol (wechat4u, scan-to-login) — the bridge picks it
+            # WeChaty requires a pad-protocol token: Tencent shut down the
+            # web protocol, so no token-free scan-to-login exists anymore
+            if provider == "wechaty" and not str(self._options.get("token") or ""):
+                raise RuntimeError(self._t("tui.bots_guide_no_token", provider=self._provider))
             # 1. detect
             self._log("INFO", self._t("tui.bots_guide_detecting"))
             detected = await service.gateway_detect(provider)

@@ -244,7 +244,7 @@ class WechatyGatewayProvisioner:
                     process.kill()
 
     async def stop(self, instance_id: str) -> None:
-        self._terminate(instance_id)
+        await asyncio.to_thread(self._terminate, instance_id)
 
     async def status(self, instance_id: str) -> GatewayInstance:
         endpoint = self._endpoint(instance_id)

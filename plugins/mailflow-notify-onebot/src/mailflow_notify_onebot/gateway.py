@@ -563,13 +563,17 @@ class NapCatProvisioner:
         )
         entry: Path | None = await asyncio.to_thread(self._find_entry, target, instance_id)
         assert entry is not None
+        # instance data dir: logs + the QR cache live here (on Linux this
+        # differs from the QQ app dir where the package is mirrored)
+        data_dir = _instance_dir(instance_id)
+        data_dir.mkdir(parents=True, exist_ok=True)
         env = dict(options.get("env") or {})
         env.setdefault("NAPCAT_UID", instance_id)
         env.setdefault("NAPCAT_PORT", str(port))
         # NapCat writes its login QR to <workdir>/cache/qrcode.png; pin the
-        # workdir to the instance dir so qr() can find and refresh it
-        env.setdefault("NAPCAT_WORKDIR", str(target))
-        log_file = target / "napcat.log"
+        # workdir to the instance data dir so qr() can find and refresh it
+        env.setdefault("NAPCAT_WORKDIR", str(data_dir))
+        log_file = data_dir / "napcat.log"
 
         def _launch() -> subprocess.Popen[Any]:
             with open(log_file, "ab") as handle:
@@ -668,9 +672,36 @@ class NapCatProvisioner:
             except Exception:
                 with __import__("contextlib").suppress(Exception):
                     process.kill()
+        # NapCat spawns QQ (xvfb-run on Linux, boot exe on Windows):
+        # kill the whole tree so no orphan QQ process is left behind
+        try:
+            import os
+
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                    capture_output=True,
+                    timeout=10,
+                )
+            else:
+                subprocess.run(
+                    ["pkill", "-TERM", "-P", str(process.pid)],
+                    capture_output=True,
+                    timeout=10,
+                )
+                if process.poll() is None:
+                    subprocess.run(
+                        ["pkill", "-KILL", "-P", str(process.pid)],
+                        capture_output=True,
+                        timeout=10,
+                    )
+        except Exception:
+            pass
 
     async def stop(self, instance_id: str) -> None:
-        self._terminate(instance_id)
+        # terminate can block up to 5s waiting for the process tree; run it
+        # off the event loop so the TUI never freezes on cancel
+        await asyncio.to_thread(self._terminate, instance_id)
 
     async def status(self, instance_id: str) -> GatewayInstance:
         endpoint = self._endpoint(instance_id)

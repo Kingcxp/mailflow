@@ -656,7 +656,7 @@
       "bots_guide_stop_failed": "无法停止网关：{error}",
       "bots_guide_qr_pending": "等待登录二维码出现（{provider} 正在启动）…",
       "bots_guide_qr_wait_scan": "请用手机扫码登录；二维码过期会自动刷新",
-      "bots_guide_no_token": "{provider} 需要配置令牌才能启动（平板协议）— 请在表单中填写后重试"
+      "bots_guide_no_token": "{provider} 需要配置平板协议令牌：微信官方已关闭免费的网页协议，目前没有免令牌的微信登录方式。请在表单中填写 padlocal 令牌后重试。"
     },
     "update": {
       "applied_title": "已应用的更新",
