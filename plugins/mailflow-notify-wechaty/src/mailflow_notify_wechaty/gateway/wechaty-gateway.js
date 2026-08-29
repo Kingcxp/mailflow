@@ -35,16 +35,21 @@ let lastQrStatus = "pending";
 let loginError = "";
 
 function startBot() {
-  if (!TOKEN) {
-    loginError = "WECHATY_TOKEN not set: pad-protocol token required";
-    lastQrStatus = "error";
-    return;
+  if (TOKEN) {
+    // pad protocol (paid): requires a platform token
+    bot = WechatyBuilder.build({
+      name: "mailflow-gateway",
+      puppet: "wechaty-puppet-padlocal",
+      puppetOptions: { token: TOKEN },
+    });
+  } else {
+    // web protocol (wechat4u): free, no token, scan-to-login.
+    // Note: web protocol carries a ban risk — use a disposable account.
+    bot = WechatyBuilder.build({
+      name: "mailflow-gateway",
+      puppet: "wechaty-puppet-wechat4u",
+    });
   }
-  bot = WechatyBuilder.build({
-    name: "mailflow-gateway",
-    puppet: "wechaty-puppet-padlocal",
-    puppetOptions: { token: TOKEN },
-  });
 
   bot.on("scan", (qrcode, status) => {
     lastQr = qrcode;

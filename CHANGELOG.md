@@ -80,6 +80,14 @@ All notable changes are recorded here; the format follows
   expires, so the TUI shows the new QR automatically; login is still
   decided by get_login_info, never by QR absence. WeChaty's bridge
   already re-emits `scan` with a fresh QR on expiry.
+- WeChaty auto-deploy no longer requires a pad-protocol token: the free
+  web-protocol puppet (wechaty-puppet-wechat4u) is installed alongside
+  padlocal and the bridge picks it when no token is configured —
+  scan-to-login, no platform auth (ban risk: use a disposable account).
+- QR-related guide texts are provider-aware ("{provider} is starting")
+  instead of hardcoding NapCat; when no QR appears the guide shows the
+  provisioner's diagnosis (QR file path + napcat.log tail) instead of
+  waiting silently.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

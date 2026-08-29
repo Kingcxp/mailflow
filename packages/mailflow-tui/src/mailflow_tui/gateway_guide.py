@@ -120,10 +120,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         service = self._service
         provider = self._provider
         try:
-            # wechaty (pad protocol) needs a token to even start its QR
-            # flow; without one the bridge stays pending forever
-            if provider == "wechaty" and not str(self._options.get("token") or ""):
-                raise RuntimeError(self._t("tui.bots_guide_no_token", provider=self._provider))
+            # WeChaty: pad protocol when a token is set, else the free web
+            # protocol (wechat4u, scan-to-login) — the bridge picks it
             # 1. detect
             self._log("INFO", self._t("tui.bots_guide_detecting"))
             detected = await service.gateway_detect(provider)
@@ -162,6 +160,11 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._logged_no_qr = False
         while time.monotonic() < deadline:
             qr = await service.gateway_qr(provider, self._instance_id)
+            if qr.startswith("ERROR:"):
+                # the provisioner diagnosed why no QR exists: show it
+                self._log("ERROR", qr[len("ERROR:") :].strip())
+                self._set_status(qr[len("ERROR:") :].strip(), "red")
+                return
             if qr == self._QR_LOGGED_IN:
                 self._set_qr("")
                 self._log("INFO", self._t("tui.bots_guide_logged_in"))

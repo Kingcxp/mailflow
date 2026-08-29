@@ -725,21 +725,21 @@ class NapCatProvisioner:
         try:
             raw = qr_file.read_bytes()
         except OSError:
-            # diagnose why the QR is missing: log the expected path and a
-            # snippet of the NapCat log so the guide can show the reason
-            tail = self._tail_log(_instance_dir(instance_id) / "napcat.log", lines=5)
+            # diagnose why the QR is missing and hand it to the guide via
+            # the ERROR: prefix so the user sees the actual reason
+            tail = self._tail_log(_instance_dir(instance_id) / "napcat.log", lines=10)
             logger.info(
                 "napcat %s: QR not ready yet (%s missing)%s",
                 instance_id,
                 qr_file,
                 tail,
             )
-            return ""
+            return f"ERROR: QR file {qr_file} not created yet{tail}"
         if len(raw) < 100:
-            logger.info(
-                "napcat %s: QR file exists but is empty/short (%d bytes)", instance_id, len(raw)
+            return (
+                f"ERROR: QR file exists but is empty/short ({len(raw)} bytes) — "
+                "the QQ login screen may not have rendered"
             )
-            return ""
         import base64 as _b64
 
         return _b64.b64encode(raw).decode("ascii")

@@ -29,6 +29,10 @@ logger = logging.getLogger("mailflow.gateway.wechaty")
 
 _WECHATY_VERSION = "wechaty@1.20.2"
 _PUPPET_VERSION = "wechaty-puppet-padlocal@1.20.1"
+# free web-protocol puppet: scan-to-login, no platform token (ban risk —
+# use a disposable account). Installed alongside padlocal so both modes
+# work without a reinstall.
+_WECHAT4U_VERSION = "wechaty-puppet-wechat4u@1.14.14"
 _BASE_PORT = 8788
 _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 _READY_TIMEOUT = 45.0
@@ -170,7 +174,15 @@ class WechatyGatewayProvisioner:
         npm = shutil.which("npm")
         if npm is None:
             raise RuntimeError("npm not found; install Node.js (includes npm)")
-        command = [npm, "install", "--no-audit", "--no-fund", _WECHATY_VERSION, _PUPPET_VERSION]
+        command = [
+            npm,
+            "install",
+            "--no-audit",
+            "--no-fund",
+            _WECHATY_VERSION,
+            _PUPPET_VERSION,
+            _WECHAT4U_VERSION,
+        ]
         logger.info("wechaty %s: %s", instance_id, " ".join(command))
         result = await asyncio.to_thread(
             subprocess.run, command, cwd=str(target), capture_output=True, text=True, timeout=600
