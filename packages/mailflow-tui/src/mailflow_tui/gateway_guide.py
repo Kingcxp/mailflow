@@ -69,11 +69,11 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         padding: 0 1;
         align: center middle;
     }
-    #guide-done, #guide-cancel {
+    #guide-done, #guide-logged-in, #guide-cancel {
         height: 1;
         min-height: 1;
         padding: 0 2;
-        margin: 0;
+        margin: 0 1;
         border: none;
     }
     """
@@ -131,7 +131,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     async def on_mount(self) -> None:
         # pin the chrome sizes in code: Textual's Button variant CSS can
         # override height declarations, so set them directly here
-        for button_id in ("guide-done", "guide-cancel"):
+        for button_id in ("guide-done", "guide-logged-in", "guide-cancel"):
             button = self.query_one(f"#{button_id}", Button)
             button.styles.height = 1  # pyright: ignore[reportUnknownMemberType]
             button.styles.min_height = 1  # pyright: ignore[reportUnknownMemberType]

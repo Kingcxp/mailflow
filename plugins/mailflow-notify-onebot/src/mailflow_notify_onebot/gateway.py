@@ -20,7 +20,6 @@ import os
 import re
 import shutil
 import subprocess
-import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -928,22 +927,11 @@ class NapCatProvisioner:
                     )
         if logged_in:
             return _QR_LOGGED_IN
-        # fallback login signal: after a successful scan NapCat stops
-        # refreshing the QR file; an expired QR would be regenerated
-        # (mtime bumps), so a QR that has been stable for 60s means the
-        # scan completed and the session is up — no HTTP requirement
-        # (the OneBot HTTP server may not be reachable on this setup).
-        try:
-            age = time.time() - qr_file.stat().st_mtime
-        except OSError:
-            age = -1.0
-        if age > 60.0:
-            logger.info(
-                "napcat %s: QR file unchanged for %ds — treating as logged in",
-                instance_id,
-                int(age),
-            )
-            return _QR_LOGGED_IN
+        # NOTE: no stable-QR heuristic here — while waiting for a scan
+        # the QR file is equally stable, so it would falsely report
+        # 'logged in' before the user scanned. Login is only confirmed
+        # by the get_login_info probe above, or manually by the user via
+        # the guide's 'I'm logged in' button.
         # not logged in: the QR png (refreshed by NapCat on expiry)
         try:
             raw = qr_file.read_bytes()

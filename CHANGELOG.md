@@ -212,6 +212,16 @@ All notable changes are recorded here; the format follows
   the component CSS and app.tcss (the app-wide sheet previously
   overrode the alignment), with top padding so it does not hug the
   title.
+- Removed the stable-QR login heuristic: while waiting for a scan the
+  QR file is equally stable, so it falsely reported 'logged in' before
+  the user scanned. Login is now only confirmed by get_login_info or by
+  the manual 'I'm logged in' button.
+- The 'I'm logged in' button is styled like the others (1 row, spacing)
+  — it previously used the default 3-row Button style and cramped the
+  row.
+- Saving a guided notifier updates an existing entry with the same id
+  instead of failing with 'duplicate notifier_id' (a previous failed
+  attempt could leave a stale entry behind).
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

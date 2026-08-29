@@ -229,7 +229,18 @@ class BotsPane(Vertical):
             "options": options,
         }
         try:
-            await self._service.add_config_entry("notifiers", values)
+            # the same instance id may already exist (a previous attempt
+            # that failed after persisting): update it instead of adding
+            # a duplicate
+            existing = [
+                (i, n)
+                for i, n in enumerate(self._service.config.notifiers)
+                if n.notifier_id == instance_id
+            ]
+            if existing:
+                await self._service.update_config_entry("notifiers", existing[0][0], values)
+            else:
+                await self._service.add_config_entry("notifiers", values)
         except Exception as exc:
             self.query_one("#bots-status", Static).update(f"[red]{exc}[/red]")
             return
