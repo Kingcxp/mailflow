@@ -380,15 +380,22 @@ class NapCatProvisioner:
         missing: list[str] = []
         if _sh.which("xvfb-run") is None:
             missing.append("xvfb-run (apt install xvfb xauth)")
-        if _sh.which("fusermount") is None:
-            # AppImages need FUSE unless extracted with --appimage-extract
-            missing.append("fusermount (apt install fuse libfuse2)")
         if missing:
             raise RuntimeError(
                 "NapCat AppImage on Linux needs these missing pieces — "
                 "install them first, then retry:\n  - "
                 + "\n  - ".join(missing)
-                + "\n(example: apt-get install -y xvfb xauth fuse libfuse2)"
+                + "\n(example: apt-get install -y xvfb xauth)"
+            )
+        if _sh.which("fusermount") is None:
+            # AppImages normally need FUSE to mount; containers/VMs often
+            # cannot modprobe fuse, so we launch with
+            # --appimage-extract-and-run which unpacks to a temp dir and
+            # needs no FUSE at all
+            logger.warning(
+                "napcat %s: fusermount not found — the AppImage will run "
+                "in extract mode (no FUSE needed)",
+                instance_id,
             )
         # resolve the latest amd64 AppImage asset name from the release
         # API; when the API is unreachable we fall back to the pinned
@@ -472,14 +479,18 @@ class NapCatProvisioner:
                     handle.write(block)
                     seen += len(block)
                     if progress is not None:
+                        what = destination.name
                         if total:
                             pct = 100.0 * seen / total
                             mb = seen / (1024 * 1024)
                             progress.update(
-                                pct, f"{mb:.0f} / {total / (1024 * 1024):.0f} MB", stage
+                                pct,
+                                f"{stage}: {what} — {mb:.0f} / {total / (1024 * 1024):.0f} MB",
                             )
                         else:
-                            progress.update(0.0, f"{seen / (1024 * 1024):.0f} MB downloaded", stage)
+                            progress.update(
+                                0.0, f"{stage}: {what} — {seen / (1024 * 1024):.0f} MB", stage
+                            )
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"download failed: HTTP {exc.code} {exc.reason} for {url}") from exc
         except urllib.error.URLError as exc:
@@ -664,6 +675,7 @@ class NapCatProvisioner:
                         "xvfb-run",
                         "-a",
                         str(entry_path),
+                        "--appimage-extract-and-run",
                         "--no-sandbox",
                     ]
                     cwd = str(run_target.resolve())

@@ -144,6 +144,12 @@ All notable changes are recorded here; the format follows
   (v4.18.19) with a warning, and the latest-asset lookup now also
   carries the asset name (previously the file kept the old pinned
   name).
+- NapCat AppImage launch uses --appimage-extract-and-run, which unpacks
+  to a temp dir and needs no FUSE — containers/VMs that cannot modprobe
+  fuse (PVE, many cloud hosts) no longer fail. fusermount absence is a
+  warning, not an error.
+- Install progress lines now name the file being downloaded
+  ('downloading: QQ-...AppImage — 45 / 190 MB').
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

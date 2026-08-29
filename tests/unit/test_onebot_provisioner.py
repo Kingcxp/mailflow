@@ -88,6 +88,8 @@ async def test_linux_start_launches_appimage_with_absolute_path(
     appimage_arg = command[2]
     assert Path(appimage_arg).is_absolute()
     assert appimage_arg.endswith(".AppImage")
+    # extract-and-run bypasses FUSE, which containers/VMs cannot modprobe
+    assert "--appimage-extract-and-run" in command
     assert captured["cwd"] == str(instance.resolve())
 
 
