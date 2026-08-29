@@ -25,6 +25,7 @@
 
 const http = require("http");
 const { WechatyBuilder } = require("wechaty");
+const QRCode = require("qrcode");
 
 // WeChaty internals reject promises outside our control (puppet network
 // errors, plugin teardown). Never let an unhandled rejection crash or
@@ -61,10 +62,20 @@ function startBot() {
     });
   }
 
-  bot.on("scan", (qrcode, status) => {
-    lastQr = qrcode;
-    lastQrStatus = "scanning";
-    loginError = "";
+  bot.on("scan", async (qrcode, status) => {
+    try {
+      // wechaty gives the QR *text*; render it to a PNG base64 so the
+      // TUI can display it directly (the user has no network route to
+      // the gateway host)
+      lastQr = await QRCode.toDataURL(qrcode, { margin: 1 });
+      lastQr = lastQr.replace(/^data:image\/png;base64,/, "");
+      lastQrStatus = "scanning";
+      loginError = "";
+    } catch (err) {
+      lastQr = qrcode;
+      lastQrStatus = "scanning";
+      loginError = "";
+    }
   });
   bot.on("login", (user) => {
     lastQr = "";

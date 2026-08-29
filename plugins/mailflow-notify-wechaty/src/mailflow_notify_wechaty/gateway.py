@@ -182,6 +182,7 @@ class WechatyGatewayProvisioner:
             _WECHATY_VERSION,
             _PUPPET_VERSION,
             _WECHAT4U_VERSION,
+            "qrcode@1.5.4",
         ]
         logger.info("wechaty %s: %s", instance_id, " ".join(command))
         result = await asyncio.to_thread(

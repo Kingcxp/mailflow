@@ -39,8 +39,12 @@ _NAPCAT_VERSION = "4.18.19"
 _NAPCAT_ASSET = "NapCat.Shell.zip"
 _NAPCAT_API = "https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest"
 _NAPCAT_SIZE_MB = 29.5  # approximate; the log is informational
-# Linux QQ (NTQQ) deb; headless containers run it under xvfb. The URL is a
-# known rolling build; override with options.qq_deb_url if it moves.
+# Linux headless: the official AppImage bundles QQ NT + NapCat in one
+# file (only xvfb + fuse needed at runtime), so no QQ deb install or
+# mirroring into /opt/QQ is required. The Shell zip stays the Windows
+# path. Override with options.napcat_appimage_url if it moves.
+_NAPCAT_APPIMAGE_API = "https://api.github.com/repos/NapNeko/NapCatAppImageBuild/releases/latest"
+_NAPCAT_APPIMAGE_ASSET = "QQ-50969_NapCat-v4.18.19-amd64.AppImage"
 _QQ_DEB_URL = "https://dldir1.qq.com/qqfile/qq/QQNT/Linux/QQ_3.2.15_240902_x86_64_01.deb"
 _QQ_INSTALL_DIR = Path("/opt/QQ")
 _WEBUI_PORT = 6099
@@ -315,12 +319,12 @@ class NapCatProvisioner:
             )
             await asyncio.to_thread(shutil.rmtree, target, True)
         target.mkdir(parents=True, exist_ok=True)
-        await self._install_napcat_package(instance_id, options, target)
         if os.name != "nt":
-            # Linux headless: verify the runtime (xvfb + QQ deb), mirror
-            # NapCat into QQ's resources/app/napcat and patch the app
-            # entry point (official BootWay03 flow).
-            await self._install_linux_qq(instance_id, options, target)
+            # Linux headless: download the official AppImage (bundles
+            # QQ NT + NapCat); no QQ deb, no /opt/QQ mirroring
+            await self._install_linux_appimage(instance_id, options, target)
+        else:
+            await self._install_napcat_package(instance_id, options, target)
 
     async def _install_napcat_package(
         self, instance_id: str, options: dict[str, Any], target: Path
@@ -348,86 +352,66 @@ class NapCatProvisioner:
             archive.unlink(missing_ok=True)
         logger.info("napcat %s: installed %d files at %s", instance_id, len(entries), target)
 
-    async def _install_linux_qq(
+    async def _install_linux_appimage(
         self, instance_id: str, options: dict[str, Any], target: Path
     ) -> None:
-        """Verify the Linux runtime (xvfb + QQ deb) and mirror the already
-        downloaded NapCat package into QQ's app dir.
+        """Download the official NapCat AppImage (bundles QQ NT + NapCat).
 
         MailFlow never installs system packages itself: missing runtime
-        pieces are reported with the exact install command so the operator
-        can provision them (apt in a container, distro packages elsewhere).
+        pieces (xvfb, fuse) are reported with the exact install command
+        so the operator can provision them.
         """
         import shutil as _sh
 
         missing: list[str] = []
         if _sh.which("xvfb-run") is None:
             missing.append("xvfb-run (apt install xvfb xauth)")
-        if _sh.which("dbus-run-session") is None:
-            # the QQ Electron client needs a session bus; dbus-run-session
-            # provides one without a system dbus daemon
-            missing.append("dbus-run-session (apt install dbus dbus-x11)")
-        if not _path_exists(_QQ_INSTALL_DIR / "qq"):
-            missing.append(f"Linux QQ at {_QQ_INSTALL_DIR / 'qq'} (install the QQ deb)")
+        if _sh.which("fusermount") is None:
+            # AppImages need FUSE unless extracted with --appimage-extract
+            missing.append("fusermount (apt install fuse libfuse2)")
         if missing:
             raise RuntimeError(
-                "NapCat on Linux needs these missing pieces — install them "
-                "first, then retry:\n  - "
+                "NapCat AppImage on Linux needs these missing pieces — "
+                "install them first, then retry:\n  - "
                 + "\n  - ".join(missing)
-                + "\n(example: apt-get install -y xvfb xauth dbus dbus-x11, "
-                + "then dpkg -i QQ_*.deb)"
+                + "\n(example: apt-get install -y xvfb xauth fuse libfuse2)"
             )
-        # mirror the freshly unpacked package into QQ's app dir and patch
-        # the app entry point; QQ's tree is root-owned, so guard the whole
-        # block with actionable permission guidance
-        qq_app = _QQ_INSTALL_DIR / "resources" / "app"
-        napcat_dir = qq_app / "napcat"
-        try:
-            if not _path_exists(napcat_dir / "napcat.mjs"):
-                qq_app.mkdir(parents=True, exist_ok=True)
-                if napcat_dir.exists():
-                    shutil.rmtree(napcat_dir, ignore_errors=True)
-                shutil.copytree(target, napcat_dir, dirs_exist_ok=True)
-                logger.info("napcat %s: NapCat mirrored to %s", instance_id, napcat_dir)
-            # write the loader that imports napcat.mjs when --no-sandbox is passed
-            loader = qq_app / "loadNapCat.cjs"
-            loader.write_text(
-                'const path = require("path");\n'
-                "const CurrentPath = path.dirname(__filename);\n"
-                'const hasNapcatParam = process.argv.includes("--no-sandbox");\n'
-                "if (hasNapcatParam) {\n"
-                '  (async () => { await import("file://" + path.join(CurrentPath, "./napcat/napcat.mjs")); })();\n'
-                "} else {\n"
-                '  require("./application/app_launcher/index.js");\n'
-                "}\n",
-                encoding="utf-8",
-            )
-            # patch package.json main -> loadNapCat.cjs (BootWay03)
-            pkg = qq_app / "package.json"
-            if _path_exists(pkg):
-                text = pkg.read_text(encoding="utf-8", errors="replace")
-                if "loadNapCat.cjs" not in text:
-                    import re as _re
+        # resolve the latest amd64 AppImage asset name from the release API
+        requested = str(options.get("napcat_appimage_url") or "").strip()
+        url = requested
+        asset = _NAPCAT_APPIMAGE_ASSET
+        if not url:
+            try:
+                import json as _json
+                import urllib.request as _ur
 
-                    patched = _re.sub(
-                        r'"main"\s*:\s*"[^"]*"',
-                        '"main": "./loadNapCat.cjs"',
-                        text,
-                        count=1,
-                    )
-                    pkg.write_text(patched, encoding="utf-8")
-                    logger.info("napcat %s: patched QQ package.json main", instance_id)
-        except PermissionError as exc:
+                def _lookup() -> str:
+                    req = _ur.Request(_NAPCAT_APPIMAGE_API, headers={"User-Agent": "mailflow"})
+                    with _ur.urlopen(req, timeout=30) as resp:
+                        data = _json.loads(resp.read().decode("utf-8"))
+                    for a in data.get("assets", []):
+                        name: str = a["name"]
+                        if "amd64" in name and name.endswith(".AppImage"):
+                            return str(a["browser_download_url"])
+                    return ""
+
+                url = await asyncio.to_thread(_lookup)
+            except Exception as exc:
+                logger.warning("napcat %s: AppImage release lookup failed (%s)", instance_id, exc)
+        if not url:
             raise RuntimeError(
-                f"cannot write to {qq_app} (permission denied). NapCat must "
-                "live inside QQ's app directory, which is owned by root. "
-                "Fix with one of:\n"
-                "  - run MailFlow as root:  sudo <your mailflow command>\n"
-                "  - grant your user write access:  "
-                "sudo chown -R $USER /opt/QQ/resources/app\n"
-                "  - or make the tree writable:  "
-                "sudo chmod -R a+rw /opt/QQ/resources/app"
-            ) from exc
+                "Could not resolve the NapCat AppImage download URL "
+                "(release API unreachable); set options.napcat_appimage_url"
+            )
+        appimage = target / asset
+        logger.info("napcat %s: downloading AppImage %s", instance_id, url)
+        await asyncio.to_thread(self._download, url, appimage)
+        await asyncio.to_thread(appimage.chmod, 0o755)
+        logger.info(
+            "napcat %s: AppImage ready (%d MB)",
+            instance_id,
+            appimage.stat().st_size // 1024 // 1024,
+        )
         logger.info("napcat %s: Linux QQ + NapCat ready", instance_id)
 
     @staticmethod
@@ -498,10 +482,11 @@ class NapCatProvisioner:
                     "into QQ's process), but none was found on this machine. "
                     "Install QQ for your platform first."
                 )
-        elif not _path_exists(_QQ_INSTALL_DIR / "qq"):
+        elif not _path_exists(_instance_dir(instance_id) / _NAPCAT_APPIMAGE_ASSET):
             raise RuntimeError(
                 "NapCat is not installed on this Linux host: run the "
-                "auto-install first (it installs Linux QQ + xvfb + NapCat)."
+                "auto-install first (it downloads the official NapCat "
+                "AppImage with QQ bundled)."
             )
         else:
             # NapCat launches the full QQ NT client (Electron): it needs
@@ -516,17 +501,17 @@ class NapCatProvisioner:
                     "available. Free memory or pick a lighter platform "
                     "(e.g. WeChaty) on this machine."
                 )
-        # the runnable NapCat lives in QQ's app dir on Linux (installed by
-        # the BootWay03 flow) and in data/gateways on Windows
-        run_target = (
-            _QQ_INSTALL_DIR / "resources" / "app" / "napcat"
-            if os.name != "nt"
-            else _instance_dir(instance_id)
+        # the AppImage (Linux) and the Shell package (Windows) both live in
+        # the instance dir; on Linux the AppImage holds QQ + NapCat and
+        # writes its cache/QR next to itself
+        run_target = _instance_dir(instance_id)
+        entry_path = (
+            run_target / _NAPCAT_APPIMAGE_ASSET if os.name != "nt" else run_target / "napcat.mjs"
         )
-        if not _path_exists(run_target / "napcat.mjs"):
+        if not _path_exists(entry_path):
             raise RuntimeError(
-                f"napcat {instance_id} is not installed (no napcat.mjs under "
-                f"{run_target}); run the setup again to install it"
+                f"napcat {instance_id} is not installed (missing {entry_path}); "
+                f"run the setup again to install it"
             )
         target = run_target
         port = int(options.get("port") or self._port_for(instance_id))
@@ -597,17 +582,16 @@ class NapCatProvisioner:
                     command = [str(boot_main), qq, str(hook)]
                     cwd = str(target)
                 else:
-                    # Linux headless: run the patched QQ under xvfb with
-                    # --no-sandbox; loadNapCat.cjs imports napcat.mjs.
+                    # Linux headless: run the AppImage (QQ + NapCat
+                    # bundled) under xvfb. The AppImage is self-contained;
+                    # its cache and QR land next to the file (cwd).
                     command = [
-                        "dbus-run-session",
-                        "--",
                         "xvfb-run",
                         "-a",
-                        str(_QQ_INSTALL_DIR / "qq"),
+                        str(run_target / _NAPCAT_APPIMAGE_ASSET),
                         "--no-sandbox",
                     ]
-                    cwd = str(_QQ_INSTALL_DIR)
+                    cwd = str(run_target)
                 return subprocess.Popen(
                     command,
                     cwd=cwd,
