@@ -51,7 +51,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         margin: 0 0 0 0;
     }
     #guide-qr {
-        height: 20;
+        height: auto;
+        max-height: 20;
         padding: 0 1;
         margin: 0;
         content-align: center top;
@@ -551,15 +552,9 @@ def _ascii_qr(image: str) -> str:
                 else:
                     row_chars.append(" ")
             out.append("".join(row_chars))
-        # QR spec requires a quiet zone (>=4 light modules); the source
-        # PNG's margin was skipped, so re-add light padding (1 half-row
-        # top/bottom + 2 cols left/right keeps it inside the 20-row panel)
-        width_chars = len(out[0]) + 4
-        out = (
-            [" " * width_chars, f"  {out[0]}  "]
-            + [f"  {row}  " for row in out[1:]]
-            + [" " * width_chars]
-        )
+        # no extra padding: the source PNG already carries its quiet zone
+        # (margin) around the code, so the sampled modules are the code
+        # itself — 29 modules render as ~15 half-block rows
         return "\n".join(out) or "(qr)"
     except Exception:
         return f"(qr payload {len(raw)} bytes)"
