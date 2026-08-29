@@ -120,6 +120,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     variant="success",
                     disabled=True,
                 )
+                yield Button(
+                    self._t("tui.bots_guide_logged_in_btn", default="I'm logged in"),
+                    id="guide-logged-in",
+                    variant="primary",
+                    disabled=True,
+                )
                 yield Button(self._t("tui.btn_cancel"), id="guide-cancel", variant="error")
 
     async def on_mount(self) -> None:
@@ -300,6 +306,11 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 last_qr = qr
                 self._set_qr(_ascii_qr(qr))
                 self._log("INFO", self._t("tui.bots_guide_qr_scan", provider=self._provider))
+                # QR on screen: the user can confirm the phone login
+                # manually if the automatic detection never fires
+                logged_btn = self.query_one_optional("#guide-logged-in", Button)
+                if logged_btn is not None:
+                    logged_btn.disabled = False
             elif qr:
                 # same QR as before: still waiting for the scan (or the
                 # provisioner's stable-QR login signal is about to fire)
@@ -333,6 +344,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             # the caller persists the notifier entry
             if self._result is not None:
                 self.dismiss(self._result)
+            return
+        if event.button.id == "guide-logged-in":
+            # manual confirmation: the phone already logged in; finish
+            # the flow so the notifier entry is saved
+            self._log("INFO", self._t("tui.bots_guide_logged_in"))
+            self._set_status(self._t("tui.bots_guide_logged_in"), "green")
+            self._finish_ready()
             return
         if event.button.id == "guide-cancel":
             await self._cancel_and_cleanup()

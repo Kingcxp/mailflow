@@ -205,6 +205,13 @@ All notable changes are recorded here; the format follows
   logged-in signal after a successful scan — Done should now enable
   right after scanning. The QR panel is vertically centered and the
   waiting text explains that login confirmation follows the scan.
+- The guide adds an 'I'm logged in' button (enabled once the QR is
+  shown): if automatic login detection never fires, the user confirms
+  the phone login manually and the flow finishes — no more being stuck
+  on 'waiting for login confirmation'. The QR panel is centered in both
+  the component CSS and app.tcss (the app-wide sheet previously
+  overrode the alignment), with top padding so it does not hug the
+  title.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

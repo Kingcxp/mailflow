@@ -662,7 +662,8 @@
       "bots_guide_no_token": "{provider} 需要配置平板协议令牌：微信官方已关闭免费的网页协议，目前没有免令牌的微信登录方式。请在表单中填写 padlocal 令牌后重试。",
       "bots_provider_openwechat": "微信 (openwechat 扫码登录)",
       "bots_guide_downloading": "正在下载并安装 {provider}…",
-      "bots_guide_downloaded": "安装完成。"
+      "bots_guide_downloaded": "安装完成。",
+      "bots_guide_logged_in_btn": "我已登录"
     },
     "update": {
       "applied_title": "已应用的更新",
