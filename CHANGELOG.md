@@ -96,8 +96,17 @@ All notable changes are recorded here; the format follows
   to 5s waiting for the process; it now runs off the event loop and kills
   the whole process tree (taskkill /T, pkill -P) so no orphan QQ remains.
 - WeChaty: Tencent shut down the web protocol, so the token-free
-  wechat4u puppet is removed; the guide requires the pad-protocol token
-  and explains that no token-free WeChat login exists anymore.
+  wechat4u puppet is kept only as a best-effort fallback (may work for
+  some accounts; ban risk documented). The bridge now reports an error
+  with the real reason when no QR appears within 60s instead of showing
+  a misleading 'scan' prompt, and the guide only shows the scan prompt
+  once a QR payload actually exists.
+- NapCat on Linux: the QQ Electron client needs a session bus; the
+  launcher now runs under `dbus-run-session` and the runtime check
+  requires dbus (apt install dbus dbus-x11) — the old failure mode was
+  a cryptic dbus/bus.cc error with no QR and an empty log.
+- Process-tree teardown on Linux is recursive (pgrep walk) so
+  dbus-run-session > xvfb-run > QQ chains are fully killed.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

@@ -154,7 +154,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         absence of a QR payload (an empty response also happens before
         the QR exists and would fake a login)."""
         self._log("INFO", self._t("tui.bots_guide_qr_wait", provider=self._provider))
-        self._set_status(self._t("tui.bots_guide_qr_scan", provider=self._provider), "yellow")
+        self._set_status(self._t("tui.bots_guide_qr_pending", provider=self._provider), "yellow")
         deadline = time.monotonic() + 120
         last_qr = ""
         self._logged_no_qr = False

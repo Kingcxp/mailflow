@@ -30,11 +30,13 @@ const PORT = parseInt(process.argv[2] || process.env.GATEWAY_PORT || "8788", 10)
 const TOKEN = process.env.WECHATY_TOKEN || "";
 
 let bot = null;
+let startedAt = null;
 let lastQr = "";
 let lastQrStatus = "pending";
 let loginError = "";
 
 function startBot() {
+  startedAt = Date.now();
   if (TOKEN) {
     // pad protocol (paid): requires a platform token
     bot = WechatyBuilder.build({
@@ -113,6 +115,11 @@ const server = http.createServer(async (req, res) => {
     if (lastQrStatus === "logged_in") return sendJson(200, { status: "logged_in" });
     if (lastQrStatus === "error") return sendJson(200, { status: "error", error: loginError });
     if (lastQr) return sendJson(200, { status: "scanning", qrcode: lastQr });
+    // no scan event yet: after a grace period this is a failure, not a
+    // wait (the web protocol is discontinued and may never emit a QR)
+    if (startedAt && Date.now() - startedAt > 60000) {
+      return sendJson(200, { status: "error", error: loginError || "no QR within 60s" });
+    }
     return sendJson(200, { status: "pending" });
   }
 

@@ -283,6 +283,8 @@ class WechatyGatewayProvisioner:
                 payload: Any = response.json()
                 if payload.get("status") == "logged_in":
                     return _QR_LOGGED_IN
+                if payload.get("status") == "error":
+                    return f"ERROR: {payload.get('error') or 'bridge failed'}"
                 return str(payload.get("qrcode") or "")
         except Exception as exc:
             logger.warning("wechaty %s /qr failed: %s", instance_id, exc)

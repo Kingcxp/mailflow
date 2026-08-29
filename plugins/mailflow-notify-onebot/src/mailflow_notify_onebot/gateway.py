@@ -363,6 +363,10 @@ class NapCatProvisioner:
         missing: list[str] = []
         if _sh.which("xvfb-run") is None:
             missing.append("xvfb-run (apt install xvfb xauth)")
+        if _sh.which("dbus-run-session") is None:
+            # the QQ Electron client needs a session bus; dbus-run-session
+            # provides one without a system dbus daemon
+            missing.append("dbus-run-session (apt install dbus dbus-x11)")
         if not _path_exists(_QQ_INSTALL_DIR / "qq"):
             missing.append(f"Linux QQ at {_QQ_INSTALL_DIR / 'qq'} (install the QQ deb)")
         if missing:
@@ -370,7 +374,8 @@ class NapCatProvisioner:
                 "NapCat on Linux needs these missing pieces — install them "
                 "first, then retry:\n  - "
                 + "\n  - ".join(missing)
-                + "\n(example: apt-get install -y xvfb xauth, then dpkg -i QQ_*.deb)"
+                + "\n(example: apt-get install -y xvfb xauth dbus dbus-x11, "
+                + "then dpkg -i QQ_*.deb)"
             )
         # mirror the freshly unpacked package into QQ's app dir and patch
         # the app entry point; QQ's tree is root-owned, so guard the whole
@@ -594,7 +599,14 @@ class NapCatProvisioner:
                 else:
                     # Linux headless: run the patched QQ under xvfb with
                     # --no-sandbox; loadNapCat.cjs imports napcat.mjs.
-                    command = ["xvfb-run", "-a", str(_QQ_INSTALL_DIR / "qq"), "--no-sandbox"]
+                    command = [
+                        "dbus-run-session",
+                        "--",
+                        "xvfb-run",
+                        "-a",
+                        str(_QQ_INSTALL_DIR / "qq"),
+                        "--no-sandbox",
+                    ]
                     cwd = str(_QQ_INSTALL_DIR)
                 return subprocess.Popen(
                     command,
@@ -682,8 +694,9 @@ class NapCatProvisioner:
             except Exception:
                 with __import__("contextlib").suppress(Exception):
                     process.kill()
-        # NapCat spawns QQ (xvfb-run on Linux, boot exe on Windows):
-        # kill the whole tree so no orphan QQ process is left behind
+        # NapCat spawns QQ (xvfb-run + dbus-run-session on Linux, boot exe
+        # on Windows): kill the whole tree so no orphan QQ process remains.
+        # pkill -P only hits direct children, so walk the tree recursively.
         try:
             import os
 
@@ -694,17 +707,32 @@ class NapCatProvisioner:
                     timeout=10,
                 )
             else:
-                subprocess.run(
-                    ["pkill", "-TERM", "-P", str(process.pid)],
-                    capture_output=True,
-                    timeout=10,
-                )
-                if process.poll() is None:
+                visited: set[int] = set()
+
+                def _kill_tree(pid: int, sig: str) -> None:
+                    if pid in visited:
+                        return
+                    visited.add(pid)
+                    out = subprocess.run(
+                        ["pgrep", "-P", str(pid)],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    ).stdout
+                    for child in out.split():
+                        _kill_tree(int(child), sig)
                     subprocess.run(
-                        ["pkill", "-KILL", "-P", str(process.pid)],
+                        ["kill", "-" + sig, str(pid)],
                         capture_output=True,
                         timeout=10,
                     )
+
+                _kill_tree(process.pid, "TERM")
+                # give the tree a moment, then force what remains
+                try:
+                    process.wait(timeout=3)
+                except Exception:
+                    _kill_tree(process.pid, "KILL")
         except Exception:
             pass
 
