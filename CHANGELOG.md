@@ -161,6 +161,11 @@ All notable changes are recorded here; the format follows
 - The QR and download progress now live inside the log stream (no
   separate widgets), and the dialog/log pane fills the modal height so
   no space is wasted below the title.
+- Fix: RGB (3-channel) QR PNGs rendered as one line of white blocks —
+  the pixel stride was hardcoded for RGBA. The stride now honors the
+  IHDR color type (gray/RGB/RGBA), and all three render correctly.
+- The QR is back in its own panel above the log (capped at 29 modules =
+  58 cols x 29 rows) so it never overflows the log pane height.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

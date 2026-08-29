@@ -44,6 +44,11 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         width: 90%;
         height: 90%;
     }
+    #guide-qr {
+        height: auto;
+        max-height: 29;
+        padding: 0 1;
+    }
     #guide-log {
         height: 1fr;
     }
@@ -80,8 +85,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._t("tui.bots_guide_title", provider=self._provider),
                 id="guide-title",
             )
-            # QR and progress live inside the log stream; the pane fills
-            # the dialog so no vertical space is wasted
+            # QR panel above the log: the QR (up to 33 rows) must stay
+            # visible without scrolling the log pane
+            yield Static("", id="guide-qr")
             with Vertical(id="guide-log-wrap"):
                 yield RichLog(
                     id="guide-log", wrap=True, highlight=True, markup=True, max_lines=5000
@@ -125,12 +131,10 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             node.update(f"[{style}]{text}[/{style}]" if style else text)
 
     def _set_qr(self, text: str) -> None:
-        # the QR is part of the log stream; empty clears the last QR block
-        node = self.query_one_optional("#guide-log", RichLog)  # pyright: ignore[reportUnknownVariableType]
-        if node is None:
-            return
-        if text:
-            node.write(text)  # pyright: ignore[reportUnknownMemberType]
+        # the QR lives in its own panel above the log
+        node = self.query_one_optional("#guide-qr", Static)
+        if node is not None:
+            node.update(text)
 
     # -- install progress ---------------------------------------------------------
 
@@ -326,19 +330,23 @@ def _ascii_qr(image: str) -> str:
         pixels: bytes = zlib.decompress(compressed)
         width: int = struct.unpack(">I", raw[16:20])[0]
         height: int = struct.unpack(">I", raw[20:24])[0]
-        stride = width * 4 + 1
-        # fit the QR to the dialog: derive the module size from the
-        # source width (<=32 modules across) and sample the centre of
-        # each module so the QR stays scannable at small size. 32
-        # modules = 64 terminal columns (each module is two columns).
-        step = max(1, width // 32)
+        # IHDR: bit depth at byte 24, color type at byte 25
+        # 0=gray, 2=RGB, 3=palette, 4=gray+alpha, 6=RGBA
+        color_type: int = raw[25]
+        channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(color_type, 4)
+        stride = width * channels + 1
+        # fit the QR to its panel: derive the module size from the
+        # source width (<=29 modules across) and sample the centre of
+        # each module so the QR stays scannable at small size. 29
+        # modules = 58 terminal columns x 29 rows (the panel max-height).
+        step = max(1, width // 29)
         out: list[str] = []
-        for my in range(min(height // step, 32)):
+        for my in range(min(height // step, 29)):
             row: list[str] = []
-            for mx in range(min(width // step, 32)):
+            for mx in range(min(width // step, 29)):
                 y = (my * step) + step // 2
                 x = (mx * step) + step // 2
-                idx = y * stride + 1 + x * 4
+                idx = y * stride + 1 + x * channels
                 if idx + 2 < len(pixels):
                     r: int = pixels[idx]
                     g: int = pixels[idx + 1]
