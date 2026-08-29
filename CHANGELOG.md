@@ -172,6 +172,11 @@ All notable changes are recorded here; the format follows
   is now a full minimal PNG decoder: it merges multi-chunk IDAT,
   applies all five filter types, honors the IHDR color type
   (gray/RGB/RGBA), and samples module centres.
+- The QR decoder also handles sub-byte bit depths now: NapCat's
+  qrcode.png is a 147x147 4-bit grayscale PNG, which previously
+  reported 'unsupported png 147x147'. 1/2/4/8-bit depths and palette
+  (PLTE) images decode correctly (verified with a 147x147 4-bit
+  filter-encoded fixture).
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

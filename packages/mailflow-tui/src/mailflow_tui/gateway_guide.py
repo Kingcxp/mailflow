@@ -312,10 +312,10 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
 def _ascii_qr(image: str) -> str:
     """Render a QR image payload as an ASCII block (base64 PNG).
 
-    Full minimal PNG decode: concatenates all IDAT chunks, unpacks the
-    scanlines (filter 0-4 per row), then samples the centre of each QR
-    module. Handles gray/RGB/RGBA 8-bit PNGs (what the gateway bridges
-    emit). Returns "(qr)" when the payload is not a decodable PNG.
+    Full minimal PNG decode: merges multi-chunk IDAT, reconstructs all
+    scanline filters (0-4), honors IHDR bit depth (1/2/4/8) and color
+    type (gray, gray+alpha, palette, RGB, RGBA), then samples the centre
+    of each QR module. Returns "(qr)" when not decodable.
     """
     import base64 as _b64
     import struct
@@ -332,17 +332,33 @@ def _ascii_qr(image: str) -> str:
     if not raw.startswith(b"\x89PNG"):
         return f"(qr payload {image[:40]}…)"
     try:
-        # header: width/height at 16..24, bit depth byte 24, color type 25
         width: int = struct.unpack(">I", raw[16:20])[0]
         height: int = struct.unpack(">I", raw[20:24])[0]
         bit_depth: int = raw[24]
         color_type: int = raw[25]
-        if bit_depth != 8 or width < 1 or height < 1 or width > 2048:
-            return f"(qr: unsupported png {width}x{height} depth {bit_depth})"
+        if width < 1 or height < 1 or width > 2048:
+            return f"(qr: bad size {width}x{height})"
+        if bit_depth not in (1, 2, 4, 8):
+            return f"(qr: unsupported depth {bit_depth})"
         channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(color_type, 0)
         if channels == 0:
             return f"(qr: unsupported color type {color_type})"
-        # concatenate every IDAT chunk (zlib stream may span chunks)
+        # palette lookup table (color type 3): chunk PLTE, RGB triplets
+        palette: list[tuple[int, int, int]] = []
+        if color_type == 3:
+            pos = 8
+            while pos < len(raw):
+                (length,) = struct.unpack(">I", raw[pos : pos + 4])
+                tag = raw[pos + 4 : pos + 8]
+                if tag == b"PLTE":
+                    entries = raw[pos + 8 : pos + 8 + length]
+                    for i in range(0, length - 2, 3):
+                        palette.append((entries[i], entries[i + 1], entries[i + 2]))
+                    break
+                pos += 12 + length
+            if not palette:
+                return "(qr: palette png without PLTE)"
+        # concatenate IDAT chunks
         data = bytearray()
         pos = 8
         while pos < len(raw):
@@ -352,18 +368,18 @@ def _ascii_qr(image: str) -> str:
                 data += raw[pos + 8 : pos + 8 + length]
             pos += 12 + length
         pixels = zlib.decompress(bytes(data))
-        stride = width * channels
-        bpp = channels
+        stride = (width * channels * bit_depth + 7) // 8
         rows: list[bytes] = []
         off = 0
         for _y in range(height):
             ftype = pixels[off]
             off += 1
-            line: bytearray = bytearray(pixels[off : off + stride])
+            line = bytearray(pixels[off : off + stride])
             off += stride
             if ftype == 1:  # Sub
-                for i in range(bpp, stride):
-                    line[i] = (line[i] + line[i - bpp]) & 0xFF
+                byte_bpp = max(1, (channels * bit_depth + 7) // 8)
+                for i in range(byte_bpp, stride):
+                    line[i] = (line[i] + line[i - byte_bpp]) & 0xFF
             elif ftype == 2:  # Up
                 if rows:
                     prev = rows[-1]
@@ -371,22 +387,56 @@ def _ascii_qr(image: str) -> str:
                         line[i] = (line[i] + prev[i]) & 0xFF
             elif ftype == 3:  # Average
                 prev = rows[-1] if rows else b"\x00" * stride
+                byte_bpp = max(1, (channels * bit_depth + 7) // 8)
                 for i in range(stride):
-                    left = line[i - bpp] if i >= bpp else 0
+                    left = line[i - byte_bpp] if i >= byte_bpp else 0
                     up = prev[i]
                     line[i] = (line[i] + ((left + up) >> 1)) & 0xFF
             elif ftype == 4:  # Paeth
                 prev = rows[-1] if rows else b"\x00" * stride
+                byte_bpp = max(1, (channels * bit_depth + 7) // 8)
                 for i in range(stride):
-                    left_v = line[i - bpp] if i >= bpp else 0
+                    left_v = line[i - byte_bpp] if i >= byte_bpp else 0
                     up_v = prev[i]
-                    diag = prev[i - bpp] if i >= bpp else 0
+                    diag = prev[i - byte_bpp] if i >= byte_bpp else 0
                     pred = left_v + up_v - diag
                     pa, pb, pc = abs(pred - left_v), abs(pred - up_v), abs(pred - diag)
                     pr = left_v if (pa <= pb and pa <= pc) else (up_v if pb <= pc else diag)
                     line[i] = (line[i] + pr) & 0xFF
             rows.append(bytes(line))
-        # sample the centre of each QR module, capped at 29 across
+
+        def sample(x: int, y: int) -> tuple[int, int, int]:
+            """RGB value of pixel (x, y) after sub-byte unpacking."""
+            line = rows[y]
+            if bit_depth == 8:
+                idx = x * channels
+                if channels == 1:
+                    v = line[idx]
+                    return (v, v, v)
+                if channels == 2:
+                    v = line[idx]
+                    return (v, v, v)
+                if channels == 3:
+                    return (line[idx], line[idx + 1], line[idx + 2])
+                return (line[idx], line[idx + 1], line[idx + 2])
+            # sub-byte depth: pack bits per sample, then take the channel
+            bits_per_px = channels * bit_depth
+            if bits_per_px == 1:  # 1-bit gray
+                byte_i = x >> 3
+                v = 255 if (line[byte_i] & (0x80 >> (x & 7))) else 0
+                return (v, v, v)
+            if bits_per_px == 2:  # 2-bit gray
+                shift = 6 - 2 * (x & 3)
+                v = ((line[x >> 2] >> shift) & 0x3) * 85
+                return (v, v, v)
+            if bits_per_px == 4:  # 4-bit gray
+                v = ((line[x >> 1] >> (4 * (1 - (x & 1)))) & 0xF) * 17
+                return (v, v, v)
+            if bits_per_px == 8 and channels == 1:  # 8-bit gray (depth 8 handled above)
+                v = line[x]
+                return (v, v, v)
+            return (0, 0, 0)
+
         step = max(1, width // 29)
         out: list[str] = []
         for my in range(min(height // step, 29)):
@@ -394,15 +444,10 @@ def _ascii_qr(image: str) -> str:
             for mx in range(min(width // step, 29)):
                 y = (my * step) + step // 2
                 x = (mx * step) + step // 2
-                scanline = rows[y]
-                idx = x * channels
-                r: int = scanline[idx]
-                if channels >= 3:
-                    g: int = scanline[idx + 1]
-                    b: int = scanline[idx + 2]
-                    lum = (r + g + b) // 3
-                else:
-                    lum = r
+                r, g, b = sample(x, y)
+                if color_type == 3 and palette and r < len(palette):
+                    r, g, b = palette[r]
+                lum = (r + g + b) // 3
                 row_chars.append("  " if lum > 128 else "██")
             out.append("".join(row_chars))
         return "\n".join(out) or "(qr)"
