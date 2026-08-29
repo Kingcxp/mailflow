@@ -310,8 +310,16 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
 
 
 def _ascii_qr(image: str) -> str:
-    """Render a QR image payload as an ASCII block (base64 PNG)."""
+    """Render a QR image payload as an ASCII block (base64 PNG).
+
+    Full minimal PNG decode: concatenates all IDAT chunks, unpacks the
+    scanlines (filter 0-4 per row), then samples the centre of each QR
+    module. Handles gray/RGB/RGBA 8-bit PNGs (what the gateway bridges
+    emit). Returns "(qr)" when the payload is not a decodable PNG.
+    """
     import base64 as _b64
+    import struct
+    import zlib
 
     if not image:
         return "(empty)"
@@ -321,38 +329,82 @@ def _ascii_qr(image: str) -> str:
         raw = _b64.b64decode(image, validate=False)
     except Exception:
         return f"(qr payload {image[:40]}…)"
-    import struct
-    import zlib
-
+    if not raw.startswith(b"\x89PNG"):
+        return f"(qr payload {image[:40]}…)"
     try:
-        pos = raw.find(b"IDAT") + 4
-        compressed = raw[pos : raw.find(b"IEND")]
-        pixels: bytes = zlib.decompress(compressed)
+        # header: width/height at 16..24, bit depth byte 24, color type 25
         width: int = struct.unpack(">I", raw[16:20])[0]
         height: int = struct.unpack(">I", raw[20:24])[0]
-        # IHDR: bit depth at byte 24, color type at byte 25
-        # 0=gray, 2=RGB, 3=palette, 4=gray+alpha, 6=RGBA
+        bit_depth: int = raw[24]
         color_type: int = raw[25]
-        channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(color_type, 4)
-        stride = width * channels + 1
-        # fit the QR to its panel: derive the module size from the
-        # source width (<=29 modules across) and sample the centre of
-        # each module so the QR stays scannable at small size. 29
-        # modules = 58 terminal columns x 29 rows (the panel max-height).
+        if bit_depth != 8 or width < 1 or height < 1 or width > 2048:
+            return f"(qr: unsupported png {width}x{height} depth {bit_depth})"
+        channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(color_type, 0)
+        if channels == 0:
+            return f"(qr: unsupported color type {color_type})"
+        # concatenate every IDAT chunk (zlib stream may span chunks)
+        data = bytearray()
+        pos = 8
+        while pos < len(raw):
+            (length,) = struct.unpack(">I", raw[pos : pos + 4])
+            tag = raw[pos + 4 : pos + 8]
+            if tag == b"IDAT":
+                data += raw[pos + 8 : pos + 8 + length]
+            pos += 12 + length
+        pixels = zlib.decompress(bytes(data))
+        stride = width * channels
+        bpp = channels
+        rows: list[bytes] = []
+        off = 0
+        for _y in range(height):
+            ftype = pixels[off]
+            off += 1
+            line: bytearray = bytearray(pixels[off : off + stride])
+            off += stride
+            if ftype == 1:  # Sub
+                for i in range(bpp, stride):
+                    line[i] = (line[i] + line[i - bpp]) & 0xFF
+            elif ftype == 2:  # Up
+                if rows:
+                    prev = rows[-1]
+                    for i in range(stride):
+                        line[i] = (line[i] + prev[i]) & 0xFF
+            elif ftype == 3:  # Average
+                prev = rows[-1] if rows else b"\x00" * stride
+                for i in range(stride):
+                    left = line[i - bpp] if i >= bpp else 0
+                    up = prev[i]
+                    line[i] = (line[i] + ((left + up) >> 1)) & 0xFF
+            elif ftype == 4:  # Paeth
+                prev = rows[-1] if rows else b"\x00" * stride
+                for i in range(stride):
+                    left_v = line[i - bpp] if i >= bpp else 0
+                    up_v = prev[i]
+                    diag = prev[i - bpp] if i >= bpp else 0
+                    pred = left_v + up_v - diag
+                    pa, pb, pc = abs(pred - left_v), abs(pred - up_v), abs(pred - diag)
+                    pr = left_v if (pa <= pb and pa <= pc) else (up_v if pb <= pc else diag)
+                    line[i] = (line[i] + pr) & 0xFF
+            rows.append(bytes(line))
+        # sample the centre of each QR module, capped at 29 across
         step = max(1, width // 29)
         out: list[str] = []
         for my in range(min(height // step, 29)):
-            row: list[str] = []
+            row_chars: list[str] = []
             for mx in range(min(width // step, 29)):
                 y = (my * step) + step // 2
                 x = (mx * step) + step // 2
-                idx = y * stride + 1 + x * channels
-                if idx + 2 < len(pixels):
-                    r: int = pixels[idx]
-                    g: int = pixels[idx + 1]
-                    b: int = pixels[idx + 2]
-                    row.append("  " if (r + g + b) // 3 > 128 else "██")
-            out.append("".join(row))
+                scanline = rows[y]
+                idx = x * channels
+                r: int = scanline[idx]
+                if channels >= 3:
+                    g: int = scanline[idx + 1]
+                    b: int = scanline[idx + 2]
+                    lum = (r + g + b) // 3
+                else:
+                    lum = r
+                row_chars.append("  " if lum > 128 else "██")
+            out.append("".join(row_chars))
         return "\n".join(out) or "(qr)"
     except Exception:
         return f"(qr payload {len(raw)} bytes)"

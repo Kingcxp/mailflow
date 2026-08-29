@@ -166,6 +166,12 @@ All notable changes are recorded here; the format follows
   IHDR color type (gray/RGB/RGBA), and all three render correctly.
 - The QR is back in its own panel above the log (capped at 29 modules =
   58 cols x 29 rows) so it never overflows the log pane height.
+- Fix (real root cause): the QR renderer decoded raw scanlines without
+  applying PNG row filters (Sub/Up/Average/Paeth), so real QR PNGs —
+  which use filters — came out as a few rows of noise/white. _ascii_qr
+  is now a full minimal PNG decoder: it merges multi-chunk IDAT,
+  applies all five filter types, honors the IHDR color type
+  (gray/RGB/RGBA), and samples module centres.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
