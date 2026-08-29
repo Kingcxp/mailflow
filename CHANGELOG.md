@@ -177,6 +177,9 @@ All notable changes are recorded here; the format follows
   reported 'unsupported png 147x147'. 1/2/4/8-bit depths and palette
   (PLTE) images decode correctly (verified with a 147x147 4-bit
   filter-encoded fixture).
+- The guide layout is more compact (title/status/actions each 1 row,
+  dialog 92% x 95%) and the QR is capped at 25 modules (50 cols x 25
+  rows) so the whole code fits a ~30-row terminal without truncation.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

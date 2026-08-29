@@ -41,20 +41,29 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         align: center middle;
     }
     #guide-dialog {
-        width: 90%;
-        height: 90%;
+        width: 92%;
+        height: 95%;
+    }
+    #guide-title {
+        height: 1;
+        padding: 0 1;
     }
     #guide-qr {
         height: auto;
-        max-height: 29;
         padding: 0 1;
     }
     #guide-log {
         height: 1fr;
+        min-height: 3;
     }
     #guide-status {
-        height: auto;
+        height: 1;
         padding: 0 1;
+    }
+    #guide-actions {
+        height: 1;
+        padding: 0 1;
+        align: center middle;
     }
     """
 
@@ -437,11 +446,11 @@ def _ascii_qr(image: str) -> str:
                 return (v, v, v)
             return (0, 0, 0)
 
-        step = max(1, width // 29)
+        step = max(1, width // 25)
         out: list[str] = []
-        for my in range(min(height // step, 29)):
+        for my in range(min(height // step, 25)):
             row_chars: list[str] = []
-            for mx in range(min(width // step, 29)):
+            for mx in range(min(width // step, 25)):
                 y = (my * step) + step // 2
                 x = (mx * step) + step // 2
                 r, g, b = sample(x, y)
