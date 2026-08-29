@@ -170,11 +170,16 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         if node is None:
             return
         node.update(text)
-        # pin the panel to the exact rendered row count so nothing clips
+        # pin the panel to the rendered rows + 1: the extra line is the
+        # bottom quiet-zone row that completes the code visually — the
+        # layout engine compresses the log, never the QR
         rows = len(text.splitlines()) if text else 0
         if rows:
-            node.styles.height = rows  # pyright: ignore[reportUnknownMemberType]
-            node.styles.min_height = rows  # pyright: ignore[reportUnknownMemberType]
+            node.styles.height = rows + 1  # pyright: ignore[reportUnknownMemberType]
+            node.styles.min_height = rows + 1  # pyright: ignore[reportUnknownMemberType]
+        if text:
+            cols = len(text.splitlines()[0])
+            self._log("INFO", f"QR shown: {rows} rows x {cols} cols")
 
     # -- install progress ---------------------------------------------------------
 
