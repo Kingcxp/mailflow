@@ -170,10 +170,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         if node is None:
             return
         node.update(text)
+        # pin the panel to the rendered row count + 1: an odd module QR
+        # (29) ends on a half-row and the extra line keeps the bottom
+        # edge visible instead of clipping the last pixel row
         rows = len(text.splitlines()) if text else 0
         if rows:
-            node.styles.height = rows  # pyright: ignore[reportUnknownMemberType]
-            node.styles.min_height = rows  # pyright: ignore[reportUnknownMemberType]
+            node.styles.height = rows + 1  # pyright: ignore[reportUnknownMemberType]
+            node.styles.min_height = rows + 1  # pyright: ignore[reportUnknownMemberType]
 
     # -- install progress ---------------------------------------------------------
 
@@ -541,6 +544,8 @@ def _ascii_qr(image: str) -> str:
             return (r + g + b) // 3 < 128
 
         out: list[str] = []
+        # ceil(max_modules/2) rows: an odd module count (e.g. 29) ends
+        # with a real half-row — render it, don't drop it
         for my in range(0, max_modules, 2):
             row_chars: list[str] = []
             for mx in range(max_modules):
