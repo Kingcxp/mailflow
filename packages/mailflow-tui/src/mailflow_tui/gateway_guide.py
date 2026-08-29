@@ -154,6 +154,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._set_status(self._t("tui.bots_guide_qr_scan"), "yellow")
         deadline = time.monotonic() + 120
         last_qr = ""
+        self._logged_no_qr = False
         while time.monotonic() < deadline:
             qr = await service.gateway_qr(provider, self._instance_id)
             if qr == self._QR_LOGGED_IN:
@@ -166,8 +167,16 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 last_qr = qr
                 self._set_qr(_ascii_qr(qr))
                 self._log("INFO", self._t("tui.bots_guide_qr_scan"))
+            elif qr:
+                # same QR as before: still waiting for the scan
+                self._set_status(self._t("tui.bots_guide_qr_wait_scan"), "yellow")
             else:
                 self._set_qr("")
+                # no QR yet: keep the user informed instead of a blank box
+                if not self._logged_no_qr:
+                    self._log("INFO", self._t("tui.bots_guide_qr_pending"))
+                    self._logged_no_qr = True
+                self._set_status(self._t("tui.bots_guide_qr_pending"), "yellow")
             await asyncio.sleep(3.0)
         self._log("ERROR", self._t("tui.bots_guide_qr_timeout"))
         self._set_status(self._t("tui.bots_guide_qr_timeout"), "red")

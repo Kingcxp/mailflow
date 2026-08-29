@@ -653,7 +653,9 @@
       "btn_done": "Done",
       "bots_guide_cancelled": "Setup cancelled — stopping the gateway…",
       "bots_guide_stopped": "Gateway stopped; nothing was saved.",
-      "bots_guide_stop_failed": "Could not stop the gateway: {error}"
+      "bots_guide_stop_failed": "Could not stop the gateway: {error}",
+      "bots_guide_qr_pending": "Waiting for the login QR to appear (NapCat is starting the QQ client)…",
+      "bots_guide_qr_wait_scan": "Scan the QR with your phone; it refreshes automatically when expired"
     },
     "update": {
       "applied_title": "Applied updates",

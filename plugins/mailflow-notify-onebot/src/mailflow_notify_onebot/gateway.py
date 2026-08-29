@@ -212,6 +212,7 @@ class NapCatProvisioner:
 
     def __init__(self) -> None:
         self._processes: dict[str, subprocess.Popen[Any]] = {}
+        self._webui_ports: dict[str, int] = {}
 
     # -- helpers ---------------------------------------------------------------
 
@@ -608,20 +609,29 @@ class NapCatProvisioner:
         # wait for the process being alive + the WebUI port (6099) as the
         # readiness signal, and report the login requirement clearly
         webui_port = int(options.get("webui_port") or _WEBUI_PORT)
-        ready = await self._wait_http_port(webui_port, wait_seconds=_READY_TIMEOUT)
+        # NapCat auto-increments the WebUI port when it is taken; scan a
+        # small window instead of hard-failing on the configured one
+        ready_port = webui_port
+        ready = False
+        for candidate in range(webui_port, webui_port + 5):
+            if await self._wait_http_port(candidate, wait_seconds=4.0):
+                ready_port = candidate
+                ready = True
+                break
         endpoint = self._endpoint(instance_id)
         if not ready:
             log_tail = self._tail_log(log_file)
             self._terminate(instance_id)
             raise RuntimeError(
                 f"napcat {instance_id} started but its WebUI did not answer on "
-                f"http://127.0.0.1:{webui_port} in {_READY_TIMEOUT:.0f}s; "
-                f"see {log_file}{log_tail}"
+                f"http://127.0.0.1:{webui_port} (scanned +0..+4) in "
+                f"{_READY_TIMEOUT:.0f}s; see {log_file}{log_tail}"
             )
+        self._webui_ports[instance_id] = ready_port
         logger.info(
             "napcat %s: WebUI up on :%d (OneBot HTTP on :%d after the QQ session logs in)",
             instance_id,
-            webui_port,
+            ready_port,
             port,
         )
         return GatewayInstance(
@@ -701,6 +711,18 @@ class NapCatProvisioner:
         try:
             raw = qr_file.read_bytes()
         except OSError:
+            # diagnose why the QR is missing: log the expected path and a
+            # snippet of the NapCat log so the guide can show the reason
+            tail = self._tail_log(_instance_dir(instance_id) / "napcat.log", lines=5)
+            logger.info(
+                "napcat %s: QR not ready yet (%s missing)%s",
+                instance_id,
+                qr_file,
+                tail,
+            )
+            return ""
+        if len(raw) < 100:
+            logger.info("napcat %s: QR file exists but is empty/short (%d bytes)", instance_id, len(raw))
             return ""
         import base64 as _b64
 
