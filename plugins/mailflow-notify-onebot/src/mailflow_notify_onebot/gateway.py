@@ -346,40 +346,57 @@ class NapCatProvisioner:
                 + "\n  - ".join(missing)
                 + "\n(example: apt-get install -y xvfb xauth, then dpkg -i QQ_*.deb)"
             )
-        # mirror the freshly unpacked package into QQ's app dir
+        # mirror the freshly unpacked package into QQ's app dir and patch
+        # the app entry point; QQ's tree is root-owned, so guard the whole
+        # block with actionable permission guidance
         qq_app = _QQ_INSTALL_DIR / "resources" / "app"
         napcat_dir = qq_app / "napcat"
-        if not _path_exists(napcat_dir / "napcat.mjs"):
-            qq_app.mkdir(parents=True, exist_ok=True)
-            if napcat_dir.exists():
-                shutil.rmtree(napcat_dir, ignore_errors=True)
-            shutil.copytree(target, napcat_dir, dirs_exist_ok=True)
-            logger.info("napcat %s: NapCat mirrored to %s", instance_id, napcat_dir)
-        # patch package.json main -> loadNapCat.cjs (BootWay03)
-        pkg = qq_app / "package.json"
-        if _path_exists(pkg):
-            text = pkg.read_text(encoding="utf-8", errors="replace")
-            if "loadNapCat.cjs" not in text:
-                import re as _re
+        try:
+            if not _path_exists(napcat_dir / "napcat.mjs"):
+                qq_app.mkdir(parents=True, exist_ok=True)
+                if napcat_dir.exists():
+                    shutil.rmtree(napcat_dir, ignore_errors=True)
+                shutil.copytree(target, napcat_dir, dirs_exist_ok=True)
+                logger.info("napcat %s: NapCat mirrored to %s", instance_id, napcat_dir)
+            # write the loader that imports napcat.mjs when --no-sandbox is passed
+            loader = qq_app / "loadNapCat.cjs"
+            loader.write_text(
+                'const path = require("path");\n'
+                "const CurrentPath = path.dirname(__filename);\n"
+                'const hasNapcatParam = process.argv.includes("--no-sandbox");\n'
+                "if (hasNapcatParam) {\n"
+                '  (async () => { await import("file://" + path.join(CurrentPath, "./napcat/napcat.mjs")); })();\n'
+                "} else {\n"
+                '  require("./application/app_launcher/index.js");\n'
+                "}\n",
+                encoding="utf-8",
+            )
+            # patch package.json main -> loadNapCat.cjs (BootWay03)
+            pkg = qq_app / "package.json"
+            if _path_exists(pkg):
+                text = pkg.read_text(encoding="utf-8", errors="replace")
+                if "loadNapCat.cjs" not in text:
+                    import re as _re
 
-                patched = _re.sub(
-                    r'"main"\s*:\s*"[^"]*"', '"main": "./loadNapCat.cjs"', text, count=1
-                )
-                pkg.write_text(patched, encoding="utf-8")
-                logger.info("napcat %s: patched QQ package.json main", instance_id)
-        # write the loader that imports napcat.mjs when --no-sandbox is passed
-        loader = qq_app / "loadNapCat.cjs"
-        loader.write_text(
-            'const path = require("path");\n'
-            "const CurrentPath = path.dirname(__filename);\n"
-            'const hasNapcatParam = process.argv.includes("--no-sandbox");\n'
-            "if (hasNapcatParam) {\n"
-            '  (async () => { await import("file://" + path.join(CurrentPath, "./napcat/napcat.mjs")); })();\n'
-            "} else {\n"
-            '  require("./application/app_launcher/index.js");\n'
-            "}\n",
-            encoding="utf-8",
-        )
+                    patched = _re.sub(
+                        r'"main"\s*:\s*"[^"]*"',
+                        '"main": "./loadNapCat.cjs"',
+                        text,
+                        count=1,
+                    )
+                    pkg.write_text(patched, encoding="utf-8")
+                    logger.info("napcat %s: patched QQ package.json main", instance_id)
+        except PermissionError as exc:
+            raise RuntimeError(
+                f"cannot write to {qq_app} (permission denied). NapCat must "
+                "live inside QQ's app directory, which is owned by root. "
+                "Fix with one of:\n"
+                "  - run MailFlow as root:  sudo <your mailflow command>\n"
+                "  - grant your user write access:  "
+                "sudo chown -R $USER /opt/QQ/resources/app\n"
+                "  - or make the tree writable:  "
+                "sudo chmod -R a+rw /opt/QQ/resources/app"
+            ) from exc
         logger.info("napcat %s: Linux QQ + NapCat ready", instance_id)
 
     @staticmethod
