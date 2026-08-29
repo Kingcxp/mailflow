@@ -469,19 +469,97 @@ def _ascii_qr(image: str) -> str:
                 return (v, v, v)
             return (0, 0, 0)
 
-        step = max(1, width // 20)
-        out: list[str] = []
-        for my in range(min(height // step, 20)):
-            row_chars: list[str] = []
-            for mx in range(min(width // step, 20)):
-                y = (my * step) + step // 2
-                x = (mx * step) + step // 2
-                r, g, b = sample(x, y)
+        # detect the QR module size: scan the middle row for run lengths
+        # and take the smallest run (the finder pattern's 1-module bars).
+        # Sampling module centres with the real module size keeps the QR
+        # scannable; guessing a step (width//N) misaligns and destroys it.
+        runs: list[int] = []
+        prev_dark: bool | None = None
+        run_len = 0
+        mid_y = height // 2
+        for x in range(width):
+            r, g, b = sample(x, mid_y)
+            if color_type == 3 and palette and r < len(palette):
+                r, g, b = palette[r]
+            dark = (r + g + b) // 3 < 128
+            if prev_dark is None:
+                prev_dark = dark
+                run_len = 1
+            elif dark == prev_dark:
+                run_len += 1
+            else:
+                if run_len > 1:
+                    runs.append(run_len)
+                prev_dark = dark
+                run_len = 1
+        if run_len > 1:
+            runs.append(run_len)
+        module = min(runs) if runs else max(1, width // 20)
+        # find the content origin: the first row with a dark pixel (the
+        # finder pattern), then start sampling there — the margin must be
+        # skipped or the samples land in white space
+        origin_y = 0
+        origin_x = 0
+        for y in range(0, height, module):
+            for x in range(0, width, module):
+                r, g, b = sample(x + module // 2, y + module // 2)
                 if color_type == 3 and palette and r < len(palette):
                     r, g, b = palette[r]
-                lum = (r + g + b) // 3
-                row_chars.append("  " if lum > 128 else "██")
+                if (r + g + b) // 3 < 128:
+                    origin_y = y
+                    break
+            if origin_y:
+                break
+        if origin_y:
+            for x in range(0, width, module):
+                r, g, b = sample(x + module // 2, origin_y + module // 2)
+                if color_type == 3 and palette and r < len(palette):
+                    r, g, b = palette[r]
+                if (r + g + b) // 3 < 128:
+                    origin_x = x
+                    break
+        # render with half-block characters: each terminal row holds two
+        # module rows (upper/lower), so a 29-module QR is ~15 rows tall
+        # and ~29 cols wide — the whole code fits the 20-row panel and
+        # stays scannable.
+        step = module
+        max_modules = min((height - origin_y) // step, (width - origin_x) // step)
+
+        def _dark(px: int, py: int) -> bool:
+            if py < 0 or py >= height or px < 0 or px >= width:
+                return False
+            r, g, b = sample(px, py)
+            if color_type == 3 and palette and r < len(palette):
+                r, g, b = palette[r]
+            return (r + g + b) // 3 < 128
+
+        out: list[str] = []
+        for my in range(0, max_modules, 2):
+            row_chars: list[str] = []
+            for mx in range(max_modules):
+                x = origin_x + (mx * step) + step // 2
+                y_top = origin_y + (my * step) + step // 2
+                y_bot = origin_y + ((my + 1) * step) + step // 2
+                top = _dark(x, y_top)
+                bot = _dark(x, y_bot) if (my + 1) * step < height - origin_y else False
+                if top and bot:
+                    row_chars.append("█")
+                elif top:
+                    row_chars.append("▀")
+                elif bot:
+                    row_chars.append("▄")
+                else:
+                    row_chars.append(" ")
             out.append("".join(row_chars))
+        # QR spec requires a quiet zone (>=4 light modules); the source
+        # PNG's margin was skipped, so re-add light padding (1 half-row
+        # top/bottom + 2 cols left/right keeps it inside the 20-row panel)
+        width_chars = len(out[0]) + 4
+        out = (
+            [" " * width_chars, f"  {out[0]}  "]
+            + [f"  {row}  " for row in out[1:]]
+            + [" " * width_chars]
+        )
         return "\n".join(out) or "(qr)"
     except Exception:
         return f"(qr payload {len(raw)} bytes)"

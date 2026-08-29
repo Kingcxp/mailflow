@@ -180,6 +180,14 @@ All notable changes are recorded here; the format follows
 - The guide layout is more compact (title/status/actions each 1 row,
   dialog 92% x 95%) and the QR is capped at 25 modules (50 cols x 25
   rows) so the whole code fits a ~30-row terminal without truncation.
+- The QR renderer is now actually scannable (verified end-to-end with a
+  real QR decoded by jsQR): it detects the true module size from the
+  PNG's finder pattern instead of guessing a step (which misaligned and
+  destroyed the code), skips the margin, and renders with half-block
+  characters (each terminal row = 2 module rows), so a 29-module QR is
+  ~15 rows tall and fits the panel whole. Buttons and title are pinned
+  to 1 row in on_mount (CSS-only height rules are overridden by
+  Textual's Button variant styles), and the QR panel is centered.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

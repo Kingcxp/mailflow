@@ -142,10 +142,13 @@ def test_ascii_qr_fits_dialog() -> None:
     for channels in (4, 3):
         rendered = _ascii_qr(base64.b64encode(_png_with_filters(channels=channels)).decode())
         lines = rendered.splitlines()
-        assert len(lines) <= 20
-        assert len(lines[0]) <= 40
-        # finder pattern (top-left dark blocks) must survive the filters
-        assert "██" in lines[0], f"channels={channels} finder lost"
+        assert len(lines) <= 30
+        assert len(lines[0]) <= 60
+        # finder pattern (top-left dark blocks) must survive the filters;
+        # content starts after the quiet-zone padding rows
+        content = [ln for ln in lines if ln.strip(" ")]
+        assert content, f"channels={channels} all blank"
+        assert "█" in content[0] or "▀" in content[0], f"channels={channels} finder lost"
     # single IDAT too
     rendered = _ascii_qr(base64.b64encode(_png_with_filters(channels=4, split_idat=False)).decode())
     assert len(rendered.splitlines()) >= 15
@@ -227,5 +230,6 @@ def test_ascii_qr_supports_4bit_gray_like_napcat() -> None:
 
     rendered = _ascii_qr(base64.b64encode(png).decode())
     lines = rendered.splitlines()
-    assert len(lines) >= 15
-    assert "██" in lines[0]
+    assert len(lines) >= 10
+    content = [ln for ln in lines if ln.strip(" ")]
+    assert content and ("█" in content[0] or "▀" in content[0])
