@@ -187,8 +187,9 @@ class BotsPane(Vertical):
             # gateway-backed platform: the form asked only the basics; the
             # guide installs/starts the gateway and shows the QR
             instance_id = str(values.get("notifier_id") or f"{gateway}-1")
+            options = dict(values.get("options") or {})
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-                GatewayGuideModal(self._service, gateway, instance_id, {}),
+                GatewayGuideModal(self._service, gateway, instance_id, options),
                 callback=lambda result: self._after_guide(gateway, instance_id, result),
             )
             return

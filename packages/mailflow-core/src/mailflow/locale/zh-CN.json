@@ -654,8 +654,9 @@
       "bots_guide_cancelled": "已取消设置 — 正在停止网关…",
       "bots_guide_stopped": "网关已停止；未保存任何内容。",
       "bots_guide_stop_failed": "无法停止网关：{error}",
-      "bots_guide_qr_pending": "等待登录二维码出现（NapCat 正在启动 QQ 客户端）…",
-      "bots_guide_qr_wait_scan": "请用手机扫码登录；二维码过期会自动刷新"
+      "bots_guide_qr_pending": "等待登录二维码出现（{provider} 正在启动）…",
+      "bots_guide_qr_wait_scan": "请用手机扫码登录；二维码过期会自动刷新",
+      "bots_guide_no_token": "{provider} 需要配置令牌才能启动（平板协议）— 请在表单中填写后重试"
     },
     "update": {
       "applied_title": "已应用的更新",

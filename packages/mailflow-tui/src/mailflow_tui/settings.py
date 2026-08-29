@@ -427,9 +427,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     _Extra("targets", required=True),
                 )
             if self._gateway_for(provider) is not None:
-                # gateway-backed platform (onebot->napcat, wechaty): the
-                # endpoint, token and targets are produced by the guided
-                # setup after Next — the form only asks for the basics
+                # gateway-backed platform: the endpoint and targets are
+                # produced by the guided setup after Next; WeChaty still
+                # needs its pad-protocol token up front (the bridge cannot
+                # even start its QR flow without one)
+                if provider == "wechaty":
+                    return (_Extra("token", kind="password", secret=True),)
                 return ()
             if provider == "onebot":
                 return (

@@ -120,6 +120,10 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         service = self._service
         provider = self._provider
         try:
+            # wechaty (pad protocol) needs a token to even start its QR
+            # flow; without one the bridge stays pending forever
+            if provider == "wechaty" and not str(self._options.get("token") or ""):
+                raise RuntimeError(self._t("tui.bots_guide_no_token", provider=self._provider))
             # 1. detect
             self._log("INFO", self._t("tui.bots_guide_detecting"))
             detected = await service.gateway_detect(provider)
@@ -151,8 +155,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         Login is decided by the provisioner's sentinel, never by the
         absence of a QR payload (an empty response also happens before
         the QR exists and would fake a login)."""
-        self._log("INFO", self._t("tui.bots_guide_qr_wait"))
-        self._set_status(self._t("tui.bots_guide_qr_scan"), "yellow")
+        self._log("INFO", self._t("tui.bots_guide_qr_wait", provider=self._provider))
+        self._set_status(self._t("tui.bots_guide_qr_scan", provider=self._provider), "yellow")
         deadline = time.monotonic() + 120
         last_qr = ""
         self._logged_no_qr = False
@@ -167,17 +171,21 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             if qr and qr != last_qr:
                 last_qr = qr
                 self._set_qr(_ascii_qr(qr))
-                self._log("INFO", self._t("tui.bots_guide_qr_scan"))
+                self._log("INFO", self._t("tui.bots_guide_qr_scan", provider=self._provider))
             elif qr:
                 # same QR as before: still waiting for the scan
-                self._set_status(self._t("tui.bots_guide_qr_wait_scan"), "yellow")
+                self._set_status(
+                    self._t("tui.bots_guide_qr_wait_scan", provider=self._provider), "yellow"
+                )
             else:
                 self._set_qr("")
                 # no QR yet: keep the user informed instead of a blank box
                 if not self._logged_no_qr:
-                    self._log("INFO", self._t("tui.bots_guide_qr_pending"))
+                    self._log("INFO", self._t("tui.bots_guide_qr_pending", provider=self._provider))
                     self._logged_no_qr = True
-                self._set_status(self._t("tui.bots_guide_qr_pending"), "yellow")
+                self._set_status(
+                    self._t("tui.bots_guide_qr_pending", provider=self._provider), "yellow"
+                )
             await asyncio.sleep(3.0)
         self._log("ERROR", self._t("tui.bots_guide_qr_timeout"))
         self._set_status(self._t("tui.bots_guide_qr_timeout"), "red")
