@@ -563,9 +563,11 @@ def _ascii_qr(image: str) -> str:
                 else:
                     row_chars.append(" ")
             out.append("".join(row_chars))
-        # no extra padding: the source PNG already carries its quiet zone
-        # (margin) around the code, so the sampled modules are the code
-        # itself — max_modules half-module rows (16 for a 32-module QR)
+        # the sampled block is the code itself; the source PNG's quiet
+        # zone was skipped, so re-add one light row/column around it —
+        # without it the bottom/right edge can look truncated
+        pad_row = " " * len(out[0])
+        out = [pad_row] + [f" {row} " for row in out] + [pad_row]
         return "\n".join(out) or "(qr)"
     except Exception:
         return f"(qr payload {len(raw)} bytes)"
