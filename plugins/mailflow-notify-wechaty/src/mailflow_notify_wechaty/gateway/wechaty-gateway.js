@@ -26,6 +26,13 @@
 const http = require("http");
 const { WechatyBuilder } = require("wechaty");
 
+// WeChaty internals reject promises outside our control (puppet network
+// errors, plugin teardown). Never let an unhandled rejection crash or
+// spam stderr: log it and keep the health/QR endpoints answering.
+process.on("unhandledRejection", (reason) => {
+  console.error(`[wechaty-gateway] unhandled rejection: ${reason && reason.stack || reason}`);
+});
+
 const PORT = parseInt(process.argv[2] || process.env.GATEWAY_PORT || "8788", 10);
 const TOKEN = process.env.WECHATY_TOKEN || "";
 
