@@ -65,11 +65,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._t("tui.bots_guide_title", provider=self._provider),
                 id="guide-title",
             )
+            # QR first so it is never pushed off by the log pane
+            yield Static("", id="guide-qr")
             with Vertical(id="guide-log-wrap"):
                 yield RichLog(
                     id="guide-log", wrap=True, highlight=True, markup=True, max_lines=2000
                 )
-            yield Static("", id="guide-qr")
             yield Static("", id="guide-status")
             with Horizontal(id="guide-actions"):
                 yield Button(

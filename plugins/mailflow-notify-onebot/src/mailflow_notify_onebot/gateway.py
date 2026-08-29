@@ -610,28 +610,42 @@ class NapCatProvisioner:
         # readiness signal, and report the login requirement clearly
         webui_port = int(options.get("webui_port") or _WEBUI_PORT)
         # NapCat auto-increments the WebUI port when it is taken; scan a
-        # small window instead of hard-failing on the configured one
+        # small window. The WebUI may require a token or come up late on
+        # slow hosts, so the QR file appearing is also a valid ready
+        # signal — the process is alive and the login flow started.
+        qr_file = target / "cache" / "qrcode.png"
         ready_port = webui_port
         ready = False
-        for candidate in range(webui_port, webui_port + 5):
-            if await self._wait_http_port(candidate, wait_seconds=4.0):
-                ready_port = candidate
-                ready = True
+        deadline = asyncio.get_running_loop().time() + _READY_TIMEOUT
+        while asyncio.get_running_loop().time() < deadline:
+            for candidate in range(webui_port, webui_port + 5):
+                if await self._wait_http_port(candidate, wait_seconds=2.0):
+                    ready_port = candidate
+                    ready = True
+                    break
+            if ready:
                 break
+            if _path_exists(qr_file) and qr_file.stat().st_size > 100:
+                # QR out = login flow started; WebUI may still be gated
+                ready = True
+                ready_port = 0
+                break
+            await asyncio.sleep(2.0)
         endpoint = self._endpoint(instance_id)
         if not ready:
             log_tail = self._tail_log(log_file)
             self._terminate(instance_id)
             raise RuntimeError(
-                f"napcat {instance_id} started but its WebUI did not answer on "
-                f"http://127.0.0.1:{webui_port} (scanned +0..+4) in "
-                f"{_READY_TIMEOUT:.0f}s; see {log_file}{log_tail}"
+                f"napcat {instance_id} started but neither its WebUI "
+                f"(http://127.0.0.1:{webui_port}, scanned +0..+4) nor the "
+                f"QR file ({qr_file}) appeared in {_READY_TIMEOUT:.0f}s; "
+                f"see {log_file}{log_tail}"
             )
         self._webui_ports[instance_id] = ready_port
         logger.info(
-            "napcat %s: WebUI up on :%d (OneBot HTTP on :%d after the QQ session logs in)",
+            "napcat %s: ready (WebUI :%d, OneBot HTTP on :%d after login)",
             instance_id,
-            ready_port,
+            ready_port or webui_port,
             port,
         )
         return GatewayInstance(

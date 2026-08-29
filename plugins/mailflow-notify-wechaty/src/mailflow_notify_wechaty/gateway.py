@@ -28,7 +28,7 @@ from mailflow.contracts import GatewayInstance
 logger = logging.getLogger("mailflow.gateway.wechaty")
 
 _WECHATY_VERSION = "wechaty@1.20.2"
-_PUPPET_VERSION = "wechaty-puppet-padlocal@2.0.1"
+_PUPPET_VERSION = "wechaty-puppet-padlocal@1.20.1"
 _BASE_PORT = 8788
 _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 _READY_TIMEOUT = 45.0
