@@ -35,19 +35,22 @@ let lastQrStatus = "pending";
 let loginError = "";
 
 function startBot() {
-  if (!TOKEN) {
-    // WeChat's web protocol was shut down by Tencent, so there is no
-    // token-free wechaty puppet anymore. Require the pad token.
-    loginError = "WECHATY_TOKEN not set: a pad-protocol token is required " +
-                 "(web protocol was discontinued by Tencent)";
-    lastQrStatus = "error";
-    return;
+  if (TOKEN) {
+    // pad protocol (paid): requires a platform token
+    bot = WechatyBuilder.build({
+      name: "mailflow-gateway",
+      puppet: "wechaty-puppet-padlocal",
+      puppetOptions: { token: TOKEN },
+    });
+  } else {
+    // fallback: web protocol (wechat4u). Tencent shut the web protocol
+    // down, so login may fail — kept as an option since it still works
+    // for some accounts. Ban risk: use a disposable account.
+    bot = WechatyBuilder.build({
+      name: "mailflow-gateway",
+      puppet: "wechaty-puppet-wechat4u",
+    });
   }
-  bot = WechatyBuilder.build({
-    name: "mailflow-gateway",
-    puppet: "wechaty-puppet-padlocal",
-    puppetOptions: { token: TOKEN },
-  });
 
   bot.on("scan", (qrcode, status) => {
     lastQr = qrcode;

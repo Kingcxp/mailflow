@@ -617,7 +617,7 @@ class NapCatProvisioner:
         # small window. The WebUI may require a token or come up late on
         # slow hosts, so the QR file appearing is also a valid ready
         # signal — the process is alive and the login flow started.
-        qr_file = target / "cache" / "qrcode.png"
+        qr_file = _instance_dir(instance_id) / "cache" / "qrcode.png"
         ready_port = webui_port
         ready = False
         deadline = asyncio.get_running_loop().time() + _READY_TIMEOUT
@@ -634,6 +634,16 @@ class NapCatProvisioner:
                 ready = True
                 ready_port = 0
                 break
+            # the launcher died (missing xvfb, bad QQ binary, missing
+            # libs, OOM): report immediately with the exit code
+            proc: subprocess.Popen[Any] | None = self._processes.get(instance_id)
+            if proc is not None and proc.poll() is not None:
+                log_tail = self._tail_log(log_file)
+                self._processes.pop(instance_id, None)
+                raise RuntimeError(
+                    f"napcat {instance_id} exited early (code "
+                    f"{proc.returncode}); see {log_file}{log_tail}"
+                )
             await asyncio.sleep(2.0)
         endpoint = self._endpoint(instance_id)
         if not ready:
@@ -738,8 +748,7 @@ class NapCatProvisioner:
         means logged in), never by the presence/absence of a QR file.
         Returns the base64 PNG (data URL stripped), the logged-in sentinel,
         or '' when the QR file does not exist yet."""
-        target = _instance_dir(instance_id)
-        qr_file = target / "cache" / "qrcode.png"
+        qr_file = _instance_dir(instance_id) / "cache" / "qrcode.png"
         # logged in? -> sentinel; a failed probe just means not yet ready
         logged_in = False
         try:
