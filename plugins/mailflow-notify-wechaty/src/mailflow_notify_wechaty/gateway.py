@@ -30,6 +30,7 @@ logger = logging.getLogger("mailflow.gateway.wechaty")
 _WECHATY_VERSION = "wechaty@1.20.2"
 _PUPPET_VERSION = "wechaty-puppet-padlocal@2.0.1"
 _BASE_PORT = 8788
+_QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 _READY_TIMEOUT = 45.0
 _BRIDGE = Path(__file__).parent / "gateway" / "wechaty-gateway.js"
 
@@ -260,7 +261,8 @@ class WechatyGatewayProvisioner:
         )
 
     async def qr(self, instance_id: str) -> str:
-        """QR payload from the bridge's /qr endpoint (base64 PNG)."""
+        """Login state for the guide: QR payload while waiting, the
+        logged-in sentinel once the session is up, '' when pending."""
         endpoint = self._endpoint(instance_id)
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
@@ -268,7 +270,7 @@ class WechatyGatewayProvisioner:
                 response.raise_for_status()
                 payload: Any = response.json()
                 if payload.get("status") == "logged_in":
-                    return ""
+                    return _QR_LOGGED_IN
                 return str(payload.get("qrcode") or "")
         except Exception as exc:
             logger.warning("wechaty %s /qr failed: %s", instance_id, exc)

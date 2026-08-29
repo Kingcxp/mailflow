@@ -649,7 +649,11 @@
       "notifier_testing": "Testing connection to {url}…",
       "notifier_test_ok": "Connection OK — you can save",
       "notifier_test_failed": "Connection failed: {error}",
-      "notifier_test_http": "Server answered HTTP {code}"
+      "notifier_test_http": "Server answered HTTP {code}",
+      "btn_done": "Done",
+      "bots_guide_cancelled": "Setup cancelled — stopping the gateway…",
+      "bots_guide_stopped": "Gateway stopped; nothing was saved.",
+      "bots_guide_stop_failed": "Could not stop the gateway: {error}"
     },
     "update": {
       "applied_title": "Applied updates",

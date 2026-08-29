@@ -72,6 +72,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             yield Static("", id="guide-qr")
             yield Static("", id="guide-status")
             with Horizontal(id="guide-actions"):
+                yield Button(
+                    self._t("tui.btn_done", default="Done"),
+                    id="guide-done",
+                    variant="success",
+                    disabled=True,
+                )
                 yield Button(self._t("tui.btn_cancel"), id="guide-cancel", variant="error")
 
     async def on_mount(self) -> None:
@@ -136,40 +142,69 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             self._set_status(str(exc), "red")
             return
 
+    _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
+
     async def _qr_loop(self, service: MailFlowService, provider: str) -> None:
-        """Poll the QR endpoint until the session logs in or 2 min passes."""
+        """Poll the QR endpoint until the session logs in or 2 min passes.
+
+        Login is decided by the provisioner's sentinel, never by the
+        absence of a QR payload (an empty response also happens before
+        the QR exists and would fake a login)."""
         self._log("INFO", self._t("tui.bots_guide_qr_wait"))
         self._set_status(self._t("tui.bots_guide_qr_scan"), "yellow")
         deadline = time.monotonic() + 120
         last_qr = ""
         while time.monotonic() < deadline:
             qr = await service.gateway_qr(provider, self._instance_id)
+            if qr == self._QR_LOGGED_IN:
+                self._set_qr("")
+                self._log("INFO", self._t("tui.bots_guide_logged_in"))
+                self._set_status(self._t("tui.bots_guide_logged_in"), "green")
+                self._finish_ready()
+                return
             if qr and qr != last_qr:
                 last_qr = qr
                 self._set_qr(_ascii_qr(qr))
                 self._log("INFO", self._t("tui.bots_guide_qr_scan"))
-            elif not qr:
+            else:
                 self._set_qr("")
-            # wait, then check whether the session is up
             await asyncio.sleep(3.0)
-            state = await service.gateway_instances()
-            current = next((i for i in state if i.instance_id == self._instance_id), None)
-            if current is not None and current.status == "running":
-                login = await service.gateway_qr(provider, self._instance_id)
-                if not login:
-                    self._log("INFO", self._t("tui.bots_guide_logged_in"))
-                    self._set_status(self._t("tui.bots_guide_logged_in"), "green")
-                    return
         self._log("ERROR", self._t("tui.bots_guide_qr_timeout"))
         self._set_status(self._t("tui.bots_guide_qr_timeout"), "red")
 
+    def _finish_ready(self) -> None:
+        """Login done: enable the Done button so the user explicitly
+        finishes the flow (Cancel keeps meaning abort)."""
+        done = self.query_one_optional("#guide-done", Button)
+        if done is not None:
+            done.disabled = False
+            done.focus()  # pyright: ignore[reportUnknownMemberType]
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "guide-done":
+            # the gateway is up and logged in: finish with the result so
+            # the caller persists the notifier entry
+            if self._result is not None:
+                self.dismiss(self._result)
+            return
         if event.button.id == "guide-cancel":
-            self.dismiss(self._result)
+            await self._cancel_and_cleanup()
             return
 
+    async def _cancel_and_cleanup(self) -> None:
+        """Abort the wizard: stop the gateway we started so no orphan
+        process keeps running, then close without saving."""
+        self._log("WARN", self._t("tui.bots_guide_cancelled"))
+        try:
+            await self._service.gateway_shutdown(self._provider, self._instance_id)
+            self._log("INFO", self._t("tui.bots_guide_stopped"))
+        except Exception as exc:
+            self._log("ERROR", self._t("tui.bots_guide_stop_failed", error=str(exc)))
+        self.dismiss(None)
+
     def action_dismiss_modal(self) -> None:
-        self.dismiss(self._result)
+        # escape = abort, same as Cancel
+        self._cleanup_task = asyncio.create_task(self._cancel_and_cleanup())
 
 
 def _ascii_qr(image: str) -> str:

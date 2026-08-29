@@ -649,7 +649,11 @@
       "notifier_testing": "正在测试与 {url} 的连接…",
       "notifier_test_ok": "连接成功 — 可以保存了",
       "notifier_test_failed": "连接失败：{error}",
-      "notifier_test_http": "服务器返回 HTTP {code}"
+      "notifier_test_http": "服务器返回 HTTP {code}",
+      "btn_done": "完成",
+      "bots_guide_cancelled": "已取消设置 — 正在停止网关…",
+      "bots_guide_stopped": "网关已停止；未保存任何内容。",
+      "bots_guide_stop_failed": "无法停止网关：{error}"
     },
     "update": {
       "applied_title": "已应用的更新",

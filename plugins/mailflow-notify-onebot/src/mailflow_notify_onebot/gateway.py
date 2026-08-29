@@ -44,6 +44,7 @@ _NAPCAT_SIZE_MB = 29.5  # approximate; the log is informational
 _QQ_DEB_URL = "https://dldir1.qq.com/qqfile/qq/QQNT/Linux/QQ_3.2.15_240902_x86_64_01.deb"
 _QQ_INSTALL_DIR = Path("/opt/QQ")
 _WEBUI_PORT = 6099
+_QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 _BASE_PORT = 3000
 _READY_TIMEOUT = 30.0
 
@@ -288,6 +289,16 @@ class NapCatProvisioner:
         ):
             logger.info("napcat %s already installed at %s", instance_id, target)
             return
+        # a leftover directory without the real entry point means a broken
+        # or partial install: wipe it so the fresh download starts clean
+        # (covers the case where data/gateways was half-removed)
+        if await asyncio.to_thread(lambda: _path_exists(target)):
+            logger.warning(
+                "napcat %s: %s exists but is incomplete — removing it for a clean reinstall",
+                instance_id,
+                target,
+            )
+            await asyncio.to_thread(shutil.rmtree, target, True)
         target.mkdir(parents=True, exist_ok=True)
         await self._install_napcat_package(instance_id, options, target)
         if os.name != "nt":
@@ -634,17 +645,29 @@ class NapCatProvisioner:
         )
 
     async def qr(self, instance_id: str) -> str:
-        """Ask the running NapCat for its login QR (base64 PNG)."""
+        """Login state for the guide: a QR payload while waiting, a sentinel
+        when the session is logged in, '' when no QR is available yet.
+
+        ``get_qrcode`` returns an empty payload both before the QR exists
+        and after login, so login is decided by ``get_login_info`` (a
+        user_id means logged in), never by the absence of a QR."""
         endpoint = self._endpoint(instance_id)
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
-                response = await client.post(f"{endpoint}/get_qrcode", json={})
-                response.raise_for_status()
-                payload: Any = response.json().get("data") or {}
+                # logged in? -> sentinel (never confuse with "no QR")
+                login = await client.post(f"{endpoint}/get_login_info", json={})
+                login.raise_for_status()
+                login_data: Any = login.json().get("data") or {}
+                if login_data.get("user_id"):
+                    return _QR_LOGGED_IN
+                # not logged in: ask for the QR
+                qr = await client.post(f"{endpoint}/get_qrcode", json={})
+                qr.raise_for_status()
+                payload: Any = qr.json().get("data") or {}
                 image = payload.get("qrcode") or payload.get("image") or ""
                 return str(image)
         except Exception as exc:
-            logger.warning("napcat %s get_qrcode failed: %s", instance_id, exc)
+            logger.warning("napcat %s login-state probe failed: %s", instance_id, exc)
             return ""
 
 
