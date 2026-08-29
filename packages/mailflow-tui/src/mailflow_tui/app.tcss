@@ -904,7 +904,7 @@ ListEditScreen, EntryFormScreen {
     width: 90;
     min-width: 80%;
     max-width: 95%;
-    height: 85%;
+    height: 95%;
     border: round $accent;
     background: $surface;
     padding: 1 2;
@@ -919,6 +919,7 @@ ListEditScreen, EntryFormScreen {
     /* the log pane takes all vertical space the other rows leave:
        it grows with the dialog height instead of leaving a gap */
     height: 1fr;
+    min-height: 4;
     border: round $primary;
     margin: 0 0 1 0;
     overflow-y: auto;
@@ -930,8 +931,11 @@ ListEditScreen, EntryFormScreen {
 }
 
 #guide-qr {
+    /* a QR renders at up to ~20 ASCII rows (40px height, 2px steps):
+       auto height collapses when empty and grows to fit the QR; the
+       cap keeps the log pane visible */
     height: auto;
-    max-height: 10;
+    max-height: 20;
     color: $text;
     margin-bottom: 1;
 }
