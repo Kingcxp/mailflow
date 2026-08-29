@@ -644,7 +644,12 @@
       "bots_provider_napcat": "QQ（NapCat 自动部署）",
       "bots_guide_starting": "开始 {provider} 部署…",
       "bots_provider_wechaty-manual": "微信（WeChaty 手动配置）",
-      "bots_manual_doc": "手动配置：自行运行 WeChaty 网关桥 — 参见 {url}"
+      "bots_manual_doc": "手动配置：自行运行 WeChaty 网关桥 — 参见 {url}",
+      "notifier_test_no_url": "请先填写服务地址",
+      "notifier_testing": "正在测试与 {url} 的连接…",
+      "notifier_test_ok": "连接成功 — 可以保存了",
+      "notifier_test_failed": "连接失败：{error}",
+      "notifier_test_http": "服务器返回 HTTP {code}"
     },
     "update": {
       "applied_title": "已应用的更新",

@@ -325,51 +325,27 @@ class NapCatProvisioner:
         logger.info("napcat %s: installed %d files at %s", instance_id, len(entries), target)
 
     async def _install_linux_qq(self, instance_id: str, options: dict[str, Any]) -> None:
-        """Install xvfb/xauth and the Linux QQ deb (root required)."""
+        """Verify the Linux runtime (xvfb + QQ deb) and place NapCat inside
+        QQ's app dir.
+
+        MailFlow never installs system packages itself: missing runtime
+        pieces are reported with the exact install command so the operator
+        can provision them (apt in a container, distro packages elsewhere).
+        """
         import shutil as _sh
 
+        missing: list[str] = []
         if _sh.which("xvfb-run") is None:
-            logger.info("napcat %s: installing xvfb + xauth…", instance_id)
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["apt-get", "update", "-qq"],
-                capture_output=True,
-                text=True,
-                timeout=300,
+            missing.append("xvfb-run (apt install xvfb xauth)")
+        if not _path_exists(_QQ_INSTALL_DIR / "qq"):
+            missing.append(f"Linux QQ at {_QQ_INSTALL_DIR / 'qq'} (install the QQ deb)")
+        if missing:
+            raise RuntimeError(
+                "NapCat on Linux needs these missing pieces — install them "
+                "first, then retry:\n  - "
+                + "\n  - ".join(missing)
+                + "\n(example: apt-get install -y xvfb xauth, then dpkg -i QQ_*.deb)"
             )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"apt-get update failed: {(result.stderr or result.stdout).strip()[:300]}"
-                )
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["apt-get", "install", "-y", "-qq", "xvfb", "xauth"],
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"apt-get install xvfb failed: {(result.stderr or result.stdout).strip()[:300]}"
-                )
-        if not _path_exists(_QQ_INSTALL_DIR) or not _path_exists(_QQ_INSTALL_DIR / "qq"):
-            logger.info("napcat %s: downloading Linux QQ…", instance_id)
-            deb_url = str(options.get("qq_deb_url") or _QQ_DEB_URL)
-            deb_path = Path("/tmp") / f"qq-{instance_id}.deb"
-            await asyncio.to_thread(self._download, deb_url, deb_path)
-            logger.info("napcat %s: installing QQ deb…", instance_id)
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["apt-get", "install", "-y", "-qq", str(deb_path)],
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-            deb_path.unlink(missing_ok=True)
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"QQ deb install failed: {(result.stderr or result.stdout).strip()[:300]}"
-                )
         # place NapCat inside QQ's app dir
         qq_app = _QQ_INSTALL_DIR / "resources" / "app"
         napcat_dir = qq_app / "napcat"

@@ -58,7 +58,14 @@ All notable changes are recorded here; the format follows
   QQ's resources/app, patches the app entry (official BootWay03 flow)
   and launches `xvfb-run qq --no-sandbox`. Windows keeps the inject
   mode via NapCatWinBootMain.exe. Without a QQ client the error now
-  says so immediately instead of timing out.
+  says so immediately instead of timing out. MailFlow never installs
+  system packages itself: missing xvfb/QQ are reported with the exact
+  install command and the flow fails cleanly.
+- The notifier form distinguishes gateway platforms from manual ones:
+  auto-deploy platforms (napcat/wechaty) continue via Next into the
+  guided setup; manual platforms (onebot, wechaty-manual, openclaw)
+  get a connection-test button that probes the endpoint and unlocks
+  Save only after a successful test. Save is disabled until then.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

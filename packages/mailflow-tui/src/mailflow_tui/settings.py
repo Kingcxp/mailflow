@@ -455,6 +455,37 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             return provider
         return None
 
+    def _sync_actions(self) -> None:
+        """Enable/disable the form actions for the current provider.
+
+        - gateway-backed platform (napcat/wechaty auto-deploy): Next is
+          active, Test hidden-inactive, Save stays disabled (the guided
+          setup saves).
+        - manual platform (onebot, wechaty-manual, openclaw): Test is
+          active; Save unlocks only after a successful test.
+        """
+        save_btn = self.query_one_optional("#entry-form-save", Button)
+        if self._group != "notifiers":
+            # llms/accounts have no setup flow: Save is always available
+            if save_btn is not None:
+                save_btn.disabled = False
+            return
+        provider = self._current_provider()
+        gateway = self._gateway_for(provider) is not None
+        next_btn = self.query_one_optional("#entry-form-next", Button)
+        test_btn = self.query_one_optional("#entry-form-test", Button)
+        if next_btn is not None:
+            next_btn.disabled = not gateway
+        if test_btn is not None:
+            test_btn.disabled = gateway
+        if save_btn is not None:
+            save_btn.disabled = not getattr(self, "_test_passed", False)
+
+    async def on_mount(self) -> None:
+        # initial button states for the default provider
+        self._test_passed = False
+        self._sync_actions()
+
     def _core_value(self, label: str) -> Any:
         spec = next((s for s in self._specs if s.label == label), None)
         value = self._values.get(label, spec.default if spec else None)
@@ -487,9 +518,16 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 if self._group == "llms" or self._group == "accounts":
                     yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
                 if self._group == "notifiers":
-                    # 选好提供商后进入连接引导（保持在同一表单内）
+                    # gateway-backed platforms continue into the guided
+                    # setup (Next); manual platforms test the connection
                     yield Button(self._t("tui.btn_next"), id="entry-form-next", variant="primary")
-                yield Button(self._t("tui.btn_save"), id="entry-form-save", variant="success")
+                    yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
+                # Save stays disabled until the flow completes: manual
+                # platforms enable it after a successful connection test,
+                # gateway platforms save through the guided setup instead
+                yield Button(
+                    self._t("tui.btn_save"), id="entry-form-save", variant="success", disabled=True
+                )
                 yield Button(self._t("tui.btn_back"), id="entry-form-back", variant="primary")
 
     def _field_widgets(self, spec: OptionSpec) -> ComposeResult:
@@ -793,11 +831,55 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         elapsed = (datetime.now() - started).total_seconds()
         status.update(f"[green]{self._t('tui.account_test_ok', seconds=f'{elapsed:.1f}')}[/green]")
 
+    async def _test_notifier(self) -> None:
+        """Probe the configured notifier endpoint (OneBot HTTP / WeChaty
+        gateway / OpenClaw); on success unlocks Save."""
+        status = self.query_one("#entry-form-status", Static)
+        provider = self._current_provider()
+        options = dict(self._values.get("options") or {})
+        # test only needs the endpoint: read the URL fields directly so a
+        # missing targets/credentials never blocks the connectivity probe
+        for field_id in ("http_url", "gateway_url", "base_url"):
+            node = self.query_one_optional(f"#extra-{_slug(field_id)}", Input)
+            if node is not None and node.value.strip():
+                options[field_id] = node.value.strip()
+        url = str(
+            options.get("http_url") or options.get("gateway_url") or options.get("base_url") or ""
+        ).rstrip("/")
+        if not url:
+            status.update(f"[yellow]{self._t('tui.notifier_test_no_url')}[/yellow]")
+            return
+        status.update(self._t("tui.notifier_testing", url=url))
+        import httpx
+
+        async def _probe() -> str:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                if provider == "onebot":
+                    response = await client.post(f"{url}/get_login_info", json={})
+                else:
+                    response = await client.get(f"{url}/health")
+                return str(response.status_code)
+
+        try:
+            code = await asyncio.wait_for(_probe(), timeout=10.0)
+        except Exception as exc:
+            status.update(
+                f"[red]{self._t('tui.notifier_test_failed', error=escape(str(exc)[:120]))}[/red]"
+            )
+            return
+        if not code.startswith("2") and code != "200":
+            status.update(f"[red]{self._t('tui.notifier_test_http', code=code)}[/red]")
+            return
+        self._test_passed = True
+        self._sync_actions()
+        status.update(f"[green]{self._t('tui.notifier_test_ok')}[/green]")
+
     # -- events -----------------------------------------------------------------
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "field-provider":
             await self._rebuild_extras()
+            self._sync_actions()
         elif event.select.id == "extra-preset":
             preset = _IMAP_PRESET_HOSTS.get(_select_text(event.select))
             if preset:
@@ -832,7 +914,14 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             self.dismiss(None)
             return
         if button_id == "entry-form-test":
-            if self._group == "accounts":
+            if self._group == "notifiers":
+                self.run_worker(
+                    self._test_notifier(),
+                    exclusive=True,
+                    group="notifier-test",
+                    exit_on_error=False,
+                )
+            elif self._group == "accounts":
                 self.run_worker(
                     self._test_account(), exclusive=True, group="account-test", exit_on_error=False
                 )
