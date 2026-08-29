@@ -42,7 +42,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     }
     #guide-dialog {
         width: 92%;
-        height: 98%;
+        height: 100%;
         padding: 0 1;
     }
     #guide-title {
@@ -52,8 +52,6 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     }
     #guide-qr {
         height: auto;
-        min-height: 15;
-        max-height: 18;
         padding: 0 1;
         margin: 0;
         content-align: center top;
@@ -61,7 +59,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     }
     #guide-log {
         height: 1fr;
-        min-height: 1;
+        min-height: 0;
     }
     #guide-status {
         height: 1;
@@ -165,10 +163,17 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             node.update(f"[{style}]{text}[/{style}]" if style else text)
 
     def _set_qr(self, text: str) -> None:
-        # the QR lives in its own panel above the log
+        # the QR lives in its own panel above the log; pin the panel
+        # height to the exact rendered row count so the layout engine
+        # compresses the log instead of clipping the QR's last row
         node = self.query_one_optional("#guide-qr", Static)
-        if node is not None:
-            node.update(text)
+        if node is None:
+            return
+        node.update(text)
+        rows = len(text.splitlines()) if text else 0
+        if rows:
+            node.styles.height = rows  # pyright: ignore[reportUnknownMemberType]
+            node.styles.min_height = rows  # pyright: ignore[reportUnknownMemberType]
 
     # -- install progress ---------------------------------------------------------
 
