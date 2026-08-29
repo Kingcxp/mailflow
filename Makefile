@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help sync test coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot docs clean
+.PHONY: help sync test coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot docs clean clean-gateways clean-config
 
 PY ?= uv run
 
@@ -74,6 +74,12 @@ docs: ## Verify all mandatory documentation is present
 
 clean: ## Remove caches, build output and local runtime data (keeps .venv)
 	$(PY) python tools/clean.py
+
+clean-gateways: ## Delete data/gateways/ (bot gateway installs; asks first, -y to skip)
+	$(PY) python tools/clean.py --gateways -y
+
+clean-config: ## Delete local config files so they regenerate from the example (asks first, -y to skip)
+	$(PY) python tools/clean.py --config -y
 
 help: ## Show this help
 	@grep -E '^([a-zA-Z_-]+:.*##|### )' $(MAKEFILE_LIST) | \

@@ -433,7 +433,12 @@ class NapCatProvisioner:
         for candidate in candidates:
             if candidate.exists():
                 return candidate
-        raise RuntimeError(f"napcat {instance_id}: no entry point found under {target}")
+        raise RuntimeError(
+            f"napcat {instance_id}: no entry point found under {target} — "
+            "the install is incomplete or the gateway directory was "
+            "partially removed; delete data/gateways/napcat-* and retry "
+            "the setup to reinstall"
+        )
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
         import os

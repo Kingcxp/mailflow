@@ -66,6 +66,13 @@ All notable changes are recorded here; the format follows
   guided setup; manual platforms (onebot, wechaty-manual, openclaw)
   get a connection-test button that probes the endpoint and unlocks
   Save only after a successful test. Save is disabled until then.
+- NapCat install validation checks for the real entry point
+  (napcat.mjs); a partially removed gateway directory now fails with a
+  clear "reinstall" hint instead of a bare no-entry-point error.
+- New cleanup targets: `make clean-gateways` (delete data/gateways/ so
+  a broken gateway install can be redone) and `make clean-config`
+  (delete local config files so they regenerate from the example); both
+  ask for confirmation interactively and accept -y.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
