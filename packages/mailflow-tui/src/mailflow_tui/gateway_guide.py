@@ -227,14 +227,16 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._show_progress(False)
             self._log("INFO", self._t("tui.bots_guide_running", endpoint=instance.endpoint))
             self._set_status(self._t("tui.bots_guide_running", endpoint=instance.endpoint), "green")
-            # 3. QR login loop (NapCat / WeChaty)
-            await self._qr_loop(service, provider)
+            # 3. QR login loop (NapCat / WeChaty); the result is set now
+            # so the Done button (or the manual 'I'm logged in' button)
+            # can finish the flow even before automatic detection fires
             self._result = {
                 "provider": provider,
                 "instance_id": self._instance_id,
                 "endpoint": instance.endpoint,
                 "options": self._options,
             }
+            await self._qr_loop(service, provider)
         except Exception as exc:
             self._log("ERROR", str(exc))
             self._set_status(str(exc), "red")
@@ -282,7 +284,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         deadline = time.monotonic() + 300
         last_qr = ""
         self._logged_no_qr = False
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not getattr(self, "_qr_done", False):
             qr = await service.gateway_qr(provider, self._instance_id)
             if qr.startswith("ERROR:"):
                 # diagnostic from the provisioner (e.g. QR file not
@@ -346,11 +348,15 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self.dismiss(self._result)
             return
         if event.button.id == "guide-logged-in":
-            # manual confirmation: the phone already logged in; finish
-            # the flow so the notifier entry is saved
+            # manual confirmation: the phone already logged in; stop the
+            # QR polling loop and finish the flow immediately — the
+            # result was set right after provisioning, so dismiss saves
+            # the notifier entry in one step
+            self._qr_done = True
             self._log("INFO", self._t("tui.bots_guide_logged_in"))
             self._set_status(self._t("tui.bots_guide_logged_in"), "green")
-            self._finish_ready()
+            if self._result is not None:
+                self.dismiss(self._result)
             return
         if event.button.id == "guide-cancel":
             await self._cancel_and_cleanup()

@@ -222,6 +222,12 @@ All notable changes are recorded here; the format follows
 - Saving a guided notifier updates an existing entry with the same id
   instead of failing with 'duplicate notifier_id' (a previous failed
   attempt could leave a stale entry behind).
+- The guide's 'I'm logged in' button now actually finishes the flow:
+  the result was only set after the QR loop returned (which blocked for
+  minutes), so Done did nothing and the QR kept refreshing. The result
+  is set right after provisioning, the QR loop exits on the button, and
+  pressing 'I'm logged in' dismisses the guide with the result in one
+  step — verified end-to-end.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
