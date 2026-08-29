@@ -154,6 +154,13 @@ All notable changes are recorded here; the format follows
   centre of each QR module (<=32 modules = 64 columns x 32 rows) so the
   whole code fits the dialog and stays scannable — previously the 2px
   sampling blew it up past the pane width and only a few rows showed.
+- The gateway guide now treats QR diagnostics (e.g. 'QR file not
+  created yet') as wait states, not fatal errors: the first AppImage
+  launch is slow (extract + QQ boot), so the loop keeps polling for up
+  to 5 minutes instead of aborting at the first missing file.
+- The QR and download progress now live inside the log stream (no
+  separate widgets), and the dialog/log pane fills the modal height so
+  no space is wasted below the title.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

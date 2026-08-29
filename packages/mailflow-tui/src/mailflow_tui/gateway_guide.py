@@ -40,6 +40,17 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     GatewayGuideModal {
         align: center middle;
     }
+    #guide-dialog {
+        width: 90%;
+        height: 90%;
+    }
+    #guide-log {
+        height: 1fr;
+    }
+    #guide-status {
+        height: auto;
+        padding: 0 1;
+    }
     """
 
     BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
@@ -69,14 +80,11 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._t("tui.bots_guide_title", provider=self._provider),
                 id="guide-title",
             )
-            # QR first so it is never pushed off by the log pane
-            yield Static("", id="guide-qr")
+            # QR and progress live inside the log stream; the pane fills
+            # the dialog so no vertical space is wasted
             with Vertical(id="guide-log-wrap"):
-                # download/install progress: a single in-place line at the
-                # top of the log pane (updated, never appended repeatedly)
-                yield Static("", id="guide-progress-label")
                 yield RichLog(
-                    id="guide-log", wrap=True, highlight=True, markup=True, max_lines=2000
+                    id="guide-log", wrap=True, highlight=True, markup=True, max_lines=5000
                 )
             yield Static("", id="guide-status")
             with Horizontal(id="guide-actions"):
@@ -117,22 +125,26 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             node.update(f"[{style}]{text}[/{style}]" if style else text)
 
     def _set_qr(self, text: str) -> None:
-        node = self.query_one_optional("#guide-qr", Static)
-        if node is not None:
-            node.update(text)
+        # the QR is part of the log stream; empty clears the last QR block
+        node = self.query_one_optional("#guide-log", RichLog)  # pyright: ignore[reportUnknownVariableType]
+        if node is None:
+            return
+        if text:
+            node.write(text)  # pyright: ignore[reportUnknownMemberType]
 
     # -- install progress ---------------------------------------------------------
 
     def _show_progress(self, visible: bool) -> None:
-        label = self.query_one_optional("#guide-progress-label", Static)
-        if label is not None:
-            label.display = visible
+        # progress lines are part of the log stream; nothing to show/hide
+        pass
 
     def _update_progress(self, percent: float, message: str) -> None:
-        # one line, updated in place — never appended to the log stream
-        label = self.query_one_optional("#guide-progress-label", Static)
-        if label is not None:
-            label.update(f"{percent:.0f}% — {message}")
+        # throttled log line (one per ~10%) so the pane scrolls without
+        # flooding; the message already names the file being downloaded
+        bucket = int(percent // 10)
+        if bucket != getattr(self, "_progress_bucket", -1):
+            self._progress_bucket = bucket
+            self._log("INFO", f"{percent:.0f}% — {message}")
 
     # -- guide flow --------------------------------------------------------------
 
@@ -212,16 +224,24 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         the QR exists and would fake a login)."""
         self._log("INFO", self._t("tui.bots_guide_qr_wait", provider=self._provider))
         self._set_status(self._t("tui.bots_guide_qr_pending", provider=self._provider), "yellow")
-        deadline = time.monotonic() + 120
+        # first AppImage launch is slow (extract + QQ boot): 5 minutes
+        deadline = time.monotonic() + 300
         last_qr = ""
         self._logged_no_qr = False
         while time.monotonic() < deadline:
             qr = await service.gateway_qr(provider, self._instance_id)
             if qr.startswith("ERROR:"):
-                # the provisioner diagnosed why no QR exists: show it
-                self._log("ERROR", qr[len("ERROR:") :].strip())
-                self._set_status(qr[len("ERROR:") :].strip(), "red")
-                return
+                # diagnostic from the provisioner (e.g. QR file not
+                # created yet, log tail). The first launch of an AppImage
+                # is slow (extract + QQ boot), so keep waiting — only log
+                # it once and do not abort the loop.
+                message = qr[len("ERROR:") :].strip()
+                if message != getattr(self, "_last_qr_diag", None):
+                    self._log("WARN", message)
+                    self._last_qr_diag = message
+                self._set_status(message, "yellow")
+                await asyncio.sleep(3.0)
+                continue
             if qr == self._QR_LOGGED_IN:
                 self._set_qr("")
                 self._log("INFO", self._t("tui.bots_guide_logged_in"))
