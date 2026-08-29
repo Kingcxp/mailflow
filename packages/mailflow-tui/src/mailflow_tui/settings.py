@@ -427,13 +427,17 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     _Extra("targets", required=True),
                 )
             if self._gateway_for(provider) is not None:
-                # gateway-backed platform: the endpoint and targets are
-                # produced by the guided setup after Next; WeChaty still
-                # needs its pad-protocol token up front (the bridge cannot
-                # even start its QR flow without one)
+                # gateway-backed platform (napcat/wechaty auto-deploy):
+                # admins are the platform user ids allowed to run chat
+                # commands (QQ number / wxid), one per line; everything
+                # else (subscriptions, mail queries) happens via chat
+                # commands like <prefix>mailflow subscribe
                 if provider == "wechaty":
-                    return (_Extra("token", kind="password", secret=True),)
-                return ()
+                    return (
+                        _Extra("token", kind="password", secret=True),
+                        _Extra("admins", kind="lines", required=True),
+                    )
+                return (_Extra("admins", kind="lines", required=True),)
             if provider == "onebot":
                 return (
                     _Extra("http_url", required=True),
@@ -685,10 +689,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 collected["options"]["imap_ssl"] = ssl_flag
                 continue
             if isinstance(node, TextArea):
-                if extra.field_id == "targets":
+                if extra.field_id in ("targets", "admins"):
                     lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
                     if lines:
-                        collected["options"]["targets"] = lines
+                        collected["options"][extra.field_id] = lines
                     continue
                 parsed = self._split_mapping(raw)
                 if parsed:

@@ -974,3 +974,129 @@ async def test_command_dispatch_no_router() -> None:
     service.commands = None
     assert await service.command_dispatch("/mail") == "MailFlow command router is not wired"
     assert await service.command_dispatch("x") is None
+
+
+@pytest.mark.asyncio
+async def test_mailflow_subscribe_requires_admin() -> None:
+    from mailflow.config import MailFlowConfig, NotifierConfig
+    from mailflow.service import MailFlowService
+
+    cfg = MailFlowConfig()
+    cfg.general.command_prefix = "/"
+    cfg.notifiers = [
+        NotifierConfig(
+            notifier_id="napcat-1",
+            provider="onebot",
+            options={"admins": ["10001"], "http_url": "http://x"},
+        )
+    ]
+    service = MailFlowService.__new__(MailFlowService)
+    service.config = cfg
+    service.commands = None
+
+    class FakeSubs:
+        def __init__(self) -> None:
+            self.added: list[tuple[str, str, str]] = []
+            self.removed: list[tuple[str, str, str]] = []
+
+        async def add(self, p: str, i: str, c: str) -> bool:
+            self.added.append((p, i, c))
+            return True
+
+        async def remove(self, p: str, i: str, c: str) -> bool:
+            self.removed.append((p, i, c))
+            return True
+
+        async def subscribers(self, p: str, i: str) -> list[str]:
+            return []
+
+    service.subscriptions = FakeSubs()  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def no_reload() -> None:
+        pass
+
+    service.reload_runtime = no_reload  # type: ignore[method-assign]
+
+    # non-admin cannot subscribe
+    reply = await service.command_dispatch(
+        "/mailflow subscribe",
+        sender="99999",
+        chat_id="group-1",
+        chat_type="group",
+        provider="napcat",
+        instance_id="napcat-1",
+    )
+    assert reply is not None and "not an admin" in reply
+
+    # admin can subscribe; targets synced into the notifier config
+    reply = await service.command_dispatch(
+        "/mailflow subscribe",
+        sender="10001",
+        chat_id="group-1",
+        chat_type="group",
+        provider="napcat",
+        instance_id="napcat-1",
+    )
+    assert reply is not None and "Subscribed" in reply
+    assert service.subscriptions.added == [  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+        ("napcat", "napcat-1", "group-1")
+    ]
+    onebot = next(n for n in cfg.notifiers if n.notifier_id == "napcat-1")
+    assert "group-1" in onebot.options["targets"]
+
+    # help
+    help_text = await service.command_dispatch("/mailflow help", sender="10001")
+    assert help_text is not None and "mailflow subscribe" in help_text
+    assert help_text is not None and "mailflow help" in help_text
+
+
+@pytest.mark.asyncio
+async def test_mailflow_unsubscribe_removes_target() -> None:
+    from mailflow.config import MailFlowConfig, NotifierConfig
+    from mailflow.service import MailFlowService
+
+    cfg = MailFlowConfig()
+    cfg.general.command_prefix = "/"
+    cfg.notifiers = [
+        NotifierConfig(
+            notifier_id="napcat-1",
+            provider="onebot",
+            options={
+                "admins": ["10001"],
+                "targets": ["group-1"],
+                "http_url": "http://x",
+            },
+        )
+    ]
+    service = MailFlowService.__new__(MailFlowService)
+    service.config = cfg
+    service.commands = None
+
+    class FakeSubs:
+        async def add(self, p: str, i: str, c: str) -> bool:
+            return True
+
+        async def remove(self, p: str, i: str, c: str) -> bool:
+            return True
+
+        async def subscribers(self, p: str, i: str) -> list[str]:
+            return []
+
+    service.subscriptions = FakeSubs()  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def no_reload() -> None:
+        pass
+
+    service.reload_runtime = no_reload  # type: ignore[method-assign]
+
+    reply = await service.command_dispatch(
+        "/mailflow unsubscribe",
+        sender="10001",
+        chat_id="group-1",
+        chat_type="group",
+        provider="napcat",
+        instance_id="napcat-1",
+    )
+    assert reply is not None and "Unsubscribed" in reply
+    onebot = next(n for n in cfg.notifiers if n.notifier_id == "napcat-1")
+    assert "group-1" not in onebot.options["targets"]

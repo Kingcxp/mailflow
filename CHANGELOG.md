@@ -239,6 +239,12 @@ All notable changes are recorded here; the format follows
 - Gateway supervision polls every 60s (was 30s) and the NapCat AppImage
   launch caps the Electron heap at 1 GB (--max-old-space-size) to cut
   CPU/memory pressure on low-RAM VMs that made the TUI lag.
+- Chat subscriptions are command-driven: `<prefix>mailflow help /
+  subscribe / unsubscribe / status` work inside groups and private
+  chats. Only users listed in the notifier's `admins` (QQ number / wxid,
+  one per line in the bot form) can run commands; subscribing adds the
+  chat to the notifier targets so mail notifications land there.
+  Subscriptions persist across restarts (gateway.sub.* preferences).
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not

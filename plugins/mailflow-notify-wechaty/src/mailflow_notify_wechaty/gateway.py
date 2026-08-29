@@ -79,6 +79,7 @@ def _find_node() -> str | None:
 
 
 class WechatyGatewayProvisioner:
+    provider = "wechaty"
     """WeChaty pad-protocol gateway managed as a child process."""
 
     backend_id = "wechaty"
@@ -211,6 +212,8 @@ class WechatyGatewayProvisioner:
         bot_url = str(options.get("bot_url") or os.environ.get("MAILFLOW_BOT_URL") or "")
         if bot_url:
             env["MAILFLOW_BOT_URL"] = bot_url
+            env["MAILFLOW_PROVIDER"] = self.provider
+            env["MAILFLOW_INSTANCE"] = instance_id
         try:
             process = await asyncio.to_thread(
                 subprocess.Popen,

@@ -177,6 +177,9 @@ class MailFlowService:
             [Repository(repo.name, repo.url) for repo in config.plugins.repositories]
         )
         self.gateways = GatewayManager(config, registry, storage)
+        from mailflow.subscriptions import Subscriptions
+
+        self.subscriptions = Subscriptions(storage)
         self._started = False
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
@@ -221,6 +224,9 @@ class MailFlowService:
         register_builtin_processors(registry)
         self.registry = registry
         self.gateways = GatewayManager(self.config, registry, self.storage)
+        from mailflow.subscriptions import Subscriptions
+
+        self.subscriptions = Subscriptions(self.storage)
         sources = _build_sources(self.config, registry)
         backends, llm_configs = _build_llms(self.config, registry)
         router = LLMRouterImpl(backends, llm_configs)
@@ -1098,21 +1104,131 @@ class MailFlowService:
         """Configured command prefix for chat-platform messages."""
         return self.config.general.command_prefix
 
-    async def command_dispatch(self, text: str) -> str | None:
+    async def command_dispatch(
+        self,
+        text: str,
+        *,
+        sender: str = "",
+        chat_id: str = "",
+        chat_type: str = "",
+        provider: str = "",
+        instance_id: str = "",
+    ) -> str | None:
         """Handle one chat-platform message.
 
         Returns the reply text when the message is a MailFlow command
-        (starts with the configured prefix), else None. Transport-neutral:
-        the caller (a gateway bridge) sends the reply back to the chat.
+        (starts with the configured prefix), else None. ``sender`` is
+        the platform user id, ``chat_id`` the group/contact id the
+        message came from, ``chat_type`` "group" or "private", and
+        ``provider``/``instance_id`` identify the gateway the message
+        arrived through (used by the subscription commands).
         """
         prefix = self.command_prefix()
         if not text.startswith(prefix):
             return None
         line = text[len(prefix) :].strip()
+        # mailflow namespace commands handled here (they need the chat
+        # context that the CommandRouter does not carry)
+        if line.startswith("mailflow"):
+            return await self._mailflow_command(
+                line[len("mailflow") :].strip(),
+                sender=sender,
+                chat_id=chat_id,
+                chat_type=chat_type,
+                provider=provider,
+                instance_id=instance_id,
+            )
         if self.commands is None:
             return "MailFlow command router is not wired"
         response = await self.commands.execute(line)
         return str(response.render())
+
+    async def _mailflow_command(
+        self,
+        args: str,
+        *,
+        sender: str,
+        chat_id: str,
+        chat_type: str,
+        provider: str,
+        instance_id: str,
+    ) -> str:
+        """Handle ``<prefix>mailflow <subcommand>`` chat commands."""
+        parts = args.split()
+        sub = parts[0] if parts else "help"
+        if sub == "help":
+            return (
+                "MailFlow commands\n"
+                f"  {self.command_prefix()}mailflow help — this help\n"
+                f"  {self.command_prefix()}mailflow subscribe — receive mail "
+                "notifications in this chat\n"
+                f"  {self.command_prefix()}mailflow unsubscribe — stop "
+                "notifications in this chat\n"
+                f"  {self.command_prefix()}mailflow status — bot status\n"
+                "Manage mail:\n"
+                f"  {self.command_prefix()}mail list — list recent mail\n"
+                f"  {self.command_prefix()}action list — pending actions\n"
+                f"  {self.command_prefix()}help — full command help"
+            )
+        if not chat_id:
+            return "This command needs a chat context (private chat or group)."
+        if not self._is_admin(sender, provider):
+            return "You are not an admin of this bot; ask the owner to add you."
+        if sub == "subscribe":
+            ok = await self.subscriptions.add(provider, instance_id, chat_id)
+            await self._sync_subscription_targets(provider, chat_id, subscribe=True)
+            # rebuild the notifiers so the new target takes effect
+            await self.reload_runtime()
+            return "Subscribed to mail notifications." if ok else "Already subscribed."
+        if sub == "unsubscribe":
+            ok = await self.subscriptions.remove(provider, instance_id, chat_id)
+            await self._sync_subscription_targets(provider, chat_id, subscribe=False)
+            await self.reload_runtime()
+            return "Unsubscribed." if ok else "Not subscribed."
+        if sub == "status":
+            subs = await self.subscriptions.subscribers(provider, instance_id)
+            return f"MailFlow bot running (gateway {instance_id}). Subscribed chats: {len(subs)}."
+        return f"Unknown mailflow subcommand '{sub}'. Use {self.command_prefix()}mailflow help."
+
+    async def _sync_subscription_targets(
+        self, provider: str, chat_id: str, *, subscribe: bool
+    ) -> None:
+        """Add/remove ``chat_id`` from every notifier's targets for this
+        provider so the runtime delivers to subscribed chats."""
+        provider = "onebot" if provider == "napcat" else provider
+        for index, notifier in enumerate(self.config.notifiers):
+            if notifier.provider != provider:
+                continue
+            raw_targets: list[Any] = list(notifier.options.get("targets") or [])
+            targets = [str(t) for t in raw_targets]
+            changed = False
+            if subscribe and chat_id not in targets:
+                targets.append(chat_id)
+                changed = True
+            elif not subscribe and chat_id in targets:
+                targets.remove(chat_id)
+                changed = True
+            if changed:
+                updated = notifier.model_copy(
+                    update={"options": {**notifier.options, "targets": targets}}
+                )
+                self.config.notifiers[index] = updated
+
+    def _is_admin(self, sender: str, provider: str) -> bool:
+        """True when ``sender`` is listed as an admin of any notifier
+        (admins are platform user ids: QQ number / wxid). ``provider``
+        maps the gateway id to the notifier provider (napcat -> onebot)."""
+        if not sender:
+            return False
+        provider = "onebot" if provider == "napcat" else provider
+        for notifier in self.config.notifiers:
+            if provider and notifier.provider != provider:
+                continue
+            raw_admins: list[Any] = list(notifier.options.get("admins") or [])
+            admins = [str(a) for a in raw_admins]
+            if sender in admins:
+                return True
+        return False
 
     # -- reply workflow ---------------------------------------------------------------------
 

@@ -82,7 +82,14 @@ class BotServer:
             payload = json.loads(body.decode("utf-8", "replace") or "{}")
             text = str(payload.get("text") or "")
             if path == "/bot/message":
-                reply = await self._service.command_dispatch(text)
+                reply = await self._service.command_dispatch(
+                    text,
+                    sender=str(payload.get("sender") or ""),
+                    chat_id=str(payload.get("chat_id") or ""),
+                    chat_type=str(payload.get("chat_type") or ""),
+                    provider=str(payload.get("provider") or ""),
+                    instance_id=str(payload.get("instance_id") or ""),
+                )
                 await self._respond(writer, 200, {"reply": reply or ""})
             else:
                 await self._respond(writer, 404, {"reply": ""})

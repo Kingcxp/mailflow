@@ -93,11 +93,22 @@ function startBot() {
     if (msg.self()) return;
     const text = msg.text();
     if (!text) return;
+    const room = msg.room();
+    const chatType = room ? "group" : "private";
+    const chatId = room ? room.id : msg.talker().id;
+    const sender = msg.talker().id;
     try {
       const res = await fetch(BOT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text }),
+        body: JSON.stringify({
+          text: text,
+          sender: sender,
+          chat_id: chatId,
+          chat_type: chatType,
+          provider: process.env.MAILFLOW_PROVIDER || "",
+          instance_id: process.env.MAILFLOW_INSTANCE || "",
+        }),
       });
       if (!res.ok) return;
       const data = await res.json();
