@@ -99,6 +99,7 @@ class BotsPane(Vertical):
             yield DataTable(id="bots-table", cursor_type="row")  # pyright: ignore[reportUnknownMemberType]
         with Horizontal(id="bots-actions"):
             yield Button(self._service.t("tui.btn_add"), id="bots-add", variant="success")
+            yield Button(self._service.t("tui.btn_edit"), id="bots-edit", variant="primary")
             yield Button(self._service.t("tui.btn_delete"), id="bots-delete", variant="error")
             yield Button(self._service.t("tui.bots_check"), id="bots-check", variant="primary")
         yield Static("", id="bots-status")
@@ -135,14 +136,14 @@ class BotsPane(Vertical):
 
     def on_mount(self) -> None:
         self._ensure_columns()
-        self._render()
+        self._render_rows()
 
     async def relabel(self) -> None:
         self.on_mount()
 
     def refresh_data(self) -> None:
         self._ensure_columns()
-        self._render()
+        self._render_rows()
 
     def on_data_table_row_selected(self, event: Any) -> None:
         self._selected_id = str(event.row_key.value)
@@ -161,6 +162,9 @@ class BotsPane(Vertical):
                 callback=self._after_form,
             )
             return
+        if button_id == "bots-edit":
+            await self._edit_selected()
+            return
         if button_id == "bots-delete":
             await self._delete_selected()
             return
@@ -169,6 +173,61 @@ class BotsPane(Vertical):
         # probes hit the network (8s timeout each): never run them on the
         # button handler or a down gateway freezes the whole UI
         self.run_worker(self._check_all(), exclusive=True, group="bots-check", exit_on_error=False)
+
+    async def _edit_selected(self) -> None:
+        """Open the notifier form pre-filled with the selected entry so
+        the user can change targets (e.g. add group:<id> subscriptions)
+        or other options."""
+        if not self._selected_id:
+            self.query_one("#bots-status", Static).update(
+                f"[red]{self._service.t('tui.bots_select_first')}[/red]"
+            )
+            return
+        found = [n for n in self._service.config.notifiers if n.notifier_id == self._selected_id]
+        if not found:
+            return
+        entry = found[0]
+        from mailflow_tui.settings import EntryFormScreen
+
+        values = entry.model_dump()
+        self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
+            EntryFormScreen(self._service, "notifiers", values=values),
+            callback=self._after_edit,
+        )
+
+    def _after_edit(self, result: dict[str, Any] | None) -> None:
+        if not result:
+            return
+        notifier_id = str(result.get("notifier_id") or self._selected_id or "")
+        index = next(
+            (
+                i
+                for i, n in enumerate(self._service.config.notifiers)
+                if n.notifier_id == notifier_id
+            ),
+            None,
+        )
+        if index is None:
+            return
+        self.run_worker(
+            self._save_edited_notifier(index, notifier_id, result),
+            exclusive=True,
+            group="bots-setup",
+            exit_on_error=False,
+        )
+
+    async def _save_edited_notifier(
+        self, index: int, notifier_id: str, values: dict[str, Any]
+    ) -> None:
+        try:
+            await self._service.update_config_entry("notifiers", index, values)
+        except Exception as exc:
+            self.query_one("#bots-status", Static).update(f"[red]{exc}[/red]")
+            return
+        self.refresh_data()
+        self.query_one("#bots-status", Static).update(
+            f"[green]{self._service.t('tui.bots_configured_ok', instance=notifier_id)}[/green]"
+        )
 
     @staticmethod
     def _gateway_for(service: MailFlowService, provider: str) -> str | None:

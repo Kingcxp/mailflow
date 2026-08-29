@@ -695,6 +695,9 @@ class NapCatProvisioner:
                         str(entry_path),
                         "--appimage-extract-and-run",
                         "--no-sandbox",
+                        # cap the Electron/QQ heap so a low-RAM container
+                        # does not get OOM-killed (QQ wants ~1.5-2 GB)
+                        "--max-old-space-size=1024",
                     ]
                     cwd = str(run_target.resolve())
                 return subprocess.Popen(

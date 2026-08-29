@@ -663,7 +663,8 @@
       "bots_provider_openwechat": "WeChat (openwechat scan-to-login)",
       "bots_guide_downloading": "Downloading and installing {provider}…",
       "bots_guide_downloaded": "Install complete.",
-      "bots_guide_logged_in_btn": "I'm logged in"
+      "bots_guide_logged_in_btn": "I'm logged in",
+      "bots_select_first": "Select a bot row first"
     },
     "update": {
       "applied_title": "Applied updates",

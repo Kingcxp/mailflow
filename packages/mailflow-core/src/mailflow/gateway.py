@@ -179,9 +179,11 @@ class GatewayManager:
                 self._instances[self._key(instance.provider, instance.instance_id)] = current
                 await self._save_state(current)
                 backoff = 5
-                # poll every 30s while healthy
+                # poll every 60s while healthy (the status probe hits the
+                # network; on low-RAM VMs the gateway itself is the
+                # resource hog, so keep supervision light)
                 try:
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=30)
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=60)
                 except TimeoutError:
                     continue
                 return

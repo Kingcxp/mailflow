@@ -68,12 +68,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         height: auto;
         padding: 0 1;
         align: center middle;
+        grid-gutter: 2 2;
     }
     #guide-done, #guide-logged-in, #guide-cancel {
         height: 1;
         min-height: 1;
         padding: 0 2;
-        margin: 0 1;
+        margin: 0;
         border: none;
     }
     """
@@ -349,14 +350,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             return
         if event.button.id == "guide-logged-in":
             # manual confirmation: the phone already logged in; stop the
-            # QR polling loop and finish the flow immediately — the
-            # result was set right after provisioning, so dismiss saves
-            # the notifier entry in one step
+            # QR polling and enable Done — Done remains the explicit
+            # final confirmation that saves the notifier
             self._qr_done = True
             self._log("INFO", self._t("tui.bots_guide_logged_in"))
             self._set_status(self._t("tui.bots_guide_logged_in"), "green")
-            if self._result is not None:
-                self.dismiss(self._result)
+            self._finish_ready()
             return
         if event.button.id == "guide-cancel":
             await self._cancel_and_cleanup()

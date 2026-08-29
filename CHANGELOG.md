@@ -228,6 +228,17 @@ All notable changes are recorded here; the format follows
   is set right after provisioning, the QR loop exits on the button, and
   pressing 'I'm logged in' dismisses the guide with the result in one
   step — verified end-to-end.
+- Fix: bots never appeared in the list after adding — refresh_data and
+  on_mount called a non-existent _render() (AttributeError swallowed by
+  Textual), so the table never repainted. They now call _render_rows().
+- The Bots tab gains an Edit button: select a row and edit targets
+  (e.g. group:<id> / user:<qq> subscriptions) or other options via the
+  pre-filled notifier form — this is how you subscribe a chat.
+- 'I'm logged in' now only enables Done (Done remains the explicit
+  final confirmation); buttons get grid-gutter spacing.
+- Gateway supervision polls every 60s (was 30s) and the NapCat AppImage
+  launch caps the Electron heap at 1 GB (--max-old-space-size) to cut
+  CPU/memory pressure on low-RAM VMs that made the TUI lag.
 
 - **Re-analyze** in the Mail tab: re-run the selected mail through the
   pipeline, or one-click re-analyze every mail whose analysis did not
