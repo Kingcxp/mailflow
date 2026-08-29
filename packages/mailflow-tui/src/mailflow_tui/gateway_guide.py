@@ -43,14 +43,17 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     #guide-dialog {
         width: 92%;
         height: 95%;
+        padding: 0 1;
     }
     #guide-title {
         height: 1;
         padding: 0 1;
+        margin: 0 0 0 0;
     }
     #guide-qr {
         height: auto;
         padding: 0 1;
+        margin: 0;
     }
     #guide-log {
         height: 1fr;
@@ -64,6 +67,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         height: 1;
         padding: 0 1;
         align: center middle;
+    }
+    #guide-actions Button {
+        height: 1;
+        min-height: 1;
+        padding: 0 2;
+        margin: 0;
     }
     """
 
