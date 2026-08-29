@@ -167,6 +167,7 @@ async def test_qr_stable_signal_logs_in(monkeypatch: pytest.MonkeyPatch, tmp_pat
     _os.utime(qr_file, (old_mtime, old_mtime))
 
     prov = NapCatProvisioner()
+
     # make the HTTP login probe fail (server down) so only the stable
     # signal can fire
     def _dead_endpoint(iid: str) -> str:
@@ -188,6 +189,7 @@ async def test_qr_fresh_keeps_waiting(monkeypatch: pytest.MonkeyPatch, tmp_path:
     qr_file.write_bytes(b"y" * 200)
 
     prov = NapCatProvisioner()
+
     # HTTP probe fails (no server) -> falls through to QR payload
     def _dead_endpoint(iid: str) -> str:
         return "http://127.0.0.1:1"
