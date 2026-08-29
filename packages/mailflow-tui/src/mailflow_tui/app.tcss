@@ -931,11 +931,9 @@ ListEditScreen, EntryFormScreen {
 }
 
 #guide-qr {
-    /* a QR renders at up to ~20 ASCII rows (40px height, 2px steps):
-       auto height collapses when empty and grows to fit the QR; the
-       cap keeps the log pane visible */
+    /* height is pinned per-render by the guide (rows + 1) so the full
+       QR always fits; no cap here — a cap clipped the last rows */
     height: auto;
-    max-height: 20;
     color: $text;
     margin-bottom: 1;
 }

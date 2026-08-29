@@ -51,7 +51,6 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         margin: 0 0 0 0;
     }
     #guide-qr {
-        height: auto;
         padding: 0 1;
         margin: 0;
         content-align: center top;
