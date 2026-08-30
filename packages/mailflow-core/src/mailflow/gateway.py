@@ -124,6 +124,7 @@ class GatewayManager:
         # scan preferences for known instances
         instances = await self._list_persisted()
         limiter = asyncio.Semaphore(2)
+
         async def _resume(instance: GatewayInstance) -> None:
             async with limiter:
                 key = self._key(instance.provider, instance.instance_id)
@@ -133,6 +134,7 @@ class GatewayManager:
                         self._supervise(instance, resume=True),
                         name=f"gateway-{instance.instance_id}",
                     )
+
         await asyncio.gather(*[_resume(i) for i in instances])
 
     async def _list_persisted(self) -> list[GatewayInstance]:

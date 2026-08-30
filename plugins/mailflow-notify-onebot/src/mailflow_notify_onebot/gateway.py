@@ -645,6 +645,7 @@ class NapCatProvisioner:
         _write_configs = [config_dir]
         if not _IS_WINDOWS:
             import os as _os
+
             home = _os.environ.get("HOME") or str(Path.home())
             _write_configs.append(Path(home) / ".config" / "QQ" / "NapCat" / "config")
         for _target in _write_configs:

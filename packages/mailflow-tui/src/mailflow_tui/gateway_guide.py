@@ -356,6 +356,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             return
         self._log("INFO", "Verifying gateway endpoint...")
         import httpx
+
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             try:

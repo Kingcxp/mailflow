@@ -368,10 +368,18 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             # manual WeChaty (bring your own gateway) is a distinct choice
             choices.add("wechaty-manual")
             # Order: console → QQ (onebot, napcat) → WeChat (wechaty, wechaty-manual, openwechat, openclaw-weixin)
-            _ORDER = ("console", "onebot", "napcat", "wechaty", "wechaty-manual", "openwechat", "openclaw-weixin")
-            self._provider_choices = tuple(
-                p for p in _ORDER if p in choices
-            ) + tuple(sorted(choices - set(_ORDER)))
+            _ORDER = (
+                "console",
+                "onebot",
+                "napcat",
+                "wechaty",
+                "wechaty-manual",
+                "openwechat",
+                "openclaw-weixin",
+            )
+            self._provider_choices = tuple(p for p in _ORDER if p in choices) + tuple(
+                sorted(choices - set(_ORDER))
+            )
         else:
             self._provider_choices = ()
 

@@ -126,8 +126,8 @@ class BotsPane(Vertical):
 
     def _ensure_columns(self) -> None:
         table: DataTable[Any] = self.query_one("#bots-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
-        # only clear columns when they already exist (first mount vs. relabel)
-        if table.column_count:
+        # columns are created once on first mount; relabel clears them first
+        if table.ordered_columns:
             return
         table.add_column(self._service.t("plugin.header_name"), key="name")
         table.add_column(self._service.t("tui.market_provider", default="provider"), key="provider")
@@ -277,7 +277,9 @@ class BotsPane(Vertical):
             options = dict(values.get("options") or {})
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
                 GatewayGuideModal(self._service, gateway, instance_id, options),
-                callback=lambda result, form_values=values: self._after_guide(gateway, instance_id, result, form_values),
+                callback=lambda result, form_values=values: self._after_guide(
+                    gateway, instance_id, result, form_values
+                ),
             )
             return
         self.run_worker(
@@ -287,7 +289,13 @@ class BotsPane(Vertical):
             exit_on_error=False,
         )
 
-    def _after_guide(self, provider: str, instance_id: str, result: dict[str, Any] | None, form_values: dict[str, Any] | None = None) -> None:
+    def _after_guide(
+        self,
+        provider: str,
+        instance_id: str,
+        result: dict[str, Any] | None,
+        form_values: dict[str, Any] | None = None,
+    ) -> None:
         """Gateway provisioned and logged in → persist the notifier entry."""
         if not result:
             return
@@ -299,7 +307,11 @@ class BotsPane(Vertical):
         )
 
     async def _save_guided_notifier(
-        self, provider: str, instance_id: str, result: dict[str, Any], form_values: dict[str, Any] | None = None
+        self,
+        provider: str,
+        instance_id: str,
+        result: dict[str, Any],
+        form_values: dict[str, Any] | None = None,
     ) -> None:
         """Persist the notifier config for a provisioned gateway."""
         endpoint = str(result.get("endpoint") or "")
@@ -376,13 +388,12 @@ class BotsPane(Vertical):
         results: dict[str, str] = {}
         if instances:
             sem = asyncio.Semaphore(4)
+
             async def _bounded(provider: str, options: dict[str, Any]) -> str:
                 async with sem:
                     return await _BotStatusProbe.probe(provider, options, self._service.t)
-            probes = [
-                _bounded(provider, options)
-                for _, provider, options in instances
-            ]
+
+            probes = [_bounded(provider, options) for _, provider, options in instances]
             outcomes = await asyncio.gather(*probes)
             results = {
                 instance_id: outcome
