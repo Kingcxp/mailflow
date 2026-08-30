@@ -73,6 +73,19 @@ class _BotStatusProbe:
                     if response.status_code < 500
                     else http_status(response.status_code)
                 )
+            if provider == "openwechat":
+                url = str(options.get("gateway_url", "")).rstrip("/")
+                if not url:
+                    return "not configured"
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    response = await client.get(f"{url}/health")
+                return str(
+                    t("tui.bots_online")
+                    if response.status_code == 200
+                    else http_status(response.status_code)
+                )
+            if provider == "console":
+                return str(t("tui.bots_online"))
         except Exception as exc:
             return str(t("tui.bots_unreachable", error=type(exc).__name__))
         return str(t("tui.bots_unknown_provider"))
@@ -113,7 +126,9 @@ class BotsPane(Vertical):
 
     def _ensure_columns(self) -> None:
         table: DataTable[Any] = self.query_one("#bots-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
-        table.clear(columns=True)
+        # only clear columns when they already exist (first mount vs. relabel)
+        if table.column_count:
+            return
         table.add_column(self._service.t("plugin.header_name"), key="name")
         table.add_column(self._service.t("tui.market_provider", default="provider"), key="provider")
         table.add_column(self._service.t("tui.bots_targets"), key="targets")
@@ -139,13 +154,17 @@ class BotsPane(Vertical):
         self._render_rows()
 
     async def relabel(self) -> None:
-        self.on_mount()
-
-    def refresh_data(self) -> None:
+        # Force column refresh when locale changes (relabel)
+        table: DataTable[Any] = self.query_one("#bots-table", DataTable)
+        table.clear(columns=True)
         self._ensure_columns()
         self._render_rows()
 
-    def on_data_table_row_selected(self, event: Any) -> None:
+    def refresh_data(self) -> None:
+        # Only re-render rows, columns are set up once
+        self._render_rows()
+
+    def on_data_table_row_highlighted(self, event: Any) -> None:
         self._selected_id = str(event.row_key.value)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -258,7 +277,7 @@ class BotsPane(Vertical):
             options = dict(values.get("options") or {})
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
                 GatewayGuideModal(self._service, gateway, instance_id, options),
-                callback=lambda result: self._after_guide(gateway, instance_id, result),
+                callback=lambda result, form_values=values: self._after_guide(gateway, instance_id, result, form_values),
             )
             return
         self.run_worker(
@@ -268,19 +287,19 @@ class BotsPane(Vertical):
             exit_on_error=False,
         )
 
-    def _after_guide(self, provider: str, instance_id: str, result: dict[str, Any] | None) -> None:
+    def _after_guide(self, provider: str, instance_id: str, result: dict[str, Any] | None, form_values: dict[str, Any] | None = None) -> None:
         """Gateway provisioned and logged in → persist the notifier entry."""
         if not result:
             return
         self.run_worker(
-            self._save_guided_notifier(provider, instance_id, result),
+            self._save_guided_notifier(provider, instance_id, result, form_values),
             exclusive=True,
             group="bots-setup",
             exit_on_error=False,
         )
 
     async def _save_guided_notifier(
-        self, provider: str, instance_id: str, result: dict[str, Any]
+        self, provider: str, instance_id: str, result: dict[str, Any], form_values: dict[str, Any] | None = None
     ) -> None:
         """Persist the notifier config for a provisioned gateway."""
         endpoint = str(result.get("endpoint") or "")
@@ -289,13 +308,17 @@ class BotsPane(Vertical):
             options["http_url"] = endpoint
         else:
             options["gateway_url"] = endpoint
+        # Merge with form values (admins, token, etc.) that the user filled
+        # in before clicking Next, so those fields are not lost
+        form_opts = dict(form_values.get("options") or {}) if form_values else {}
+        merged_options = {**form_opts, **options, "gateway": provider}
         values = {
             "notifier_id": instance_id,
             # the notifier component id (onebot) differs from the gateway
             # id (napcat); record the gateway so editing the entry still
             # knows it is gateway-backed (admins form, not targets)
             "provider": "onebot" if provider == "napcat" else provider,
-            "options": {**options, "gateway": provider},
+            "options": merged_options,
         }
         try:
             # the same instance id may already exist (a previous attempt
@@ -342,8 +365,7 @@ class BotsPane(Vertical):
             return
         await self._service.remove_config_entry("notifiers", index)
         self._selected_id = None
-        self._ensure_columns()
-        self._render()
+        self._render_rows()
 
     async def _check_all(self) -> None:
         status_node = self.query_one("#bots-status", Static)
@@ -353,8 +375,12 @@ class BotsPane(Vertical):
         # cost 3 x timeout of waiting
         results: dict[str, str] = {}
         if instances:
+            sem = asyncio.Semaphore(4)
+            async def _bounded(provider: str, options: dict[str, Any]) -> str:
+                async with sem:
+                    return await _BotStatusProbe.probe(provider, options, self._service.t)
             probes = [
-                _BotStatusProbe.probe(provider, options, self._service.t)
+                _bounded(provider, options)
                 for _, provider, options in instances
             ]
             outcomes = await asyncio.gather(*probes)

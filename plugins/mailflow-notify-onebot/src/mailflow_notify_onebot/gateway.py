@@ -638,34 +638,19 @@ class NapCatProvisioner:
             "enableLocalFile2Url": False,
             "parseMultMsg": False,
         }
-        config_dir.mkdir(parents=True, exist_ok=True)
-        for target_dir in (config_dir,):
-            (target_dir / "onebot11.json").write_text(
-                json.dumps(payload, indent=2), encoding="utf-8"
-            )
-        # NapCat also reads its config from the standard per-user dir
-        # (~/.config/QQ/NapCat/config/); mirror the OneBot config there
-        # so the HTTP endpoint actually starts on headless hosts
+        # Write OneBot config to instance dir AND per-user NapCat config dir,
+        # ensuring the HTTP server starts after login regardless of platform.
+        # On Windows the boot loader targets the instance dir; on Linux the
+        # AppImage reads from ~/.config/QQ/NapCat/config/.
+        _write_configs = [config_dir]
         if not _IS_WINDOWS:
             import os as _os
-
             home = _os.environ.get("HOME") or str(Path.home())
-            napcat_config = Path(home) / ".config" / "QQ" / "NapCat" / "config"
-            try:
-                napcat_config.mkdir(parents=True, exist_ok=True)
-                (napcat_config / "onebot11.json").write_text(
-                    json.dumps(payload, indent=2), encoding="utf-8"
-                )
-                logger.info(
-                    "napcat %s: OneBot HTTP config mirrored to %s", instance_id, napcat_config
-                )
-            except OSError as exc:
-                logger.warning(
-                    "napcat %s: could not write NapCat config at %s: %s",
-                    instance_id,
-                    napcat_config,
-                    exc,
-                )
+            _write_configs.append(Path(home) / ".config" / "QQ" / "NapCat" / "config")
+        for _target in _write_configs:
+            _target.mkdir(parents=True, exist_ok=True)
+            (_target / "onebot11.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            logger.info("napcat %s: OneBot HTTP config written to %s", instance_id, _target)
         # Linux runs the bundled AppImage directly; only the Windows Shell
         # package needs its node entry point located inside the tree
         if not _IS_WINDOWS:

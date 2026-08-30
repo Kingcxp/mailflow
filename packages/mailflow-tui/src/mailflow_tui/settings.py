@@ -346,7 +346,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         elif group == "accounts":
             self._default_provider = "imap"
         elif group == "notifiers":
-            self._default_provider = "onebot"
+            self._default_provider = "console"
         else:
             self._default_provider = ""
         if group == "llms":
@@ -367,7 +367,11 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             choices.update(service.gateway_providers())
             # manual WeChaty (bring your own gateway) is a distinct choice
             choices.add("wechaty-manual")
-            self._provider_choices = tuple(sorted(choices))
+            # Order: console → QQ (onebot, napcat) → WeChat (wechaty, wechaty-manual, openwechat, openclaw-weixin)
+            _ORDER = ("console", "onebot", "napcat", "wechaty", "wechaty-manual", "openwechat", "openclaw-weixin")
+            self._provider_choices = tuple(
+                p for p in _ORDER if p in choices
+            ) + tuple(sorted(choices - set(_ORDER)))
         else:
             self._provider_choices = ()
 
@@ -703,11 +707,6 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 collected["options"]["imap_ssl"] = ssl_flag
                 continue
             if isinstance(node, TextArea):
-                if extra.field_id in ("targets", "admins"):
-                    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
-                    if lines:
-                        collected["options"][extra.field_id] = lines
-                    continue
                 parsed = self._split_mapping(raw)
                 if parsed:
                     collected[extra.field_id] = parsed
@@ -718,6 +717,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 items = node.value()
                 if items:
                     collected["options"][extra.field_id] = items
+                elif extra.required:
+                    raise SettingsError(extra.field_id, f"{extra.label} is required")
                 continue
             text = raw.strip()
             if not text:

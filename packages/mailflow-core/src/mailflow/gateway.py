@@ -117,16 +117,23 @@ class GatewayManager:
     # -- lifecycle --------------------------------------------------------------
 
     async def start(self) -> None:
-        """Restore instances that were running at shutdown (autostart)."""
+        """Restore instances that were running at shutdown (autostart).
+        Limits concurrent restores to 2 to prevent OOM (each NapCat
+        instance is a full QQ Electron app, ~1.5-2 GB RAM)."""
         self._stop_event = asyncio.Event()
         # scan preferences for known instances
-        for instance in await self._list_persisted():
-            self._instances[self._key(instance.provider, instance.instance_id)] = instance
-            if instance.status == _STATUS_RUNNING and instance.extra.get("autostart", True):
-                self._supervise_tasks[instance.instance_id] = asyncio.create_task(
-                    self._supervise(instance, resume=True),
-                    name=f"gateway-{instance.instance_id}",
-                )
+        instances = await self._list_persisted()
+        limiter = asyncio.Semaphore(2)
+        async def _resume(instance: GatewayInstance) -> None:
+            async with limiter:
+                key = self._key(instance.provider, instance.instance_id)
+                self._instances[key] = instance
+                if instance.status == _STATUS_RUNNING and instance.extra.get("autostart", True):
+                    self._supervise_tasks[instance.instance_id] = asyncio.create_task(
+                        self._supervise(instance, resume=True),
+                        name=f"gateway-{instance.instance_id}",
+                    )
+        await asyncio.gather(*[_resume(i) for i in instances])
 
     async def _list_persisted(self) -> list[GatewayInstance]:
         found: list[GatewayInstance] = []

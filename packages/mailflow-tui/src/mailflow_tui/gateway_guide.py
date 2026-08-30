@@ -274,11 +274,14 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 
     async def _qr_loop(self, service: MailFlowService, provider: str) -> None:
-        """Poll the QR endpoint until the session logs in or 2 min passes.
+        """Poll the QR endpoint until the session logs in or 5 min passes.
 
         Login is decided by the provisioner's sentinel, never by the
         absence of a QR payload (an empty response also happens before
-        the QR exists and would fake a login)."""
+        the QR exists and would fake a login). After the QR scan/login
+        is detected (either via sentinel or manual confirmation), the
+        method waits for the gateway HTTP endpoint to become reachable
+        so the subsequent connectivity check succeeds."""
         self._log("INFO", self._t("tui.bots_guide_qr_wait", provider=self._provider))
         self._set_status(self._t("tui.bots_guide_qr_pending", provider=self._provider), "yellow")
         # first AppImage launch is slow (extract + QQ boot): 5 minutes
@@ -303,6 +306,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._set_qr("")
                 self._log("INFO", self._t("tui.bots_guide_logged_in"))
                 self._set_status(self._t("tui.bots_guide_logged_in"), "green")
+                await self._wait_for_endpoint()
                 self._finish_ready()
                 return
             if qr and qr != last_qr:
@@ -341,6 +345,30 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             done.disabled = False
             done.focus()  # pyright: ignore[reportUnknownMemberType]
 
+    async def _wait_for_endpoint(self) -> None:
+        """Wait for the gateway HTTP endpoint to become reachable after login.
+        The OneBot HTTP server (NapCat) or health endpoint (WeChaty) only
+        starts serving after the user logs in via QR; this method polls
+        the endpoint until it responds or a short timeout elapses, so the
+        saved config is immediately usable."""
+        endpoint = (self._result or {}).get("endpoint", "")
+        if not endpoint:
+            return
+        self._log("INFO", "Verifying gateway endpoint...")
+        import httpx
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    resp = await client.get(endpoint)
+                if resp.status_code < 500:
+                    self._log("INFO", f"Gateway endpoint {endpoint} reachable")
+                    return
+            except Exception:
+                pass
+            await asyncio.sleep(2.0)
+        self._log("WARN", f"Gateway endpoint {endpoint} not reachable yet")
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "guide-done":
             # the gateway is up and logged in: finish with the result so
@@ -355,6 +383,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             self._qr_done = True
             self._log("INFO", self._t("tui.bots_guide_logged_in"))
             self._set_status(self._t("tui.bots_guide_logged_in"), "green")
+            # Verify the gateway endpoint is reachable before enabling Done
+            await self._wait_for_endpoint()
             self._finish_ready()
             return
         if event.button.id == "guide-cancel":
