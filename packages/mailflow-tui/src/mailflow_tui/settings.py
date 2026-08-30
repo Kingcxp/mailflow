@@ -358,12 +358,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 sorted(service.registry.component_ids(ComponentKind.MAIL_SOURCE))
             )
         elif group == "notifiers":
-            from mailflow_tui.bots import BotsPane
+            from mailflow_tui.notifications import NotificationsPane
 
             # gateway-auto-deploy platforms first, then manual ones; the
             # gateway id (napcat) is a separate choice from the manual
             # notifier id (onebot) so self-hosted users keep the form
-            choices = set(BotsPane.IM_PROVIDERS)
+            choices = set(NotificationsPane.IM_PROVIDERS)
             choices.update(service.gateway_providers())
             # manual WeChaty (bring your own gateway) is a distinct choice
             choices.add("wechaty-manual")

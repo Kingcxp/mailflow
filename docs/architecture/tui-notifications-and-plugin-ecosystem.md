@@ -165,15 +165,15 @@ Each field is a small dataclass:
 ```python
 @dataclass(frozen=True)
 class FormField:
-    id: str                     # option key (landed in config options / top-level)
-    label_key: str              # i18n key suffix, e.g. "token" -> tui.extras_token
-    kind: str                   # "string" | "password" | "number" | "list" | "select" | "bool"
+    id: str  # option key (landed in config options / top-level)
+    label_key: str  # i18n key suffix, e.g. "token" -> tui.extras_token
+    kind: str  # "string" | "password" | "number" | "list" | "select" | "bool"
     required: bool = False
     default: Any = None
-    choices: tuple[str, ...] = ()   # for "select"
-    secret: bool = False            # password rendering + never logged
-    into_options: bool = True       # False -> top-level config column
-    description_key: str = ""       # optional longer help
+    choices: tuple[str, ...] = ()  # for "select"
+    secret: bool = False  # password rendering + never logged
+    into_options: bool = True  # False -> top-level config column
+    description_key: str = ""  # optional longer help
 ```
 
 Registration: the plugin's `mailflow_register` may pass a

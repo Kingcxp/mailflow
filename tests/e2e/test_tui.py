@@ -1017,3 +1017,74 @@ async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
             await pilot.pause()
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_notifications_pane_lists_all_notifiers_and_toggles(tmp_path: Path) -> None:
+    """The Notifications tab shows every notifier (not just IM providers),
+    toggles the selected one enabled/disabled in place, and edits urgency."""
+    from mailflow_tui.notifications import NotificationsPane
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    # add a gateway-backed (onebot) and a plain (console) notifier so the
+    # pane really lists more than the IM providers
+    service.config.notifiers.append(
+        __import__("mailflow.config", fromlist=["NotifierConfig"]).NotifierConfig(
+            notifier_id="qq-1",
+            provider="onebot",
+            enabled=True,
+            options={"http_url": "http://127.0.0.1:1", "targets": ["group:123"]},
+        )
+    )
+    service.config.notifiers.append(
+        __import__("mailflow.config", fromlist=["NotifierConfig"]).NotifierConfig(
+            notifier_id="console-2",
+            provider="console",
+            enabled=True,
+        )
+    )
+    service.config_path = tmp_path / "cfg.toml"
+    CommandRouter(service)
+    import queue
+
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause(0.2)
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-notifications"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.2)
+            pane = app.query_one(NotificationsPane)
+            table = cast(DataTable[Any], pane.query_one("#notifications-table", DataTable))
+            assert table.row_count == 3  # console + onebot
+            names = {str(table.get_row_at(i)[0]) for i in range(table.row_count)}
+            assert "qq-1" in names
+            assert "console-2" in names
+            # select the onebot row and toggle it off
+            qq_row = next(
+                i for i in range(table.row_count) if str(table.get_row_at(i)[0]) == "qq-1"
+            )
+            table.move_cursor(row=qq_row, animate=False)  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.05)
+            cast(Button, pane.query_one("#notif-toggle")).press()
+            await pilot.pause(0.2)
+            qq = next(n for n in service.config.notifiers if n.notifier_id == "qq-1")
+            assert qq.enabled is False
+            # edit urgency via the dropdown
+            urgency = cast(Select[Any], pane.query_one("#notif-urgency", Select))
+            await set_select_value(pilot, urgency, "urgent")
+            await pilot.pause(0.2)
+            qq = next(n for n in service.config.notifiers if n.notifier_id == "qq-1")
+            assert qq.minimum_urgency is Urgency.URGENT
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()

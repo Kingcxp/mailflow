@@ -40,9 +40,9 @@ from textual.widgets import (
     TextArea,
 )
 
-from mailflow_tui.bots import BotsPane
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
+from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
@@ -2136,8 +2136,8 @@ class MailFlowApp(App[None]):
                 # marketplace installs run uv against the local environment
                 with TabPane(self._service.t("tui.tab_market"), id="tab-market"):
                     yield MarketPane(self._service)
-            with TabPane(self._service.t("tui.tab_bots"), id="tab-bots"):
-                yield BotsPane(self._service)
+            with TabPane(self._service.t("tui.tab_notifications"), id="tab-notifications"):
+                yield NotificationsPane(self._service)
             with TabPane(self._service.t("tui.tab_settings"), id="tab-settings"):
                 yield SettingsPane(self._service)
             with TabPane(self._service.t("tui.tab_logs"), id="tab-logs"):
@@ -2206,7 +2206,7 @@ class MailFlowApp(App[None]):
             "tab-actions": (ActionsPane, "tui.tab_actions"),
             "tab-llms": (LLMPane, "tui.tab_llms"),
             "tab-runtime": (RuntimePane, "tui.tab_runtime"),
-            "tab-bots": (BotsPane, "tui.tab_bots"),
+            "tab-notifications": (NotificationsPane, "tui.tab_notifications"),
             "tab-market": (MarketPane, "tui.tab_market"),
             "tab-settings": (SettingsPane, "tui.tab_settings"),
         }
