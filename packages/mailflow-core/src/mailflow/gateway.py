@@ -70,6 +70,10 @@ class GatewayManager:
         self._instances: dict[str, GatewayInstance] = {}
         self._supervise_tasks: dict[str, asyncio.Task[Any]] = {}
         self._stop_event = asyncio.Event()
+        # gates concurrent gateway launches (each NapCat is a full QQ
+        # Electron app, ~1.5-2 GB RAM); shared by the startup resumes and
+        # the guided-provision start so the host never OOMs
+        self._start_limiter = asyncio.Semaphore(2)
 
     # -- provisioner resolution -------------------------------------------------
 
@@ -118,24 +122,21 @@ class GatewayManager:
 
     async def start(self) -> None:
         """Restore instances that were running at shutdown (autostart).
-        Limits concurrent restores to 2 to prevent OOM (each NapCat
-        instance is a full QQ Electron app, ~1.5-2 GB RAM)."""
+
+        The actual gateway launches are serialized by
+        ``self._start_limiter`` inside :meth:`_supervise`, so many
+        instances at boot never launch more than two QQ/NapCat Electron
+        apps at once (~1.5-2 GB each)."""
         self._stop_event = asyncio.Event()
         # scan preferences for known instances
-        instances = await self._list_persisted()
-        limiter = asyncio.Semaphore(2)
-
-        async def _resume(instance: GatewayInstance) -> None:
-            async with limiter:
-                key = self._key(instance.provider, instance.instance_id)
-                self._instances[key] = instance
-                if instance.status == _STATUS_RUNNING and instance.extra.get("autostart", True):
-                    self._supervise_tasks[instance.instance_id] = asyncio.create_task(
-                        self._supervise(instance, resume=True),
-                        name=f"gateway-{instance.instance_id}",
-                    )
-
-        await asyncio.gather(*[_resume(i) for i in instances])
+        for instance in await self._list_persisted():
+            key = self._key(instance.provider, instance.instance_id)
+            self._instances[key] = instance
+            if instance.status == _STATUS_RUNNING and instance.extra.get("autostart", True):
+                self._supervise_tasks[instance.instance_id] = asyncio.create_task(
+                    self._supervise(instance, resume=True),
+                    name=f"gateway-{instance.instance_id}",
+                )
 
     async def _list_persisted(self) -> list[GatewayInstance]:
         found: list[GatewayInstance] = []
@@ -228,9 +229,10 @@ class GatewayManager:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
             backoff = min(backoff * 2, 60)
             try:
-                started = await self.provisioner(instance.provider).start(
-                    instance.instance_id, instance.extra.get("options", {})
-                )
+                async with self._start_limiter:
+                    started = await self.provisioner(instance.provider).start(
+                        instance.instance_id, instance.extra.get("options", {})
+                    )
                 self._instances[self._key(started.provider, started.instance_id)] = started
                 await self._save_state(started)
                 backoff = 5
@@ -286,7 +288,8 @@ class GatewayManager:
         instance.status = "starting"
         await self._save_state(instance)
         try:
-            running = await provisioner.start(instance_id, options)
+            async with self._start_limiter:
+                running = await provisioner.start(instance_id, options)
         except Exception as exc:
             instance.status = "error"
             instance.error = f"start failed: {exc}"

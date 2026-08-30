@@ -3,6 +3,7 @@ connections from the TUI (the same surface as `plugin repo add|remove`)."""
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any, ClassVar
 
 from mailflow.service import MailFlowService
@@ -24,6 +25,7 @@ class ReposScreen(ModalScreen[bool | None]):
         super().__init__()
         self._service = service
         self._editing_name: str | None = None
+        self._original_url: str = ""
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -61,14 +63,11 @@ class ReposScreen(ModalScreen[bool | None]):
         if button_id == "repos-cancel":
             self.dismiss(None)
             return
-        if button_id == "repos-add" and self._editing_name is not None:
-            # pressing Add while editing first clears back to insert mode
-            pass
         if button_id == "repos-add":
-            self.run_worker(self._add_repo())
+            self.run_worker(self._add_repo(), exit_on_error=False)
             return
         if button_id == "repos-remove":
-            self.run_worker(self._remove_repo())
+            self.run_worker(self._remove_repo(), exit_on_error=False)
 
     def on_data_table_row_selected(self, event: Any) -> None:
         """Double-click / Enter on a repo loads it into the form for editing."""
@@ -79,6 +78,7 @@ class ReposScreen(ModalScreen[bool | None]):
             return
         name, url = str(row_values[0]), str(row_values[1])
         self._editing_name = name
+        self._original_url = url
         self.query_one("#repos-name", Input).value = name
         self.query_one("#repos-url", Input).value = url
         add_button = self.query_one("#repos-add", Button)
@@ -87,6 +87,7 @@ class ReposScreen(ModalScreen[bool | None]):
 
     def _reset_edit_state(self) -> None:
         self._editing_name = None
+        self._original_url = ""
         self.query_one("#repos-name", Input).value = ""
         self.query_one("#repos-url", Input).value = ""
         add_button = self.query_one("#repos-add", Button)
@@ -99,21 +100,21 @@ class ReposScreen(ModalScreen[bool | None]):
         if not name or not url:
             self.notify(self._t("tui.repos_missing_fields"), severity="error", timeout=6)
             return
+        editing = self._editing_name
+        original_url = self._original_url or url
         try:
-            if self._editing_name is not None and self._editing_name != name:
-                await self._service.plugin_repo_remove(self._editing_name)
-                try:
-                    await self._service.plugin_repo_add(name, url)
-                except ValueError:
-                    # restore the original entry so an edit cannot lose a repo
-                    await self._service.plugin_repo_add(self._editing_name, url)
-                    raise
-            elif self._editing_name == name:
-                await self._service.plugin_repo_remove(name)
-                await self._service.plugin_repo_add(name, url)
-            else:
-                await self._service.plugin_repo_add(name, url)
-        except ValueError as exc:
+            if editing is not None:
+                # editing an existing entry: drop the old row first, then add
+                # the replacement (covers both rename and same-name edits)
+                await self._service.plugin_repo_remove(editing)
+            await self._service.plugin_repo_add(name, url)
+        except (KeyError, ValueError) as exc:
+            # restore the original entry so an edit cannot lose a repo; the
+            # restore uses the URL captured when the row was selected, not
+            # the (possibly half-typed) edited URL
+            if editing is not None:
+                with contextlib.suppress(Exception):
+                    await self._service.plugin_repo_add(editing, original_url)
             self.notify(str(exc), severity="error", timeout=6)
             return
         self._reset_edit_state()

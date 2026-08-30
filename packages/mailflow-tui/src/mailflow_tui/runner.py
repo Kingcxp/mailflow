@@ -126,6 +126,7 @@ async def _run_local(config_path: str | None, *, with_server: bool) -> None:
     CommandRouter(service)
     server = None
     server_task = None
+    stopped = False
     try:
         if with_server:
             server, server_task = await _start_embedded_server(service, config, log_queue)
@@ -140,8 +141,10 @@ async def _run_local(config_path: str | None, *, with_server: bool) -> None:
             if server_task is not None:
                 await asyncio.gather(server_task, return_exceptions=True)
             await service.stop()
+            stopped = True
     except Exception:
-        await service.stop()
+        if not stopped:
+            await service.stop()
         raise
 
 
@@ -208,6 +211,7 @@ async def _run_remote() -> None:
     log_queue: queue_module.Queue[Any] = queue_module.Queue()
     pump = asyncio.create_task(pump_async_to_thread(client.log_queue, log_queue))
     await client.start_events()
+    await client.enable_logs()
 
     app = MailFlowApp(adapter, log_queue, remote=True)
     try:
@@ -215,6 +219,7 @@ async def _run_remote() -> None:
     finally:
         await client.stop_events()
         pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
 
 
 def cast_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:

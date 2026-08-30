@@ -146,6 +146,10 @@ class RemoteServiceAdapter:
         result: str = self.i18n.t(key, **params)
         return result
 
+    def on(self, event: str, handler: Any) -> Any:
+        """Subscribe to a live event; delegates to the websocket relay."""
+        return self.events.on(event, handler)
+
     # -- reads -----------------------------------------------------------------
     async def snapshot(self) -> dict[str, Any]:
         self._snapshot = await self.client.snapshot()

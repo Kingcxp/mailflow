@@ -306,6 +306,11 @@ def serve(
             config.server.host = host
         if port is not None:
             config.server.port = port
+        # validate credentials before starting the service so a missing
+        # [server] section fails fast instead of leaking a running service
+        from mailflow_server.auth import require_credentials
+
+        require_credentials(config.server)
         service = await start_service(config, config_path=config_path)
         app = create_app(service)
         uv_config = uvicorn.Config(

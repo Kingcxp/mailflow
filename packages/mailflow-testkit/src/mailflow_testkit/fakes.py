@@ -7,7 +7,6 @@ are reproducible; ``send_reply`` records calls for E2E assertions.
 from __future__ import annotations
 
 import asyncio
-import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -15,6 +14,15 @@ from mailflow.contracts import LLMCompletion, MailEmitter, MessageDict
 from mailflow.domain import MailAddress, MailMessage, MailRecord, ReplyDraft
 
 _BASE_TIME = datetime(2026, 1, 1, 8, 0, tzinfo=UTC)
+
+
+def _stable_message_id(*parts: str) -> str:
+    """Deterministic 16-hex id from the mail's content, so two identical
+    ``make_mail()`` calls yield the same message (dedup-safe) while
+    different content stays distinct."""
+    import hashlib
+
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
 def make_mail(
@@ -33,7 +41,7 @@ def make_mail(
 ) -> MailMessage:
     """Deterministic message: stable id, UTC dates, sane defaults."""
     if message_id is None:
-        message_id = uuid.uuid4().hex[:16]
+        message_id = _stable_message_id(account_id, provider, subject, body_text)
     if received_at is None:
         received_at = _BASE_TIME
     return MailMessage(

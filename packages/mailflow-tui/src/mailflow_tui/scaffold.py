@@ -97,7 +97,7 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
             else:
                 target = base
             self.query_one("#scaffold-generate", Button).disabled = True
-            self.run_worker(self._scaffold(target, plugin_id, category))
+            self.run_worker(self._scaffold(target, plugin_id, category), exit_on_error=False)
         except ValueError as exc:
             self._notify_error(str(exc))
 
@@ -106,7 +106,9 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
             created = await asyncio.to_thread(scaffold_plugin, target, plugin_id, category)
         except (ValueError, OSError) as exc:
             self._notify_error(str(exc))
-            self.query_one("#scaffold-generate", Button).disabled = False
+            generate_btn = self.query_one_optional("#scaffold-generate", Button)
+            if generate_btn is not None:
+                generate_btn.disabled = False
             return
         self.notify(self._t("tui.scaffold_created", path=str(created)), severity="information")
         self.dismiss(created)

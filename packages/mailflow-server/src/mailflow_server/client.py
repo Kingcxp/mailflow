@@ -12,7 +12,7 @@ import asyncio
 import base64
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -28,13 +28,27 @@ def _basic(username: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Basic {token}"}
 
 
-def _websocket_connect() -> Callable[..., Any]:
-    """websockets ships with uvicorn[standard]; imported lazily so the REST
-    client works without it."""
+def _ws_headers(auth: dict[str, str]) -> dict[str, Any]:
+    """Header kwargs accepted by ``websockets.connect`` across versions.
+
+    websockets >= 12 renamed ``extra_headers`` to ``additional_headers``;
+    both are passed as the raw header mapping, so trying the newer name
+    first and falling back to the legacy one keeps the client working
+    with whatever uvicorn[standard] pinned.
+    """
+    return {"additional_headers": dict(auth), "extra_headers": dict(auth)}
+
+
+def _ws_connect(url: str, auth: dict[str, str]) -> Any:
+    """Open an authenticated websocket to ``url``.
+
+    The server's ``/ws`` endpoint requires HTTP Basic auth on the upgrade
+    handshake (it closes with 4401 otherwise), so the header must be
+    attached here — every REST method already sends ``self._auth``.
+    """
     import websockets  # type: ignore[import-not-found,unused-ignore]
 
-    connect_fn: Callable[..., Any] = websockets.connect  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
-    return connect_fn  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+    return cast(Any, websockets.connect(url, **_ws_headers(auth)))  # pyright: ignore[reportUnknownMemberType]
 
 
 class RemoteClient:
@@ -46,6 +60,7 @@ class RemoteClient:
         self._event_handlers: dict[str, list[Callable[..., Any]]] = {}
         self._ws_task: asyncio.Task[Any] | None = None
         self.log_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._logs_requested = False
 
     # -- low level -------------------------------------------------------------
 
@@ -100,28 +115,54 @@ class RemoteClient:
             self._ws_task = None
 
     async def enable_logs(self) -> None:
-        await self._send_ws({"type": "logs"})
+        """Ask the persistent event connection to also stream log lines."""
+        self._logs_requested = True
 
     async def _send_ws(self, frame: dict[str, Any]) -> None:
-        connect = _websocket_connect()
-        async with connect(self.base_url.replace("http", "ws", 1) + "/ws") as ws:
+        url = self.base_url.replace("http", "ws", 1) + "/ws"
+        async with _ws_connect(url, self._auth) as ws:
             await ws.send(json.dumps(frame))
 
     async def _ws_loop(self) -> None:
-        connect = _websocket_connect()
+        """Persistent event connection with reconnect and optional log fan-out.
+
+        The server only attaches a connection to its log feed after the
+        client sends ``{"type": "logs"}``, and it does so per-connection —
+        so the frame must go over THIS connection, not a throwaway one.
+        """
         url = self.base_url.replace("http", "ws", 1) + "/ws"
-        async with connect(url) as ws:
-            async for raw in ws:
-                try:
-                    frame = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                event = str(frame.get("event", ""))
-                payload_map: dict[str, Any] = dict(frame.get("payload") or {})
-                if event == "log":
-                    await self.log_queue.put(str(frame.get("line", "")))
-                    continue
-                await self._dispatch(event, payload_map)
+        backoff = 1.0
+        while True:
+            try:
+                async with _ws_connect(url, self._auth) as ws:
+                    # request log streaming once per connection so the remote
+                    # TUI's log pane fills even though nothing calls
+                    # enable_logs() explicitly today
+                    if self._logs_requested:
+                        await ws.send(json.dumps({"type": "logs"}))
+                    async for raw in ws:
+                        try:
+                            frame = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        event = str(frame.get("event", ""))
+                        payload_map: dict[str, Any] = dict(frame.get("payload") or {})
+                        if event == "log":
+                            await self.log_queue.put(str(frame.get("line", "")))
+                            continue
+                        try:
+                            await self._dispatch(event, payload_map)
+                        except Exception:
+                            # a single bad handler must not kill the stream
+                            continue
+                    # connection closed cleanly by the server
+                    backoff = 1.0
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # server down / restart / network blip: reconnect with backoff
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
 
     # -- service-like surface ----------------------------------------------------
 

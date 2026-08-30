@@ -2034,7 +2034,7 @@ class MailFlowApp(App[None]):
 
     async def on_mount(self) -> None:
         self.title = self._service.t("tui.title")
-        self.sub_title = f"v{self._service.snapshot().version}"
+        self.sub_title = self._version_string()
         self._log_timer = self.set_interval(1.0, self._drain_logs)
         # preload the persisted marketplace cache so the Runtime tab's
         # plugin detail keeps its translations before the first fetch
@@ -2050,6 +2050,14 @@ class MailFlowApp(App[None]):
         self._refresh_lock = asyncio.Lock()
         self._service.on("mailflow.mail.processed", self._on_mail_processed)
         self._service.on("language.changed", self._on_language_changed)
+
+    def _version_string(self) -> str:
+        """App version for the title bar; remote adapter snapshots are
+        plain dicts (``snapshot_sync``) while the local service returns a
+        typed :class:`RuntimeSnapshot`."""
+        if self._remote:
+            return f"v{self._service.snapshot_sync().get('version', '')}"
+        return f"v{self._service.snapshot().version}"
 
     async def _preload_market_cache(self) -> None:
         """Load persisted marketplace entries into the shared cache."""
