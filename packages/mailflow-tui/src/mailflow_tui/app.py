@@ -9,6 +9,7 @@ import contextlib
 import queue as queue_module
 import re
 import time
+from collections import deque
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, ClassVar, cast
@@ -65,6 +66,12 @@ def _typed_select(owner: Any, selector: str) -> Select[str] | None:
     """query_one_optional without leaking an unparametrized Select (whose
     ``value`` attribute comes back Unknown under strict type checking)."""
     return cast("Select[str] | None", owner.query_one_optional(selector))
+
+
+def _event_select_value(event: Any) -> str:
+    """Value of a Select.Changed event, as a plain string ('' on NULL)."""
+    value = getattr(event.select, "value", Select.NULL)
+    return "" if value is Select.NULL else str(value)
 
 
 def _apply_options(owner: Any, selector: str, pairs: list[tuple[str, str]]) -> None:
@@ -1284,55 +1291,160 @@ class RuntimePane(Vertical):
 
 
 class LogsPane(Vertical):
-    def __init__(self, service: MailFlowService, log_queue: queue_module.Queue[Any]) -> None:
-        super().__init__()
-        self._service = service
-        self._log_queue = log_queue
+    """Filterable log viewer.
 
-    def compose(self) -> ComposeResult:
-        yield RichLog(id="log-view", wrap=True, highlight=True)
-
-    async def on_mount(self) -> None:
-        self.query_one("#log-view", RichLog).write(self._service.t("tui.logs_title"))
-
-    def relabel(self) -> None:
-        # language switches must NOT clear received log lines; refresh only
-        # the in-log title marker
-        log_view = self.query_one_optional("#log-view", RichLog)
-        if log_view is not None:
-            log_view.write(self._service.t("tui.logs_title"))
+    Buffers the last N formatted log lines and re-renders them through
+    three filters: a minimum level (WARNING+ERROR by default, expandable
+    to INFO or DEBUG), a source group (empty = all), and a substring
+    search. The buffer is bounded so the pane never grows without limit.
+    """
 
     _LEVEL_STYLES: ClassVar[dict[str, str]] = {
         "ERROR": "bold red",
         "CRITICAL": "bold red",
         "WARNING": "yellow",
         "INFO": "dim",
+        "DEBUG": "dim",
     }
+    _LEVEL_RANK: ClassVar[dict[str, int]] = {
+        "DEBUG": 10,
+        "INFO": 20,
+        "WARNING": 30,
+        "ERROR": 40,
+        "CRITICAL": 50,
+    }
+    _DEFAULT_MIN_LEVEL = "WARNING"
+    _MAX_LINES = 2000
+
+    def __init__(self, service: MailFlowService, log_queue: queue_module.Queue[Any]) -> None:
+        super().__init__()
+        self._service = service
+        self._log_queue = log_queue
+        self._buffer: deque[str] = deque(maxlen=self._MAX_LINES)
+        self._min_level = self._DEFAULT_MIN_LEVEL
+        self._source = ""
+        self._query = ""
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="log-controls"):
+            yield Select(
+                [
+                    (self._service.t("tui.logs_level_warning"), "WARNING"),
+                    (self._service.t("tui.logs_level_info"), "INFO"),
+                    (self._service.t("tui.logs_level_debug"), "DEBUG"),
+                ],
+                value=self._min_level,
+                id="log-level",
+                allow_blank=False,
+            )
+            yield Select(
+                [(self._service.t("tui.logs_all_sources"), "")],
+                id="log-source",
+                allow_blank=False,
+            )
+            yield Input(
+                placeholder=self._service.t("tui.logs_search_placeholder"),
+                id="log-search",
+            )
+        with ScrollableContainer(id="log-scroll"):
+            yield RichLog(id="log-view", wrap=True, highlight=True)
+
+    async def on_mount(self) -> None:
+        self._render_logs()
+
+    def relabel(self) -> None:
+        # language switches refresh the control labels without clearing
+        # received log lines
+        level = _typed_select(self, "#log-level")
+        if level is not None:
+            self._set_level_options(level)
+        source = _typed_select(self, "#log-source")
+        if source is not None:
+            self._refresh_source_options()
+        search = self.query_one_optional("#log-search", Input)
+        if search is not None:
+            search.placeholder = self._service.t("tui.logs_search_placeholder")
+        self._render_logs()
+
+    def _set_level_options(self, level: Select[str]) -> None:
+        current = level.value
+        level.set_options(
+            [
+                (self._service.t("tui.logs_level_warning"), "WARNING"),
+                (self._service.t("tui.logs_level_info"), "INFO"),
+                (self._service.t("tui.logs_level_debug"), "DEBUG"),
+            ]
+        )
+        level.value = current
+
+    def _refresh_source_options(self) -> None:
+        source = _typed_select(self, "#log-source")
+        if source is None:
+            return
+        current = source.value
+        seen = sorted(
+            {parts[2] for parts in (line.split("|", 3) for line in self._buffer) if len(parts) == 4}
+        )
+        source.set_options(
+            [(self._service.t("tui.logs_all_sources"), "")] + [(name, name) for name in seen]
+        )
+        if current is not Select.NULL and current != "":
+            source.value = current if current in seen else ""
 
     def drain(self) -> None:
         # remounts (language switch, tab re-compose) can tick the interval
         # while the widget tree is detached — never crash the app for it
-        log_view = self.query_one_optional("#log-view", RichLog)
-        if log_view is None:
-            return
+        pulled = False
         while True:
             try:
                 line = self._log_queue.get_nowait()
             except queue_module.Empty:
                 break
-            # lines arrive as "HH:MM:SS|LEVEL|logger|message"
+            self._buffer.append(line)
+            pulled = True
+        if pulled:
+            self._refresh_source_options()
+            self._render_logs()
+
+    def _render_logs(self) -> None:
+        log_view = self.query_one_optional("#log-view", RichLog)
+        if log_view is None:
+            return
+        log_view.clear()
+        min_rank = self._LEVEL_RANK.get(self._min_level, self._LEVEL_RANK[self._DEFAULT_MIN_LEVEL])
+        query = self._query.lower()
+        for line in self._buffer:
+            parts = line.split("|", 3)
+            if len(parts) != 4:
+                log_view.write(line)
+                continue
+            time_part, level, logger_name, message = parts
+            if self._LEVEL_RANK.get(level, 0) < min_rank:
+                continue
+            if self._source and logger_name != self._source:
+                continue
+            if query and query not in message.lower():
+                continue
             from rich.text import Text
 
-            parts = line.split("|", 3)
-            if len(parts) == 4:
-                time_part, level, logger_name, message = parts
-                text = Text(f"{time_part} ")
-                text.append(f"{level:<7}", style=self._LEVEL_STYLES.get(level, "bold"))
-                text.append(f" {logger_name} ")
-                text.append(message)
-                log_view.write(text)
-            else:
-                log_view.write(line)
+            text = Text(f"{time_part} ")
+            text.append(f"{level:<7}", style=self._LEVEL_STYLES.get(level, "bold"))
+            text.append(f" {logger_name} ")
+            text.append(message)
+            log_view.write(text)
+
+    def on_select_changed(self, event: Any) -> None:
+        if event.select.id == "log-level":
+            self._min_level = _event_select_value(event)
+            self._render_logs()
+        elif event.select.id == "log-source":
+            self._source = _event_select_value(event)
+            self._render_logs()
+
+    def on_input_changed(self, event: Any) -> None:
+        if event.input.id == "log-search":
+            self._query = str(event.input.value)
+            self._render_logs()
 
 
 def plugin_doc_readme(info: Any) -> str:
@@ -2020,8 +2132,6 @@ class MailFlowApp(App[None]):
                     yield LLMPane(self._service)
             with TabPane(self._service.t("tui.tab_runtime"), id="tab-runtime"):
                 yield RuntimePane(self._service)
-            with TabPane(self._service.t("tui.tab_logs"), id="tab-logs"):
-                yield LogsPane(self._service, self._log_queue)
             if not self._remote:
                 # marketplace installs run uv against the local environment
                 with TabPane(self._service.t("tui.tab_market"), id="tab-market"):
@@ -2030,6 +2140,8 @@ class MailFlowApp(App[None]):
                 yield BotsPane(self._service)
             with TabPane(self._service.t("tui.tab_settings"), id="tab-settings"):
                 yield SettingsPane(self._service)
+            with TabPane(self._service.t("tui.tab_logs"), id="tab-logs"):
+                yield LogsPane(self._service, self._log_queue)
         yield Footer()
 
     async def on_mount(self) -> None:
