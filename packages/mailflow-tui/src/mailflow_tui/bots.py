@@ -375,6 +375,22 @@ class BotsPane(Vertical):
         )
         if index is None:
             return
+        entry = notifiers[index]
+        # gateway-backed entries supervise a real child process (NapCat/
+        # WeChaty/OpenWeChat — each NapCat is a full QQ Electron app).
+        # Stop the gateway BEFORE dropping the config so deleting rows
+        # never leaves orphan processes eating RAM/CPU.
+        gateway = self._gateway_from_options(dict(entry.options))
+        if entry.provider in self._service.gateway_providers():
+            gateway = gateway or entry.provider
+        if gateway:
+            try:
+                await self._service.gateway_shutdown(gateway, entry.notifier_id)
+            except Exception as exc:
+                self.query_one("#bots-status", Static).update(
+                    f"[red]{self._service.t('tui.bots_stop_failed', instance=entry.notifier_id, error=str(exc))}[/red]"
+                )
+                return
         await self._service.remove_config_entry("notifiers", index)
         self._selected_id = None
         self._render_rows()

@@ -82,10 +82,12 @@ class OpenWechatProvisioner(GatewayProvisioner):
             if not directory.is_dir():
                 continue
             token = directory.name[len("openwechat-") :]
-            try:
-                suffix = int(token.split("-")[-1]) % 97 if token.split("-")[-1].isdigit() else 0
-            except (ValueError, IndexError):
-                continue
+            # same digit-accumulation as _port_for so multi-digit ids and
+            # sanitized tokens probe the instance's real port
+            suffix = 0
+            for ch in token:
+                if ch.isdigit():
+                    suffix = (suffix * 10 + int(ch)) % 97
             port = _BASE_PORT + suffix
             if await self._wait_http_port(port, wait_seconds=2.0):
                 return True
@@ -150,13 +152,6 @@ class OpenWechatProvisioner(GatewayProvisioner):
         port = int(options.get("port") or self._port_for(instance_id))
         if await self._wait_http_port(port, wait_seconds=1.0):
             logger.info("openwechat %s: reusing running gateway on :%d", instance_id, port)
-            return GatewayInstance(
-                provider="openwechat",
-                instance_id=instance_id,
-                status="running",
-                endpoint=f"http://127.0.0.1:{port}",
-                extra={"port": port, "reused": True},
-            )
             return GatewayInstance(
                 provider="openwechat",
                 instance_id=instance_id,

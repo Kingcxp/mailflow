@@ -10,6 +10,7 @@ process operation runs in a worker; the log pane streams each step.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from datetime import datetime
 from typing import Any, ClassVar
@@ -261,15 +262,27 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         task = asyncio.create_task(
             service.gateway_provision(provider, self._instance_id, self._options)
         )
-        while not task.done():
-            await asyncio.sleep(0.2)
-            # the provisioner mutates the options dict in place? no — it
-            # receives a copy with _progress injected; read it from the
-            # options copy the service made? Simplest: re-inject by
-            # querying the manager — use the service's last progress
-            progress = getattr(service.gateways, "_last_progress", None)
-            _poll()
-        return await task
+        try:
+            while not task.done():
+                await asyncio.sleep(0.2)
+                # the provisioner mutates the options dict in place? no — it
+                # receives a copy with _progress injected; read it from the
+                # options copy the service made? Simplest: re-inject by
+                # querying the manager — use the service's last progress
+                progress = getattr(service.gateways, "_last_progress", None)
+                _poll()
+            return await task
+        except asyncio.CancelledError:
+            # the guide was cancelled mid-provision: stop the provision
+            # task and tear down whatever it already started, so no
+            # orphan gateway (and its QQ process) keeps running after the
+            # modal is gone
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            with contextlib.suppress(Exception):
+                await service.gateway_shutdown(provider, self._instance_id)
+            raise
 
     _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 
@@ -334,8 +347,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     self._t("tui.bots_guide_qr_pending", provider=self._provider), "yellow"
                 )
             await asyncio.sleep(5.0)
-        self._log("ERROR", self._t("tui.bots_guide_qr_timeout"))
-        self._set_status(self._t("tui.bots_guide_qr_timeout"), "red")
+        # the loop also exits via the manual "I'm logged in" button
+        # (_qr_done), which already logged the success and set a green
+        # status; only report a timeout when the deadline genuinely hit
+        if not getattr(self, "_qr_done", False):
+            self._log("ERROR", self._t("tui.bots_guide_qr_timeout"))
+            self._set_status(self._t("tui.bots_guide_qr_timeout"), "red")
 
     def _finish_ready(self) -> None:
         """Login done: enable the Done button so the user explicitly

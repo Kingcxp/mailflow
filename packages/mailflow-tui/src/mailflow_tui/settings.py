@@ -873,6 +873,13 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         gateway / OpenClaw); on success unlocks Save."""
         status = self.query_one("#entry-form-status", Static)
         provider = self._current_provider()
+        if provider == "console":
+            # console needs no endpoint: the test trivially passes so the
+            # default provider is usable without any configuration
+            self._test_passed = True
+            self._sync_actions()
+            status.update(f"[green]{self._t('tui.notifier_test_ok')}[/green]")
+            return
         options = dict(self._values.get("options") or {})
         # test only needs the endpoint: read the URL fields directly so a
         # missing targets/credentials never blocks the connectivity probe
