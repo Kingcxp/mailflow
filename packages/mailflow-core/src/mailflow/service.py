@@ -1176,13 +1176,17 @@ class MailFlowService:
             return "You are not an admin of this bot; ask the owner to add you."
         if sub == "subscribe":
             ok = await self.subscriptions.add(provider, instance_id, chat_id)
-            await self._sync_subscription_targets(provider, chat_id, subscribe=True)
+            await self._sync_subscription_targets(
+                provider, chat_id, chat_type=chat_type, subscribe=True
+            )
             # rebuild the notifiers so the new target takes effect
             await self.reload_runtime()
             return "Subscribed to mail notifications." if ok else "Already subscribed."
         if sub == "unsubscribe":
             ok = await self.subscriptions.remove(provider, instance_id, chat_id)
-            await self._sync_subscription_targets(provider, chat_id, subscribe=False)
+            await self._sync_subscription_targets(
+                provider, chat_id, chat_type=chat_type, subscribe=False
+            )
             await self.reload_runtime()
             return "Unsubscribed." if ok else "Not subscribed."
         if sub == "status":
@@ -1191,28 +1195,41 @@ class MailFlowService:
         return f"Unknown mailflow subcommand '{sub}'. Use {self.command_prefix()}mailflow help."
 
     async def _sync_subscription_targets(
-        self, provider: str, chat_id: str, *, subscribe: bool
+        self,
+        provider: str,
+        chat_id: str,
+        *,
+        chat_type: str = "private",
+        subscribe: bool,
     ) -> None:
         """Add/remove ``chat_id`` from every notifier's targets for this
-        provider so the runtime delivers to subscribed chats."""
+        provider so the runtime delivers to subscribed chats, and persist
+        the change so delivery survives a restart."""
         provider = "onebot" if provider == "napcat" else provider
+        # OneBot targets must be ``user:<id>`` / ``group:<id>``; a bare id
+        # is malformed and silently dropped by the notifier
+        kind = "group" if chat_type == "group" else "user"
+        prefixed = f"{kind}:{chat_id}"
         for index, notifier in enumerate(self.config.notifiers):
             if notifier.provider != provider:
                 continue
             raw_targets: list[Any] = list(notifier.options.get("targets") or [])
             targets = [str(t) for t in raw_targets]
             changed = False
-            if subscribe and chat_id not in targets:
-                targets.append(chat_id)
+            if subscribe and prefixed not in targets:
+                targets.append(prefixed)
                 changed = True
-            elif not subscribe and chat_id in targets:
-                targets.remove(chat_id)
+            elif not subscribe and prefixed in targets:
+                targets.remove(prefixed)
                 changed = True
             if changed:
                 updated = notifier.model_copy(
                     update={"options": {**notifier.options, "targets": targets}}
                 )
                 self.config.notifiers[index] = updated
+        config_path = getattr(self, "config_path", None)
+        if config_path:
+            write_config(self.config, config_path)
 
     def _is_admin(self, sender: str, provider: str) -> bool:
         """True when ``sender`` is listed as an admin of any notifier

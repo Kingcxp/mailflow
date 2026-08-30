@@ -1042,7 +1042,9 @@ async def test_mailflow_subscribe_requires_admin() -> None:
         ("napcat", "napcat-1", "group-1")
     ]
     onebot = next(n for n in cfg.notifiers if n.notifier_id == "napcat-1")
-    assert "group-1" in onebot.options["targets"]
+    # OneBot targets must be prefixed (user: / group:); a bare id is
+    # malformed and silently dropped by the notifier
+    assert "group:group-1" in onebot.options["targets"]
 
     # help
     help_text = await service.command_dispatch("/mailflow help", sender="10001")
@@ -1063,7 +1065,7 @@ async def test_mailflow_unsubscribe_removes_target() -> None:
             provider="onebot",
             options={
                 "admins": ["10001"],
-                "targets": ["group-1"],
+                "targets": ["group:group-1"],
                 "http_url": "http://x",
             },
         )
@@ -1099,4 +1101,4 @@ async def test_mailflow_unsubscribe_removes_target() -> None:
     )
     assert reply is not None and "Unsubscribed" in reply
     onebot = next(n for n in cfg.notifiers if n.notifier_id == "napcat-1")
-    assert "group-1" not in onebot.options["targets"]
+    assert "group:group-1" not in onebot.options["targets"]
