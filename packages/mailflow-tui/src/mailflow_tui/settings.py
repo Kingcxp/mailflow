@@ -175,6 +175,7 @@ class _Extra:
     default and whether it lands in ``options`` (vs a top-level column)."""
 
     __slots__ = (
+        "choices",
         "default",
         "field_id",
         "into_options",
@@ -192,6 +193,7 @@ class _Extra:
         default: str = "",
         into_options: bool = True,
         secret: bool = False,
+        choices: tuple[str, ...] = (),
         required: bool = False,
     ) -> None:
         self.field_id = field_id
@@ -200,10 +202,18 @@ class _Extra:
         self.default = default
         self.into_options = into_options
         self.secret = secret
+        self.choices = choices
         self.required = required
 
 
 _ADVANCED = ("headers", "query", "extra_body")
+# config group -> ComponentKind, for looking up plugin-declared form fields
+_GROUP_REGISTRY_KIND = {
+    "accounts": ComponentKind.MAIL_SOURCE,
+    "llms": ComponentKind.LLM_BACKEND,
+    "processors": ComponentKind.MAIL_PROCESSOR,
+    "notifiers": ComponentKind.NOTIFIER,
+}
 
 _LLM_PROVIDER_FIELDS: dict[str, tuple[_Extra, ...]] = {
     "openai-completions": (
@@ -411,6 +421,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         return translated if translated != key else value
 
     def _extras_for(self, provider: str) -> tuple[_Extra, ...]:
+        plugin_extras = self._plugin_extras(provider)
+        if plugin_extras is not None:
+            return plugin_extras
         if self._group == "llms":
             return _LLM_PROVIDER_FIELDS.get(provider, ())
         if self._group == "accounts" and provider == "imap":
@@ -463,6 +476,39 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     _Extra("targets", required=True),
                 )
         return ()
+
+    def _plugin_extras(self, provider: str) -> tuple[_Extra, ...] | None:
+        """Plugin-declared form fields, converted to _Extra; None when the
+        provider declares none (fall back to the hardcoded extras)."""
+        kind = _GROUP_REGISTRY_KIND.get(self._group)
+        if kind is None:
+            return None
+        fields = self._service.registry.form_fields(kind, provider)
+        if not fields:
+            return None
+        extras: list[_Extra] = []
+        for field in fields:
+            kind_map = {
+                "string": "text",
+                "password": "password",
+                "number": "int",
+                "boolean": "boolean",
+                "list": "lines",
+                "select": "choice",
+                "textarea": "text",
+            }
+            extras.append(
+                _Extra(
+                    field.field_id,
+                    kind=kind_map.get(field.kind, "text"),
+                    default="" if field.default is None else str(field.default),
+                    into_options=field.into_options,
+                    secret=field.secret or field.kind == "password",
+                    required=field.required,
+                    choices=tuple(field.choices),
+                )
+            )
+        return tuple(extras)
 
     def _gateway_for(self, provider: str) -> str | None:
         """The gateway provisioner id backing a notifier provider.
@@ -615,9 +661,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             if translated_desc != desc_key:
                 yield Static(escape(translated_desc), classes="field-desc")
             if extra.kind == "choice":
+                _choice_names = tuple(extra.choices) or tuple(_IMAP_PRESET_HOSTS)
                 yield Select(
-                    [(name, name) for name in _IMAP_PRESET_HOSTS],
-                    value=self._extra_value(extra) or "qq",
+                    [(name, name) for name in _choice_names],
+                    value=self._extra_value(extra) or (_choice_names[0] if _choice_names else ""),
                     id=widget_id,
                     allow_blank=False,
                 )
@@ -630,6 +677,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 yield ListEditor(
                     current_lines,
                     placeholder=str(extra.default or "one item per line"),
+                    id=widget_id,
+                )
+            elif extra.kind == "boolean":
+                yield Switch(
+                    value=str(self._extra_value(extra)).strip().lower()
+                    in ("1", "true", "yes", "on"),
                     id=widget_id,
                 )
             elif extra.secret:
@@ -727,6 +780,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     collected["options"][extra.field_id] = items
                 elif extra.required:
                     raise SettingsError(extra.field_id, f"{extra.label} is required")
+                continue
+            if isinstance(node, Switch):
+                target = collected["options"] if extra.into_options else collected
+                target[extra.field_id] = bool(node.value)
                 continue
             text = raw.strip()
             if not text:

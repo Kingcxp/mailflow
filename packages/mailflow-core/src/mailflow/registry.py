@@ -7,8 +7,8 @@ plugin with capability X" — component ids are bound to factories explicitly.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import cast
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from mailflow.bot_export import BotExportContext, BotExportResult
 from mailflow.config import (
@@ -30,6 +30,7 @@ from mailflow.contracts import (
     StorageBackend,
 )
 from mailflow.domain import ComponentKind, ComponentSnapshot
+from mailflow.forms import FormField
 
 SourceFactory = Callable[[MailAccountConfig], MailSource]
 LLMFactory = Callable[[LLMConfig], LLMBackend]
@@ -52,6 +53,11 @@ Factory = (
 )
 
 
+# Probe: async (options, t) -> status string, registered by plugins for the
+# "Test connection" button and the Notifications tab live-status column.
+ProbeFn = Callable[[dict[str, Any], Any], Awaitable[str]]
+
+
 class ComponentRegistry:
     """Holds typed factories plus the ownership snapshot for each component."""
 
@@ -60,6 +66,8 @@ class ComponentRegistry:
         self._factories: dict[ComponentKind, dict[str, Factory]] = {
             kind: {} for kind in ComponentKind
         }
+        self._form_fields: dict[tuple[ComponentKind, str], tuple[FormField, ...]] = {}
+        self._probes: dict[tuple[ComponentKind, str], ProbeFn] = {}
 
     def register(
         self, kind: ComponentKind, component_id: str, plugin_id: str, factory: Factory
@@ -124,6 +132,24 @@ class ComponentRegistry:
     def component_ids(self, kind: ComponentKind) -> list[str]:
         return sorted(self._factories[kind])
 
+    def form_fields(self, kind: ComponentKind, component_id: str) -> tuple[FormField, ...]:
+        """Form fields a plugin declared for one component ('' when none)."""
+        return self._form_fields.get((kind, component_id), ())
+
+    def set_form_fields(
+        self, kind: ComponentKind, component_id: str, fields: tuple[FormField, ...]
+    ) -> None:
+        """Record the ordered form fields a plugin declared for one component."""
+        self._form_fields[(kind, component_id)] = fields
+
+    def probe(self, kind: ComponentKind, component_id: str) -> ProbeFn | None:
+        """A plugin-registered connection probe for one component (None when none)."""
+        return self._probes.get((kind, component_id))
+
+    def set_probe(self, kind: ComponentKind, component_id: str, probe: ProbeFn) -> None:
+        """Record a plugin-registered connection probe for one component."""
+        self._probes[(kind, component_id)] = probe
+
     def snapshots(self) -> list[ComponentSnapshot]:
         return sorted(self._snapshots.values(), key=lambda s: (s.kind.value, s.component_id))
 
@@ -179,6 +205,29 @@ class PluginRegistrar:
         chat-platform bot runtime (e.g. ``napcat``, ``wechaty``). The
         component id is the provider key used by the Bots tab."""
         self._register(ComponentKind.GATEWAY_PROVISIONER, component_id, factory)
+
+    def add_form_fields(
+        self,
+        kind: ComponentKind,
+        component_id: str,
+        fields: tuple[FormField, ...],
+    ) -> None:
+        """Declare the ordered form fields a component's login/option form
+        needs. The TUI renders them generically (text/password/number/
+        boolean/list/select/textarea); the core stores them as pure data."""
+        if not fields:
+            return
+        self._registry.set_form_fields(kind, component_id, fields)
+
+    def add_probe(
+        self,
+        kind: ComponentKind,
+        component_id: str,
+        probe: ProbeFn,
+    ) -> None:
+        """Register a connection probe for one component; used by the
+        'Test' button and the Notifications tab's live status column."""
+        self._registry.set_probe(kind, component_id, probe)
 
     @property
     def config(self) -> MailFlowConfig:
