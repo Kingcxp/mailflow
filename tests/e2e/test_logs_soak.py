@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from mailflow_tui.app import LogsPane
-from test_splash import _make_app
+from test_splash import make_app
 from textual.widgets import TabbedContent
 
 
@@ -26,7 +26,7 @@ async def _tick_once(app: Any, pilot: Any) -> float:
 async def test_logs_soak_responsive(tmp_path: Path) -> None:
     """Pumping logs for ~8s of wall time must not starve the event loop:
     each pump cycle returns quickly and the app still answers queries."""
-    app, service = await _make_app(tmp_path)
+    app, service = await make_app(tmp_path)
     try:
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
@@ -52,7 +52,7 @@ async def test_logs_soak_responsive(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_logs_soak_buffer_bounded(tmp_path: Path) -> None:
     """Even with way more log lines than the ring buffer, memory stays flat."""
-    app, service = await _make_app(tmp_path)
+    app, service = await make_app(tmp_path)
     try:
         async with app.run_test() as pilot:
             await pilot.pause(0.2)

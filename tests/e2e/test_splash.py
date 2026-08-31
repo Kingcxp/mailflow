@@ -16,7 +16,7 @@ from mailflow_tui.splash import SplashScreen
 from test_tui import TUIPlugin, build_config
 
 
-async def _make_app(db_path: Path, *, splash: bool = False) -> tuple[Any, Any]:
+async def make_app(db_path: Path, *, splash: bool = False) -> tuple[Any, Any]:
     from mailflow_notify_console.plugin import plugin as notify_plugin
     from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 
@@ -36,7 +36,7 @@ async def _make_app(db_path: Path, *, splash: bool = False) -> tuple[Any, Any]:
 @pytest.mark.asyncio
 async def test_splash_shows_then_dismisses(tmp_path: Path) -> None:
     """With splash=True the boot screen appears and removes itself."""
-    app, service = await _make_app(tmp_path, splash=True)
+    app, service = await make_app(tmp_path, splash=True)
     try:
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
@@ -54,7 +54,7 @@ async def test_splash_shows_then_dismisses(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_splash_escape_skips(tmp_path: Path) -> None:
     """Escape closes the splash before the duration elapses."""
-    app, service = await _make_app(tmp_path, splash=True)
+    app, service = await make_app(tmp_path, splash=True)
     try:
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
@@ -69,7 +69,7 @@ async def test_splash_escape_skips(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_splash_off_by_default(tmp_path: Path) -> None:
     """Default construction (tests) does not push the splash screen."""
-    app, service = await _make_app(tmp_path)
+    app, service = await make_app(tmp_path)
     try:
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
@@ -81,7 +81,7 @@ async def test_splash_off_by_default(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_splash_logo_animates(tmp_path: Path) -> None:
     """The logo/widgets exist and the interval animates without crashing."""
-    app, service = await _make_app(tmp_path, splash=True)
+    app, service = await make_app(tmp_path, splash=True)
     try:
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
