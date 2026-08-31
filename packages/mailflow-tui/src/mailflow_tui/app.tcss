@@ -60,6 +60,29 @@ Button:focus {
     margin: 0 1 1 1;
 }
 
+#mail-empty-hint {
+    dock: top;
+    margin: 0 1 1 1;
+    color: $text-muted;
+    text-style: italic;
+}
+
+Header {
+    background: $panel;
+    color: $foreground;
+    text-style: bold;
+}
+
+HeaderTitle {
+    color: $accent;
+    text-style: bold;
+}
+
+Footer {
+    background: $panel;
+    color: $foreground;
+}
+
 #mail-table {
     width: 60%;
     height: 1fr;

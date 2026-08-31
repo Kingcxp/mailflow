@@ -666,7 +666,6 @@
       "bots_basics_next": "Next",
       "bots_provider_pick": "Choose the platform:",
       "bots_provider_missing": "No gateway provisioner available for this platform",
-      "bots_provider_console": "Console (local output)",
       "bots_provider_napcat": "QQ (NapCat auto-deploy)",
       "bots_guide_starting": "Starting {provider} setup…",
       "bots_provider_wechaty-manual": "WeChat (WeChaty manual)",
@@ -688,7 +687,13 @@
       "bots_guide_downloaded": "Install complete.",
       "bots_guide_logged_in_btn": "I'm logged in",
       "bots_select_first": "Select a bot row first",
-      "extras_admins": "Platform user ids allowed to run chat commands (QQ number or wxid), one per item. Add yourself here."
+      "extras_admins": "Platform user ids allowed to run chat commands (QQ number or wxid), one per item. Add yourself here.",
+      "splash_tagline": "Unified multi-account mail inbox — plugin pipeline, LLM analysis, rich TUI",
+      "splash_status_plugins": "Loading plugins…",
+      "splash_status_service": "Starting service…",
+      "splash_status_ready": "Ready",
+      "mail_empty": "No mail to show yet — add a mailbox or wait for new mail.",
+      "mail_no_match": "No mail matches the current search or filter."
     },
     "update": {
       "applied_title": "Applied updates",

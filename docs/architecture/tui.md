@@ -12,6 +12,18 @@ forwards `--config` as `config_path`, which is what makes every persisting
 action (settings edits, plugin enable/disable, repository management) work —
 without it the service has no file to write to.
 
+## Boot splash
+
+`mailflow_tui/splash.py: SplashScreen` is a full-screen animation shown for a
+moment at startup when the runner enables it (`MailFlowApp(..., splash=True)`;
+headless tests keep the default `splash=False` so they land directly on the
+main screen). It renders the "MailFlow" logo with a flowing wave of the four
+urgency contract colors plus the accent, a small animated equalizer bar, a
+localized status line that advances (loading plugins → starting service →
+ready) and a `LoadingIndicator`; Escape skips it, and it pops itself after
+~2.6s. All animation timers are created on the screen so Textual tears them
+down with the screen — nothing keeps ticking after it closes.
+
 ## Tabs
 
 - **Mail**: search `Input` with placeholder; urgency-colored `DataTable`
@@ -24,7 +36,8 @@ without it the service has no file to write to.
   `ad/info/important/urgent/follow-automatic` dropdown that mirrors the
   selected mail — plus urgency filter and sort) and a two-row button
   container (refresh/trash/feedback then reply/re-analyze/re-analyze-failed)
-  with equal-width buttons. Reply opens the confirmation-gated modal.
+  with equal-width buttons. An empty view shows a hint (no mail yet vs. no
+  match for the search/filter). Reply opens the confirmation-gated modal.
 - **Mailboxes** (`settings.py: AccountsPane`): accounts table with
   Add / Edit / Delete (forms, not TOML editing) plus the **history browser** —
   Load history pages a mailbox newest-first through
@@ -99,8 +112,17 @@ without it the service has no file to write to.
 - **Logs**: a filterable viewer with a **bounded ring buffer (2000 lines)**,
   a level `Select` (WARNING+ERROR is the default, expandable to INFO/DEBUG),
   a source-group `Select` populated from the seen loggers, and a search box.
-  Rendering re-applies the filters on every drain; the pane sits **after
-  Settings** in the tab order.
+  Rendering is **incremental**: each drain appends only newly pulled lines to
+  the `RichLog` (capped via `max_lines`) instead of rebuilding the whole
+  buffer every second — a full re-render happens only when a filter changes
+  or lines fell off the ring buffer. This keeps the event loop responsive on
+  slow terminals (headless containers, remote shells) even under heavy
+  logging. The pane sits **after Settings** in the tab order.
+
+Keyboard navigation: **Ctrl+1 … Ctrl+9** jump straight to a tab by its stable
+id (mail, actions, mailboxes, LLMs, runtime, market, notifications, settings,
+logs); hidden tabs in remote mode are skipped silently. These bindings are
+`show=False` so they do not clutter the footer.
 
 ## Settings editor
 

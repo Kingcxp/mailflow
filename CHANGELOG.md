@@ -7,6 +7,29 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **Boot splash** — the TUI opens with a full-screen animation
+  (`mailflow_tui/splash.py: SplashScreen`) when started by the runner: the
+  "MailFlow" logo flows through the four urgency contract colors, a small
+  equalizer bar animates, and a localized status line advances (loading
+  plugins → starting service → ready) under a LoadingIndicator. Escape skips
+  it; it pops itself after ~2.6s and its timers die with the screen. Headless
+  tests keep the default `splash=False` so they land directly on the main
+  screen.
+- **Logs tab responsiveness** — log rendering is now **incremental**: each
+  drain appends only newly pulled lines to the `RichLog` (capped via
+  `max_lines`) instead of rebuilding the whole 2000-line buffer every second.
+  A full re-render happens only on a filter change or when lines fall off the
+  ring buffer. This fixes UI freezes on slow terminals (headless containers,
+  remote shells) under heavy logging; the source-group dropdown is also
+  skipped when unchanged. New keys `tui.splash_*`, `tui.mail_empty`,
+  `tui.mail_no_match` in both locales.
+- **Mail tab empty state** — an empty mailbox or a search/filter with no
+  match now shows a localized hint instead of a blank table.
+- **Tab keyboard shortcuts** — Ctrl+1…Ctrl+9 jump straight to a tab by stable
+  id (hidden tabs in remote mode are skipped); bindings are `show=False` so
+  the footer stays uncluttered.
+- **Header/footer styling** — Header title uses the accent color with a bold
+  title; the footer matches the panel surface.
 - **Notifications tab** (Phase 1): the Bots tab is now the Notifications tab
   (`tab-notifications`, `NotificationsPane`) and manages *every* configured
   notifier — chat-platform gateways (NapCat/onebot, WeChaty, OpenWeChat,

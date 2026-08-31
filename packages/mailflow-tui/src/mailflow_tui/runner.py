@@ -132,7 +132,7 @@ async def _run_local(config_path: str | None, *, with_server: bool) -> None:
             server, server_task = await _start_embedded_server(service, config, log_queue)
         from mailflow_tui.app import MailFlowApp
 
-        app = MailFlowApp(service, log_queue)
+        app = MailFlowApp(service, log_queue, splash=True)
         try:
             await app.run_async()
         finally:
@@ -213,7 +213,7 @@ async def _run_remote() -> None:
     await client.start_events()
     await client.enable_logs()
 
-    app = MailFlowApp(adapter, log_queue, remote=True)
+    app = MailFlowApp(adapter, log_queue, remote=True, splash=True)
     try:
         await app.run_async()
     finally:

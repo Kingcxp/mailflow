@@ -449,6 +449,7 @@ class MailPane(Vertical):
         # so it never stamps an override onto the selected mail
         self._urgency_suppress = True
         yield Input(placeholder=self._service.t("tui.search_placeholder"), id="mail-search")
+        yield Static("", id="mail-empty-hint")
         with Horizontal():
             yield DataTable(id="mail-table")
             with ScrollableContainer(id="mail-detail"):
@@ -597,6 +598,15 @@ class MailPane(Vertical):
                 # yield to the event loop so the UI stays interactive while
                 # a large mailbox renders
                 await asyncio.sleep(0)
+        hint = self.query_one_optional("#mail-empty-hint", Static)
+        if hint is not None:
+            if not records:
+                if self._records:
+                    hint.update(self._service.t("tui.mail_no_match"))
+                else:
+                    hint.update(self._service.t("tui.mail_empty"))
+            else:
+                hint.update(_BLANK)
         visible_ids = {record.record_id for record in records}
         if self._selected_id not in visible_ids:
             self._selected_id = records[0].record_id if records else None
@@ -1324,6 +1334,12 @@ class LogsPane(Vertical):
         self._min_level = self._DEFAULT_MIN_LEVEL
         self._source = ""
         self._query = ""
+        self._seen_sources: set[str] = set()
+        # incremental rendering: newly pulled lines are appended to the
+        # RichLog (capped by its own max_lines) instead of re-rendering the
+        # whole 2000-line buffer every second — on slow terminals full
+        # rebuilds stall the event loop. A full rebuild happens only when a
+        # filter changes or the pane (re)mounts.
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="log-controls"):
@@ -1347,7 +1363,7 @@ class LogsPane(Vertical):
                 id="log-search",
             )
         with ScrollableContainer(id="log-scroll"):
-            yield RichLog(id="log-view", wrap=True, highlight=True)
+            yield RichLog(id="log-view", wrap=True, highlight=True, max_lines=2000)
 
     async def on_mount(self) -> None:
         self._render_logs()
@@ -1382,55 +1398,80 @@ class LogsPane(Vertical):
         if source is None:
             return
         current = source.value
-        seen = sorted(
-            {parts[2] for parts in (line.split("|", 3) for line in self._buffer) if len(parts) == 4}
-        )
-        source.set_options(
-            [(self._service.t("tui.logs_all_sources"), "")] + [(name, name) for name in seen]
-        )
+        pairs = [(self._service.t("tui.logs_all_sources"), "")] + [
+            (name, name) for name in sorted(self._seen_sources)
+        ]
+        # drain() runs every second; poking Select.set_options with an
+        # identical list re-renders the widget each tick — skip it
+        signature = repr(pairs)
+        if getattr(self, "_source_signature", None) != signature:
+            source.set_options(pairs)  # pyright: ignore[reportUnknownMemberType]
+            self._source_signature = signature
         if current is not Select.NULL and current != "":
-            source.value = current if current in seen else ""
+            source.value = current if current in self._seen_sources else ""
 
     def drain(self) -> None:
         # remounts (language switch, tab re-compose) can tick the interval
         # while the widget tree is detached — never crash the app for it
-        pulled = False
+        pulled: list[str] = []
         while True:
             try:
                 line = self._log_queue.get_nowait()
             except queue_module.Empty:
                 break
             self._buffer.append(line)
-            pulled = True
-        if pulled:
-            self._refresh_source_options()
-            self._render_logs()
+            pulled.append(line)
+            parts = line.split("|", 3)
+            if len(parts) == 4:
+                self._seen_sources.add(parts[2])
+        if not pulled:
+            return
+        self._refresh_source_options()
+        self._append_new_lines(pulled)
 
     def _render_logs(self) -> None:
         log_view = self.query_one_optional("#log-view", RichLog)
         if log_view is None:
             return
         log_view.clear()
-        min_rank = self._LEVEL_RANK.get(self._min_level, self._LEVEL_RANK[self._DEFAULT_MIN_LEVEL])
-        query = self._query.lower()
         for line in self._buffer:
-            parts = line.split("|", 3)
-            if len(parts) != 4:
-                log_view.write(line)
+            text = self._line_to_text(line)
+            if text is None:
                 continue
-            time_part, level, logger_name, message = parts
-            if self._LEVEL_RANK.get(level, 0) < min_rank:
-                continue
-            if self._source and logger_name != self._source:
-                continue
-            if query and query not in message.lower():
-                continue
-            from rich.text import Text
+            log_view.write(text)
 
-            text = Text(f"{time_part} ")
-            text.append(f"{level:<7}", style=self._LEVEL_STYLES.get(level, "bold"))
-            text.append(f" {logger_name} ")
-            text.append(message)
+    def _line_to_text(self, line: str) -> Any:
+        """Format one buffered line under the current filters; '' means the
+        line is filtered out (or is a non-log line that passes through)."""
+        parts = line.split("|", 3)
+        if len(parts) != 4:
+            return line
+        time_part, level, logger_name, message = parts
+        if self._LEVEL_RANK.get(level, 0) < self._LEVEL_RANK.get(
+            self._min_level, self._LEVEL_RANK[self._DEFAULT_MIN_LEVEL]
+        ):
+            return None
+        if self._source and logger_name != self._source:
+            return None
+        if self._query and self._query.lower() not in message.lower():
+            return None
+        from rich.text import Text
+
+        text = Text(f"{time_part} ")
+        text.append(f"{level:<7}", style=self._LEVEL_STYLES.get(level, "bold"))
+        text.append(f" {logger_name} ")
+        text.append(message)
+        return text
+
+    def _append_new_lines(self, new_lines: list[str]) -> None:
+        """Incremental path: write only rows added since the last drain."""
+        log_view = self.query_one_optional("#log-view", RichLog)
+        if log_view is None:
+            return  # detached: on remount, _render_logs rebuilds cleanly
+        for line in new_lines:
+            text = self._line_to_text(line)
+            if text is None:
+                continue
             log_view.write(text)
 
     def on_select_changed(self, event: Any) -> None:
@@ -2066,7 +2107,32 @@ class MailFlowApp(App[None]):
     CSS_PATH = "app.tcss"
     BINDINGS: ClassVar[list[Any]] = [
         Binding("ctrl+q", "quit", "Quit"),
+        # tab switching: ctrl+number jumps straight to a tab (labels are
+        # localized, ids are stable; missing tabs — remote mode hides some —
+        # are skipped in the action)
+        # quoted ids: Textual parses action args with ast.literal_eval, so a
+        # bare ``tab-mail`` would be evaluated as ``tab - mail`` and fail
+        Binding("ctrl+1", "goto_tab('tab-mail')", "Mail", show=False),
+        Binding("ctrl+2", "goto_tab('tab-actions')", "Actions", show=False),
+        Binding("ctrl+3", "goto_tab('tab-mailboxes')", "Mailboxes", show=False),
+        Binding("ctrl+4", "goto_tab('tab-llms')", "LLMs", show=False),
+        Binding("ctrl+5", "goto_tab('tab-runtime')", "Runtime", show=False),
+        Binding("ctrl+6", "goto_tab('tab-market')", "Market", show=False),
+        Binding("ctrl+7", "goto_tab('tab-notifications')", "Notifications", show=False),
+        Binding("ctrl+8", "goto_tab('tab-settings')", "Settings", show=False),
+        Binding("ctrl+9", "goto_tab('tab-logs')", "Logs", show=False),
     ]
+
+    def action_goto_tab(self, tab_id: str) -> None:
+        """Switch to a tab by its stable id; silently ignore hidden tabs
+        (remote mode omits mailboxes/llms/market)."""
+        try:
+            tabs = self.query_one(TabbedContent)
+            tabs.get_tab(tab_id)  # pyright: ignore[reportUnknownMemberType]
+            tabs.active = tab_id  # pyright: ignore[reportUnknownMemberType]
+        except Exception:
+            pass
+
     TITLE = "MailFlow"
 
     def __init__(
@@ -2075,11 +2141,13 @@ class MailFlowApp(App[None]):
         log_queue: queue_module.Queue[Any],
         *,
         remote: bool = False,
+        splash: bool = False,
     ) -> None:
         super().__init__()
         self._service = service
         self._log_queue = log_queue
         self._remote = remote
+        self._splash = splash
         self._log_timer: Any = None
         # shared plugin-entry cache: the single source of truth for the
         # detail dialog. MarketPane writes its fetched entries here, and
@@ -2162,6 +2230,10 @@ class MailFlowApp(App[None]):
         self._refresh_lock = asyncio.Lock()
         self._service.on("mailflow.mail.processed", self._on_mail_processed)
         self._service.on("language.changed", self._on_language_changed)
+        if self._splash:
+            from mailflow_tui.splash import SplashScreen
+
+            self.push_screen(SplashScreen(self._service.t, self._version_string()))  # pyright: ignore[reportUnknownMemberType]
 
     def _version_string(self) -> str:
         """App version for the title bar; remote adapter snapshots are
