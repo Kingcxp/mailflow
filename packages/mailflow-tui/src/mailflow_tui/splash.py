@@ -2,9 +2,15 @@
 
 Shown for a moment while the app mounts (service is already started by the
 runner; the splash just makes the handoff feel alive). Renders the logo with
-a flowing brand-color wave, a tiny equalizer bar, a step-advancing status
-line and a LoadingIndicator; dismisses itself after ``duration`` seconds or
-on Escape. Needs only the translation callable — no service dependency.
+a flowing brand-color wave, a tiny equalizer bar and a step-advancing status
+line; dismisses itself after ``duration`` seconds or on Escape. Needs only
+the translation callable — no service dependency.
+
+Rendering is deliberately gentle: slow terminals (headless containers, web
+shells) stall when a TUI floods them with frame updates, so the animation
+ticks at ~5fps, is disabled entirely when the app's animation level is
+``none``, and never uses Textual's `LoadingIndicator` (which repaints at
+16fps on its own timer).
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, Middle
 from textual.screen import Screen
-from textual.widgets import LoadingIndicator, Static
+from textual.widgets import Static
 
 # MailFlow brand palette: the four urgency contract colors plus the accent.
 # Drawn left-to-right as a moving wave; the logo cycles through them in
@@ -35,6 +41,10 @@ _LOGO = "MailFlow"
 
 _LEVELS = "▁▃▅▇█"
 
+# frames per second for the color wave — low enough that a slow terminal
+# never falls behind, high enough to read as motion
+_TICK_INTERVAL = 1 / 5
+
 
 def _color(palette_index: int) -> str:
     r, g, b = _PALETTE[palette_index % len(_PALETTE)]
@@ -45,7 +55,7 @@ def _logo_text(frame: int) -> RichText:
     """The logo, each character tinted from a moving slice of the palette."""
     text = RichText(no_wrap=True)
     for index, char in enumerate(_LOGO):
-        color = _color(int(frame / 5) + index * 2)
+        color = _color(int(frame / 2) + index * 2)
         text.append(char, style=f"bold {color}")
     return text
 
@@ -54,9 +64,9 @@ def _wave_text(frame: int) -> RichText:
     """A 20-bar equalizer; bar heights follow sine, tinted like the logo."""
     text = RichText(no_wrap=True)
     for bar in range(20):
-        phase = bar * 0.55 + frame * 0.35
+        phase = bar * 0.55 + frame * 0.2
         height = int(1 + 4 * (0.5 + 0.5 * math.sin(phase)))
-        color = _color(int(frame / 5) + bar * 2)
+        color = _color(int(frame / 2) + bar * 2)
         text.append(_LEVELS[height - 1] * 2, style=color)
     return text
 
@@ -81,12 +91,9 @@ class SplashScreen(Screen[None]):
     #splash-wave {
         margin-bottom: 1;
     }
-    LoadingIndicator {
-        margin-bottom: 1;
-    }
     #splash-status {
         color: $text-muted;
-        margin-bottom: 2;
+        margin-bottom: 1;
     }
     #splash-version {
         color: $text-disabled;
@@ -113,25 +120,39 @@ class SplashScreen(Screen[None]):
         self._frame = 0
         self._status_step = 0
         self._status_ticks = 0
+        self._timer: Any = None
 
     def compose(self) -> ComposeResult:
         with Center(), Middle():
             yield Static("", id="splash-logo")
             yield Static(self._t("tui.splash_tagline"), id="splash-tagline")
             yield Static("", id="splash-wave")
-            yield LoadingIndicator(id="splash-loader")
             yield Static("", id="splash-status")
             yield Static(self._version, id="splash-version")
 
     async def on_mount(self) -> None:
         self._render_logo()
-        self.set_interval(1 / 12, self._tick)
+        # honour the app's animation setting: headless/slow hosts (which set
+        # animation_level to "none") get a static frame instead of a busy
+        # timer that can stall a slow terminal's output pipe
+        if self.app.animation_level != "none":  # pyright: ignore[reportUnknownMemberType]
+            self._timer = self.set_interval(_TICK_INTERVAL, self._tick)
+        else:
+            status = self.query_one("#splash-status", Static)
+            status.update(self._t(self._STATUS_STEPS[-1]))  # pyright: ignore[reportUnknownMemberType]
         self.set_timer(self._duration, self._finish)
 
     def _finish(self) -> None:
-        """Return to the main screen. ``pop_screen`` returns an AwaitComplete
-        that must not be awaited from a message handler (Textual forbids it);
-        fire-and-forget matches how the app itself pushes screens."""
+        """Return to the main screen, stopping the animation first.
+
+        ``pop_screen`` returns an AwaitComplete that must not be awaited from
+        a message handler (Textual forbids it); fire-and-forget matches how
+        the app itself pushes screens. Stopping the tick timer explicitly
+        guarantees the animation can never outlive the screen even if the
+        pop is deferred."""
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
         self.app.pop_screen()  # pyright: ignore[reportUnknownMemberType]
 
     def _render_logo(self) -> None:
@@ -144,7 +165,7 @@ class SplashScreen(Screen[None]):
         self._frame += 1
         self._render_logo()
         self._status_ticks += 1
-        if self._status_ticks % 4 == 0 and self._status_step < len(self._STATUS_STEPS) - 1:
+        if self._status_ticks % 2 == 0 and self._status_step < len(self._STATUS_STEPS) - 1:
             self._status_step += 1
             status = self.query_one("#splash-status", Static)
             status.update(self._t(self._STATUS_STEPS[self._status_step]))  # pyright: ignore[reportUnknownMemberType]
