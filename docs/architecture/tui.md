@@ -65,24 +65,42 @@ without it the service has no file to write to.
   double-click path.
   Every pane loads asynchronously (mount workers) so startup never blocks.
 - **Market**: VS Code-style plugin store — search input, localized category
-  filter (known ids render through the language packs), a **sort dropdown**
-  (name / status / category / installed-first / enabled-first /
-  not-installed-first), a list of plugin name + description + version +
-  status, and a detail pane rendering the plugin's markdown readme
-  (scrollable; links are clickable and route through `general.browser_mode`)
-  with Install / Uninstall / Enable / Disable buttons. **Locally installed
-  and bundled plugins appear as entries too**, their docstrings becoming the
-  detail readme, so chat providers can ship setup docs. The repository fetch
-  runs in an exclusive worker and filtering renders from the cached entries.
-  **New** opens the plugin wizard (`scaffold.py`); **Export** opens the
-  bot-framework export wizard (`export.py`).
+  filter (known ids render through the language packs: `mail_source`,
+  `processor`, `llm_backend`, `llm_enhancer`, `notifier`, `storage`,
+  `bot_exporter`, **`gateway`**), a **sort dropdown** (name / status /
+  category / installed-first / enabled-first / not-installed-first), a list
+  of plugin name + description + version + status, and a detail pane
+  rendering the plugin's markdown readme (scrollable; links are clickable and
+  route through `general.browser_mode`) with Install / Uninstall / Enable /
+  Disable buttons. **Locally installed and bundled plugins appear as entries
+  too**, their docstrings becoming the detail readme, so chat providers can
+  ship setup docs. The repository fetch runs in an exclusive worker and
+  filtering renders from the cached entries. **New** opens the plugin wizard
+  (`scaffold.py`); **Export** opens the bot-framework export wizard
+  (`export.py`).
 - **Export wizard** (`BotExportScreen`): framework `Select` (every
   registered `BOT_EXPORTER` plugin), `DirectoryTree` folder pick, optional
   subfolder checkbox + input, and a Generate button running
   `mailflow.bot_export.export_bot_plugin` in a worker.
-- **Logs**: `RichLog` fed by the injected handler on a timer — never stdout
-  scraping.
+- **Notifications** (`notifications.py: NotificationsPane`): manages *every*
+  configured notifier — chat-platform gateways (NapCat/onebot, WeChaty,
+  OpenWeChat, OpenClaw) and plain delivery channels (console, telegram,
+  webhook, ntfy, smtp, ...). The table shows name / provider / enabled /
+  urgency threshold / targets / live status. In-place actions toggle the
+  selected notifier enabled and edit its delivery urgency; Add routes
+  gateway-backed providers through the guided setup (`GatewayGuideModal`):
+  auto-install/download, start, then drive the **QR login inside the TUI**,
+  and persist the resulting notifier config. On mount the pane auto-connects
+  every enabled notifier in a bounded worker and refreshes every 30s;
+  failures render inline as `offline: <reason>`, never blocking startup.
+  Deleting a gateway-backed row shuts the supervised process down first so
+  no orphan QQ/NapCat instances are left running.
 - **Settings**: the VS Code-style editor described below.
+- **Logs**: a filterable viewer with a **bounded ring buffer (2000 lines)**,
+  a level `Select` (WARNING+ERROR is the default, expandable to INFO/DEBUG),
+  a source-group `Select` populated from the seen loggers, and a search box.
+  Rendering re-applies the filters on every drain; the pane sits **after
+  Settings** in the tab order.
 
 ## Settings editor
 
@@ -102,9 +120,18 @@ schema knowledge of its own.
 - List and mapping values open `ListEditScreen` (one entry per line, or JSON
   for mappings); structured entries open `EntryFormScreen`, a real form window
   with per-field labels, descriptions and a Back button.
+- **Plugin-declared forms**: a plugin may register `FormField`s for a
+  component (`registrar.add_form_fields(kind, component_id, fields)`); the
+  form renders them generically (string / password / number / boolean /
+  list / select / textarea), falling back to the built-in field layouts when
+  a provider declares none. An optional plugin `probe` backs the Test button
+  and the Notifications status column. The contract is capability-based — a
+  `mail_source` plugin may declare exactly the fields its transport needs
+  (it could connect to a message platform that is only "like a mailbox").
 - Each form's **Test** button dispatches by group: mailbox forms run a
   real IMAP login probe (20s socket timeout), LLM forms send a one-shot
-  completion and report latency plus the model name.
+  completion and report latency plus the model name, notifier forms probe
+  the registered connector.
 - An invalid edit shows which option is wrong and why (from
   `SettingsError.option`/`.message`) in the status line and as a notification;
   a valid edit is persisted immediately through the service.
@@ -144,7 +171,8 @@ table population, search filtering, urgency mutation through the Select,
 language persistence, prepare/confirm gating of the reply modal, the settings
 cards (save / invalid value / restore default), the LLM chain reordering, the
 mailbox history browser (analyze a picked mail, skip a known one), the
-repository dialog's Back button, and that a processed-mail event refreshes the
+repository dialog's Back button, the Notifications pane (lists all notifiers,
+toggles enabled, edits urgency), and that a processed-mail event refreshes the
 panes without a manual refresh.
 
 ## Opening web links (browser_mode)
@@ -187,25 +215,6 @@ Notes:
 - Any service implementing Carbonyl's render contract (`GET {render}/{url}`
   returning terminal-renderable output) can be used in place of Carbonyl.
 - `browser_mode` changes apply on restart.
-
-## Bots tab
-
-The Bots tab lists configured onebot/wechaty/openclaw-weixin notifier
-instances (table fills the tab height) and probes their login state on
-demand with **concurrent** checks run in a worker. QR scanning happens in
-the bot runtime itself (NapCat, WeChaty via the **pad protocol** — see the
-plugin's market doc, OpenClaw); the tab verifies the session MailFlow sends
-through. Probe statuses are localized (logged-in-as / online / unreachable /
-HTTP status). The add form is a real
-`EntryFormScreen`: the provider is a dropdown limited to the IM providers,
-each provider renders its own option fields (endpoint URL, token, targets)
-with bilingual descriptions, and a help line above the table explains the
-external-runtime login model.
-
-A planned rework (see `bot-login.md`) turns this into an auto-provisioning
-flow: the form asks for basics first, then the provider, then guides the
-user through installing/starting the gateway (NapCat / WeChaty) with the QR
-login inside the TUI.
 
 ## Remote mode and embedded server
 

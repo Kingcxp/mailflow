@@ -53,9 +53,10 @@ notifiers, storage — installed from a plugin marketplace.
   languages load as data-only JSON packs; the choice persists.
 - **Plugin marketplace** (VS Code style) — search, category filters, markdown
   details, install / uninstall / enable / disable from commands and the TUI;
-  built-ins are categorized (mail_source, processor, llm_backend, notifier,
-  storage, bot_exporter); disabling a plugin never breaks startup (orphaned
-  config entries are skipped with a warning).
+  built-ins are categorized (mail_source, processor, llm_backend,
+  llm_enhancer, notifier, storage, bot_exporter, gateway); disabling a
+  plugin never breaks startup (orphaned config entries are skipped with a
+  warning).
 - **Bot-framework export** — turn a configured instance into a plugin for
   NoneBot2, AstrBot or any other chatbot framework (`mailflow export
   --framework <id>`, TUI export wizard with folder tree, `make
@@ -197,9 +198,9 @@ workflow validates exactly the plugins each PR changes.
 **Write your own plugin** — the TUI has a new-plugin wizard (Market tab →
 New): pick a folder in the directory tree, optionally create a subfolder,
 choose the template category (mail source / processor / LLM backend /
-notifier / storage / bot exporter), and MailFlow generates a complete,
-loadable template. The wizard is also available to hosts embedding the core
-via `mailflow.plugin_template.scaffold_plugin`.
+notifier / storage / bot exporter / LLM enhancer / gateway), and MailFlow
+generates a complete, loadable template. The wizard is also available to
+hosts embedding the core via `mailflow.plugin_template.scaffold_plugin`.
 
 **Ship MailFlow as a bot plugin** — the Market tab's Export button opens the
 same folder-tree wizard, now selecting a framework (NoneBot, AstrBot, ...)

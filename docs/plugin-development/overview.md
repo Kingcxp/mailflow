@@ -94,9 +94,90 @@ continues (the failure is logged).
 - Declare `kinds` so snapshots and `plugin list` show what you provide.
 - Never log credentials; sanitize error text before it can reach persisted
   notes.
-- Keep processors deterministic where possible and fast; LLM work goes
-  through the injected `LLMRouter` (or through the built-in
-  `llm-importance` processor when you only need to shape its analysis).
+## Declaring forms and probes
+
+Fields and probes are registered through the classic registrar inside
+`mailflow_register` (the declarative `PluginBuilder` currently covers
+component factories only):
+
+```python
+from mailflow.forms import FormField
+
+
+def mailflow_register(self, registrar, config) -> None:
+    registrar.add_source("imap", ImapSource)
+    registrar.add_form_fields(
+        ComponentKind.MAIL_SOURCE,
+        "imap",
+        [
+            FormField(field_id="host", kind="string", default="imap.example.com", required=True),
+            FormField(field_id="use_tls", kind="boolean", default=True),
+        ],
+    )
+```
+
+`registrar.add_form_fields(kind, component_id, fields)` is
+`PluginRegistrar.add_form_fields`; the runtime snapshot reads them back via
+`ComponentRegistry.form_fields(kind, component_id)`. `FormField.kind` is
+one of the `Literal` strings `string | password | number | boolean | list |
+select | textarea` (the `FormFieldKind` type alias in `mailflow.forms`).
+`label_key`/`description_key` carry locale keys and fall back to the
+built-in `tui.extras_<id>` labels.
+
+**Probes** verify a configured component live — they back the form's Test
+button and the Notifications tab status column:
+
+```python
+async def probe_imap(config: dict, instance: ImapSource) -> str:
+    return "logged-in-as user"  # or "offline: connection refused"
+
+
+registrar.add_probe(ComponentKind.MAIL_SOURCE, "imap", probe_imap)
+```
+
+`ProbeFn = Callable[[dict[str, Any], Any], Awaitable[str]]`: the raw config
+mapping plus the instantiated component; return a human-readable status
+string. Components without a probe report `"not probed"`.
+
+The contract is **capability-based, not literal-type-based**: a
+`mail_source` plugin may connect to anything "like a mailbox" (IMAP, a
+chat platform, an API) and declare exactly the fields its transport needs.
+The marketplace validates a plugin by loading it, instantiating every
+registered factory and probing — it never assumes a known component-id
+vocabulary.
+
+## Gateway provisioners
+
+`gateway` is both a marketplace category and a component kind
+(`ComponentKind.GATEWAY_PROVISIONER`). A gateway plugin installs / starts /
+supervises an external bot runtime (NapCat, WeChaty, OpenWeChat) and drives
+its QR login from inside the TUI; the `NotificationsPane` routes
+gateway-backed notifiers through it. Author one with the `gateway`
+scaffold (`mailflow plugin new --kind gateway`) or the declarative
+decorator:
+
+```python
+from typing import Any
+
+from mailflow.contracts import GatewayInstance, GatewayProvisioner
+
+
+@PLUGIN.gateway_provisioner("napcat")
+class NapCatProvisioner(GatewayProvisioner):
+    async def detect(self) -> str: ...
+    async def install(self, instance_id: str, options: dict[str, Any]) -> None: ...
+    async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance: ...
+    async def stop(self, instance_id: str) -> None: ...
+    async def status(self, instance_id: str) -> GatewayInstance: ...
+    async def qr(self, instance_id: str) -> str: ...
+```
+
+The factory registered by the decorator is the zero-argument callable that
+returns the provisioner object; `mailflow.gateway.GatewayManager` drives the
+lifecycle (persist, restart on crash, stop on shutdown).
+
+See `docs/architecture/tui-notifications-and-plugin-ecosystem.md` §1 for
+the guided-setup flow.
 
 ## Guides
 

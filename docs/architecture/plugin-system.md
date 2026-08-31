@@ -88,6 +88,63 @@ Frozen mode does not promise arbitrary post-build plugin discovery.
 | `NOTIFIER`        | `(NotifierConfig) -> Notifier`                     | `console`             |
 | `STORAGE`         | `(StorageConfig) -> StorageBackend`                | `sqlite`              |
 | `BOT_EXPORTER`    | `(BotExportContext) -> BotExportResult`            | `nonebot`, `astrbot`  |
+| `GATEWAY_PROVISIONER` | `() -> GatewayProvisioner`     | `napcat`, `wechaty`   |
+
+`GATEWAY_PROVISIONER` factories are zero-argument callables returning a
+`GatewayProvisioner` protocol object (`mailflow.contracts.GatewayProvisioner`)
+implementing the async methods `detect`, `install`, `start`, `stop`,
+`status` and `qr`; `mailflow.gateway.GatewayManager` owns the lifecycle
+(persist state, restart on crash, stop on shutdown). The Notifications tab
+(`NotificationsPane`) routes gateway-backed notifiers through them. See
+`docs/architecture/bot-login.md` for the flow.
+
+## Form fields and probes
+
+Component factories take config objects, but the TUI needs to know *which
+fields a form must present* and how to *verify a config live*. That is
+declared, not guessed. `mailflow.forms.FormField` is the field model; a
+plugin registers its fields with the registrar at registration time:
+
+```python
+from mailflow.forms import FormField
+
+registrar.add_form_fields(
+    ComponentKind.MAIL_SOURCE,
+    "imap",
+    [
+        FormField(field_id="host", kind="string", default="imap.example.com", required=True),
+        FormField(field_id="use_tls", kind="boolean", default=True),
+    ],
+)
+```
+
+`FormField.kind` is one of the `Literal` strings `string`, `password`,
+`number`, `boolean`, `list`, `select`, `textarea` (`FormFieldKind` type
+alias in `mailflow.forms`); `label_key`/`description_key` hold locale keys
+and fall back to the built-in `tui.extras_<id>` labels. The same
+registration API exists as `ComponentRegistry.form_fields` (runtime
+snapshot) and is surfaced to plugins through
+`PluginRegistrar.add_form_fields(kind, component_id, fields)`.
+`EntryFormScreen` renders declared fields generically and falls back to its
+built-in layouts when a provider declares none.
+
+Probes answer "is this configured component reachable?":
+
+```python
+registrar.add_probe(ComponentKind.MAIL_SOURCE, "imap", probe_fn)
+```
+
+`ProbeFn = Callable[[dict[str, Any], Any], Awaitable[str]]` — takes the raw
+config mapping plus the component instance and returns a status string
+(e.g. `"logged-in-as <user>"` or `"offline: connection refused"`). Probes
+back the **Test** button in `EntryFormScreen` and the live status column of
+the Notifications tab; un-probed components report `"not probed"` rather
+than failing.
+
+The contract is **capability-based, not literal-type-based**: a
+`mail_source` plugin may connect to anything "like a mailbox" and declare
+exactly the fields its transport needs. Nothing assumes a plugin is typed
+by its component id beyond the kind.
 
 `BOT_EXPORTER` factories turn a configured instance into a chatbot-framework
 plugin; see `docs/architecture/bot-export.md` and

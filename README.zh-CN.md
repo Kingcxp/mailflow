@@ -39,7 +39,7 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
   绝不触碰宿主的根日志器。
 - **i18n** —— 内置英文（默认）与简体中文；其他语言以纯数据 JSON 包加载；语言选择持久化。
 - **插件商城**（VS Code 风格）—— 搜索、分类筛选、Markdown 详情，命令行与 TUI 均可安装/卸载/启用/禁用；
-  内置插件按类别组织（mail_source、processor、llm_backend、llm_enhancer、notifier、storage、bot_exporter）；
+  内置插件按类别组织（mail_source、processor、llm_backend、llm_enhancer、notifier、storage、bot_exporter、gateway）；
   IMAP 邮件源内置 QQ、163、Outlook、Gmail 预设，LLM 内置 OpenAI 兼容与 Anthropic 两种格式；
   禁用插件绝不会导致启动失败（孤立配置项会跳过并告警）。
 - **机器人框架导出** —— 把配置好的实例导出为 NoneBot2、AstrBot 或任何其他聊天机器人框架的插件
@@ -172,7 +172,7 @@ uv run mailflow plugin install mailflow-notify-ntfy     # 重启后加载
 其 docs/ 目录是插件开发指南，pull request 工作流只校验每个 PR 改动的插件。
 
 **写你自己的插件** —— TUI 提供新插件向导（Market 标签 → New）：在目录树中选择文件夹，
-可选创建子文件夹，选择模板类别（邮件源 / 处理器 / LLM 后端 / 通知器 / 存储 / 机器人导出器），
+可选创建子文件夹，选择模板类别（邮件源 / 处理器 / LLM 后端 / 通知器 / 存储 / 机器人导出器 / LLM 增强器 / 网关），
 MailFlow 生成完整可加载的模板。内嵌核心的宿主也可通过 `mailflow.plugin_template.scaffold_plugin` 使用向导。
 
 **把 MailFlow 导出为机器人插件** —— Market 标签的 Export 按钮打开同一个目录树向导，

@@ -1,4 +1,13 @@
 # Bot platform login (auto-provisioned gateways)
+> **Superseded.** This page described the gateway auto-provisioning flow
+> (form-driven install + QR login for NapCat / WeChaty / OpenWeChat) before
+> the Notifications tab existed. That flow is now a feature of the
+> Notifications tab, managed by `NotificationsPane` in
+> `mailflow_tui/notifications.py`; the approved architecture plan is
+> [tui-notifications-and-plugin-ecosystem.md](tui-notifications-and-plugin-ecosystem.md),
+> and the current UI behavior is documented in
+> [tui.md](tui.md) → "Notifications tab". The sections below are kept for
+> historical reference.
 
 How MailFlow sets up IM chat bot platforms (QQ via OneBot/NapCat, WeChat via
 WeChaty pad protocol) with as little manual work as possible: the user picks

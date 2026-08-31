@@ -7,6 +7,40 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **Notifications tab** (Phase 1): the Bots tab is now the Notifications tab
+  (`tab-notifications`, `NotificationsPane`) and manages *every* configured
+  notifier — chat-platform gateways (NapCat/onebot, WeChaty, OpenWeChat,
+  OpenClaw) and plain delivery channels (console, telegram, webhook, ntfy,
+  smtp, ...). Columns: name / provider / enabled / urgency / targets /
+  status. In-place actions toggle `enabled` and edit the delivery urgency
+  (`minimum_urgency`) with a re-sync guard; on mount every enabled notifier
+  is probed in a bounded worker (concurrency 4) and the status column fills
+  in, refreshing every 30s. Deleting a gateway-backed row shuts the
+  supervised process down first.
+- **Plugin-declared forms and probes** (Phase 2): new `mailflow/forms.py`
+  (`FormField`, `FormSchema`, `FormFieldKind` Literal) and registry hooks
+  `PluginRegistrar.add_form_fields` / `add_probe` (runtime snapshots via
+  `ComponentRegistry.form_fields` / `probe`). `EntryFormScreen` renders a
+  plugin's declared fields generically (string/password/number/boolean/
+  list/select/textarea) and falls back to its built-in extras when a
+  provider declares none; plugin probes back the form's Test button and the
+  Notifications status column. The contract is capability-based — a
+  `mail_source` plugin may connect to anything "like a mailbox".
+- **Gateway marketplace category** (Phase 3): `gateway` is now a
+  marketplace/docs category plus a `gateway_provisioner()` decorator and
+  scaffold template; the Market category filter picks up
+  `market_category_gateway` in both locales.
+- **15 new marketplace plugins** (Phase 4, in `mailflow-repo`): 6 notifiers
+  (DingTalk, Feishu, WeCom, Slack, Discord, ServerChan), 3 processors
+  (filter, archive, rules), 2 mail sources (Gmail, Outlook — IMAP/SMTP with
+  app-password auth; native OAuth documented as future work) and 4 LLM
+  presets (DeepSeek, Qwen, Zhipu, Moonshot), all validated loadable and
+  runnable.
+- **Logs tab rework** (Phase 0): the Logs tab now sits after Settings with
+  a bounded ring buffer (2000 lines), a WARNING+ERROR default level filter
+  (expandable to INFO/DEBUG), a source-group filter from the seen loggers
+  and a search box; the view scrolls within the pane instead of growing
+  without limit.
 - **Bot platform auto-provisioning** (`GATEWAY_PROVISIONER` component kind,
   `mailflow.gateway.GatewayManager`): the Bots tab now walks through a
   three-step setup — basics (instance name) → provider dropdown (napcat,
