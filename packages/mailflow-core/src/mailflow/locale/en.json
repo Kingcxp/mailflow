@@ -630,7 +630,7 @@
       "market_category_llm_backend": "LLM backends",
       "market_category_llm_enhancer": "LLM enhancers",
       "market_category_storage": "Storage",
-      "market_category_bot_exporter": "Bot exporters",
+      "market_category_gateway": "Gateways",
       "bots_qr_title": "NapCat QR login (approximate rendering — widen the terminal for a clearer code)",
       "bots_qr_ok": "Logged in — writing the config…",
       "bots_qr_timeout": "Timed out waiting for the scan (5 min). Start NapCat and click Add again.",

@@ -104,6 +104,9 @@ class PluginBuilder:
     def llm_enhancer(self, component_id: str | None = None) -> Callable[[Factory], Factory]:
         return self._register(ComponentKind.LLM_ENHANCER, component_id)
 
+    def gateway_provisioner(self, component_id: str | None = None) -> Callable[[Factory], Factory]:
+        return self._register(ComponentKind.GATEWAY_PROVISIONER, component_id)
+
     def build(self) -> Any:
         """Return a plugin object exposing the two pluggy hooks."""
         plugin_id = self._plugin_id
@@ -133,6 +136,7 @@ class PluginBuilder:
                         ComponentKind.STORAGE: registrar.add_storage,
                         ComponentKind.BOT_EXPORTER: registrar.add_bot_exporter,
                         ComponentKind.LLM_ENHANCER: registrar.add_llm_enhancer,
+                        ComponentKind.GATEWAY_PROVISIONER: registrar.add_gateway_provisioner,
                     }[registration.kind]
                     add(registration.component_id, registration.factory)
 

@@ -630,7 +630,7 @@
       "market_category_llm_backend": "大模型后端",
       "market_category_llm_enhancer": "大模型增强",
       "market_category_storage": "存储",
-      "market_category_bot_exporter": "机器人导出",
+      "market_category_gateway": "网关",
       "bots_qr_title": "NapCat 扫码登录（二维码为近似渲染，请使用能看清的终端宽度）",
       "bots_qr_ok": "登录成功，正在写入配置…",
       "bots_qr_timeout": "等待扫码超时（5 分钟）。请确认 NapCat 已启动并重新点击添加。",

@@ -35,6 +35,7 @@ CATEGORIES = (
     "storage",
     "bot_exporter",
     "llm_enhancer",
+    "gateway",
 )
 
 _CATEGORY_LABEL = {
@@ -45,6 +46,7 @@ _CATEGORY_LABEL = {
     "storage": "Storage backend",
     "bot_exporter": "Bot exporter",
     "llm_enhancer": "LLM enhancer",
+    "gateway": "Gateway provisioner",
 }
 
 _DESCRIPTION = {
@@ -55,6 +57,7 @@ _DESCRIPTION = {
     "storage": "MailFlow storage backend: durable persistence for records and drafts",
     "bot_exporter": "MailFlow bot exporter: turns a configured instance into a chatbot-framework plugin",
     "llm_enhancer": "MailFlow LLM enhancer: bounded customization of the built-in LLM analysis",
+    "gateway": "MailFlow gateway provisioner: installs/start/supervises a chat-platform bot runtime",
 }
 
 # plugin.json readme shown in the marketplace; the <<SPAN_COLOR>> placeholder
@@ -191,6 +194,7 @@ PLUGIN = define_plugin(
         "storage": _STORAGE_BODY,
         "bot_exporter": _BOT_EXPORTER_BODY,
         "llm_enhancer": _LLM_ENHANCER_BODY,
+        "gateway": _GATEWAY_PROVISIONER_BODY,
     }
     body = (
         module_by_category[category]
@@ -395,6 +399,47 @@ class {Category}Enhancer:
 
 
 '''.replace("{Category}", "LLM")
+
+_GATEWAY_PROVISIONER_BODY = '''@PLUGIN.gateway_provisioner("{component_id}")
+class {Category}Provisioner:
+    """Installs/start/supervises one chat-platform bot runtime.
+
+    The component id is the provider key used by the Notifications tab.
+    Returns GatewayInstance objects for start/status; the QR step drives
+    the login flow (base64 PNG in ``qr()``, or the logged-in sentinel)."""
+
+    backend_id = "{component_id}"
+
+    async def detect(self) -> str:
+        # TODO: report installed/running state (e.g. "not installed")
+        return "detected"
+
+    async def install(self, instance_id, options) -> None:
+        # TODO: download/install the runtime into data/gateways/...
+        raise NotImplementedError
+
+    async def start(self, instance_id, options):
+        # TODO: launch the runtime and return a running GatewayInstance
+        # (provider, instance_id, status="running", endpoint=..., extra=...)
+        from mailflow.contracts import GatewayInstance
+
+        raise NotImplementedError
+
+    async def stop(self, instance_id) -> None:
+        raise NotImplementedError
+
+    async def status(self, instance_id):
+        from mailflow.contracts import GatewayInstance
+
+        return GatewayInstance(provider="{component_id}", instance_id=instance_id, status="stopped")
+
+    async def qr(self, instance_id) -> str:
+        # TODO: return the login QR as base64 PNG, the logged-in sentinel
+        # "__MAILFLOW_LOGGED_IN__", an "ERROR: ..." diagnostic, or ""
+        return ""
+
+
+'''.replace("{Category}", "Gateway")
 
 
 def template_files(plugin_id: str, category: str, *, name: str = "") -> dict[str, str]:

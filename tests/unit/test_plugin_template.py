@@ -43,6 +43,7 @@ def test_generated_module_compiles_and_loads(category: str, tmp_path: Path) -> N
         "storage": "storage",
         "bot_exporter": "bot_exporter",
         "llm_enhancer": "llm_enhancer",
+        "gateway": "gateway_provisioner",
     }[category]
     plugin_id = f"mailflow-demo-{category.replace('_', '-')}"
     target = scaffold_plugin(tmp_path / "plugin", plugin_id, category)
