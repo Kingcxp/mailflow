@@ -470,3 +470,37 @@ def _accounts_pane(app: Any) -> Any:
     from mailflow_tui.settings import AccountsPane
 
     return app.query_one(AccountsPane)
+
+
+async def test_notifier_form_mounts_with_valid_provider_default(tmp_path: Path) -> None:
+    """Regression: clicking Add notification must not crash with
+    InvalidSelectValueError. The notifier form's provider choices are the
+    IM/gateway platforms, and the default provider must be one of them
+    (the old default "console" was not, so Textual Select rejected it at
+    mount)."""
+    from mailflow_tui.settings import EntryFormScreen
+
+    service = await start_service_quiet(tmp_path)
+    CommandRouter(service)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            app.push_screen(cast(Any, EntryFormScreen(cast(Any, service), "notifiers")))
+            await pilot.pause(0.2)
+
+            provider_select = cast(Select[Any], app.screen.query_one("#field-provider", Select))
+            # the preselected default is always one of the listed providers
+            value = str(provider_select.value)
+            option_values = {
+                str(o[1])
+                for o in provider_select._options  # pyright: ignore[reportPrivateUsage]
+            }
+            assert value in option_values, f"default {value!r} not in {option_values}"
+            assert value == "onebot"
+            # the form is actually interactive (switch provider rebuilds)
+            provider_select.value = "wechaty"
+            await pilot.pause(0.2)
+            assert str(provider_select.value) == "wechaty"
+    finally:
+        await service.stop()

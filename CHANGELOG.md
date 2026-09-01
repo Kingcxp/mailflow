@@ -5,6 +5,17 @@ All notable changes are recorded here; the format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Add notification crash** — clicking Add in the Notifications tab crashed
+  the notifier form with `InvalidSelectValueError: Illegal select value
+  'console'`. The form's provider dropdown only lists IM/gateway platforms,
+  but the new-entry default was the plain delivery channel `console`, which
+  is not an option; Textual Select validates the value at mount and raised.
+  The default is now `onebot` (always a listed provider), and the entry form
+  guards any provider default against the option set — an unlisted default
+  falls back to the first option instead of crashing.
+
 ### Added
 
 - **Boot splash** — the TUI opens with a full-screen animation

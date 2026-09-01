@@ -356,7 +356,13 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         elif group == "accounts":
             self._default_provider = "imap"
         elif group == "notifiers":
-            self._default_provider = "console"
+            # the TUI notifier form only lists IM platforms + gateway
+            # auto-deploy + manual wechaty; plain delivery channels (console,
+            # webhook, ntfy, ...) are managed via config. "onebot" is always
+            # in that choice set, so it is a safe preselected default —
+            # using "console" here crashes Textual Select's mount-time
+            # validation (value must be one of the options).
+            self._default_provider = "onebot"
         else:
             self._default_provider = ""
         if group == "llms":
@@ -613,10 +619,18 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         if spec.editor is EditorKind.BOOLEAN:
             yield Switch(value=bool(current), id=widget_id)
         elif spec.editor is EditorKind.CHOICE or (spec.label == "provider" and choices):
-            initial = str(current) if str(current) in [str(c) for c in choices] else None
+            choice_values = [str(c) for c in choices]
+            initial = str(current) if str(current) in choice_values else None
             if spec.label == "provider" and not self._editing:
                 # a brand-new entry defaults to the most common transport
                 initial = self._default_provider or initial
+            # the default must be one of the options: Textual Select validates
+            # the value at mount and raises InvalidSelectValueError otherwise
+            # (e.g. a notifier form whose default "console" is not a listed
+            # IM/gateway provider). Fall back to NULL so Textual picks the
+            # first option instead of crashing.
+            if initial is not None and str(initial) not in choice_values:
+                initial = None
             # literal None is an illegal Select value: NULL makes Textual pick
             # the first option when blank is not allowed, instead of crashing
             initial_value: Any = initial if initial is not None else Select.NULL
