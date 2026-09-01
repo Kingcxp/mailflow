@@ -5,6 +5,19 @@ All notable changes are recorded here; the format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Native chat commands for gateway notifiers** — the napcat (OneBot) and
+  wechaty notifiers now handle chat commands themselves, with the prefix
+  from `general.command_prefix` — no exported bot plugin needed. The
+  service injects the local command endpoint (`bot_url`) into gateway
+  options when provisioning; the napcat gateway runs a small event bridge
+  (NapCat `httpClients` → OneBot v11 message events → `command_dispatch`
+  → reply sent back via `send_group_msg`/`send_private_msg`), so
+  `/mailflow help`, `/mailflow subscribe`, `/mailflow unsubscribe` and the
+  rest work in QQ groups and private chats. CommandRouter commands
+  (`mail list`, `action list`, ...) are reachable the same way.
+
 ### Fixed
 
 - **Chat commands respond to `/mailflow` on NoneBot** — the exported NoneBot

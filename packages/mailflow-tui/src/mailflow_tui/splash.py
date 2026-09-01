@@ -22,7 +22,6 @@ from typing import Any, ClassVar
 from rich.text import Text as RichText
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Center, Middle
 from textual.screen import Screen
 from textual.widgets import Static
 
@@ -80,6 +79,10 @@ class SplashScreen(Screen[None]):
     SplashScreen {
         align: center middle;
     }
+    SplashScreen > Static {
+        width: 100%;
+        content-align: center middle;
+    }
     #splash-logo {
         text-style: bold;
         margin-bottom: 1;
@@ -123,12 +126,11 @@ class SplashScreen(Screen[None]):
         self._timer: Any = None
 
     def compose(self) -> ComposeResult:
-        with Center(), Middle():
-            yield Static("", id="splash-logo")
-            yield Static(self._t("tui.splash_tagline"), id="splash-tagline")
-            yield Static("", id="splash-wave")
-            yield Static("", id="splash-status")
-            yield Static(self._version, id="splash-version")
+        yield Static("", id="splash-logo")
+        yield Static(self._t("tui.splash_tagline"), id="splash-tagline")
+        yield Static("", id="splash-wave")
+        yield Static("", id="splash-status")
+        yield Static(self._version, id="splash-version")
 
     async def on_mount(self) -> None:
         self._render_logo()

@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from mailflow.contracts import GatewayInstance
@@ -54,6 +54,7 @@ _QQ_INSTALL_DIR = Path("/opt/QQ")
 _WEBUI_PORT = 6099
 _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 _BASE_PORT = 3000
+_BRIDGE_BASE_PORT = 18000
 _READY_TIMEOUT = 30.0
 
 _latest_version: str | None = None
@@ -144,6 +145,19 @@ def _instance_dir(instance_id: str) -> Path:
     return _data_root() / f"napcat-{_safe_token(instance_id)}"
 
 
+async def _respond(writer: asyncio.StreamWriter, status: int, payload: dict[str, Any]) -> None:
+    body = json.dumps(payload).encode("utf-8")
+    reason = {200: "OK", 404: "Not Found", 500: "Internal Server Error"}.get(status, "OK")
+    writer.write(
+        f"HTTP/1.1 {status} {reason}\r\n"
+        f"Content-Type: application/json\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        f"Connection: close\r\n\r\n".encode()
+    )
+    writer.write(body)
+    await writer.drain()
+
+
 def _find_node() -> str | None:
     """Path to a usable ``node`` binary (NapCat needs Node >= 18)."""
     node = shutil.which("node")
@@ -224,6 +238,140 @@ def _detect_qq() -> str | None:
     return shutil.which("qq") or shutil.which("linuxqq")
 
 
+class _OneBotEventBridge:
+    """Local HTTP endpoint NapCat posts OneBot v11 message events to.
+
+    Each incoming ``message`` event is translated to the MailFlow
+    bot_server payload and POSTed to the injected ``bot_url`` (the local
+    ``mailflow.bot_server`` command endpoint); a non-empty reply is sent
+    back to the chat through the OneBot HTTP API. This is what makes the
+    notifier's chat commands work natively — no exported bot plugin needed.
+    """
+
+    def __init__(
+        self,
+        instance_id: str,
+        port: int,
+        bot_url: str,
+        onebot_url: str,
+        token: str = "",
+    ) -> None:
+        self._instance_id = instance_id
+        self._port = port
+        self._bot_url = bot_url
+        self._onebot_url = onebot_url
+        self._token = token
+        self._server: asyncio.AbstractServer | None = None
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self._port}/onebot/event"
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    async def start(self) -> None:
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", self._port)
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            request_line = await reader.readline()
+            parts = request_line.decode("utf-8", "replace").strip().split()
+            if len(parts) < 2 or parts[0] != "POST":
+                await _respond(writer, 404, {})
+                return
+            while True:
+                line = await reader.readline()
+                if line in (b"\r\n", b"\n", b""):
+                    break
+            body = await reader.read(65536)
+            payload = json.loads(body.decode("utf-8", "replace") or "{}")
+            if payload.get("post_type") == "message":
+                await self._dispatch(payload)
+            await _respond(writer, 200, {})
+        except Exception as exc:
+            logger.debug("onebot event bridge failed: %s", exc)
+            await _respond(writer, 500, {})
+        finally:
+            with __import__("contextlib").suppress(Exception):
+                writer.close()
+
+    @staticmethod
+    def _extract_text(event: dict[str, Any]) -> str:
+        raw = event.get("raw_message")
+        if raw:
+            return str(raw)
+        parts: list[str] = []
+        message: list[Any] = event.get("message") or []
+        for seg in message:
+            if not isinstance(seg, dict):
+                continue
+            segment = cast("dict[str, Any]", seg)
+            if segment.get("type") != "text":
+                continue
+            data = cast("dict[str, Any]", segment.get("data") or {})
+            parts.append(str(data.get("text") or ""))
+        return "".join(parts)
+
+    async def _dispatch(self, event: dict[str, Any]) -> None:
+        message_type = event.get("message_type")
+        if message_type not in ("group", "private"):
+            return
+        user_id = event.get("user_id")
+        group_id = event.get("group_id")
+        text = self._extract_text(event)
+        if not text or user_id is None:
+            return
+        chat_id = str(group_id) if message_type == "group" else str(user_id)
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.post(
+                    self._bot_url,
+                    json={
+                        "text": text,
+                        "sender": str(user_id),
+                        "chat_id": chat_id,
+                        "chat_type": message_type,
+                        "provider": "napcat",
+                        "instance_id": self._instance_id,
+                    },
+                )
+                data: dict[str, Any] = resp.json() or {}
+            except Exception as exc:
+                logger.debug("onebot dispatch to bot_server failed: %s", exc)
+                return
+        reply = str(data.get("reply") or "")
+        if reply:
+            await self._send_reply(reply, message_type, chat_id, str(user_id))
+
+    async def _send_reply(self, reply: str, message_type: str, chat_id: str, user_id: str) -> None:
+        headers = {"Content-Type": "application/json"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        endpoint = (
+            f"{self._onebot_url}/send_group_msg"
+            if message_type == "group"
+            else f"{self._onebot_url}/send_private_msg"
+        )
+        payload: dict[str, Any] = (
+            {"group_id": int(chat_id), "message": reply}
+            if message_type == "group"
+            else {"user_id": int(user_id), "message": reply}
+        )
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                await client.post(endpoint, json=payload, headers=headers)
+            except Exception as exc:
+                logger.warning("onebot reply to %s:%s failed: %s", message_type, chat_id, exc)
+
+
 class NapCatProvisioner:
     """OneBot v11 gateway backed by a local NapCat process."""
 
@@ -232,6 +380,7 @@ class NapCatProvisioner:
     def __init__(self) -> None:
         self._processes: dict[str, subprocess.Popen[Any]] = {}
         self._webui_ports: dict[str, int] = {}
+        self._bridges: dict[str, _OneBotEventBridge] = {}
 
     # -- helpers ---------------------------------------------------------------
 
@@ -243,6 +392,15 @@ class NapCatProvisioner:
         except (ValueError, IndexError):
             suffix = 0
         return _BASE_PORT + (suffix % 100)
+
+    @staticmethod
+    def _bridge_port_for(instance_id: str) -> int:
+        # deterministic, in a range far from the OneBot HTTP port (3000s)
+        try:
+            suffix = int(_safe_token(instance_id).split("-")[-2])
+        except (ValueError, IndexError):
+            suffix = 0
+        return _BRIDGE_BASE_PORT + (suffix % 100)
 
     def _endpoint(self, instance_id: str) -> str:
         return f"http://127.0.0.1:{self._port_for(instance_id)}"
@@ -597,6 +755,22 @@ class NapCatProvisioner:
             entry_path = entry_path.resolve()
         target = run_target
         port = int(options.get("port") or self._port_for(instance_id))
+        # local chat-command bridge: NapCat posts message events here, we
+        # forward them to the injected bot_server endpoint (bot_url) and
+        # send the reply back through the OneBot HTTP API — the notifier's
+        # chat commands work without an exported bot plugin
+        bridge: _OneBotEventBridge | None = None
+        bot_url = str(options.get("bot_url") or "")
+        if bot_url:
+            bridge = _OneBotEventBridge(
+                instance_id,
+                self._bridge_port_for(instance_id),
+                bot_url,
+                self._endpoint(instance_id),
+                token=str(options.get("access_token") or ""),
+            )
+            await bridge.start()
+            self._bridges[instance_id] = bridge
         # already running on this port (another instance or a self-hosted
         # NapCat)? reuse it instead of starting a conflicting process
         if await self._wait_http_port(port, wait_seconds=1.0):
@@ -630,7 +804,20 @@ class NapCatProvisioner:
                         "debug": False,
                     }
                 ],
-                "httpClients": [],
+                "httpClients": (
+                    [
+                        {
+                            "name": "mailflow-bridge",
+                            "enable": True,
+                            "url": bridge.url,
+                            "token": "",
+                            "messagePostFormat": "array",
+                            "debug": False,
+                        }
+                    ]
+                    if bridge is not None
+                    else []
+                ),
                 "websocketServers": [],
                 "websocketClients": [],
             },
@@ -828,6 +1015,10 @@ class NapCatProvisioner:
             pass
 
     async def stop(self, instance_id: str) -> None:
+        bridge = self._bridges.pop(instance_id, None)
+        if bridge is not None:
+            with __import__("contextlib").suppress(Exception):
+                await bridge.stop()
         # terminate can block up to 5s waiting for the process tree; run it
         # off the event loop so the TUI never freezes on cancel
         await asyncio.to_thread(self._terminate, instance_id)

@@ -1087,7 +1087,17 @@ class MailFlowService:
         *,
         autostart: bool = True,
     ) -> Any:
-        """Install (if needed), start and supervise one gateway instance."""
+        """Install (if needed), start and supervise one gateway instance.
+
+        Injects the local chat-command endpoint (``bot_url``) into the
+        gateway options so gateway bridges (wechaty node bridge, onebot
+        message listener) can forward incoming chat messages to
+        ``command_dispatch`` — the notifier's chat commands work without
+        deploying a separate exported bot plugin.
+        """
+        bot_url = getattr(self, "bot_server", None)
+        if bot_url is not None:
+            options = {**options, "bot_url": bot_url.url}
         return await self.gateways.provision(provider, instance_id, options, autostart=autostart)
 
     async def gateway_qr(self, provider: str, instance_id: str) -> str:
