@@ -7,6 +7,15 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **List editor rebuilt as editable rows** — the `admins` list field (and
+  any line-list field) is now a set of **editable input rows**: each row is
+  an input with its own delete button, and a bottom **+ add** button appends
+  a row. Enter in a row also appends. Whatever is typed in a row is the
+  value immediately — there is no hidden "add to a readonly list" step, so
+  a required field validates against what the user actually typed (typing
+  an admin and saving no longer reports "admins is required"). Rows are
+  built directly without Textual's compose-only context manager, so add /
+  delete work from button handlers without raising IndexError.
 - **napcat admins list field unusable** — the `admins` list field in the
   napcat auto-deploy notifier form rendered as a clipped "half input box"
   and could not add or delete items. The list editor rebuilt its rows with

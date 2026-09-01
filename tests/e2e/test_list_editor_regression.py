@@ -1,15 +1,13 @@
 """Reproduce the napcat notifier-form ListEditor bug: the 'admins' list
-field must render a usable input + add/delete buttons. The old
-implementation rebuilt item rows with the ``with Horizontal(...):`` compose
-context manager from a button handler — that manager reads
-``app._compose_stacks`` which only exists during compose, so adding or
-deleting an item crashed with IndexError and the field was unusable."""
+field must render editable rows with per-row delete and a bottom add
+button. Typing in a row is the value (no hidden add-to-list step), Enter
+appends a row, and a required field validates against what is typed."""
 
 from __future__ import annotations
 
 import queue as queue_module
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from mailflow.commands import CommandRouter
@@ -53,19 +51,49 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
 
             editor: ListEditor = app.screen.query_one("#extra-admins", ListEditor)
             assert editor is not None
-            # input row renders
-            input_box: Input = editor.query_one("#list-editor-input", Input)
-            add_btn: Button = editor.query_one("#list-editor-add", Button)
-            assert input_box is not None and add_btn is not None
-            # add a list item
-            input_box.value = "10001"
-            add_btn.press()
+            # starts with one empty input row
+            row0: Input = editor.query_one("#list-editor-input-0", Input)
+            assert row0.value == ""
+            # typing IS the value; no add button needed
+            row0.value = "10001"
+            assert editor.value() == ["10001"]
+            # Enter appends a new row and keeps the typed value
+            row0.focus()  # pyright: ignore[reportUnknownMemberType]
+            await pilot.press("enter")
             await pilot.pause(0.2)
             assert editor.value() == ["10001"]
-            # delete it
-            del_btn: Button = editor.query_one("#list-editor-del-0", Button)
-            del_btn.press()
+            assert editor.query_one("#list-editor-input-1", Input) is not None
+            # bottom add button appends another row
+            add_btn: Button = editor.query_one("#list-editor-add", Button)
+            add_btn.press()
+            await pilot.pause(0.2)
+            assert editor.query_one("#list-editor-input-2", Input) is not None
+            # per-row delete removes that row's value
+            del0: Button = editor.query_one("#list-editor-del-0", Button)
+            del0.press()
             await pilot.pause(0.2)
             assert editor.value() == []
+
+            # collection passes required with a typed value, and the value
+            # lands in options.admins (the napcat gateway field)
+            from mailflow.settings import SettingsError
+
+            form = cast(Any, app.screen)
+            # the form requires a notifier id; fill it so collection reaches
+            # the admins extra (otherwise the core validation fails first)
+            id_field: Input = form.query_one("#field-notifier-id", Input)
+            id_field.value = "bot-1"
+            row_a: Input = form.query_one("#extra-admins #list-editor-input-0", Input)
+            row_a.value = "123456"
+            collected = form._collect()
+            assert collected["options"]["admins"] == ["123456"]
+            # empty admins still fails required validation
+            row_a.value = ""
+            try:
+                form._collect()
+                raise AssertionError("expected SettingsError for empty admins")
+            except SettingsError as exc:
+                assert exc.option == "admins"
+                assert "required" in exc.message
     finally:
         await service.stop()
