@@ -7,6 +7,12 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **List editor text centered + compact layout** — the `admins` rows now
+  center their text when not focused (Textual's Input is left-aligned by
+  default; a `CenteredInput` subclass centers the blurred value while
+  keeping native cursor/selection behaviour while focused). Rows are
+  single-line with a compact square-ish delete button; the bottom **+**
+  button spans the full row width and is labelled just `+`.
 - **List editor rebuilt as editable rows** — the `admins` list field (and
   any line-list field) is now a set of **editable input rows**: each row is
   an input with its own delete button, and a bottom **+ add** button appends

@@ -14,10 +14,39 @@ rebuilding rows from a button handler would raise IndexError.
 
 from __future__ import annotations
 
+from rich.segment import Segment
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.strip import Strip
 from textual.widget import Widget
 from textual.widgets import Button, Input
+
+
+class CenteredInput(Input):
+    """An Input whose value text is centered while not focused.
+
+    Textual's native Input renders its value left-aligned and ignores
+    ``text-align`` / ``content-align`` (render_line hardcodes left). This
+    subclass centers the rendered value when the field is not focused; while
+    focused it delegates to the parent so the cursor, selection and scroll
+    behave exactly as in a normal input.
+    """
+
+    def render_line(self, y: int) -> Strip:
+        if y != 0 or self.has_focus:
+            return super().render_line(y)
+        console = self.app.console  # pyright: ignore[reportUnknownMemberType]
+        options = self.app.console_options  # pyright: ignore[reportUnknownMemberType]
+        width = self.scrollable_content_region.width
+        text = self._value if self.value else Text(self.placeholder, style="dim")
+        pad = max(0, (width - text.cell_len) // 2)
+        base = list(console.render(text, options.update_width(width - pad)))
+        segs = [Segment(" " * pad, self.rich_style), *base]
+        # apply_style gives every segment a style (Monochrome filter crashes
+        # on None styles) and matches what Input.render_line does at the end
+        strip = Strip(segs).extend_cell_length(width)
+        return strip.apply_style(self.rich_style)
 
 
 class ListEditor(Widget):
@@ -32,30 +61,33 @@ class ListEditor(Widget):
         height: auto;
     }
     .list-editor-row {
-        height: auto;
+        height: 1;
         margin-bottom: 0;
         align-vertical: middle;
     }
     .list-editor-row Input {
-        height: 3;
+        height: 1;
         border: none;
         padding: 0 1;
         width: 1fr;
     }
     .list-editor-row Button {
-        height: auto;
-        min-height: 3;
-        min-width: 8;
-        padding: 0 1;
+        height: 1;
+        min-height: 1;
+        width: 3;
+        min-width: 3;
+        padding: 0;
         margin: 0 0 0 1;
         border: none;
+        content-align: center middle;
     }
     #list-editor-add {
-        width: auto;
-        min-width: 8;
-        height: auto;
+        width: 100%;
+        height: 1;
+        min-height: 1;
         margin-top: 1;
         border: none;
+        content-align: center middle;
     }
     """
 
@@ -68,7 +100,9 @@ class ListEditor(Widget):
 
     def _row(self, index: int, item: str) -> Horizontal:
         return Horizontal(
-            Input(value=item, id=f"list-editor-input-{index}", placeholder=self._placeholder),
+            CenteredInput(
+                value=item, id=f"list-editor-input-{index}", placeholder=self._placeholder
+            ),
             Button("x", id=f"list-editor-del-{index}", variant="error"),
             classes="list-editor-row",
         )
@@ -78,7 +112,7 @@ class ListEditor(Widget):
             rows = self.items if self.items else [""]
             for index, item in enumerate(rows):
                 yield self._row(index, item)
-        yield Button("+ add", id="list-editor-add", variant="success")
+        yield Button("+", id="list-editor-add", variant="success")
 
     async def _render_rows(self) -> None:
         container = self.query_one("#list-editor-rows", Vertical)
@@ -105,7 +139,7 @@ class ListEditor(Widget):
         self.items.append("")
         await self._render_rows()
         new_index = len(self.items) - 1
-        new_input = self.query_one(f"#list-editor-input-{new_index}", Input)
+        new_input = self.query_one(f"#list-editor-input-{new_index}", CenteredInput)
         new_input.focus()  # pyright: ignore[reportUnknownMemberType]
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -115,7 +149,7 @@ class ListEditor(Widget):
             self.items.append("")
             await self._render_rows()
             new_index = len(self.items) - 1
-            new_input = self.query_one(f"#list-editor-input-{new_index}", Input)
+            new_input = self.query_one(f"#list-editor-input-{new_index}", CenteredInput)
             new_input.focus()  # pyright: ignore[reportUnknownMemberType]
             return
         if button_id.startswith("list-editor-del-"):

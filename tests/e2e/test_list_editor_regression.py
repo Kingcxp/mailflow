@@ -57,6 +57,13 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
             # typing IS the value; no add button needed
             row0.value = "10001"
             assert editor.value() == ["10001"]
+            # non-focused rows render the value centered (Textual Input is
+            # left-aligned by default; CenteredInput centers while blurred)
+            row0.blur()  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.1)
+            rendered = row0.render_line(0).text
+            assert rendered.strip() == "10001"
+            assert rendered.find("10001") > 0, f"value not centered: {rendered!r}"
             # Enter appends a new row and keeps the typed value
             row0.focus()  # pyright: ignore[reportUnknownMemberType]
             await pilot.press("enter")
