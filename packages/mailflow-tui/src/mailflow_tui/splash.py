@@ -41,9 +41,9 @@ _LOGO = "MailFlow"
 
 _LEVELS = "▁▃▅▇█"
 
-# frames per second for the color wave — low enough that a slow terminal
-# never falls behind, high enough to read as motion
-_TICK_INTERVAL = 1 / 5
+# frames per second for the color wave — a visible-but-light animation;
+# slow terminals still cope because each tick only rewrites two Statics
+_TICK_INTERVAL = 1 / 8
 
 
 def _color(palette_index: int) -> str:
@@ -111,7 +111,7 @@ class SplashScreen(Screen[None]):
         t: Callable[[str], str],
         version: str = "",
         *,
-        duration: float = 2.6,
+        duration: float = 3.5,
     ) -> None:
         super().__init__()
         self._t = t

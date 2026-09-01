@@ -49,8 +49,9 @@ with the bot and stops on shutdown. Configure it by editing
 ``config.toml`` next to this module.
 
 Chat commands are prefixed with ``mailflow`` (``mailflow mail list``,
-``mailflow help``) so they never collide with other plugins\' commands.
-Long replies and the daily digest are split into separate messages.
+``mailflow help``) or ``/mailflow`` (``/mailflow help``) so they never
+collide with other plugins\' commands. Long replies and the daily digest
+are split into separate messages.
 """
 
 from __future__ import annotations
@@ -120,9 +121,15 @@ _mailflow_matcher = on_message(priority=10, block=False)
 async def _handle_mailflow(event: Any) -> None:
     """Dispatch ``mailflow ...`` chat messages to the shared command router."""
     text = str(event.get_plaintext() or "").strip()
-    if not text.startswith("mailflow ") or _router is None:
+    if _router is None:
         return
-    response = await _router.execute(text[len("mailflow "):].strip())
+    if text.startswith("/mailflow"):
+        line = text[len("/mailflow"):].strip()
+    elif text.startswith("mailflow "):
+        line = text[len("mailflow "):].strip()
+    else:
+        return
+    response = await _router.execute(line)
     for chunk in _chunk(response.text):
         await _mailflow_matcher.send(chunk)
 

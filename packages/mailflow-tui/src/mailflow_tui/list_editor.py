@@ -15,7 +15,6 @@ rebuilding rows from a button handler would raise IndexError.
 from __future__ import annotations
 
 from rich.segment import Segment
-from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.strip import Strip
@@ -30,16 +29,19 @@ class CenteredInput(Input):
     ``text-align`` / ``content-align`` (render_line hardcodes left). This
     subclass centers the rendered value when the field is not focused; while
     focused it delegates to the parent so the cursor, selection and scroll
-    behave exactly as in a normal input.
+    behave exactly as in a normal input. The placeholder stays left-aligned
+    in both states so the hint never jumps.
     """
 
     def render_line(self, y: int) -> Strip:
-        if y != 0 or self.has_focus:
+        if y != 0 or self.has_focus or not self.value:
+            # focused (cursor/selection/scroll native) and empty
+            # (placeholder) rows are rendered by the parent, left-aligned
             return super().render_line(y)
         console = self.app.console  # pyright: ignore[reportUnknownMemberType]
         options = self.app.console_options  # pyright: ignore[reportUnknownMemberType]
         width = self.scrollable_content_region.width
-        text = self._value if self.value else Text(self.placeholder, style="dim")
+        text = self._value
         pad = max(0, (width - text.cell_len) // 2)
         base = list(console.render(text, options.update_width(width - pad)))
         segs = [Segment(" " * pad, self.rich_style), *base]

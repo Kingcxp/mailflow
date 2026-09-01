@@ -41,8 +41,8 @@ async def test_splash_shows_then_dismisses(tmp_path: Path) -> None:
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
             assert isinstance(app.screen, SplashScreen)
-            # wait past the auto-dismiss duration
-            await pilot.pause(3.2)
+            # wait past the auto-dismiss duration (default 3.5s)
+            await pilot.pause(4.0)
             assert not isinstance(app.screen, SplashScreen)
             from textual.widgets import TabbedContent
 

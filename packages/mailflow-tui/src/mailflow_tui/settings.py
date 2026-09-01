@@ -690,7 +690,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 ]
                 yield ListEditor(
                     current_lines,
-                    placeholder=str(extra.default or "one item per line"),
+                    placeholder=str(extra.default or self._t("tui.list_editor_placeholder")),
                     id=widget_id,
                 )
             elif extra.kind == "boolean":

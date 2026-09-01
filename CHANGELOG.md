@@ -7,6 +7,21 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **Chat commands respond to `/mailflow` on NoneBot** — the exported NoneBot
+  plugin only matched a bare ``mailflow `` prefix, so ``/mailflow help`` was
+  silently ignored (AstrBot already accepted both). It now accepts both
+  ``/mailflow`` and ``mailflow ``.
+- **List editor placeholder aligned + translated** — the placeholder stays
+  left-aligned in both focus states (the centered-value input no longer
+  centers the hint, so it never jumps on focus); the default placeholder is
+  now localized via `tui.list_editor_placeholder` instead of the hardcoded
+  English "one item per line".
+- **Gateway QR shows a logged-in banner** — after scanning the login QR, the
+  QR panel now shows a green "logged in" banner instead of abruptly clearing
+  (both auto-detected and manual confirmation paths).
+- **Boot splash more visible** — the splash animation ticks at 8fps (was
+  5fps) and the default duration is 3.5s (was 2.6s) so slow web-shell
+  terminals get to see it before it dismisses.
 - **List editor text centered + compact layout** — the `admins` rows now
   center their text when not focused (Textual's Input is left-aligned by
   default; a `CenteredInput` subclass centers the blurred value while

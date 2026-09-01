@@ -693,7 +693,8 @@
       "splash_status_service": "Starting service…",
       "splash_status_ready": "Ready",
       "mail_empty": "No mail to show yet — add a mailbox or wait for new mail.",
-      "mail_no_match": "No mail matches the current search or filter."
+      "mail_no_match": "No mail matches the current search or filter.",
+      "list_editor_placeholder": "one item per line, Enter to add"
     },
     "update": {
       "applied_title": "Applied updates",

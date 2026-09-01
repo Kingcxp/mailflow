@@ -188,6 +188,20 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             cols = len(text.splitlines()[0])
             self._log("INFO", f"QR shown: {rows} rows x {cols} cols")
 
+    def _logged_in_banner(self) -> str:
+        """Completion banner shown in the QR panel after login succeeds —
+        keeps the panel occupied with a clear 'logged in' state instead of
+        abruptly clearing the QR."""
+        message = self._t("tui.bots_guide_logged_in")
+        width = max(len(message) + 8, 28)
+        bar = "═" * (width - 2)
+        inner = message.center(width - 2)
+        return (
+            f"[bold green]╔{bar}╗[/bold green]\n"
+            f"[bold green]║[/bold green] {inner} [bold green]║[/bold green]\n"
+            f"[bold green]╚{bar}╝[/bold green]"
+        )
+
     # -- install progress ---------------------------------------------------------
 
     def _show_progress(self, visible: bool) -> None:
@@ -316,7 +330,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 await asyncio.sleep(5.0)
                 continue
             if qr == self._QR_LOGGED_IN:
-                self._set_qr("")
+                self._set_qr(self._logged_in_banner())
                 self._log("INFO", self._t("tui.bots_guide_logged_in"))
                 self._set_status(self._t("tui.bots_guide_logged_in"), "green")
                 await self._wait_for_endpoint()
@@ -399,6 +413,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             # QR polling and enable Done — Done remains the explicit
             # final confirmation that saves the notifier
             self._qr_done = True
+            self._set_qr(self._logged_in_banner())
             self._log("INFO", self._t("tui.bots_guide_logged_in"))
             self._set_status(self._t("tui.bots_guide_logged_in"), "green")
             # Verify the gateway endpoint is reachable before enabling Done

@@ -693,7 +693,8 @@
       "splash_status_service": "正在启动服务…",
       "splash_status_ready": "就绪",
       "mail_empty": "暂无邮件——请添加邮箱或等待新邮件。",
-      "mail_no_match": "没有符合当前搜索或筛选的邮件。"
+      "mail_no_match": "没有符合当前搜索或筛选的邮件。",
+      "list_editor_placeholder": "每行一项，回车添加"
     },
     "update": {
       "applied_title": "已应用的更新",
