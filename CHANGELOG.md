@@ -7,6 +7,16 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **napcat admins list field unusable** — the `admins` list field in the
+  napcat auto-deploy notifier form rendered as a clipped "half input box"
+  and could not add or delete items. The list editor rebuilt its rows with
+  Textual's `with Horizontal(...):` compose context manager from the button
+  handler — that manager reads `app._compose_stacks`, which only exists
+  during compose, so adding/deleting raised `IndexError` and left the field
+  broken. Rows are now constructed directly (`Horizontal(Label, Button)`)
+  both at compose time and on refresh, and the input uses a compact style
+  (no tall border) so it renders as a full single-line field. Regression
+  test mounts the napcat notifier form, adds and deletes an admin.
 - **Add notification crash** — clicking Add in the Notifications tab crashed
   the notifier form with `InvalidSelectValueError: Illegal select value
   'console'`. The form's provider dropdown only lists IM/gateway platforms,

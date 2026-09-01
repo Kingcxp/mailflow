@@ -27,6 +27,8 @@ class ListEditor(Widget):
     }
     #list-editor-input {
         height: 1;
+        border: none;
+        padding: 0 1;
     }
     #list-editor-add {
         height: 1;
@@ -45,6 +47,7 @@ class ListEditor(Widget):
     .list-editor-item-label {
         height: 1;
         padding: 0 1;
+        overflow: hidden;
     }
     .list-editor-item-del {
         height: 1;
@@ -62,18 +65,26 @@ class ListEditor(Widget):
         self.items = list(items)
         self._placeholder = placeholder
 
+    def _item_row(self, index: int, item: str) -> Horizontal:
+        """One list row. Builds the container directly (children passed to the
+        constructor) instead of using the ``with Horizontal(...):`` compose
+        context manager: that manager reads ``app._compose_stacks`` and only
+        works during compose. Re-rendering items from a button handler
+        (``_refresh``) has no compose stack, so the ``with`` form raised
+        IndexError and made add/delete unusable."""
+        return Horizontal(
+            Label(item, classes="list-editor-item-label"),
+            Button("x", id=f"list-editor-del-{index}", classes="list-editor-item-del"),
+            classes="list-editor-item",
+        )
+
     def compose(self) -> ComposeResult:
         with Horizontal(id="list-editor-input-row"):
             yield Input(placeholder=self._placeholder, id="list-editor-input")
             yield Button("+", id="list-editor-add", variant="success")
         with Vertical(id="list-editor-items"):
-            yield from self._item_widgets()
-
-    def _item_widgets(self) -> ComposeResult:
-        for index, item in enumerate(self.items):
-            with Horizontal(classes="list-editor-item"):
-                yield Label(item, classes="list-editor-item-label")
-                yield Button("x", id=f"list-editor-del-{index}", classes="list-editor-item-del")
+            for index, item in enumerate(self.items):
+                yield self._item_row(index, item)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
@@ -95,7 +106,8 @@ class ListEditor(Widget):
     async def _refresh(self) -> None:
         container = self.query_one("#list-editor-items", Vertical)
         await container.remove_children()
-        await container.mount_all(list(self._item_widgets()))
+        for index, item in enumerate(self.items):
+            await container.mount(self._item_row(index, item))
 
     def value(self) -> list[str]:
         """Current items (drops any leftover text in the input)."""
