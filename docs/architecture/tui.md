@@ -17,12 +17,13 @@ without it the service has no file to write to.
 `mailflow_tui/splash.py: SplashScreen` is a full-screen animation shown for a
 moment at startup when the runner enables it (`MailFlowApp(..., splash=True)`;
 headless tests keep the default `splash=False` so they land directly on the
-main screen). It renders the "MailFlow" logo with a flowing wave of the four
-urgency contract colors plus the accent, a small animated equalizer bar, a
-localized status line that advances (loading plugins → starting service →
-ready) and a `LoadingIndicator`; Escape skips it, and it pops itself after
-~2.6s. All animation timers are created on the screen so Textual tears them
-down with the screen — nothing keeps ticking after it closes.
+main screen). It renders a large block-letter "MAILFLOW" wordmark tinted by a
+flowing wave of the four urgency contract colors plus the accent (one colour
+per glyph), a hairline divider, the localized tagline, a small animated
+equalizer bar, a localized status line that advances (loading plugins →
+starting service → ready) and the version; Escape skips it, and it pops
+itself after ~3.5s. All animation timers are created on the screen so Textual
+tears them down with the screen — nothing keeps ticking after it closes.
 
 ## Tabs
 

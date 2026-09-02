@@ -18,6 +18,10 @@ All notable changes are recorded here; the format follows
   rolling `feedback.guidelines` (matching the old Reject behaviour), so
   future analyses tune the same way. The Reply button moved to the second
   action row to make room.
+- **Splash screen redesign** — the boot animation now renders a large
+  block-letter "MAILFLOW" wordmark (one palette colour per glyph) instead of
+  a plain text logo, framed by a hairline divider and a refined tagline
+  ("Every message, understood." / "每一封邮件，都被读懂。").
 - **Stronger urgency calibration in the LLM prompt** — a new rule forbids
   labelling a mail "info" while the reason describes something the recipient
   must act on, respond to or track this week (the reported INFO-vs-important

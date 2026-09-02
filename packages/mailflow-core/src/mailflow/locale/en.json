@@ -681,7 +681,7 @@
       "bots_guide_logged_in_btn": "I'm logged in",
       "bots_select_first": "Select a bot row first",
       "extras_admins": "Platform user ids allowed to run chat commands (QQ number or wxid), one per item. Add yourself here.",
-      "splash_tagline": "Unified multi-account mail inbox — plugin pipeline, LLM analysis, rich TUI",
+      "splash_tagline": "Every message, understood.",
       "splash_status_plugins": "Loading plugins…",
       "splash_status_service": "Starting service…",
       "splash_status_ready": "Ready",

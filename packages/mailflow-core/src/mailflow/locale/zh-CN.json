@@ -681,7 +681,7 @@
       "bots_guide_logged_in_btn": "我已登录",
       "bots_select_first": "请先选中一个 bot 行",
       "extras_admins": "允许执行聊天命令的平台用户 ID(QQ 号或微信号),每项一个。请添加你自己。",
-      "splash_tagline": "统一多账户邮件收件箱——插件化流水线、LLM 智能分析、富终端界面",
+      "splash_tagline": "每一封邮件，都被读懂。",
       "splash_status_plugins": "正在加载插件…",
       "splash_status_service": "正在启动服务…",
       "splash_status_ready": "就绪",

@@ -1,10 +1,11 @@
 """Animated boot splash for the MailFlow TUI.
 
 Shown for a moment while the app mounts (service is already started by the
-runner; the splash just makes the handoff feel alive). Renders the logo with
-a flowing brand-color wave, a tiny equalizer bar and a step-advancing status
-line; dismisses itself after ``duration`` seconds or on Escape. Needs only
-the translation callable — no service dependency.
+runner; the splash just makes the handoff feel alive). Renders a large
+block-letter logo with a flowing brand-color wave, a hairline divider, a
+tiny equalizer bar and a step-advancing status line; dismisses itself after
+``duration`` seconds or on Escape. Needs only the translation callable — no
+service dependency.
 
 Rendering is deliberately gentle: slow terminals (headless containers, web
 shells) stall when a TUI floods them with frame updates, so the animation
@@ -36,7 +37,19 @@ _PALETTE: tuple[tuple[int, int, int], ...] = (
     (0x7E, 0xA7, 0xF8),  # accent blue
 )
 
-_LOGO = "MailFlow"
+# 5-row block-letter font for the wordmark; one tuple of rows per glyph.
+_LOGO_ART: dict[str, tuple[str, str, str, str, str]] = {
+    "M": ("█   █", "██ ██", "█ █ █", "█   █", "█   █"),
+    "A": (" ███ ", "█   █", "█████", "█   █", "█   █"),
+    "I": ("█████", "  █  ", "  █  ", "  █  ", "█████"),
+    "L": ("█    ", "█    ", "█    ", "█    ", "█████"),
+    "F": ("█████", "█    ", "███  ", "█    ", "█    "),
+    "O": (" ███ ", "█   █", "█   █", "█   █", " ███ "),
+    "W": ("█   █", "█   █", "█ █ █", "██ ██", "█   █"),
+}
+
+# The wordmark: each glyph becomes one colour cell of the moving wave.
+_LOGO = "MAILFLOW"
 
 _LEVELS = "▁▃▅▇█"
 
@@ -51,12 +64,27 @@ def _color(palette_index: int) -> str:
 
 
 def _logo_text(frame: int) -> RichText:
-    """The logo, each character tinted from a moving slice of the palette."""
+    """Render the block-letter wordmark, one colour per glyph.
+
+    Each glyph is tinted from a moving slice of the palette so the whole
+    mark reads as a single flowing wave; glyphs are joined by two spaces so
+    the block letters stay legible.
+    """
     text = RichText(no_wrap=True)
-    for index, char in enumerate(_LOGO):
-        color = _color(int(frame / 2) + index * 2)
-        text.append(char, style=f"bold {color}")
+    for row in range(5):
+        for index, char in enumerate(_LOGO):
+            color = _color(int(frame / 2) + index * 2)
+            text.append(_LOGO_ART[char][row], style=f"bold {color}")
+            if index < len(_LOGO) - 1:
+                text.append("  ", style=color)
+        if row < 4:
+            text.append("\n")
     return text
+
+
+def _divider_text() -> RichText:
+    """A quiet hairline under the wordmark to separate it from the status."""
+    return RichText("─" * 36, style="#7EA7F8 dim", no_wrap=True)
 
 
 def _wave_text(frame: int) -> RichText:
@@ -85,6 +113,9 @@ class SplashScreen(Screen[None]):
     }
     #splash-logo {
         text-style: bold;
+        margin-bottom: 1;
+    }
+    #splash-divider {
         margin-bottom: 1;
     }
     #splash-tagline {
@@ -127,6 +158,7 @@ class SplashScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Static("", id="splash-logo")
+        yield Static(_divider_text(), id="splash-divider")
         yield Static(self._t("tui.splash_tagline"), id="splash-tagline")
         yield Static("", id="splash-wave")
         yield Static("", id="splash-status")
