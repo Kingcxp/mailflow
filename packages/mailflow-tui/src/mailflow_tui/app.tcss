@@ -61,7 +61,6 @@ Button:focus {
 }
 
 #mail-empty-hint {
-    dock: top;
     margin: 0 1 1 1;
     color: $text-muted;
     text-style: italic;

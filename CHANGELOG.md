@@ -20,6 +20,12 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **Mail tab search box height** — the search input lost its top border row:
+  both `#mail-search` and `#mail-empty-hint` were `dock: top`, and the empty
+  hint (an empty `Static`) still occupied the top dock slot, compressing the
+  search box by one row. The hint is now an ordinary flow element (height 0
+  when empty), so the search box renders its full 3 rows (top border +
+  content + bottom border).
 - **Chat commands respond to `/mailflow` on NoneBot** — the exported NoneBot
   plugin only matched a bare ``mailflow `` prefix, so ``/mailflow help`` was
   silently ignored (AstrBot already accepted both). It now accepts both
