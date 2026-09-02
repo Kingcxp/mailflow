@@ -159,6 +159,52 @@ class SQLiteStorage:
             conn.commit()
         return record
 
+    async def update_mail_analysis(
+        self,
+        record_id: str,
+        *,
+        urgency: Urgency | None = None,
+        summary: str | None = None,
+        reason: str | None = None,
+    ) -> MailRecord | None:
+        """Update selected fields of a stored record's analysis.
+
+        Only the given fields are replaced; the original mail (body, subject,
+        sender) is never touched. Used by the in-place Ask & Correct flow so
+        the LLM can adjust urgency/summary/reason without a re-analysis.
+        """
+        async with self._lock:
+            conn = self._check_conn()
+            row = conn.execute(
+                "SELECT record_json FROM mails WHERE record_id = ?", (record_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            record = MailRecord.model_validate_json(row[0])
+            analysis = record.analysis
+            if analysis is None:
+                from mailflow.domain import MailAnalysis
+
+                analysis = MailAnalysis(
+                    summary=summary or record.mail.subject,
+                    urgency=urgency or record.auto_urgency,
+                )
+                record.analysis = analysis
+            if urgency is not None:
+                analysis.urgency = urgency
+                record.auto_urgency = urgency
+            if summary is not None:
+                analysis.summary = summary
+            if reason is not None:
+                analysis.reason = reason
+            stored = self._without_payload(record)
+            conn.execute(
+                "UPDATE mails SET record_json = ? WHERE record_id = ?",
+                (stored.model_dump_json(), record_id),
+            )
+            conn.commit()
+        return record
+
     async def delete_mail(self, record_id: str) -> None:
         """Move the full record to trash, stamping the deletion time."""
         async with self._lock:

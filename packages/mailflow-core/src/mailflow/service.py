@@ -603,6 +603,131 @@ class MailFlowService:
             await self.events.emit("mail.urgency.changed", record_id=record_id, urgency=urgency)
         return record
 
+    # -- Ask & Correct: conversational analysis ----------------------------------
+
+    _ASK_PROMPT = """You are MailFlow's mail-analysis assistant. The user is
+reviewing one analysed mail and may question your urgency judgement or ask
+for details. You have the mail, the current analysis and any user feedback
+from earlier mails.
+
+Reply helpfully in the user's language. If the user disagrees with the
+urgency (or anything else about the analysis), listen and adjust: apply
+their correction unless it clearly contradicts the mail's content, and when
+you do change the analysis, return the corrections as a JSON object at the
+end of your reply inside the exact markers:
+
+[c]
+{"urgency": "important", "summary": "...", "reason": "..."}
+[/c]
+
+Only include fields that actually change; omit unchanged ones. urgency must
+be one of ad|info|important|urgent. The original mail body is never edited.
+"""
+
+    async def chat_about_mail(
+        self,
+        record_id: str,
+        messages: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        """Conversational Ask & Correct over one analysed mail.
+
+        ``messages`` is the chat history so far (``{"role", "content"}``,
+        alternating user/assistant, no system entry). Builds the context
+        (mail, current analysis, feedback guidelines), sends the whole
+        conversation to the primary LLM, applies any ``[c]...[/c]``
+        corrections to the stored analysis (urgency/summary/reason — never
+        the mail body) and returns ``{"reply": str, "corrections": {...}}``.
+        """
+        record = await self.storage.get_mail(record_id)
+        if record is None:
+            return {"reply": "Mail not found.", "corrections": {}}
+        if not self.config.llms:
+            return {"reply": "No LLM is configured; add one in Settings → LLMs.", "corrections": {}}
+        llm_ids = [llm.llm_id for llm in self.config.llms]
+        from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
+
+        body = _plain_body(record.mail)[:6000]
+        context = (
+            f"Mail received: {record.mail.received_at.isoformat()}\n"
+            f"From: {record.mail.sender.display}\n"
+            f"To: {', '.join(r.display for r in record.mail.recipients)}\n"
+            f"Subject: {record.mail.subject}\n"
+            f"Body:\n{body}\n"
+        )
+        analysis = record.analysis
+        if analysis is not None:
+            context += (
+                f"\nCurrent analysis:\n"
+                f"urgency={analysis.urgency.value}\n"
+                f"summary={analysis.summary}\n"
+                f"reason={analysis.reason}\n"
+                f"action_items={[a.summary for a in analysis.action_items]}\n"
+            )
+        guidelines = await self.feedback_guidelines()
+        if guidelines:
+            context += f"\nUser feedback on earlier mails:\n{guidelines}\n"
+        full_messages: list[dict[str, str]] = [
+            {"role": "system", "content": self._ASK_PROMPT + "\n\n" + context}
+        ]
+        full_messages.extend(messages)
+        try:
+            completion = await self.router.chat(
+                full_messages,
+                primary=llm_ids[0],
+                fallback=llm_ids[1:],
+                options={"temperature": 0.4},
+            )
+        except Exception as exc:
+            return {"reply": f"LLM request failed: {exc}", "corrections": {}}
+        reply = completion.text
+        corrections: dict[str, Any] = {}
+        import re as _re
+
+        m = _re.search(r"\[c\](.*?)\[/c\]", reply, _re.DOTALL)
+        if m:
+            try:
+                corrections = json.loads(m.group(1).strip())
+            except Exception:
+                corrections = {}
+            reply = _re.sub(r"\s*\[c\].*?\[/c\]\s*", "", reply, flags=_re.DOTALL).strip()
+        if corrections:
+            await self.update_mail_analysis(
+                record_id,
+                urgency=corrections.get("urgency"),
+                summary=corrections.get("summary"),
+                reason=corrections.get("reason"),
+            )
+            # the user's latest message is the correction opinion; record it
+            # as a feedback guideline so future analyses tune the same way
+            # (matches the old Reject flow's lasting-guideline behaviour)
+            for item in reversed(messages):
+                if item.get("role") == "user":
+                    note = str(item.get("content") or "").strip()
+                    if note:
+                        with contextlib.suppress(Exception):
+                            await self.record_feedback(record_id, note)
+                    break
+        return {"reply": reply, "corrections": corrections}
+
+    async def update_mail_analysis(
+        self,
+        record_id: str,
+        *,
+        urgency: str | None = None,
+        summary: str | None = None,
+        reason: str | None = None,
+    ) -> MailRecord | None:
+        """Apply Ask & Correct edits (urgency/summary/reason) to a record."""
+        from mailflow.domain import Urgency as _U
+
+        parsed = _U(urgency) if urgency in {u.value for u in _U} else None
+        record = await self.storage.update_mail_analysis(
+            record_id, urgency=parsed, summary=summary, reason=reason
+        )
+        if record is not None:
+            await self.events.emit("mail.analysis.changed", record_id=record_id)
+        return record
+
     async def delete_mail(self, record_id: str) -> bool:
         """Move a mail to trash (recoverable); returns False when unknown."""
         record = await self.storage.get_mail(record_id)

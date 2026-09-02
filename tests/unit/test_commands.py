@@ -154,6 +154,34 @@ class MemoryStorage:
     async def set_preference(self, key: str, value: str) -> None:
         self.preferences[key] = value
 
+    async def update_mail_analysis(
+        self,
+        record_id: str,
+        *,
+        urgency: Urgency | None = None,
+        summary: str | None = None,
+        reason: str | None = None,
+    ) -> MailRecord | None:
+        record = self.mails.get(record_id)
+        if record is None:
+            return None
+        analysis = record.analysis
+        if analysis is None:
+            from mailflow.domain import MailAnalysis
+
+            analysis = MailAnalysis(
+                summary=summary or record.mail.subject, urgency=urgency or record.auto_urgency
+            )
+            record.analysis = analysis
+        if urgency is not None:
+            analysis.urgency = urgency
+            record.auto_urgency = urgency
+        if summary is not None:
+            analysis.summary = summary
+        if reason is not None:
+            analysis.reason = reason
+        return record
+
     async def save_custom_action(self, item: ActionItem) -> None:
         self.custom_actions[item.item_id] = item
 

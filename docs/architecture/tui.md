@@ -35,7 +35,8 @@ down with the screen — nothing keeps ticking after it closes.
   row holds the three selects (manual urgency — a localized
   `ad/info/important/urgent/follow-automatic` dropdown that mirrors the
   selected mail — plus urgency filter and sort) and a two-row button
-  container (refresh/trash/feedback then reply/re-analyze/re-analyze-failed)
+  container (refresh/trash/Ask & Correct then reply/re-analyze/re-analyze-
+  failed)
   with equal-width buttons. An empty view shows a hint (no mail yet vs. no
   match for the search/filter). Reply opens the confirmation-gated modal.
 - **Mailboxes** (`settings.py: AccountsPane`): accounts table with
@@ -46,10 +47,17 @@ down with the screen — nothing keeps ticking after it closes.
   `service.process_mail`. Already-stored mail is marked and skipped, so
   re-analyzing is a no-op instead of a duplicate. Sources that do not
   implement the optional history capability report that instead of failing.
-- **Mail detail**: a **Reject** button opens a dialog to record a reason;
-  the reason joins the rolling correction guidelines that every future LLM
-  analysis receives (`feedback.guidelines`, most recent 20 kept), and the
-  detail view marks the mail with its rejection reason.
+- **Mail detail**: an **Ask & Correct** button opens a live LLM chat over
+  the selected mail — left chat history, right panel with the current
+  urgency / summary / reason and the original body, bottom input sent by
+  Enter or the Send button. The conversation is ephemeral (discarded on
+  close, with a reminder in the header); the LLM can apply corrections to
+  urgency / summary / reason (never the original body), which are persisted
+  to the stored analysis and reflected in the right panel immediately. When
+  a correction is applied the user's latest message is recorded into the
+  rolling correction guidelines that every future LLM analysis receives
+  (`feedback.guidelines`, most recent 20 kept), matching the old Reject
+  behaviour.
 - **Actions**: time / type / content / notes / source-mail columns; row
   selection opens a detail modal that fills the screen — a scrollable box
   with the action plus the **source mail** (subject, sender, date, analysis

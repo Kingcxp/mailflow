@@ -13,7 +13,8 @@ from mailflow.commands import CommandRouter
 from mailflow.config import MailFlowConfig
 from mailflow.service import MailFlowService
 from mailflow_bundled import create_plugin_manager
-from mailflow_tui.app import FeedbackModal, MailFlowApp
+from mailflow_tui.app import MailFlowApp
+from mailflow_tui.ask_correct import AskCorrectModal
 from textual.widgets import Button, Input, Select, Static, TabbedContent
 
 
@@ -294,40 +295,24 @@ async def test_entry_form_fields_scroll(tmp_path: Path) -> None:
         await service.stop()
 
 
-async def test_reject_mail_with_reason_feeds_guidelines(tmp_path: Path) -> None:
-    """The 打回 flow: button opens a dialog, the reason lands in the rolling
-    guidelines that every future analysis receives, and the detail view
-    marks the mail as rejected."""
+async def test_ask_correct_modal_opens_and_sends(tmp_path: Path) -> None:
+    """The 提问修正 flow: the button opens the Ask & Correct chat modal with
+    the mail info panel and a bottom input; sending without an LLM yields a
+    friendly notice; closing discards the (ephemeral) chat."""
     from mailflow.domain import MailAnalysis, MailRecord, Urgency
-    from mailflow.plugins import PluginManager
-    from mailflow.service import start_service
-    from mailflow_storage_sqlite.plugin import plugin as storage_plugin
     from mailflow_testkit.fakes import make_mail as make_test_mail
-    from mailflow_tui.app import MailFlowApp
-    from textual.widgets import Button, DataTable
+    from textual.widgets import DataTable
 
-    def build_config(db: Path) -> Any:
-        from mailflow.config import MailFlowConfig
-
-        return MailFlowConfig()
-
-    manager = PluginManager(build_config(tmp_path / "unused"))
-    manager.register(storage_plugin)
-    service = await start_service(
-        build_config(tmp_path / "fb2.db"),
-        plugin_manager=manager,
-        discover_plugins=False,
-        enable_logging=False,
-    )
+    service = await start_service_quiet(tmp_path)
     CommandRouter(service)
     app = MailFlowApp(cast(Any, service), queue_module.Queue())
     try:
-        async with app.run_test(size=(140, 50)) as pilot:
+        async with app.run_test(size=(160, 50)) as pilot:
             record = MailRecord(
-                record_id="m-reject",
-                mail=make_test_mail(message_id="m-reject", subject="促销邮件"),
+                record_id="m-ask",
+                mail=make_test_mail(message_id="m-ask", subject="会议通知"),
                 auto_urgency=Urgency.URGENT,
-                analysis=MailAnalysis(summary="促销", urgency=Urgency.URGENT),
+                analysis=MailAnalysis(summary="会议", urgency=Urgency.URGENT),
             )
             await service.storage.save_mail(record)
             await pilot.pause()
@@ -341,34 +326,37 @@ async def test_reject_mail_with_reason_feeds_guidelines(tmp_path: Path) -> None:
                 await pilot.pause(0.05)
             assert table.row_count >= 1
 
-            app.query_one("#btn-feedback", Button).press()
-            from textual.widgets import TextArea
+            app.query_one("#btn-ask-correct", Button).press()
 
-            # the modal mounts asynchronously: poll for its fields instead
-            # of a single pause (flaky on slow CI runners)
+            # modal mounts asynchronously: poll for its input field
             for _ in range(60):
-                if isinstance(app.screen, FeedbackModal) and app.screen.query_one_optional(
-                    "#feedback-reason", TextArea
+                if isinstance(app.screen, AskCorrectModal) and app.screen.query_one_optional(
+                    "#ask-correct-input", Input
                 ):
                     break
                 await pilot.pause(0.05)
-            area = app.screen.query_one("#feedback-reason", TextArea)
-            area.text = "这是营销广告，不是紧急事务\n永远归为 ad"
-            app.screen.query_one("#feedback-save", Button).press()
+            assert isinstance(app.screen, AskCorrectModal)
+
+            # right pane shows the current urgency, header carries the reminder
+            assert "urgent" in str(app.screen.query_one("#ask-correct-urgency").render())
+            title = str(app.screen.query_one("#ask-correct-title").render())
+            assert "temporary" in title.lower() or "临时" in title
+
+            # sending a message without an LLM yields a friendly notice
+            input_box = app.screen.query_one("#ask-correct-input", Input)
+            input_box.value = "这是重要的会议吗?"
+            app.screen.query_one("#ask-correct-send", Button).press()
             for _ in range(60):
-                if "营销广告" in (await service.feedback_guidelines()):
+                if "No LLM" in str(app.screen.query_one("#ask-correct-messages").render()):
                     break
                 await pilot.pause(0.05)
-            guidelines = await service.feedback_guidelines()
-            assert "m-reject" in guidelines
-            assert "营销广告" in guidelines
+            messages = str(app.screen.query_one("#ask-correct-messages").render())
+            assert "No LLM" in messages
 
-            # detail view shows the rejection marker
-            notes_widget = app.query_one("#mail-notes")
-            notes = str(
-                notes_widget.content  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType, reportAttributeAccessIssue]
-            )
-            assert "已打回" in notes or "Rejected" in notes
+            # closing dismisses the modal and discards the chat
+            app.screen.action_close()
+            await pilot.pause()
+            assert not isinstance(app.screen, AskCorrectModal)
     finally:
         await service.stop()
 

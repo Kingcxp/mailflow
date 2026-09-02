@@ -7,6 +7,22 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **Ask & Correct (提问修正) in the Mail tab** — the "Reject" button is now
+  "Ask & Correct": it opens an LLM chat window (left chat history, right
+  panel with urgency / summary / reason / original body, bottom input sent
+  by Enter or the Send button). The conversation is ephemeral (discarded on
+  close, with a reminder in the header), but the LLM can apply corrections —
+  urgency / summary / reason, never the original body — which are persisted
+  to the stored analysis and shown in the right panel immediately. When a
+  correction is applied, the user's latest message is recorded into the
+  rolling `feedback.guidelines` (matching the old Reject behaviour), so
+  future analyses tune the same way. The Reply button moved to the second
+  action row to make room.
+- **Stronger urgency calibration in the LLM prompt** — a new rule forbids
+  labelling a mail "info" while the reason describes something the recipient
+  must act on, respond to or track this week (the reported INFO-vs-important
+  contradiction); such mails must be at least "important", or "urgent" when
+  a concrete date/time is set.
 - **Native chat commands for gateway notifiers** — the napcat (OneBot) and
   wechaty notifiers now handle chat commands themselves, with the prefix
   from `general.command_prefix` — no exported bot plugin needed. The

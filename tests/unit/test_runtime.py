@@ -126,6 +126,16 @@ class FakeStorage:
     ) -> MailRecord | None:
         return None
 
+    async def update_mail_analysis(
+        self,
+        record_id: str,
+        *,
+        urgency: Urgency | None = None,
+        summary: str | None = None,
+        reason: str | None = None,
+    ) -> MailRecord | None:
+        return None
+
     async def delete_mail(self, record_id: str) -> None:
         pass
 

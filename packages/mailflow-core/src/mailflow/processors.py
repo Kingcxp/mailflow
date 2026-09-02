@@ -135,7 +135,15 @@ Calibration rules:
    deadlines requiring an action (pickups, payments, registrations,
    appointments, submission deadlines); "other" ONLY when none of the three
    fit — always prefer the closest specific category.
-7. Output ONLY a single JSON object, no prose, no markdown fences:
+7. reason MUST agree with urgency. Never write a reason describing something
+   the recipient must act on, read, respond to or track this week and then
+   classify it "info". If the mail asks for action, has a deadline, needs a
+   response, or the reason says it matters to the recipient, pick
+   important (or urgent when a concrete date/time is set). "info" reasons
+   must be genuinely optional/FYI (seminar you MAY attend, general notice).
+   A reason like "action required" with urgency "info" is a contradiction:
+   re-check and raise the urgency.
+8. Output ONLY a single JSON object, no prose, no markdown fences:
 {
   "summary": "one or two sentence summary",
   "urgency": "ad|info|important|urgent",

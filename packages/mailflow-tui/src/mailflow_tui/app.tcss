@@ -259,35 +259,38 @@ FeedbackModal {
     align: center middle;
 }
 
-#feedback-dialog {
-    width: 70;
-    height: auto;
-    max-height: 70%;
-    border: round $accent;
-    background: $surface;
-    padding: 0 1;
-}
-
-#feedback-title {
+/* Ask & Correct modal: left chat, right mail info, bottom input row */
+#ask-correct-title {
     text-style: bold;
     margin-bottom: 1;
 }
-
-#feedback-hint {
-    color: $text-muted;
+#ask-correct-body {
+    height: 1fr;
     margin-bottom: 1;
 }
-
-#feedback-reason {
-    height: 6;
+#ask-correct-chat {
+    width: 60%;
+    height: 100%;
+    border: round $primary;
+    padding: 0 1;
 }
-
-#feedback-buttons {
+#ask-correct-scroll {
+    height: 1fr;
+}
+#ask-correct-info {
+    width: 40%;
+    height: 100%;
+    border: round $secondary;
+    padding: 0 1;
+}
+#ask-correct-info Static {
+    margin-bottom: 1;
+}
+#ask-correct-input-row {
     height: auto;
-    margin-top: 1;
 }
-
-#feedback-buttons Button {
+#ask-correct-input {
+    width: 1fr;
     margin-right: 1;
 }
 

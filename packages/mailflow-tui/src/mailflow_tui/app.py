@@ -385,53 +385,6 @@ class ActionModal(ModalScreen[Any]):
             self.dismiss(None)
 
 
-class FeedbackModal(ModalScreen[str | None]):
-    """Reject a mail's priority with a reason; the reason becomes a lasting
-    correction guideline injected into every future LLM analysis."""
-
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
-
-    def __init__(self, service: MailFlowService, record: MailRecord) -> None:
-        super().__init__()
-        self._service = service
-        self._record = record
-
-    def _t(self, key: str, **params: Any) -> str:
-        return self._service.t(key, **params)
-
-    def compose(self) -> ComposeResult:
-        yield Static(self._t("tui.feedback_title"), id="feedback-title")
-        with Vertical(id="feedback-dialog"):
-            yield Label(
-                f"{escape(self._record.mail.subject)}  "
-                f"[dim]{escape(self._record.summary or '')}[/dim]"
-            )
-            yield Label(self._t("tui.feedback_hint"), id="feedback-hint")
-            yield TextArea(
-                placeholder=self._t("tui.feedback_reason_label"),
-                id="feedback-reason",
-            )
-            yield Static("", id="feedback-error")
-            with Horizontal(id="feedback-buttons"):
-                yield Button(self._t("tui.btn_save"), id="feedback-save", variant="primary")
-                yield Button(self._t("tui.btn_cancel"), id="feedback-cancel", variant="default")
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "feedback-save":
-            await self._save()
-        elif event.button.id == "feedback-cancel":
-            self.dismiss(None)
-
-    async def _save(self) -> None:
-        text = self.query_one("#feedback-reason", TextArea).text.strip()
-        if not text:
-            self.query_one("#feedback-error", Static).update(
-                f"[yellow]{self._t('tui.feedback_empty')}[/yellow]"
-            )
-            return
-        self.dismiss(" ".join(text.splitlines()))
-
-
 class MailPane(Vertical):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
@@ -481,15 +434,15 @@ class MailPane(Vertical):
                     )
                     yield Button(self._service.t("tui.btn_trash"), id="btn-trash", variant="error")
                     yield Button(
-                        self._service.t("tui.btn_feedback"),
-                        id="btn-feedback",
+                        self._service.t("tui.btn_ask_correct"),
+                        id="btn-ask-correct",
                         variant="warning",
-                    )
-                    yield Button(
-                        self._service.t("tui.btn_reply"), id="btn-reply", variant="success"
                     )
                 yield Static("", id="mail-actions-spacer")
                 with Horizontal(id="mail-actions-row2"):
+                    yield Button(
+                        self._service.t("tui.btn_reply"), id="btn-reply", variant="success"
+                    )
                     yield Button(
                         self._service.t("tui.btn_reparse"), id="btn-reparse", variant="primary"
                     )
@@ -801,25 +754,20 @@ class MailPane(Vertical):
             self._selected_id = None
             await self.refresh_mail()
             return
-        if button_id == "btn-feedback":
+        if button_id == "btn-ask-correct":
             record = await self._service.get_mail(self._selected_id)
             if record is None:
                 return
             if getattr(self._service, "remote", False):
                 self._set_static(
                     "#mail-notes",
-                    f"[yellow]{self._service.t('tui.feedback_local_only')}[/yellow]",
+                    f"[yellow]{self._service.t('tui.ask_correct_local_only')}[/yellow]",
                 )
                 return
-            feedback_record = record
-
-            def on_feedback(reason: str | None) -> None:
-                if reason is not None:
-                    self.run_worker(self._apply_feedback(feedback_record.record_id, reason))
+            from mailflow_tui.ask_correct import AskCorrectModal
 
             cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-                FeedbackModal(self._service, record),
-                on_feedback,
+                AskCorrectModal(self._service, record)
             )
             return
         if button_id == "btn-reparse":
@@ -899,14 +847,6 @@ class MailPane(Vertical):
             )
             return
         await self._reparse_batch([record.mail for record in failed_records])
-
-    async def _apply_feedback(self, record_id: str, reason: str) -> None:
-        await self._service.record_feedback(record_id, reason)
-        self._set_static(
-            "#mail-notes",
-            f"[green]{self._service.t('tui.feedback_saved')}[/green]",
-        )
-        await self._show_selected()
 
     def select_mail(self, mail_id: str) -> None:
         self._selected_id = mail_id
