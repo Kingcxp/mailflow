@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from mailflow.config import MailFlowConfig
@@ -23,6 +23,14 @@ class FakeProvisioner:
         self.stopped: list[str] = []
         self.running = True
         self.detect_calls = 0
+        self.bridge_ensures: list[str] = []
+        self.ensure_bridge_impl: Any = None  # optional async override
+
+    async def ensure_bridge(self, instance_id: str, options: dict[str, Any]) -> None:
+        if self.ensure_bridge_impl is not None:
+            await self.ensure_bridge_impl(instance_id, options)
+            return
+        self.bridge_ensures.append(instance_id)
 
     async def detect(self) -> str:
         self.detect_calls += 1
@@ -174,3 +182,170 @@ async def test_provision_injects_progress_into_install_options() -> None:
     assert captured["x"] == 1
     # original options dict untouched (copy)
     assert "_progress" not in {"x": 1}
+
+
+@pytest.mark.asyncio
+async def test_resume_running_calls_ensure_bridge() -> None:
+    """After an app restart the gateway child may still be running, so the
+    supervisor never calls start() again — in-process side channels (the
+    onebot event bridge) must still be recreated via ensure_bridge."""
+    import asyncio
+
+    provisioner = FakeProvisioner()
+    manager, storage = _manager(provisioner)
+    options = {"bot_url": "http://127.0.0.1:18789/bot/message"}
+    persisted = GatewayInstance(
+        provider="fake-gw",
+        instance_id="gw-1",
+        status="running",
+        endpoint="http://127.0.0.1:9001",
+        extra={"options": options, "autostart": True},
+    )
+    await storage.set_preference("gateway.instance.fake-gw.gw-1", persisted.model_dump_json())
+    await storage.set_preference("gateway.instance.fake-gw.ids", "gw-1")
+
+    await manager.start()  # resumes gw-1 as RUNNING
+    # the supervisor runs one poll cycle before blocking on the stop event
+    for _ in range(200):
+        if provisioner.bridge_ensures:
+            break
+        await asyncio.sleep(0.01)
+    assert provisioner.bridge_ensures == ["gw-1"]
+    # a RUNNING gateway must not be restarted — only the side channel is
+    # ensured; start() is never called
+    assert provisioner.started == []
+
+    await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_resume_dead_gateway_restarts_then_ensures_bridge() -> None:
+    """An instance persisted as RUNNING whose child then died takes the
+    restart path (start()) — the bridge is created by start() itself, so
+    no separate ensure_bridge call happens before the restart."""
+    import asyncio
+
+    provisioner = FakeProvisioner()
+    provisioner.running = False  # child died while persisted as running
+    manager, storage = _manager(provisioner)
+    persisted = GatewayInstance(
+        provider="fake-gw",
+        instance_id="gw-1",
+        status="running",
+        endpoint="http://127.0.0.1:9001",
+        extra={"options": {"bot_url": "x"}, "autostart": True},
+    )
+    await storage.set_preference("gateway.instance.fake-gw.gw-1", persisted.model_dump_json())
+    await storage.set_preference("gateway.instance.fake-gw.ids", "gw-1")
+
+    await manager.start()  # resume path: child dead -> restart via start()
+    # the restart path waits one backoff (5s) before starting
+    for _ in range(800):
+        if provisioner.started:
+            break
+        await asyncio.sleep(0.01)
+    assert provisioner.started == ["gw-1"]
+    await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_payload_missing_marks_error_and_stops_retry() -> None:
+    """When the gateway payload is gone (deleted data dir), supervision
+    must mark the instance error with a clear message and stop retrying —
+    an endless restart loop would hide the problem forever."""
+    import asyncio
+
+    from mailflow.gateway import GatewayNotInstalledError
+
+    class MissingPayload(FakeProvisioner):
+        start_calls = 0
+
+        async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
+            MissingPayload.start_calls += 1
+            raise GatewayNotInstalledError(
+                f"napcat {instance_id} is not installed; run the setup again"
+            )
+
+    provisioner = MissingPayload()
+    provisioner.running = False
+    manager, storage = _manager(provisioner)
+    persisted = GatewayInstance(
+        provider="fake-gw",
+        instance_id="gw-1",
+        status="running",
+        endpoint="http://127.0.0.1:9001",
+        extra={"options": {"bot_url": "x"}, "autostart": True},
+    )
+    await storage.set_preference("gateway.instance.fake-gw.gw-1", persisted.model_dump_json())
+    await storage.set_preference("gateway.instance.fake-gw.ids", "gw-1")
+
+    await manager.start()
+    # backoff(5s) -> start() raises GatewayNotInstalledError -> instance
+    # marked error and the supervisor returns (no further start attempts)
+    for _ in range(800):
+        instance = manager.instance("fake-gw", "gw-1")
+        if instance is not None and instance.status == "error":
+            break
+        await asyncio.sleep(0.01)
+    instance = manager.instance("fake-gw", "gw-1")
+    assert instance is not None
+    assert instance.status == "error"
+    assert "is not installed" in instance.error
+    # exactly one start attempt: the loop stopped instead of retrying
+    assert MissingPayload.start_calls == 1
+    await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_notifier_pane_merge_gateway_error_shows_reconfig() -> None:
+    """Gateway-backed notifiers whose managed gateway is in error (e.g.
+    the data dir was deleted) get an explicit reconfigure hint in the
+    status column instead of a generic probe result."""
+    from mailflow.config import NotifierConfig
+    from mailflow.contracts import GatewayInstance as GI
+    from mailflow_tui.notifications import NotificationsPane
+
+    class _StubService:
+        def __init__(self) -> None:
+            from types import SimpleNamespace
+
+            self.config = SimpleNamespace(notifiers=[])
+
+        def t(self, key: str, **params: Any) -> str:
+            return f"t({key})"
+
+        def gateway_providers(self) -> list[str]:
+            return ["napcat", "wechaty"]
+
+        async def gateway_instances(self) -> list[Any]:
+            return [
+                GI(
+                    provider="napcat",
+                    instance_id="qq-1",
+                    status="error",
+                    error="napcat qq-1 is not installed; run the setup again",
+                    endpoint="http://127.0.0.1:3000",
+                )
+            ]
+
+    service = _StubService()
+    service.config.notifiers = [
+        NotifierConfig(
+            notifier_id="qq-1",
+            provider="onebot",
+            enabled=True,
+            options={"gateway": "napcat", "http_url": "http://127.0.0.1:3000"},
+        ),
+        NotifierConfig(
+            notifier_id="plain-2",
+            provider="console",
+            enabled=True,
+        ),
+    ]
+    pane = NotificationsPane(cast(Any, service))
+    results = {"qq-1": "online", "plain-2": "ok"}
+    await pane._merge_gateway_states(results)  # pyright: ignore[reportPrivateUsage]
+    assert "t(tui.bots_need_reconfig)" in results["qq-1"]
+    assert "is not installed" in results["qq-1"]
+    # non-gateway notifiers are untouched
+    assert results["plain-2"] == "ok"

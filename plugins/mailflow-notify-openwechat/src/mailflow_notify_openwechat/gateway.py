@@ -25,6 +25,7 @@ from typing import Any
 
 import httpx
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
+from mailflow.gateway import GatewayNotInstalledError
 
 logger = logging.getLogger("mailflow.gateway.openwechat")
 
@@ -145,7 +146,7 @@ class OpenWechatProvisioner(GatewayProvisioner):
         target = _instance_dir(instance_id)
         bridge = target / "openwechat-bridge"
         if not bridge.exists():
-            raise RuntimeError(
+            raise GatewayNotInstalledError(
                 f"openwechat {instance_id} is not installed (no bridge "
                 f"binary); run the setup to install it"
             )
@@ -164,6 +165,14 @@ class OpenWechatProvisioner(GatewayProvisioner):
         def _launch() -> subprocess.Popen[Any]:
             env = {**os.environ, **dict(options.get("env") or {})}
             env["GATEWAY_PORT"] = str(port)
+            # chat command dispatch endpoint (see mailflow.bot_server); the
+            # referenced bridge forwards incoming text messages here and
+            # sends the reply back to the same chat
+            bot_url = str(options.get("bot_url") or "")
+            if bot_url:
+                env["MAILFLOW_BOT_URL"] = bot_url
+                env["MAILFLOW_PROVIDER"] = "openwechat"
+                env["MAILFLOW_INSTANCE"] = instance_id
             with open(log_file, "ab") as handle:
                 return subprocess.Popen(
                     [str(bridge)],

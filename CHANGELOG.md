@@ -7,6 +7,19 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **Gateway chat commands survive restarts and are complete across
+  platforms** — the NapCat event bridge (the local listener NapCat
+  `httpClients` push events to) lives in the MailFlow process, so after an
+  app restart the supervisor now calls the provisioner's `ensure_bridge`
+  hook on every healthy poll and recreates it — previously the bridge was
+  silently lost, the gateway still reported "running", and chat commands
+  stopped answering. The OpenWeChat bridge gained incoming-message
+  forwarding to the bot command endpoint (it only offered `/health`,
+  `/qr`, `/send` before), so NapCat / WeChaty / OpenWeChat all have a
+  working chat-command path. When a gateway's data directory is missing
+  (deleted while stopped), supervision marks the instance `error` and
+  stops retrying instead of looping forever, and the Notifier tab shows an
+  explicit "installation missing — re-run setup" hint.
 - **Ask & Correct (提问修正) in the Mail tab** — the "Reject" button is now
   "Ask & Correct": it opens an LLM chat window (left chat history, right
   panel with urgency / summary / reason / original body, bottom input sent

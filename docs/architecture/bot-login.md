@@ -111,11 +111,29 @@ Add form (basics) → Next → provider guide
 ```
 
 Crash handling: the runtime's gateway supervisor restarts a dead child with
-backoff (like the pipeline's retry policy); after N failures the instance
-is marked `error` in the Bots tab. `stop()` terminates every managed child
-(graceful SIGTERM, then kill). On startup, instances that were running at
-shutdown are resumed automatically (the supervisor starts them once even
-when the status probe reports stopped).
+backoff (like the pipeline's retry policy). `stop()` terminates every
+managed child (graceful SIGTERM, then kill). On startup, instances that
+were running at shutdown are resumed automatically (the supervisor starts
+them once even when the status probe reports stopped).
+
+Chat-command wiring survives app restarts: the onebot event bridge (the
+local listener NapCat's `httpClients` push message events to) lives in the
+MailFlow process, not in the gateway child. While a gateway reports
+`running` the supervisor calls the provisioner's `ensure_bridge` hook on
+every poll cycle, so the bridge is recreated after a restart even though
+`start()` is never called again — chat commands keep answering. The
+WeChaty and OpenWeChat bridges forward incoming text messages to the same
+local `mailflow.bot_server` endpoint (via `MAILFLOW_BOT_URL`) and send the
+reply back, so all three gateway platforms have a working chat-command
+path; the OpenWeChat bridge gained this forwarding (previously it only
+offered `/health`, `/qr` and `/send`).
+
+Missing payload: if the gateway's data directory was deleted while the app
+was stopped (or the install was moved), `start()` raises
+`GatewayNotInstalledError`; the supervisor then marks the instance `error`
+and stops retrying — an endless restart loop would hide the problem. The
+Notifier tab surfaces this as an explicit "installation missing — re-run
+setup" hint in the status column instead of a generic unreachable.
 
 ## Chat commands (subscriptions & operations)
 

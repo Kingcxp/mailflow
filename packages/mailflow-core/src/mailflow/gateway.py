@@ -27,6 +27,14 @@ from mailflow.registry import ComponentRegistry
 logger = logging.getLogger("mailflow.gateway")
 
 _PREF_PREFIX = "gateway.instance."
+
+
+class GatewayNotInstalledError(RuntimeError):
+    """The gateway's payload is missing (e.g. its data directory was
+    deleted while the app was stopped). Not transient: supervision must
+    mark the instance and stop retrying instead of looping forever."""
+
+
 _STATUS_RUNNING = "running"
 
 
@@ -178,6 +186,30 @@ class GatewayManager:
                 instance.status = "stopped"
                 await self._save_state(instance)
 
+    async def _ensure_side_channels(self, instance: GatewayInstance) -> None:
+        """Give the provisioner a chance to recreate in-process bridges.
+
+        Some gateways route chat events through a listener that lives in
+        the MailFlow process (the onebot httpClients bridge). After an app
+        restart the gateway child may still be running — so ``status``
+        reports RUNNING and ``start()`` is never called again — while the
+        in-process listener is gone. Provisioners that implement an
+        ``ensure_bridge(instance_id, options)`` hook get called here to
+        recreate it idempotently; others get nothing.
+        """
+        ensure = getattr(self.provisioner(instance.provider), "ensure_bridge", None)
+        if ensure is None:
+            return
+        try:
+            await ensure(instance.instance_id, instance.extra.get("options", {}))
+        except Exception as exc:
+            logger.warning(
+                "gateway %s.%s bridge ensure failed: %s",
+                instance.provider,
+                instance.instance_id,
+                exc,
+            )
+
     async def _supervise(self, instance: GatewayInstance, *, resume: bool = False) -> None:
         """Restart a crashed gateway with bounded backoff.
 
@@ -196,6 +228,11 @@ class GatewayManager:
                 self._instances[self._key(instance.provider, instance.instance_id)] = current
                 await self._save_state(current)
                 backoff = 5
+                # the gateway process is alive, but in-process side channels
+                # (e.g. the onebot event bridge that lives in *this* process,
+                # not in the gateway's) can still be missing after an app
+                # restart. Let the provisioner resurrect them.
+                await self._ensure_side_channels(instance)
                 # poll every 60s while healthy (the status probe hits the
                 # network; on low-RAM VMs the gateway itself is the
                 # resource hog, so keep supervision light)
@@ -237,6 +274,21 @@ class GatewayManager:
                 await self._save_state(started)
                 backoff = 5
                 first = False
+            except GatewayNotInstalledError as exc:
+                # the payload is gone (deleted data dir, moved install):
+                # retrying forever is pointless and hides the problem.
+                # Mark the instance error so the UI can tell the user to
+                # re-run the setup, then stop supervising it.
+                failed = instance.model_copy(update={"status": "error", "error": str(exc)})
+                self._instances[self._key(instance.provider, instance.instance_id)] = failed
+                await self._save_state(failed)
+                logger.error(
+                    "gateway %s.%s payload missing; stopping supervision: %s",
+                    instance.provider,
+                    instance.instance_id,
+                    exc,
+                )
+                return
             except Exception as exc:
                 logger.error(
                     "gateway %s.%s restart failed: %s", instance.provider, instance.instance_id, exc
@@ -336,4 +388,4 @@ class GatewayManager:
         await self._save_state(instance)
 
 
-__all__ = ["GatewayManager"]
+__all__ = ["GatewayManager", "GatewayNotInstalledError"]

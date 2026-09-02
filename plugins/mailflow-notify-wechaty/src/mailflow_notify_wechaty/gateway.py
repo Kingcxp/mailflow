@@ -25,6 +25,7 @@ from typing import Any
 
 import httpx
 from mailflow.contracts import GatewayInstance
+from mailflow.gateway import GatewayNotInstalledError
 
 logger = logging.getLogger("mailflow.gateway.wechaty")
 
@@ -202,7 +203,7 @@ class WechatyGatewayProvisioner:
             raise RuntimeError("WeChaty needs Node.js >= 18; install Node first")
         target = _instance_dir(instance_id)
         if not (target / "wechaty-gateway.js").exists():
-            raise RuntimeError(f"wechaty {instance_id} is not installed")
+            raise GatewayNotInstalledError(f"wechaty {instance_id} is not installed")
         port = int(options.get("port") or self._port_for(instance_id))
         token = str(options.get("token") or "")
         env = dict(options.get("env") or {})

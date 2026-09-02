@@ -695,7 +695,8 @@
       "ask_correct_you": "我",
       "ask_correct_llm": "MailFlow",
       "ask_correct_applied": "已应用——上方分析已更新。",
-      "ask_correct_local_only": "提问修正需要本地服务（远程模式不支持）"
+      "ask_correct_local_only": "提问修正需要本地服务（远程模式不支持）",
+      "bots_need_reconfig": "安装缺失，请重新部署"
     },
     "update": {
       "applied_title": "已应用的更新",

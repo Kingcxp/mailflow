@@ -28,6 +28,7 @@ from typing import Any, cast
 
 import httpx
 from mailflow.contracts import GatewayInstance
+from mailflow.gateway import GatewayNotInstalledError
 
 logger = logging.getLogger("mailflow.gateway.napcat")
 
@@ -405,6 +406,36 @@ class NapCatProvisioner:
     def _endpoint(self, instance_id: str) -> str:
         return f"http://127.0.0.1:{self._port_for(instance_id)}"
 
+    async def ensure_bridge(
+        self, instance_id: str, options: dict[str, Any]
+    ) -> _OneBotEventBridge | None:
+        """Recreate the in-process onebot event bridge if it is missing.
+
+        Idempotent: ``start()`` creates the bridge on first launch. After
+        an app restart the NapCat child may still be running (status
+        reports RUNNING) so ``start()`` is never called again — without a
+        bridge here the httpClients event push silently targets a dead
+        port and chat commands stop answering. The gateway supervisor
+        calls this hook on every healthy poll cycle.
+        """
+        existing = self._bridges.get(instance_id)
+        if existing is not None:
+            return existing
+        bot_url = str(options.get("bot_url") or "")
+        if not bot_url:
+            return None
+        bridge = _OneBotEventBridge(
+            instance_id,
+            self._bridge_port_for(instance_id),
+            bot_url,
+            self._endpoint(instance_id),
+            token=str(options.get("access_token") or ""),
+        )
+        await bridge.start()
+        self._bridges[instance_id] = bridge
+        logger.info("napcat %s: event bridge recreated on :%d", instance_id, bridge.port)
+        return bridge
+
     async def _wait_http(self, instance_id: str, wait_seconds: float = _READY_TIMEOUT) -> bool:
         url = self._endpoint(instance_id)
         deadline = asyncio.get_running_loop().time() + wait_seconds
@@ -711,7 +742,7 @@ class NapCatProvisioner:
         elif not any(
             p.suffix == ".AppImage" for p in _instance_dir(instance_id).glob("*.AppImage")
         ):
-            raise RuntimeError(
+            raise GatewayNotInstalledError(
                 "NapCat is not installed on this Linux host: run the "
                 "auto-install first (it downloads the official NapCat "
                 "AppImage with QQ bundled)."
@@ -737,7 +768,7 @@ class NapCatProvisioner:
             # the AppImage asset name changes with each release: glob it
             appimages = list(run_target.glob("*.AppImage"))
             if not appimages:
-                raise RuntimeError(
+                raise GatewayNotInstalledError(
                     f"napcat {instance_id} is not installed (no .AppImage "
                     f"under {run_target}); run the setup again to install it"
                 )
@@ -748,7 +779,7 @@ class NapCatProvisioner:
         else:
             entry_path = run_target / "napcat.mjs"
             if not _path_exists(entry_path):
-                raise RuntimeError(
+                raise GatewayNotInstalledError(
                     f"napcat {instance_id} is not installed (missing "
                     f"{entry_path}); run the setup again to install it"
                 )
@@ -759,18 +790,7 @@ class NapCatProvisioner:
         # forward them to the injected bot_server endpoint (bot_url) and
         # send the reply back through the OneBot HTTP API — the notifier's
         # chat commands work without an exported bot plugin
-        bridge: _OneBotEventBridge | None = None
-        bot_url = str(options.get("bot_url") or "")
-        if bot_url:
-            bridge = _OneBotEventBridge(
-                instance_id,
-                self._bridge_port_for(instance_id),
-                bot_url,
-                self._endpoint(instance_id),
-                token=str(options.get("access_token") or ""),
-            )
-            await bridge.start()
-            self._bridges[instance_id] = bridge
+        bridge = await self.ensure_bridge(instance_id, options)
         # already running on this port (another instance or a self-hosted
         # NapCat)? reuse it instead of starting a conflicting process
         if await self._wait_http_port(port, wait_seconds=1.0):

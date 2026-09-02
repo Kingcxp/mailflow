@@ -559,8 +559,48 @@ class NotificationsPane(Vertical):
                 instance_id: outcome
                 for (instance_id, _, _), outcome in zip(instances, outcomes, strict=True)
             }
+        # gateway-backed notifiers: surface managed-gateway failures (e.g.
+        # the gateway's data dir was deleted while the app was stopped) as
+        # an explicit "re-run setup" hint instead of a generic unreachable
+        await self._merge_gateway_states(results)
         self._render_rows(results)
         status_node.update(self._service.t("tui.notifications_checked"))
+
+    async def _merge_gateway_states(self, results: dict[str, str]) -> None:
+        """Overlay managed-gateway errors onto notifier status rows.
+
+        A notifier whose gateway instance is in ``error`` (missing
+        install, deleted data dir, ...) cannot deliver or answer chat
+        commands; replacing the probe line with the reconfig hint makes
+        the required action obvious."""
+        try:
+            instances = await self._service.gateway_instances()
+        except Exception:
+            return
+        gateway_by_id: dict[str, str] = {}
+        for instance in instances:
+            status = str(getattr(instance, "status", ""))
+            if status == "error":
+                error = str(getattr(instance, "error", "") or "")
+                gateway_by_id[str(instance.instance_id)] = (
+                    f"[red]{self._service.t('tui.bots_need_reconfig')}[/red] ({error})"
+                )
+        if not gateway_by_id:
+            return
+        providers = self._service.gateway_providers()  # pyright: ignore[reportUnknownMemberType]
+        for entry in self._all_notifiers():
+            notifier_id = str(entry["notifier_id"])
+            provider = str(entry["provider"])
+            gateway = (
+                str(entry["options"].get("gateway") or "")
+                if entry["options"].get("gateway")
+                else (provider if provider in providers else "")
+            )
+            if not gateway:
+                continue
+            hint = gateway_by_id.get(notifier_id)
+            if hint:
+                results[notifier_id] = hint
 
 
 __all__ = ["NotificationsPane"]

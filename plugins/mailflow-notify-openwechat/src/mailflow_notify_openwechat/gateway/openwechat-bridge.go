@@ -6,6 +6,12 @@
 //   GET  /qr     -> {"status": ..., "qrcode": "<base64 png>", "error": ...}
 //   POST /send   -> {"to": {"type": "contact"|"room", "name": ...}, "text": ...}
 //
+// Chat commands: incoming text messages are forwarded to the MailFlow bot
+// endpoint (MAILFLOW_BOT_URL, the local mailflow.bot_server command
+// dispatcher); a non-empty reply is sent back to the same chat via the
+// SDK. Set MAILFLOW_PROVIDER / MAILFLOW_INSTANCE so the reply carries the
+// correct gateway identity for subscription commands.
+//
 // The QR is rendered to a PNG so the TUI can display it directly.
 // Login is scan-to-login: no platform token required.
 //
@@ -15,6 +21,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -39,6 +46,57 @@ type state struct {
 
 var st = &state{status: "pending", started: time.Now()}
 
+var httpClient = &http.Client{Timeout: 15 * time.Second}
+
+// dispatchChatCommand forwards a text message to the MailFlow bot endpoint
+// and sends the reply back to the originating chat.
+func dispatchChatCommand(msg *openwechat.Message, text string) {
+	botURL := os.Getenv("MAILFLOW_BOT_URL")
+	if botURL == "" {
+		return
+	}
+	chatType := "private"
+	if msg.IsSendByGroup() {
+		chatType = "group"
+	}
+	// The group/contact id is the FromUserName ("@@group" chats, "@user"
+	// contacts); the sender wire id is the same value for private chats.
+	chatID := msg.FromUserName
+	sender := msg.FromUserName
+	if senderInGroup, err := msg.SenderInGroup(); err == nil && senderInGroup != nil {
+		sender = senderInGroup.UserName
+	}
+	payload, err := json.Marshal(map[string]any{
+		"text":        text,
+		"sender":      sender,
+		"chat_id":     chatID,
+		"chat_type":   chatType,
+		"provider":    os.Getenv("MAILFLOW_PROVIDER"),
+		"instance_id": os.Getenv("MAILFLOW_INSTANCE"),
+	})
+	if err != nil {
+		log.Printf("[openwechat-bridge] dispatch marshal failed: %v", err)
+		return
+	}
+	resp, err := httpClient.Post(botURL, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		log.Printf("[openwechat-bridge] bot dispatch failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Reply string `json:"reply"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return
+	}
+	if result.Reply != "" {
+		if _, err := msg.ReplyText(result.Reply); err != nil {
+			log.Printf("[openwechat-bridge] reply failed: %v", err)
+		}
+	}
+}
+
 func main() {
 	port := os.Getenv("GATEWAY_PORT")
 	if port == "" {
@@ -55,6 +113,19 @@ func main() {
 			st.errMsg = ""
 			st.mu.Unlock()
 		}
+	}
+
+	// Chat command flow: forward text messages to the MailFlow bot
+	// endpoint; a non-empty reply is sent back to the same chat. Self
+	// messages and non-text segments are ignored.
+	bot.MessageHandler = func(msg *openwechat.Message) {
+		if msg.IsSendBySelf() {
+			return
+		}
+		if !msg.IsText() {
+			return
+		}
+		dispatchChatCommand(msg, msg.Content)
 	}
 
 	go func() {
