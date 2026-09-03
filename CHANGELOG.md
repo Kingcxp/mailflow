@@ -40,6 +40,15 @@ All notable changes are recorded here; the format follows
   leaks the NapCat log tail into the UI error (the guide showed "QR
   shown: rows x cols" and the gateway returned "empty/short (N bytes)"
   with a log tail attached).
+- **NapCat per-account config sync runs on every healthy poll** — the
+  per-account OneBot config (`onebot11_<uin>.json`) is only learnable
+  AFTER the QQ account logs in, but the sync previously ran once at bridge
+  creation (pre-login) and never again, so a stale account file silently
+  kept chat commands dead forever. The supervisor's healthy-poll hook now
+  re-syncs every cycle (signature-deduped so the file is only rewritten
+  when the QQ number or bridge URL actually changed), and a repaired file
+  triggers the one-shot NapCat restart so the corrected httpClients entry
+  loads.
 - **NapCat httpClients survive login & restarts (chat commands)** — NapCat
   prefers the per-account OneBot config (`onebot11_<uin>.json`) once a QQ
   account is logged in; an account file written by an older MailFlow (or

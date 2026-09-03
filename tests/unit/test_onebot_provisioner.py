@@ -6,7 +6,7 @@ import subprocess
 import urllib.error
 import urllib.request as _ur
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import mailflow_notify_onebot.gateway as gw_mod
 import pytest
@@ -236,6 +236,36 @@ async def test_qr_clears_cached_uin_when_logged_out(
 
 async def _async_true() -> bool:
     return True
+
+
+@pytest.mark.asyncio
+async def test_ensure_bridge_syncs_per_account_on_healthy_poll() -> None:
+    """The per-account config sync must run on EVERY healthy poll — not
+    only at bridge creation. At creation time no QQ session exists (the
+    user has not logged in yet), so the QQ number is only learnable after
+    login; a sync that skips the existing-bridge path would never repair a
+    stale per-account config and chat commands would stay dead forever."""
+    import asyncio
+
+    prov = NapCatProvisioner()
+
+    syncs: list[str] = []
+
+    async def _fake_sync(instance_id: str) -> bool:
+        syncs.append(instance_id)
+        return False
+
+    # a sentinel standing in for the live bridge (type checked loose)
+    prov._bridges["napcat-1"] = cast(  # pyright: ignore[reportPrivateUsage]
+        Any, object()
+    )
+    prov._sync_per_account_config = _fake_sync  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
+
+    await prov.ensure_bridge("napcat-1", {"bot_url": "http://127.0.0.1:18789/bot/message"})
+    await asyncio.sleep(0.05)
+    assert syncs == ["napcat-1"], (
+        "healthy-poll path must run the per-account sync even when the bridge already exists"
+    )
 
 
 def test_looks_corrupt_detects_loader_failures() -> None:

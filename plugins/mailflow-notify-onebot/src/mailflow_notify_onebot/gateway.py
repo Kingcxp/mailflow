@@ -475,6 +475,10 @@ class NapCatProvisioner:
         # instances currently being repaired (delete + reinstall): guards
         # the self-heal path against infinite repair loops
         self._repairing: set[str] = set()
+        # last per-account config signature written per instance
+        # ("uin:bridge_url:port") — dedupes the healthy-poll sync so the
+        # file is only rewritten when something actually changed
+        self._synced: dict[str, str] = {}
 
     # -- helpers ---------------------------------------------------------------
 
@@ -522,9 +526,14 @@ class NapCatProvisioner:
             return False
         bridge = self._bridges.get(instance_id)
         bridge_url = bridge.url if bridge is not None else ""
-        return await self._write_onebot_config(
+        signature = f"{uin}:{bridge_url}:{self._port_for(instance_id)}"
+        if self._synced.get(instance_id) == signature:
+            return False  # already written, nothing changed since
+        healed = await self._write_onebot_config(
             instance_id, self._port_for(instance_id), bridge_url, qq=uin
         )
+        self._synced[instance_id] = signature
+        return healed
 
     async def _probe_uin(self, instance_id: str) -> str:
         """The logged-in QQ number via get_login_info, or '' if not up."""
@@ -665,6 +674,16 @@ class NapCatProvisioner:
         """
         existing = self._bridges.get(instance_id)
         if existing is not None:
+            # The per-account sync must run on every healthy poll, not only
+            # at bridge creation: the QQ number is only known AFTER login,
+            # and a per-account config created before the bridge existed
+            # (older MailFlow, NapCat WebUI save) silently lacks the
+            # httpClients entry — the exact phantom-"logged in" failure
+            # where the gateway reports running but chat commands never
+            # answer. Sync here too; _sync_per_account_config dedupes.
+            healed = await self._sync_per_account_config(instance_id)
+            if healed:
+                await self._restart_for_config(instance_id, options)
             return existing
         bot_url = str(options.get("bot_url") or "")
         if not bot_url:
