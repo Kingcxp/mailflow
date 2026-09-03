@@ -7,6 +7,19 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **No phantom NapCat logins after cleanup** — three related fixes: (1)
+  `start()` only reuses a NapCat process MailFlow itself spawned and that
+  is still alive; a port occupied by an unknown process (a stale NapCat
+  left over after clearing the gateway data dir) now raises a clear error
+  instead of silently reporting "reuse" — previously the new instance
+  never actually started and the old session answered `get_login_info`,
+  so the guide claimed "scan complete / logged in" while the phone showed
+  no login at all. (2) the cached QQ number is dropped whenever the login
+  probe stops seeing a session, so logging out actually clears the logged
+  in state. (3) the QR flow no longer prints the QR payload dimensions or
+  leaks the NapCat log tail into the UI error (the guide showed "QR
+  shown: rows x cols" and the gateway returned "empty/short (N bytes)"
+  with a log tail attached).
 - **NapCat httpClients survive login & restarts (chat commands)** — NapCat
   prefers the per-account OneBot config (`onebot11_<uin>.json`) once a QQ
   account is logged in; an account file written by an older MailFlow (or

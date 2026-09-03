@@ -184,9 +184,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         if rows:
             node.styles.height = rows + 1  # pyright: ignore[reportUnknownMemberType]
             node.styles.min_height = rows + 1  # pyright: ignore[reportUnknownMemberType]
-        if text:
-            cols = len(text.splitlines()[0])
-            self._log("INFO", f"QR shown: {rows} rows x {cols} cols")
+        # (no size log here: the QR payload dimensions are internal debug
+        # detail that would leak into the user-facing log panel)
 
     def _logged_in_banner(self) -> str:
         """Completion banner shown in the QR panel after login succeeds —
@@ -661,7 +660,7 @@ def _ascii_qr(image: str) -> str:
         out = [f" {row} " for row in out] + [pad_row]
         return "\n".join(out) or "(qr)"
     except Exception:
-        return f"(qr payload {len(raw)} bytes)"
+        return "(qr)"
 
 
 __all__ = ["GatewayGuideModal", "_ascii_qr"]

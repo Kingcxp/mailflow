@@ -148,6 +148,15 @@ and stops retrying — an endless restart loop would hide the problem. The
 Notifier tab surfaces this as an explicit "installation missing — re-run
 setup" hint in the status column instead of a generic unreachable.
 
+Stale processes: `start()` reuses a running gateway only when MailFlow
+itself spawned the child and it is still alive. A port occupied by an
+unmanaged process — typically a stale NapCat left over after the gateway
+data dir was cleared — raises a clear error instead of being silently
+"reused"; reusing it would have reported the old session as logged in
+while the new instance never started (the phantom "scan complete" seen
+after cleanup). The cached QQ number is also dropped whenever the login
+probe stops seeing a session, so logout is reflected in the UI.
+
 ## Chat commands (subscriptions & operations)
 
 MailFlow bots answer chat commands in groups and private chats. The

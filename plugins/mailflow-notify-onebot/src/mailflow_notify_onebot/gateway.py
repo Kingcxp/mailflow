@@ -974,15 +974,33 @@ class NapCatProvisioner:
         # chat commands work without an exported bot plugin
         bridge = await self.ensure_bridge(instance_id, options)
         # already running on this port (another instance or a self-hosted
-        # NapCat)? reuse it instead of starting a conflicting process
-        if await self._wait_http_port(port, wait_seconds=1.0):
-            logger.info("napcat %s: reusing already-running gateway on :%d", instance_id, port)
+        # NapCat)? Only reuse a child WE spawned and that is still alive.
+        # A port occupied by an unknown process is almost always a stale
+        # NapCat left over after the gateway data dir was cleared: reusing
+        # it would report the old session as "logged in" while the new
+        # instance never actually started — surface that as an error so the
+        # user can clean it up instead of chasing a phantom login.
+        managed = self._processes.get(instance_id)
+        if (
+            managed is not None
+            and managed.poll() is None
+            and await self._wait_http_port(port, wait_seconds=1.0)
+        ):
+            logger.info("napcat %s: reusing running gateway on :%d", instance_id, port)
             return GatewayInstance(
                 provider="napcat",
                 instance_id=instance_id,
                 status="running",
                 endpoint=f"http://127.0.0.1:{port}",
                 extra={"port": port, "reused": True},
+            )
+        if await self._wait_http_port(port, wait_seconds=1.0):
+            raise RuntimeError(
+                f"napcat {instance_id}: port {port} is already in use by a "
+                "process MailFlow does not manage (a stale NapCat left over "
+                "after clearing the gateway data dir?). Stop that process or "
+                "run the gateway cleanup, then start again — reusing it would "
+                "report a phantom login."
             )
         # config for NapCat: HTTP server on the instance port plus the
         # httpClients entry pushing message events to the in-process
@@ -1249,6 +1267,11 @@ class NapCatProvisioner:
                         break
                 except Exception as exc:
                     probe = f"{endpoint} ERR {type(exc).__name__}"
+        # a probe that no longer sees a session means the account was
+        # logged out (or the stale process died): drop the cached QQ
+        # number so state never shows a phantom login
+        if not logged_in:
+            self._uins.pop(instance_id, None)
         if logged_in:
             await self._sync_per_account_config(instance_id)
         if probe != getattr(self, "_last_probe", None):
@@ -1293,21 +1316,22 @@ class NapCatProvisioner:
         try:
             raw = qr_file.read_bytes()
         except OSError:
-            # diagnose why the QR is missing and hand it to the guide via
-            # the ERROR: prefix so the user sees the actual reason
-            tail = self._tail_log(_instance_dir(instance_id) / "napcat.log", lines=10)
+            # diagnose why the QR is missing; the detail goes to the log,
+            # the guide only gets a user-facing hint (no log tail leaked
+            # into the UI)
             logger.info(
-                "napcat %s: QR not ready yet (%s missing)%s",
+                "napcat %s: QR not ready yet (%s missing)",
                 instance_id,
                 qr_file,
-                tail,
             )
-            return f"ERROR: QR file {qr_file} not created yet{tail}"
+            return "ERROR: QR not ready yet — the QQ login screen is still loading"
         if len(raw) < 100:
-            return (
-                f"ERROR: QR file exists but is empty/short ({len(raw)} bytes) — "
-                "the QQ login screen may not have rendered"
+            logger.info(
+                "napcat %s: QR file is empty/short (%d bytes)",
+                instance_id,
+                len(raw),
             )
+            return "ERROR: QR is empty — the QQ login screen may not have rendered yet"
         import base64 as _b64
 
         return _b64.b64encode(raw).decode("ascii")

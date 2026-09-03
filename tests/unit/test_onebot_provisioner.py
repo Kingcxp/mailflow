@@ -169,3 +169,59 @@ async def test_qr_fresh_keeps_waiting(monkeypatch: pytest.MonkeyPatch, tmp_path:
     result = await prov.qr("A-Bot-NapCat-5baf4a")
     assert result != "__MAILFLOW_LOGGED_IN__"
     assert result  # the QR payload
+
+
+@pytest.mark.asyncio
+async def test_start_refuses_stale_process_on_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A port occupied by a process MailFlow does not manage (a stale
+    NapCat left over after clearing the gateway data dir) must surface as
+    an error — silently reusing it would report a phantom login."""
+    monkeypatch.chdir(tmp_path)
+    instance = _instance_dir("A-Bot-NapCat-5baf4a")  # pyright: ignore[reportPrivateUsage]
+    instance.mkdir(parents=True, exist_ok=True)
+    (instance / "QQ-50969_NapCat-v4.18.19-amd64.AppImage").write_bytes(b"x")
+
+    monkeypatch.setattr(gw_mod, "_find_node", lambda: "node")
+    monkeypatch.setattr(gw_mod, "_available_memory_mb", lambda: 4096.0)
+    # the port answers HTTP but no process is in _processes -> stale
+    monkeypatch.setattr(
+        NapCatProvisioner,
+        "_wait_http_port",
+        lambda self, port, wait_seconds=2.0: _async_true(),  # pyright: ignore[reportUnknownLambdaType,reportUnknownArgumentType]
+    )
+    prov = NapCatProvisioner()
+    with pytest.raises(RuntimeError, match=r"does not manage|stale NapCat"):
+        await prov.start("A-Bot-NapCat-5baf4a", {"port": "39999"})
+
+
+@pytest.mark.asyncio
+async def test_qr_clears_cached_uin_when_logged_out(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """After logout the login probe no longer sees a session: the cached
+    QQ number must be dropped so state never shows a phantom login."""
+    monkeypatch.chdir(tmp_path)
+    instance = _instance_dir("A-Bot-NapCat-5baf4a")  # pyright: ignore[reportPrivateUsage]
+    (instance / "cache").mkdir(parents=True, exist_ok=True)
+    (instance / "cache" / "qrcode.png").write_bytes(b"y" * 200)
+
+    prov = NapCatProvisioner()
+    prov._uins["A-Bot-NapCat-5baf4a"] = "404291187"  # pyright: ignore[reportPrivateUsage]
+
+    # HTTP probe fails (no server) -> falls through to QR payload;
+    # logged_in stays False -> the cached uin is invalidated
+    def _dead_endpoint(iid: str) -> str:
+        return "http://127.0.0.1:1"
+
+    monkeypatch.setattr(prov, "_endpoint", _dead_endpoint)
+
+    result = await prov.qr("A-Bot-NapCat-5baf4a")
+    assert result != "__MAILFLOW_LOGGED_IN__"
+    assert result  # QR payload returned
+    assert "A-Bot-NapCat-5baf4a" not in prov._uins  # pyright: ignore[reportPrivateUsage]
+
+
+async def _async_true() -> bool:
+    return True
