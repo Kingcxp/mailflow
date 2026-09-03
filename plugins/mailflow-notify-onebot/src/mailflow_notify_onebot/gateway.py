@@ -472,6 +472,9 @@ class NapCatProvisioner:
         # used to keep the per-account onebot11_<uin>.json in sync with
         # the httpClients bridge entry after login
         self._uins: dict[str, str] = {}
+        # instances currently being repaired (delete + reinstall): guards
+        # the self-heal path against infinite repair loops
+        self._repairing: set[str] = set()
 
     # -- helpers ---------------------------------------------------------------
 
@@ -820,17 +823,21 @@ class NapCatProvisioner:
             missing.append("xvfb-run (apt install xvfb xauth)")
         libs_missing = _missing_qq_runtime_libs()
         if libs_missing:
-            missing.append(
-                "QQ/Electron runtime libraries (apt install " + " ".join(libs_missing) + ")"
+            # Informational only: the ldconfig cache can lag a fresh apt
+            # install (and package names vary across distros), so a false
+            # positive here must not block deployment. If the libraries
+            # really are absent the AppImage launch fails and start()'s
+            # diagnostics surface the actual loader error.
+            logger.warning(
+                "napcat %s: QQ/Electron runtime libraries not visible to "
+                "ldconfig (apt install %s if launch fails)",
+                instance_id,
+                " ".join(libs_missing),
             )
-        if missing:
+        if _sh.which("xvfb-run") is None:
             raise RuntimeError(
-                "NapCat AppImage on Linux needs these missing pieces — "
-                "install them first, then retry:\n  - "
-                + "\n  - ".join(missing)
-                + "\n(example: apt-get install -y xvfb xauth "
-                + " ".join(libs_missing)
-                + ")"
+                "NapCat AppImage on Linux needs xvfb-run — install it first, "
+                "then retry:\n  - xvfb-run (apt install xvfb xauth)"
             )
         if _sh.which("fusermount") is None:
             # AppImages normally need FUSE to mount; containers/VMs often
@@ -980,6 +987,46 @@ class NapCatProvisioner:
             "partially removed; delete data/gateways/napcat-* and retry "
             "the setup to reinstall"
         )
+
+    @staticmethod
+    def _looks_corrupt(log_tail: str) -> bool:
+        """Heuristic: did the child die because the install/runtime is
+        broken (missing loader objects, AppImage preload failure) rather
+        than a transient problem? These are the fingerprints of a corrupt
+        or incomplete NapCat environment that a clean reinstall fixes."""
+        signatures = (
+            "major.node",
+            "cannot open shared object file",
+            "error while loading shared libraries",
+            "preload] failed",
+            "Trace/breakpoint trap",
+            "AppRun: line",
+        )
+        return any(sig in log_tail for sig in signatures)
+
+    async def _repair_reinstall(
+        self, instance_id: str, options: dict[str, Any], failure: str
+    ) -> GatewayInstance:
+        """Delete the instance's NapCat install and deploy it fresh.
+
+        Called when the child dies with corruption fingerprints (missing
+        runtime objects, preload failures). The data dir is wiped so the
+        next install downloads a clean copy, then start() runs again once.
+        """
+        logger.warning(
+            "napcat %s: install looks corrupted (%s) — deleting and reinstalling automatically",
+            instance_id,
+            failure,
+        )
+        target = _instance_dir(instance_id)
+        self._repairing.add(instance_id)
+        try:
+            self._terminate(instance_id)
+            await asyncio.to_thread(shutil.rmtree, target, True)
+            await self.install(instance_id, options)
+            return await self.start(instance_id, options)
+        finally:
+            self._repairing.discard(instance_id)
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
 
@@ -1176,21 +1223,27 @@ class NapCatProvisioner:
             if proc is not None and proc.poll() is not None:
                 log_tail = self._tail_log(log_file)
                 self._processes.pop(instance_id, None)
-                raise RuntimeError(
+                detail = (
                     f"napcat {instance_id} exited early (code "
                     f"{proc.returncode}); see {log_file}{log_tail}"
                 )
+                if instance_id not in self._repairing and self._looks_corrupt(detail):
+                    return await self._repair_reinstall(instance_id, options, detail)
+                raise RuntimeError(detail)
             await asyncio.sleep(2.0)
         endpoint = self._endpoint(instance_id)
         if not ready:
             log_tail = self._tail_log(log_file)
-            self._terminate(instance_id)
-            raise RuntimeError(
+            detail = (
                 f"napcat {instance_id} started but neither its WebUI "
                 f"(http://127.0.0.1:{webui_port}, scanned +0..+4) nor the "
                 f"QR file ({qr_file}) appeared in {_READY_TIMEOUT:.0f}s; "
                 f"see {log_file}{log_tail}"
             )
+            self._terminate(instance_id)
+            if instance_id not in self._repairing and self._looks_corrupt(detail):
+                return await self._repair_reinstall(instance_id, options, detail)
+            raise RuntimeError(detail)
         self._webui_ports[instance_id] = ready_port
         logger.info(
             "napcat %s: ready (WebUI :%d, OneBot HTTP on :%d after login)",

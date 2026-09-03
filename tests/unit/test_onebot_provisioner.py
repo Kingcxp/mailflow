@@ -238,6 +238,24 @@ async def _async_true() -> bool:
     return True
 
 
+def test_looks_corrupt_detects_loader_failures() -> None:
+    """Corruption fingerprints (missing shared objects, preload failures)
+    must trigger the repair path; ordinary early exits must not."""
+    assert gw_mod.NapCatProvisioner._looks_corrupt(  # pyright: ignore[reportPrivateUsage]
+        "preload] failed. major.node: cannot open shared object file"
+    )
+    assert gw_mod.NapCatProvisioner._looks_corrupt(  # pyright: ignore[reportPrivateUsage]
+        "error while loading shared libraries: libgtk-3.so.0"
+    )
+    assert gw_mod.NapCatProvisioner._looks_corrupt(  # pyright: ignore[reportPrivateUsage]
+        "Trace/breakpoint trap"
+    )
+    # an OOM kill or a plain crash is NOT an install-corruption signature
+    assert not gw_mod.NapCatProvisioner._looks_corrupt(  # pyright: ignore[reportPrivateUsage]
+        "napcat exited early (code -9)"
+    )
+
+
 @pytest.mark.asyncio
 async def test_missing_qq_runtime_libs_detects_absent_gtk(monkeypatch: pytest.MonkeyPatch) -> None:
     """The preflight reports a package when its shared library is absent

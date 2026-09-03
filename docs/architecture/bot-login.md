@@ -145,8 +145,18 @@ Linux host libraries: the bundled NapCat AppImage contains the full QQ NT
 + Electron runtime, which needs the usual desktop shared libraries
 (`libnss3`, `libgbm`, `libasound`, GTK, ...). A minimal container without
 them fails at load with a cryptic `major.node: cannot open shared object
-file`. The installer preflights these via `ldconfig -p` before downloading
-and prints the exact `apt-get install` command.
+file`. The installer checks these via `ldconfig -p` and logs the exact
+`apt-get install` command as a warning when any look absent (the ldconfig
+cache can lag a fresh install, so this never blocks deployment).
+
+Self-healing installs: when the NapCat child dies with loader/preload
+fingerprints (`major.node`, `cannot open shared object file`, `preload]
+failed`, `Trace/breakpoint trap`) — a corrupt or incomplete environment —
+the provisioner deletes the instance's data dir and reinstalls NapCat
+automatically, then starts it once more. A second failure is reported as
+an error (one repair attempt per start; no infinite loop). Clearing
+`data/gateways` manually is no longer required to recover from a broken
+deployment.
 
 Missing payload: if the gateway's data directory was deleted while the app
 was stopped (or the install was moved), `start()` raises

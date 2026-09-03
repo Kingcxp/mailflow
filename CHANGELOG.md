@@ -7,6 +7,16 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **NapCat self-heals a corrupted install** — when the NapCat child dies
+  with loader/preload fingerprints (`major.node`, `cannot open shared
+  object file`, `preload] failed`, `Trace/breakpoint trap`), the gateway
+  provisioner now deletes the instance's data dir and reinstalls NapCat
+  automatically before giving up (one repair attempt per start, no
+  infinite loop). The Linux runtime-library preflight was also downgraded
+  from a hard error to a warning: the ldconfig cache can lag a fresh
+  `apt install` (and package names vary), so a false positive must not
+  block deployment — if the libraries really are absent the launch fails
+  and the repair path kicks in with the loader error surfaced.
 - **NapCat Linux preflight reports missing QQ runtime libraries** — a
   minimal container (no desktop packages) fails to load the bundled
   Electron/QQ runtime with a cryptic "major.node: cannot open shared
