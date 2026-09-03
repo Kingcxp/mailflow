@@ -7,6 +7,13 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **Actions tab fills the pane** — the todo table used a fixed 70% height
+  and the button row split the remaining space 50/50 (Textual's Horizontal
+  defaults to height:1fr), so the table showed only half the pane. Both
+  are now sized correctly (table 1fr, button row auto).
+- **Logs tab shows chat activity by default** — the viewer defaulted to
+  WARNING+, which hid the INFO-level chat-command lines exactly when
+  diagnosing a silent bot; the default level is now INFO.
 - **Create your own todo items** — the Actions tab gains an "Add todo"
   button opening a form (summary, type, due time, notes); user-created
   todos live in the custom-action store, join the reminder scheduler like

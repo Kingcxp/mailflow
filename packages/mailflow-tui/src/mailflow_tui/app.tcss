@@ -212,6 +212,13 @@ ActionModal {
     border: round $primary;
 }
 
+/* Horizontal defaults to height:1fr — without this the button row splits
+   the remaining space 50/50 with the table */
+#actions-buttons {
+    height: auto;
+    padding: 0 1;
+}
+
 #actions-hint {
     height: 1;
     color: $text-muted;

@@ -1334,7 +1334,10 @@ class LogsPane(Vertical):
         "ERROR": 40,
         "CRITICAL": 50,
     }
-    _DEFAULT_MIN_LEVEL = "WARNING"
+    # INFO by default: the chat-command chain (received messages, replies)
+    # logs at INFO, and WARNING-only would hide the exact lines a user
+    # needs when diagnosing why a bot did not answer.
+    _DEFAULT_MIN_LEVEL = "INFO"
     _MAX_LINES = 2000
 
     def __init__(self, service: MailFlowService, log_queue: queue_module.Queue[Any]) -> None:
