@@ -706,7 +706,16 @@
       "logs_cat_parse": "Mail parsing",
       "logs_cat_notify": "Notifications",
       "logs_cat_storage": "Storage",
-      "logs_cat_system": "System"
+      "logs_cat_system": "System",
+      "btn_add_todo": "Add todo",
+      "todo_add_title": "New todo item",
+      "todo_summary_label": "What needs doing",
+      "todo_due_label": "Due at (YYYY-MM-DD HH:MM)",
+      "todo_type_label": "Type",
+      "todo_notes_label": "Notes (optional)",
+      "todo_added": "Todo added.",
+      "todo_invalid_due": "Invalid date/time — use YYYY-MM-DD HH:MM",
+      "todo_summary_required": "Please enter what needs doing"
     },
     "update": {
       "applied_title": "Applied updates",

@@ -706,7 +706,16 @@
       "logs_cat_parse": "邮件解析",
       "logs_cat_notify": "通知",
       "logs_cat_storage": "存储",
-      "logs_cat_system": "系统"
+      "logs_cat_system": "系统",
+      "btn_add_todo": "添加待办",
+      "todo_add_title": "新建待办事项",
+      "todo_summary_label": "要做什么",
+      "todo_due_label": "截止时间 (YYYY-MM-DD HH:MM)",
+      "todo_type_label": "类型",
+      "todo_notes_label": "备注（可选）",
+      "todo_added": "待办已添加。",
+      "todo_invalid_due": "日期无效——请使用 YYYY-MM-DD HH:MM 格式",
+      "todo_summary_required": "请填写待办内容"
     },
     "update": {
       "applied_title": "已应用的更新",

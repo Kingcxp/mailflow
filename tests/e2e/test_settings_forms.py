@@ -494,6 +494,71 @@ async def test_notifier_form_mounts_with_valid_provider_default(tmp_path: Path) 
         await service.stop()
 
 
+async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
+    """The Actions tab 'Add todo' button opens the create form; a filled
+    form lands in the custom-action store, shows up in the table, and is
+    deleted for real (custom todos have no dismissal semantics)."""
+    from mailflow.domain import ActionItem
+    from textual.widgets import DataTable
+
+    service = await start_service_quiet(tmp_path)
+    CommandRouter(service)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause(0.2)
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-actions"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.2)
+
+            # open the create form
+            app.query_one("#actions-add", Button).press()
+            await pilot.pause(0.2)
+            from mailflow_tui.todo_create import TodoCreateModal
+
+            assert isinstance(app.screen, TodoCreateModal)
+            summary_input = app.screen.query_one("#todo-summary", Input)
+            summary_input.value = "给导师发进度报告"
+            due_input = app.screen.query_one("#todo-due", Input)
+            due_input.value = "2099-01-01 09:00"
+            notes_input = app.screen.query_one("#todo-notes", Input)
+            notes_input.value = "每周例会前"
+            app.screen.query_one("#todo-save", Button).press()
+            await pilot.pause(0.3)
+
+            # persisted in the custom store with the right fields
+            custom = await service.storage.list_custom_actions()
+            assert len(custom) == 1
+            item = custom[0]
+            assert isinstance(item, ActionItem)
+            assert item.summary == "给导师发进度报告"
+            assert item.mail_id == ""  # user-created: no source mail
+            assert item.due_at.year == 2099
+
+            # shows up in the actions table
+            table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
+            rows = " ".join(
+                " ".join(str(c) for c in table.get_row_at(i)) for i in range(table.row_count)
+            )
+            assert "给导师发进度报告" in rows
+
+            # delete it: custom todos are removed for real
+            idx = next(
+                i
+                for i in range(table.row_count)
+                if "给导师发进度报告" in str(table.get_row_at(i)[2])
+            )
+            table.move_cursor(row=idx, animate=False)  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.05)
+            app.query_one("#actions-delete", Button).press()
+            await pilot.pause(0.3)
+            assert await service.storage.list_custom_actions() == []
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
 async def test_reparse_failed_works_without_selection(tmp_path: Path) -> None:
     """'Re-analyze failed' must start re-analysis of every failed mail even
     when nothing is selected in the table — selection is only required for

@@ -46,6 +46,7 @@ from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
+from mailflow_tui.todo_create import TodoCreateModal
 
 _BLANK = ""
 
@@ -891,6 +892,11 @@ class ActionsPane(Vertical):
         yield DataTable(id="actions-table")
         with Horizontal(id="actions-buttons"):
             yield Button(
+                self._service.t("tui.btn_add_todo"),
+                id="actions-add",
+                variant="primary",
+            )
+            yield Button(
                 self._service.t("tui.btn_delete_todo"),
                 id="actions-delete",
                 variant="error",
@@ -1000,6 +1006,21 @@ class ActionsPane(Vertical):
             )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "actions-add":
+
+            def _refresh_after_create(_result: bool | None) -> None:
+                self.run_worker(
+                    self.refresh_actions(),
+                    exclusive=True,
+                    group="actions-refresh",
+                    exit_on_error=False,
+                )
+
+            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+                TodoCreateModal(self._service),
+                callback=_refresh_after_create,
+            )
+            return
         if event.button.id != "actions-delete":
             return
         table = self._actions_table()

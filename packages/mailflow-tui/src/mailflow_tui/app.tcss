@@ -151,6 +151,37 @@ ActionModal {
     margin-right: 1;
 }
 
+/* Todo create modal */
+#todo-create-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+#todo-create-form {
+    width: 60;
+    height: auto;
+    padding: 0 1;
+}
+.todo-label {
+    color: $text-muted;
+    margin-bottom: 0;
+}
+#todo-create-form Input,
+#todo-create-form Select {
+    margin-bottom: 1;
+}
+#todo-create-error {
+    height: auto;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+#todo-create-buttons {
+    height: auto;
+    margin-top: 1;
+}
+#todo-create-buttons Button {
+    margin-right: 1;
+}
+
 #mail-summary {
     color: $text;
 }
