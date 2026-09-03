@@ -657,8 +657,10 @@ class NapCatProvisioner:
             if not await self._wait_http_port(self._port_for(instance_id), wait_seconds=1.0):
                 break
             await asyncio.sleep(1.0)
-        with contextlib.suppress(Exception):
-            await self.start(instance_id, options)
+        # surface relaunch failures: swallowing them silently would leave
+        # the gateway "running" without a bridge — exactly the phantom
+        # state where NapCat pushes events to a dead port
+        await self.start(instance_id, options)
 
     async def ensure_bridge(
         self, instance_id: str, options: dict[str, Any]
@@ -674,6 +676,25 @@ class NapCatProvisioner:
         """
         existing = self._bridges.get(instance_id)
         if existing is not None:
+            # verify the listener is actually up: a bridge can vanish from
+            # the port map (server closed, listener crashed, relaunch
+            # swallowed) while its entry survives in _bridges — NapCat
+            # would then push events at a dead port with ECONNREFUSED
+            try:
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection("127.0.0.1", existing.port), timeout=2.0
+                )
+                writer.close()
+            except Exception:
+                logger.warning(
+                    "napcat %s: event bridge port %d is dead — recreating",
+                    instance_id,
+                    existing.port,
+                )
+                self._bridges.pop(instance_id, None)
+                with contextlib.suppress(Exception):
+                    await existing.stop()
+                return await self.ensure_bridge(instance_id, options)
             # The per-account sync must run on every healthy poll, not only
             # at bridge creation: the QQ number is only known AFTER login,
             # and a per-account config created before the bridge existed

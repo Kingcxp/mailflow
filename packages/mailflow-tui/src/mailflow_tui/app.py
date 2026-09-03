@@ -1396,6 +1396,11 @@ class LogsPane(Vertical):
                 placeholder=self._service.t("tui.logs_search_placeholder"),
                 id="log-search",
             )
+            yield Button(
+                self._service.t("tui.logs_export"),
+                id="logs-export",
+                variant="default",
+            )
         with ScrollableContainer(id="log-scroll"):
             yield RichLog(id="log-view", wrap=True, highlight=True, max_lines=2000)
 
@@ -1443,6 +1448,29 @@ class LogsPane(Vertical):
             self._source_signature = signature
         if current is not Select.NULL and current != "":
             source.value = current if current in self._seen_sources else ""
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id != "logs-export":
+            return
+        from mailflow_tui.log_export import LogExportScreen
+
+        def _on_saved(path: str | None) -> None:
+            if path is None:
+                return
+            # confirm inside the log itself, at the saved buffer's level
+            # so the confirmation is visible under the current filters
+            stamp = __import__("datetime").datetime.now().strftime("%H:%M:%S")
+            self._buffer.append(
+                f"{stamp}|INFO|mailflow.tui|{self._service.t('tui.logs_exported', path=path)}"
+            )
+            self._seen_sources.add("tui")
+            self._refresh_source_options()
+            self._append_new_lines([self._buffer[-1]])
+
+        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+            LogExportScreen(self._service, list(self._buffer)),
+            callback=_on_saved,
+        )
 
     def drain(self) -> None:
         # remounts (language switch, tab re-compose) can tick the interval

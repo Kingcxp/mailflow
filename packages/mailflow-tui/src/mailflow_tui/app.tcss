@@ -234,6 +234,33 @@ ActionModal {
     height: 100%;
 }
 
+/* Log export modal */
+#log-export-dialog {
+    width: 80;
+    height: 80%;
+    border: round $accent;
+    background: $surface;
+    padding: 0 1;
+}
+#log-export-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+#log-export-tree {
+    height: 1fr;
+    margin-bottom: 1;
+}
+#log-export-filename {
+    margin-bottom: 1;
+}
+#log-export-error {
+    height: auto;
+    margin-bottom: 1;
+}
+#log-export-actions Button {
+    margin-right: 1;
+}
+
 #log-controls {
     height: auto;
     padding: 0 1;

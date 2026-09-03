@@ -559,6 +559,77 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
         await service.stop()
 
 
+async def test_logs_export_saves_buffer_to_file(tmp_path: Path) -> None:
+    """The Logs tab export button opens a directory tree + filename form;
+    saving writes the buffered lines to <name>.log (suffix appended when
+    missing) and confirms the path inside the log itself."""
+    import logging as _logging
+
+    from mailflow_tui.runner import TuiLogHandler
+
+    service = await start_service_quiet(tmp_path)
+    CommandRouter(service)
+    log_queue: queue_module.Queue[str] = queue_module.Queue()
+    # enable_logging=False (quiet) never mounts the runtime, so the TUI
+    # handler is attached directly to the mailflow logger like the real
+    # runner would
+    handler = TuiLogHandler(log_queue)
+    ml = _logging.getLogger("mailflow")
+    # quiet mode skips configure_logging, so the mailflow logger keeps the
+    # root's WARNING default — INFO chat lines would be dropped at source
+    ml.setLevel(_logging.INFO)
+    ml.addHandler(handler)
+    app = MailFlowApp(cast(Any, service), log_queue)
+    export_dir = tmp_path / "exported"
+    export_dir.mkdir()
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause(0.3)
+            _logging.getLogger("mailflow.bot_server").info("chat[probe] group:1: '#mailflow help'")
+            from textual.widgets import TabbedContent
+
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-logs"  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(1.0)
+            from mailflow_tui.app import LogsPane
+
+            pane = app.query_one(LogsPane)
+            await pilot.pause(1.0)
+            assert list(pane._buffer), "log buffer must contain lines"  # pyright: ignore[reportPrivateUsage]
+
+            app.query_one("#logs-export", Button).press()
+            await pilot.pause(0.3)
+            from mailflow_tui.log_export import LogExportScreen
+
+            assert isinstance(app.screen, LogExportScreen)
+
+            # navigate the tree to the export dir: simulate by patching the
+            # tree cursor node with the target directory
+            from mailflow_tui.log_export import DirectoryTree  # reuse import path
+
+            tree = app.screen.query_one("#log-export-tree", DirectoryTree)
+            tree.path = export_dir
+            await pilot.pause(0.5)
+            # place the cursor on the root (the target directory itself)
+            tree.cursor_line = 0
+            await pilot.pause(0.1)
+            name_input = app.screen.query_one("#log-export-filename", Input)
+            name_input.value = "my-logs"  # no .log suffix -> appended
+            app.screen.query_one("#log-export-save", Button).press()
+            await pilot.pause(0.3)
+
+            saved = export_dir / "my-logs.log"
+            assert saved.exists(), "export must write the .log file"
+            content = saved.read_text(encoding="utf-8")
+            assert "chat[probe]" in content
+            # confirmation written back into the log buffer
+            assert "my-logs.log" in str(pane._buffer[-1])  # pyright: ignore[reportPrivateUsage]
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
 async def test_reparse_failed_works_without_selection(tmp_path: Path) -> None:
     """'Re-analyze failed' must start re-analysis of every failed mail even
     when nothing is selected in the table — selection is only required for

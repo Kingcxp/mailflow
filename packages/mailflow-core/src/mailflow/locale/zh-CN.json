@@ -715,7 +715,14 @@
       "todo_notes_label": "备注（可选）",
       "todo_added": "待办已添加。",
       "todo_invalid_due": "日期无效——请使用 YYYY-MM-DD HH:MM 格式",
-      "todo_summary_required": "请填写待办内容"
+      "todo_summary_required": "请填写待办内容",
+      "logs_export": "导出…",
+      "log_export_title": "导出日志到文件",
+      "log_export_pick_folder": "在下方目录树中选择保存位置",
+      "log_export_filename_placeholder": "文件名，例如 mailflow.log",
+      "log_export_filename_required": "请输入文件名",
+      "log_export_failed": "保存失败：{error}",
+      "logs_exported": "日志已保存到 {path}"
     },
     "update": {
       "applied_title": "已应用的更新",

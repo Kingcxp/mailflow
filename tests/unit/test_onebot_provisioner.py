@@ -255,17 +255,29 @@ async def test_ensure_bridge_syncs_per_account_on_healthy_poll() -> None:
         syncs.append(instance_id)
         return False
 
-    # a sentinel standing in for the live bridge (type checked loose)
+    # a REAL listening socket stands in for the live bridge: the
+    # dead-port self-check must reach it, so the sync path is exercised
+    import asyncio as _asyncio
+
+    listener = await _asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
+    live_port = listener.sockets[0].getsockname()[1]  # pyright: ignore[reportUnknownMemberType]
+
+    class _LiveBridge:
+        port = live_port
+
     prov._bridges["napcat-1"] = cast(  # pyright: ignore[reportPrivateUsage]
-        Any, object()
+        Any, _LiveBridge()
     )
     prov._sync_per_account_config = _fake_sync  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
 
-    await prov.ensure_bridge("napcat-1", {"bot_url": "http://127.0.0.1:18789/bot/message"})
-    await asyncio.sleep(0.05)
-    assert syncs == ["napcat-1"], (
-        "healthy-poll path must run the per-account sync even when the bridge already exists"
-    )
+    try:
+        await prov.ensure_bridge("napcat-1", {"bot_url": "http://127.0.0.1:18789/bot/message"})
+        await asyncio.sleep(0.05)
+        assert syncs == ["napcat-1"], (
+            "healthy-poll path must run the per-account sync even when the bridge already exists"
+        )
+    finally:
+        listener.close()
 
 
 def test_looks_corrupt_detects_loader_failures() -> None:

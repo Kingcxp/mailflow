@@ -715,7 +715,14 @@
       "todo_notes_label": "Notes (optional)",
       "todo_added": "Todo added.",
       "todo_invalid_due": "Invalid date/time — use YYYY-MM-DD HH:MM",
-      "todo_summary_required": "Please enter what needs doing"
+      "todo_summary_required": "Please enter what needs doing",
+      "logs_export": "Export…",
+      "log_export_title": "Export logs to file",
+      "log_export_pick_folder": "Pick the target folder in the tree below",
+      "log_export_filename_placeholder": "File name, e.g. mailflow.log",
+      "log_export_filename_required": "Please enter a file name",
+      "log_export_failed": "Save failed: {error}",
+      "logs_exported": "Logs saved to {path}"
     },
     "update": {
       "applied_title": "Applied updates",
