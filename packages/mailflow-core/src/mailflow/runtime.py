@@ -333,13 +333,13 @@ class MailFlowRuntime:
     ) -> MailRecord | None:
         record_id = mail.normalized_message_id()
         if not _skip_dedup and record_id in self._seen_ids:
-            logger.info("duplicate mail skipped (already processed): %s", record_id)
+            logger.debug("duplicate mail skipped (already processed): %s", record_id)
             return None
         self._seen_ids.add(record_id)  # no await: atomic across workers
         if not _skip_dedup and await self._storage.get_mail(record_id) is not None:
             # Forwarded copies of the same mail (multiple accounts, restarts)
             # share the normalized id; process and store exactly one copy.
-            logger.info("duplicate mail skipped (already stored): %s", record_id)
+            logger.debug("duplicate mail skipped (already stored): %s", record_id)
             return None
         try:
             analysis, notes, _, _ = await self._pipeline.process(

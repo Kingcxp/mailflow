@@ -1320,6 +1320,17 @@ class LogsPane(Vertical):
                 return category
         return "system"
 
+    # category tag colors (contract palette reuse: chat=accent blue,
+    # mail=info green, llm=important amber, parse=urgent red, notify=sys)
+    _CATEGORY_STYLES: ClassVar[dict[str, str]] = {
+        "chat": "#7EA7F8",
+        "mail": "#67C23A",
+        "llm": "#E6A23C",
+        "parse": "#F56C6C",
+        "notify": "#E6A23C",
+        "storage": "#909399",
+        "system": "#909399",
+    }
     _LEVEL_STYLES: ClassVar[dict[str, str]] = {
         "ERROR": "bold red",
         "CRITICAL": "bold red",
@@ -1471,10 +1482,16 @@ class LogsPane(Vertical):
             return None
         from rich.text import Text
 
+        category = self._category_of(logger_name)
+        cat_label = self._service.t(f"tui.logs_cat_{category}")
+        cat_style = self._CATEGORY_STYLES.get(category, "")
+        # Layout: HH:MM:SS LEVEL [Category] message — the category tag is
+        # color-coded, the message indented under it so the eye groups
+        # every line by its subsystem instead of reading raw logger names.
         text = Text(f"{time_part} ")
         text.append(f"{level:<7}", style=self._LEVEL_STYLES.get(level, "bold"))
-        text.append(f" {logger_name} ")
-        text.append(message)
+        text.append(f" [{cat_label}]", style=cat_style)
+        text.append(f" {message}")
         return text
 
     def _append_new_lines(self, new_lines: list[str]) -> None:
