@@ -699,7 +699,14 @@
       "bots_need_reconfig": "installation missing — re-run setup",
       "ask_correct_chat_label": "Conversation",
       "ask_correct_info_label": "Analysis",
-      "reparse_failed_start": "Re-analyzing {count} failed mail(s)…"
+      "reparse_failed_start": "Re-analyzing {count} failed mail(s)…",
+      "logs_cat_chat": "Chat bot",
+      "logs_cat_mail": "Mail",
+      "logs_cat_llm": "AI analysis",
+      "logs_cat_parse": "Mail parsing",
+      "logs_cat_notify": "Notifications",
+      "logs_cat_storage": "Storage",
+      "logs_cat_system": "System"
     },
     "update": {
       "applied_title": "Applied updates",

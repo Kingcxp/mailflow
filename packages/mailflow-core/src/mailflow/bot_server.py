@@ -82,14 +82,28 @@ class BotServer:
             payload = json.loads(body.decode("utf-8", "replace") or "{}")
             text = str(payload.get("text") or "")
             if path == "/bot/message":
+                instance = str(payload.get("instance_id") or "")
+                chat_id = str(payload.get("chat_id") or "")
+                # INFO on every chat hop: the chain (platform -> bridge ->
+                # here -> command) is otherwise invisible, and a missing
+                # log line pinpoints where it broke
+                logger.info(
+                    "chat[%s] %s:%s: %.80r",
+                    instance,
+                    payload.get("chat_type") or "chat",
+                    chat_id,
+                    text,
+                )
                 reply = await self._service.command_dispatch(
                     text,
                     sender=str(payload.get("sender") or ""),
-                    chat_id=str(payload.get("chat_id") or ""),
+                    chat_id=chat_id,
                     chat_type=str(payload.get("chat_type") or ""),
                     provider=str(payload.get("provider") or ""),
-                    instance_id=str(payload.get("instance_id") or ""),
+                    instance_id=instance,
                 )
+                if reply:
+                    logger.info("chat[%s] reply to %s: %.80r", instance, chat_id, reply)
                 await self._respond(writer, 200, {"reply": reply or ""})
             else:
                 await self._respond(writer, 404, {"reply": ""})

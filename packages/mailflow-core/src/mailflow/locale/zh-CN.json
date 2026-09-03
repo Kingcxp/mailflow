@@ -699,7 +699,14 @@
       "bots_need_reconfig": "安装缺失，请重新部署",
       "ask_correct_chat_label": "对话",
       "ask_correct_info_label": "分析",
-      "reparse_failed_start": "正在重新解析 {count} 封失败的邮件…"
+      "reparse_failed_start": "正在重新解析 {count} 封失败的邮件…",
+      "logs_cat_chat": "聊天机器人",
+      "logs_cat_mail": "邮件",
+      "logs_cat_llm": "AI 分析",
+      "logs_cat_parse": "邮件解析",
+      "logs_cat_notify": "通知",
+      "logs_cat_storage": "存储",
+      "logs_cat_system": "系统"
     },
     "update": {
       "applied_title": "已应用的更新",

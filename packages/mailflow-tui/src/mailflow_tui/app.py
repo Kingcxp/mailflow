@@ -421,8 +421,8 @@ class MailPane(Vertical):
             )
             yield Select(
                 [
-                    (self._service.t("tui.sort_urgency"), "urgency"),
                     (self._service.t("tui.sort_time"), "time"),
+                    (self._service.t("tui.sort_urgency"), "urgency"),
                 ],
                 id="mail-sort",
                 allow_blank=False,
@@ -600,8 +600,8 @@ class MailPane(Vertical):
             self,
             "#mail-sort",
             [
-                (service.t("tui.sort_urgency"), "urgency"),
                 (service.t("tui.sort_time"), "time"),
+                (service.t("tui.sort_urgency"), "urgency"),
             ],
         )
 
@@ -1259,7 +1259,45 @@ class LogsPane(Vertical):
     three filters: a minimum level (WARNING+ERROR by default, expandable
     to INFO or DEBUG), a source group (empty = all), and a substring
     search. The buffer is bounded so the pane never grows without limit.
+
+    Sources are shown as user-facing categories (Chat, Mail, LLM, ...) in
+    the user's language — raw logger names like ``mailflow.llm.openai``
+    are plumbing detail nobody filters by.
     """
+
+    # logger segment -> category key (first match wins; localized via
+    # tui.logs_cat_*). Chat keywords come before notify so platform
+    # notifiers (mailflow.notify.onebot) count as the chat bot they are.
+    _SOURCE_CATEGORIES: ClassVar[dict[str, str]] = {
+        "bot_server": "chat",
+        "gateway": "chat",
+        "onebot": "chat",
+        "napcat": "chat",
+        "wechaty": "chat",
+        "openwechat": "chat",
+        "openclaw": "chat",
+        "llm": "llm",
+        "pipeline": "parse",
+        "processor": "parse",
+        "imap": "mail",
+        "mail": "mail",
+        "service": "mail",
+        "notify": "notify",
+        "reminder": "notify",
+        "storage": "storage",
+    }
+
+    @staticmethod
+    def _category_of(logger_name: str) -> str:
+        """User-facing category for a raw logger name; 'system' fallback.
+
+        Matching walks the logger's dot segments, so nested names like
+        ``mailflow.plugins.openwechat`` still classify by their keyword."""
+        for segment in logger_name.split("."):
+            category = LogsPane._SOURCE_CATEGORIES.get(segment)
+            if category is not None:
+                return category
+        return "system"
 
     _LEVEL_STYLES: ClassVar[dict[str, str]] = {
         "ERROR": "bold red",
@@ -1351,7 +1389,7 @@ class LogsPane(Vertical):
             return
         current = source.value
         pairs = [(self._service.t("tui.logs_all_sources"), "")] + [
-            (name, name) for name in sorted(self._seen_sources)
+            (self._service.t(f"tui.logs_cat_{name}"), name) for name in sorted(self._seen_sources)
         ]
         # drain() runs every second; poking Select.set_options with an
         # identical list re-renders the widget each tick — skip it
@@ -1375,7 +1413,7 @@ class LogsPane(Vertical):
             pulled.append(line)
             parts = line.split("|", 3)
             if len(parts) == 4:
-                self._seen_sources.add(parts[2])
+                self._seen_sources.add(self._category_of(parts[2]))
         if not pulled:
             return
         self._refresh_source_options()
@@ -1403,7 +1441,7 @@ class LogsPane(Vertical):
             self._min_level, self._LEVEL_RANK[self._DEFAULT_MIN_LEVEL]
         ):
             return None
-        if self._source and logger_name != self._source:
+        if self._source and self._category_of(logger_name) != self._source:
             return None
         if self._query and self._query.lower() not in message.lower():
             return None
