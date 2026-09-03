@@ -25,7 +25,10 @@ from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Static
+from textual.widgets import Button, Footer, Input, Static
+
+# Brand accent used for the title bar (matches the app's $accent).
+_ACCENT = "#7EA7F8"
 
 
 class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
@@ -45,15 +48,17 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            f"[bold]{escape(self._record.mail.subject)}[/bold] — "
-            f"{escape(self._t('tui.ask_correct_ephemeral'))}",
+            f"[bold {_ACCENT}]{escape(self._record.mail.subject)}[/bold {_ACCENT}]  "
+            f"[dim]{escape(self._t('tui.ask_correct_ephemeral'))}[/dim]",
             id="ask-correct-title",
         )
         with Horizontal(id="ask-correct-body"):
-            with Vertical(id="ask-correct-chat"):  # noqa: SIM117 — nested layout required
+            with Vertical(id="ask-correct-chat"):
+                yield Static(self._t("tui.ask_correct_chat_label"), id="ask-correct-chat-label")
                 with ScrollableContainer(id="ask-correct-scroll"):
                     yield Static("", id="ask-correct-messages")
             with Vertical(id="ask-correct-info"):
+                yield Static(self._t("tui.ask_correct_info_label"), id="ask-correct-info-label")
                 yield Static("", id="ask-correct-urgency")
                 yield Static("", id="ask-correct-summary")
                 yield Static("", id="ask-correct-reason")
@@ -62,6 +67,8 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         with Horizontal(id="ask-correct-input-row"):
             yield Input(placeholder=self._t("tui.ask_correct_placeholder"), id="ask-correct-input")
             yield Button(self._t("tui.ask_correct_send"), id="ask-correct-send", variant="primary")
+            yield Button(self._t("tui.btn_close"), id="ask-correct-close", variant="default")
+        yield Footer()
 
     async def on_mount(self) -> None:
         self._render_mail_info()
@@ -71,9 +78,13 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
     def _render_mail_info(self) -> None:
         """Right pane: current analysis + original body (body never edited)."""
         record = self._record
-        urgency = record.effective_urgency.value
+        urgency = record.effective_urgency
+        # the four contract colors are part of the public Urgency enum and
+        # reused everywhere (mail table, CLI) — the value gets the same
+        # color here so the panel is not a flat wall of text
         self.query_one("#ask-correct-urgency", Static).update(  # pyright: ignore[reportUnknownMemberType]
-            f"[bold]{self._t('tui.column_urgency')}:[/bold] {escape(urgency)}"
+            f"[bold]{self._t('tui.column_urgency')}:[/bold] "
+            f"[bold {urgency.color}]■ {escape(urgency.value)}[/bold {urgency.color}]"
         )
         summary = record.summary or ""
         self.query_one("#ask-correct-summary", Static).update(  # pyright: ignore[reportUnknownMemberType]
@@ -85,7 +96,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         )
         body = record.mail.body_text or record.mail.body_html or ""
         self.query_one("#ask-correct-original-body", Static).update(  # pyright: ignore[reportUnknownMemberType]
-            f"[bold]{self._t('tui.detail_body')}:[/bold] {escape(body[:4000])}"
+            f"[dim][bold]{self._t('tui.detail_body')}:[/bold][/dim] {escape(body[:4000])}"
         )
         attachments = [a.filename for a in record.mail.attachments if a.filename]
         notes = ""
@@ -97,15 +108,14 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
 
     def _render_chat(self) -> None:
         node = self.query_one("#ask-correct-messages", Static)
-        lines: list[str] = []
+        blocks: list[str] = []
         for item in self._history:
-            role = (
-                self._t("tui.ask_correct_you")
-                if item["role"] == "user"
-                else self._t("tui.ask_correct_llm")
-            )
-            lines.append(f"[bold]{role}[/bold] {escape(item['content'])}")
-        node.update("\n\n".join(lines))  # pyright: ignore[reportUnknownMemberType]
+            if item["role"] == "user":
+                role = f"[bold {_ACCENT}]{escape(self._t('tui.ask_correct_you'))}[/bold {_ACCENT}]"
+            else:
+                role = f"[bold #67C23A]{escape(self._t('tui.ask_correct_llm'))}[/bold #67C23A]"
+            blocks.append(f"{role}\n{escape(item['content'])}")
+        node.update("\n\n".join(blocks))  # pyright: ignore[reportUnknownMemberType]
         self.query_one("#ask-correct-scroll", ScrollableContainer).scroll_end(  # pyright: ignore[reportUnknownMemberType]
             animate=False
         )
@@ -117,6 +127,8 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "ask-correct-send":
             await self._send()
+        elif event.button.id == "ask-correct-close":
+            self.action_close()
 
     async def _send(self) -> None:
         input_box = self.query_one("#ask-correct-input", Input)

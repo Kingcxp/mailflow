@@ -215,6 +215,15 @@ def _coerce_analysis_payload(raw: dict[str, Any]) -> dict[str, Any]:
             if key in entry:
                 value = entry[key]
                 entry[key] = "" if value is None else _as_str(value)
+        # models routinely omit the action item's summary while filling
+        # notes ("填写提名表格…"); without a fallback one missing field
+        # would scrap the whole analysis. Derive a readable summary from
+        # the notes or the action type so the item survives validation.
+        if not entry.get("summary"):
+            entry["summary"] = (
+                entry.get("notes")
+                or f"[{entry.get('action_type') or 'other'}] {entry.get('due_at') or ''}"
+            ).strip()
         cleaned.append(entry)
     coerced["action_items"] = cleaned
     return coerced
@@ -292,6 +301,13 @@ class LLMImportanceProcessor:
     ) -> list[dict[str, str]]:
         now = context.now or datetime.now()
         body = _plain_body(mail)
+        if len(body) > self._max_body_chars:
+            # the config knob exists but was never applied: oversized
+            # bodies (long HTML mails, emoji-heavy newsletters) push the
+            # request past the model's context limit and the gateway
+            # answers 400 — non-retryable, so the mail can never be
+            # analysed. Truncate here so the request always fits.
+            body = body[: self._max_body_chars]
         user = (
             f"Current time (UTC): {now.isoformat()}\n"
             f"Timezone: {context.timezone}\n"

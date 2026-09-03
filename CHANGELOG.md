@@ -7,6 +7,35 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **NapCat httpClients survive login & restarts (chat commands)** — NapCat
+  prefers the per-account OneBot config (`onebot11_<uin>.json`) once a QQ
+  account is logged in; an account file written by an older MailFlow (or
+  the WebUI) silently lacked the `httpClients` bridge entry, so message
+  events were never pushed to the chat-command bridge and `#mailflow help`
+  got no reply while the gateway still reported logged in. The provisioner
+  now writes the OneBot config to both the default and the per-account
+  file, re-syncs it after login / bridge recreation (probing the QQ number
+  via `get_login_info`), and restarts the NapCat child once when a stale
+  per-account file was repaired. The event bridge also logs every received
+  message and reply at INFO level so a broken chain is diagnosable.
+- **LLM analysis no longer 400s on oversized mail** — `max_body_chars`
+  (default 6000) was read but never applied, so long bodies pushed the
+  request past the model's context limit and the gateway answered 400
+  (non-retryable: re-analysing could never succeed). The body is now
+  truncated to the configured limit before the prompt is built.
+- **Action items without a summary no longer scrap the analysis** — models
+  routinely omit `action_items[].summary` while filling notes; one missing
+  field failed the whole `AnalysisPayload` validation and the mail could
+  never be parsed. The summary now falls back to the notes / action type.
+- **Ask & Correct window readable and closable** — urgency values use the
+  contract colors (the four-level palette, same as the mail table), the
+  title uses the accent, chat roles are colour-coded, and a visible Close
+  button plus a Textual footer with the ESC binding make the modal's
+  exit discoverable.
+- **Mail tab: no gap above the table** — the empty-state hint hid as a
+  blank `Static` between the search box and the table even when there was
+  nothing to say; it is now `display:none` when empty, so the table sits
+  flush under the search box.
 - **Gateway chat commands survive restarts and are complete across
   platforms** — the NapCat event bridge (the local listener NapCat
   `httpClients` push events to) lives in the MailFlow process, so after an

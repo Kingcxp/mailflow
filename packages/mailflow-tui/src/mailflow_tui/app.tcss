@@ -263,6 +263,7 @@ FeedbackModal {
 #ask-correct-title {
     text-style: bold;
     margin-bottom: 1;
+    height: auto;
 }
 #ask-correct-body {
     height: 1fr;
@@ -274,8 +275,19 @@ FeedbackModal {
     border: round $primary;
     padding: 0 1;
 }
+#ask-correct-chat-label,
+#ask-correct-info-label {
+    text-style: bold;
+    color: $text-muted;
+    margin-bottom: 1;
+}
 #ask-correct-scroll {
     height: 1fr;
+    scrollbar-size: 1 1;
+}
+#ask-correct-messages {
+    height: auto;
+    padding: 0 1 1 1;
 }
 #ask-correct-info {
     width: 40%;
@@ -283,14 +295,18 @@ FeedbackModal {
     border: round $secondary;
     padding: 0 1;
 }
-#ask-correct-info Static {
+#ask-correct-info > Static {
     margin-bottom: 1;
 }
 #ask-correct-input-row {
     height: auto;
+    margin-bottom: 1;
 }
 #ask-correct-input {
     width: 1fr;
+    margin-right: 1;
+}
+#ask-correct-send {
     margin-right: 1;
 }
 

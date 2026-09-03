@@ -558,8 +558,13 @@ class MailPane(Vertical):
                     hint.update(self._service.t("tui.mail_no_match"))
                 else:
                     hint.update(self._service.t("tui.mail_empty"))
+                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
             else:
                 hint.update(_BLANK)
+                # an empty Static still occupies a row; hide it so the
+                # search box and the mail table sit flush (the redundant
+                # gap between them comes from this placeholder)
+                hint.display = "none"  # pyright: ignore[reportUnknownMemberType]
         visible_ids = {record.record_id for record in records}
         if self._selected_id not in visible_ids:
             self._selected_id = records[0].record_id if records else None

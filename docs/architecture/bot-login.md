@@ -128,6 +128,19 @@ reply back, so all three gateway platforms have a working chat-command
 path; the OpenWeChat bridge gained this forwarding (previously it only
 offered `/health`, `/qr` and `/send`).
 
+NapCat's OneBot config is per-account: once a QQ number is logged in,
+`onebot11_<uin>.json` takes precedence over the default `onebot11.json`.
+The provisioner therefore writes both files, and after login / bridge
+(re)creation re-syncs the per-account file with the current `httpClients`
+bridge URL (the QQ number is probed from `get_login_info`; a stale
+per-account file — e.g. written by an older MailFlow or the NapCat WebUI —
+silently dropped the bridge entry, so message events were never pushed and
+chat commands went unanswered). When the re-sync repaired a stale file the
+NapCat child is restarted once so the corrected config actually loads
+(NapCat reads config only at startup; the QR/session is hot-reloaded so
+login persists). The event bridge logs every received message and reply at
+INFO level, making a broken chain diagnosable from the MailFlow log alone.
+
 Missing payload: if the gateway's data directory was deleted while the app
 was stopped (or the install was moved), `start()` raises
 `GatewayNotInstalledError`; the supervisor then marks the instance `error`

@@ -150,6 +150,34 @@ class TestLLMImportanceProcessor:
         # rules urgency (and later processors) survive the merge.
         assert result.analysis is None
 
+    async def test_oversized_body_is_truncated(self) -> None:
+        """The config knob max_body_chars is actually applied: an oversized
+        body would push the request past the model's context limit and the
+        gateway answers 400 (non-retryable, so the mail could never be
+        analysed). The prompt must contain only the truncated body."""
+        router = StubRouter(CRITICAL_EXAM_JSON)
+        processor = make_processor(router)
+        mail = make_mail(subject="Exam", body_text="A" * 50_000)
+        result = await processor.process(mail, CONTEXT)
+        assert result.analysis is not None
+        joined = "\n".join(m["content"] for m in router.last_messages)
+        assert "A" * 6000 in joined
+        assert "A" * 6001 not in joined
+
+    async def test_action_item_without_summary_gets_fallback(self) -> None:
+        """The model sometimes omits an action item's summary while filling
+        notes; without a fallback one missing field scrapped the whole
+        analysis (the reported 'important mail cannot be parsed' bug). The
+        item must survive with a derived summary."""
+        payload = CRITICAL_EXAM_JSON.replace('"summary": "Attend the final calculus exam",', "")
+        router = StubRouter(payload)
+        processor = make_processor(router)
+        result = await processor.process(make_mail(), CONTEXT)
+        assert result.analysis is not None
+        assert len(result.analysis.action_items) == 1
+        item = result.analysis.action_items[0]
+        assert item.summary, "missing action summary must fall back, not fail"
+
 
 class TestLLMEnhancers:
     """Processor plugins extend the built-in LLM analysis through enhancers."""

@@ -696,7 +696,9 @@
       "ask_correct_llm": "MailFlow",
       "ask_correct_applied": "Applied — the analysis above was updated.",
       "ask_correct_local_only": "Ask & Correct requires a local service (unsupported remotely)",
-      "bots_need_reconfig": "installation missing — re-run setup"
+      "bots_need_reconfig": "installation missing — re-run setup",
+      "ask_correct_chat_label": "Conversation",
+      "ask_correct_info_label": "Analysis"
     },
     "update": {
       "applied_title": "Applied updates",

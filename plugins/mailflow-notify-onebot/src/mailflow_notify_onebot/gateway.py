@@ -14,6 +14,7 @@ Install model:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -331,6 +332,17 @@ class _OneBotEventBridge:
         if not text or user_id is None:
             return
         chat_id = str(group_id) if message_type == "group" else str(user_id)
+        # an INFO line per message event makes the chat-command chain
+        # observable: if this line is missing in the app log, NapCat never
+        # pushed the event (httpClients config issue, not a dispatch bug)
+        logger.info(
+            "onebot bridge %s: %s message from %s in %s: %.60r",
+            self._instance_id,
+            message_type,
+            user_id,
+            chat_id,
+            text,
+        )
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
                 resp = await client.post(
@@ -346,10 +358,17 @@ class _OneBotEventBridge:
                 )
                 data: dict[str, Any] = resp.json() or {}
             except Exception as exc:
-                logger.debug("onebot dispatch to bot_server failed: %s", exc)
+                logger.warning("onebot dispatch to bot_server failed: %s", exc)
                 return
         reply = str(data.get("reply") or "")
         if reply:
+            logger.info(
+                "onebot bridge %s: replying to %s:%s: %.60r",
+                self._instance_id,
+                message_type,
+                chat_id,
+                reply,
+            )
             await self._send_reply(reply, message_type, chat_id, str(user_id))
 
     async def _send_reply(self, reply: str, message_type: str, chat_id: str, user_id: str) -> None:
@@ -382,6 +401,10 @@ class NapCatProvisioner:
         self._processes: dict[str, subprocess.Popen[Any]] = {}
         self._webui_ports: dict[str, int] = {}
         self._bridges: dict[str, _OneBotEventBridge] = {}
+        # QQ numbers seen logged in per instance (from get_login_info);
+        # used to keep the per-account onebot11_<uin>.json in sync with
+        # the httpClients bridge entry after login
+        self._uins: dict[str, str] = {}
 
     # -- helpers ---------------------------------------------------------------
 
@@ -405,6 +428,158 @@ class NapCatProvisioner:
 
     def _endpoint(self, instance_id: str) -> str:
         return f"http://127.0.0.1:{self._port_for(instance_id)}"
+
+    async def _sync_per_account_config(self, instance_id: str) -> bool:
+        """Re-sync the per-account OneBot config after login or bridge
+        recreation.
+
+        NapCat prefers ``onebot11_<uin>.json`` over the default
+        ``onebot11.json`` once a QQ account is logged in. If that file was
+        created by an older MailFlow (without a matching httpClients
+        entry) the chat-command bridge never receives events, so after
+        login and after every bridge (re)creation we rewrite it with the
+        current bridge URL. The QQ number is probed from the live OneBot
+        API when not already cached (after an app restart the guide's QR
+        loop is not running, so the supervisor's ensure_bridge hook is the
+        only caller). No-op when no session is up yet.
+        """
+        uin = self._uins.get(instance_id)
+        if not uin:
+            uin = await self._probe_uin(instance_id)
+            if uin:
+                self._uins[instance_id] = uin
+        if not uin:
+            return False
+        bridge = self._bridges.get(instance_id)
+        bridge_url = bridge.url if bridge is not None else ""
+        return await self._write_onebot_config(
+            instance_id, self._port_for(instance_id), bridge_url, qq=uin
+        )
+
+    async def _probe_uin(self, instance_id: str) -> str:
+        """The logged-in QQ number via get_login_info, or '' if not up."""
+        endpoints = [self._endpoint(instance_id)]
+        webui = self._webui_ports.get(instance_id)
+        webui_url = f"http://127.0.0.1:{webui}" if webui else ""
+        if webui_url and webui_url not in endpoints:
+            endpoints.append(webui_url)
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            for endpoint in endpoints:
+                try:
+                    login = await client.post(f"{endpoint}/get_login_info", json={})
+                    login.raise_for_status()
+                    data: Any = login.json().get("data") or {}
+                    uin = str(data.get("user_id") or data.get("uin") or data.get("account") or "")
+                    if uin:
+                        return uin
+                except Exception:
+                    continue
+        return ""
+
+    async def _write_onebot_config(
+        self,
+        instance_id: str,
+        port: int,
+        bridge_url: str,
+        qq: str | None = None,
+    ) -> bool:
+        """Write the OneBot HTTP + httpClients config for an instance.
+
+        NapCat loads ``onebot11.json`` as the default config, but after a
+        QQ account logs in it prefers ``onebot11_<qq>.json``. Write both:
+        the default on every start (pre-login), and the per-account file
+        whenever the QQ number is known (post-login sync) so the
+        httpClients event push keeps pointing at the in-process bridge —
+        otherwise chat commands silently stop after a restart that skips a
+        fresh login.
+        """
+        payload: dict[str, Any] = {
+            "network": {
+                "httpServers": [
+                    {
+                        "name": "mailflow-http",
+                        "enable": True,
+                        "port": port,
+                        "host": "127.0.0.1",
+                        "enableCors": False,
+                        "enableWebsocket": False,
+                        "messagePostFormat": "array",
+                        "token": "",
+                        "debug": False,
+                    }
+                ],
+                "httpClients": (
+                    [
+                        {
+                            "name": "mailflow-bridge",
+                            "enable": True,
+                            "url": bridge_url,
+                            "token": "",
+                            "messagePostFormat": "array",
+                            "debug": False,
+                        }
+                    ]
+                    if bridge_url
+                    else []
+                ),
+                "websocketServers": [],
+                "websocketClients": [],
+            },
+            "musicSignUrl": "",
+            "enableLocalFile2Url": False,
+            "parseMultMsg": False,
+        }
+        _write_configs = [_instance_dir(instance_id) / "config"]
+        if not _IS_WINDOWS:
+            import os as _os
+
+            home = _os.environ.get("HOME") or str(Path.home())
+            _write_configs.append(Path(home) / ".config" / "QQ" / "NapCat" / "config")
+        changed = False
+        serialized = json.dumps(payload, indent=2)
+        for _target in _write_configs:
+            _target.mkdir(parents=True, exist_ok=True)
+            (_target / "onebot11.json").write_text(serialized, encoding="utf-8")
+            if qq:
+                account_path = _target / f"onebot11_{qq}.json"
+                if (
+                    not account_path.exists()
+                    or account_path.read_text(encoding="utf-8") != serialized
+                ):
+                    changed = True
+                account_path.write_text(serialized, encoding="utf-8")
+            logger.info(
+                "napcat %s: OneBot HTTP config written to %s%s",
+                instance_id,
+                _target,
+                f" (per-account {qq})" if qq else "",
+            )
+        return changed
+
+    async def _restart_for_config(self, instance_id: str, options: dict[str, Any]) -> None:
+        """Restart the NapCat child so a corrected OneBot config loads.
+
+        Called when the per-account ``onebot11_<uin>.json`` needed its
+        httpClients entry added/repaired: NapCat reads the config only at
+        startup, so a running process would keep ignoring the bridge.
+        Terminate the managed child and relaunch it via :meth:`start` —
+        the QR/session is hot-reloaded by NapCat, so login persists.
+        """
+        logger.info("napcat %s: restarting to load updated OneBot config", instance_id)
+        await self.stop(instance_id)
+        # stop() pops the bridge; ensure_bridge on the relaunch recreates
+        # it on the same deterministic port, keeping the httpClients URL
+        # stable across the restart
+        # wait for the port to actually free: start() treats a still-bound
+        # port as "reuse an already-running gateway" and would skip the
+        # relaunch (the old child is being killed, so its port lingers in
+        # TIME_WAIT for a moment)
+        for _ in range(10):
+            if not await self._wait_http_port(self._port_for(instance_id), wait_seconds=1.0):
+                break
+            await asyncio.sleep(1.0)
+        with contextlib.suppress(Exception):
+            await self.start(instance_id, options)
 
     async def ensure_bridge(
         self, instance_id: str, options: dict[str, Any]
@@ -434,6 +609,13 @@ class NapCatProvisioner:
         await bridge.start()
         self._bridges[instance_id] = bridge
         logger.info("napcat %s: event bridge recreated on :%d", instance_id, bridge.port)
+        healed = await self._sync_per_account_config(instance_id)
+        if healed:
+            # NapCat only reads its OneBot config at startup; a stale
+            # per-account file (no httpClients) means the running process
+            # will never push events to the bridge. Restart it once so the
+            # corrected config takes effect.
+            await self._restart_for_config(instance_id, options)
         return bridge
 
     async def _wait_http(self, instance_id: str, wait_seconds: float = _READY_TIMEOUT) -> bool:
@@ -802,63 +984,13 @@ class NapCatProvisioner:
                 endpoint=f"http://127.0.0.1:{port}",
                 extra={"port": port, "reused": True},
             )
-        # config for NapCat: HTTP server on the instance port
-        config_dir = target / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        # v4.5.3+ loads ./config/onebot11.json as the default OneBot
-        # config; the per-account file is onebot11_<qq>.json. Use the
-        # default name (we do not know the QQ number before login) with
-        # the full server shape NapCat expects (name + enable required).
-        payload = {
-            "network": {
-                "httpServers": [
-                    {
-                        "name": "mailflow-http",
-                        "enable": True,
-                        "port": port,
-                        "host": "127.0.0.1",
-                        "enableCors": False,
-                        "enableWebsocket": False,
-                        "messagePostFormat": "array",
-                        "token": "",
-                        "debug": False,
-                    }
-                ],
-                "httpClients": (
-                    [
-                        {
-                            "name": "mailflow-bridge",
-                            "enable": True,
-                            "url": bridge.url,
-                            "token": "",
-                            "messagePostFormat": "array",
-                            "debug": False,
-                        }
-                    ]
-                    if bridge is not None
-                    else []
-                ),
-                "websocketServers": [],
-                "websocketClients": [],
-            },
-            "musicSignUrl": "",
-            "enableLocalFile2Url": False,
-            "parseMultMsg": False,
-        }
-        # Write OneBot config to instance dir AND per-user NapCat config dir,
-        # ensuring the HTTP server starts after login regardless of platform.
-        # On Windows the boot loader targets the instance dir; on Linux the
-        # AppImage reads from ~/.config/QQ/NapCat/config/.
-        _write_configs = [config_dir]
-        if not _IS_WINDOWS:
-            import os as _os
-
-            home = _os.environ.get("HOME") or str(Path.home())
-            _write_configs.append(Path(home) / ".config" / "QQ" / "NapCat" / "config")
-        for _target in _write_configs:
-            _target.mkdir(parents=True, exist_ok=True)
-            (_target / "onebot11.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            logger.info("napcat %s: OneBot HTTP config written to %s", instance_id, _target)
+        # config for NapCat: HTTP server on the instance port plus the
+        # httpClients entry pushing message events to the in-process
+        # bridge (chat commands). Written to the default onebot11.json AND
+        # the per-account onebot11_<qq>.json when the QQ number is known
+        # (NapCat prefers the per-account file after login; without the
+        # duplicate write the httpClients entry silently never loads).
+        await self._write_onebot_config(instance_id, port, bridge.url if bridge else "")
         # Linux runs the bundled AppImage directly; only the Windows Shell
         # package needs its node entry point located inside the tree
         if not _IS_WINDOWS:
@@ -1106,9 +1238,19 @@ class NapCatProvisioner:
                     )
                     probe = f"{endpoint} HTTP {login.status_code}"
                     if logged_in:
+                        uin = str(
+                            login_data.get("user_id")
+                            or login_data.get("uin")
+                            or login_data.get("account")
+                            or ""
+                        )
+                        if uin:
+                            self._uins[instance_id] = uin
                         break
                 except Exception as exc:
                     probe = f"{endpoint} ERR {type(exc).__name__}"
+        if logged_in:
+            await self._sync_per_account_config(instance_id)
         if probe != getattr(self, "_last_probe", None):
             self._last_probe = probe
             logger.info(
