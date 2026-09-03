@@ -7,6 +7,10 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **Create your own todo items** — the Actions tab gains an "Add todo"
+  button opening a form (summary, type, due time, notes); user-created
+  todos live in the custom-action store, join the reminder scheduler like
+  mail-derived items, and are deleted for real (no dismissal semantics).
 - **NapCat self-heals a corrupted install** — when the NapCat child dies
   with loader/preload fingerprints (`major.node`, `cannot open shared
   object file`, `preload] failed`, `Trace/breakpoint trap`), the gateway
