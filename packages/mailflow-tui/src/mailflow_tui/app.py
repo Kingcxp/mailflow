@@ -851,6 +851,13 @@ class MailPane(Vertical):
                 f"[green]{self._service.t('tui.reparse_none_failed')}[/green]",
             )
             return
+        # immediate feedback before the first LLM call: each re-analysis can
+        # take seconds (and may rate-limit), so without this the bulk
+        # action looks like it never started
+        self._set_static(
+            "#mail-notes",
+            f"[cyan]{self._service.t('tui.reparse_failed_start', count=len(failed_records))}[/cyan]",
+        )
         await self._reparse_batch([record.mail for record in failed_records])
 
     def select_mail(self, mail_id: str) -> None:

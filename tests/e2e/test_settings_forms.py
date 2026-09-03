@@ -492,3 +492,74 @@ async def test_notifier_form_mounts_with_valid_provider_default(tmp_path: Path) 
             assert str(provider_select.value) == "wechaty"
     finally:
         await service.stop()
+
+
+async def test_reparse_failed_works_without_selection(tmp_path: Path) -> None:
+    """'Re-analyze failed' must start re-analysis of every failed mail even
+    when nothing is selected in the table — selection is only required for
+    the single-mail re-analyze button, never for the bulk one."""
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from mailflow.domain import ProcessorNote, Urgency
+    from mailflow_testkit.fakes import make_mail as make_test_mail
+
+    service = await start_service_quiet(tmp_path)
+    calls: list[str] = []
+
+    original = service.process_mail
+
+    async def _spy(mail: Any, *, force: bool = False) -> Any:
+        calls.append(str(mail.message_id))
+        return await original(mail, force=force)
+
+    service.process_mail = _spy  # type: ignore[method-assign]
+
+    # a record whose LLM analysis failed (processor note marked failed)
+    from mailflow.domain import MailRecord
+
+    mail = make_test_mail(message_id="failed-1", subject="解析失败邮件")
+    record = MailRecord(
+        record_id="failed-1",
+        mail=mail,
+        auto_urgency=Urgency.INFO,
+        processor_notes=[
+            ProcessorNote(
+                processor_id="llm-importance",
+                plugin_id="mailflow-core",
+                status="failed",
+                message="failed: rate limit",
+                started_at=_dt.now(UTC),
+                finished_at=_dt.now(UTC),
+            )
+        ],
+    )
+    await service.storage.save_mail(record)
+
+    CommandRouter(service)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause(0.2)
+            app.query_one("#btn-refresh", Button).press()
+            await pilot.pause(0.2)
+
+            # do NOT select any row — the bulk re-analyze button must not
+            # depend on selection
+            notes_before = str(app.query_one("#mail-notes").render())
+            app.query_one("#btn-reparse-failed", Button).press()
+            await pilot.pause(1.5)
+            assert "failed-1" in calls, (
+                "re-analyze failed must process failed mails without a selection; "
+                f"process_mail calls: {calls}"
+            )
+            # the user-facing feedback must appear even with nothing selected
+            notes_after = str(app.query_one("#mail-notes").render())
+            assert notes_after != notes_before, (
+                "status feedback must update when re-analyzing failed mails; "
+                f"before={notes_before!r} after={notes_after!r}"
+            )
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()

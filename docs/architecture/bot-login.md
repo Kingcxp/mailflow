@@ -141,6 +141,13 @@ NapCat child is restarted once so the corrected config actually loads
 login persists). The event bridge logs every received message and reply at
 INFO level, making a broken chain diagnosable from the MailFlow log alone.
 
+Linux host libraries: the bundled NapCat AppImage contains the full QQ NT
++ Electron runtime, which needs the usual desktop shared libraries
+(`libnss3`, `libgbm`, `libasound`, GTK, ...). A minimal container without
+them fails at load with a cryptic `major.node: cannot open shared object
+file`. The installer preflights these via `ldconfig -p` before downloading
+and prints the exact `apt-get install` command.
+
 Missing payload: if the gateway's data directory was deleted while the app
 was stopped (or the install was moved), `start()` raises
 `GatewayNotInstalledError`; the supervisor then marks the instance `error`

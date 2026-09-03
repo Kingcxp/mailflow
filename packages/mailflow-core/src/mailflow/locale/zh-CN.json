@@ -698,7 +698,8 @@
       "ask_correct_local_only": "提问修正需要本地服务（远程模式不支持）",
       "bots_need_reconfig": "安装缺失，请重新部署",
       "ask_correct_chat_label": "对话",
-      "ask_correct_info_label": "分析"
+      "ask_correct_info_label": "分析",
+      "reparse_failed_start": "正在重新解析 {count} 封失败的邮件…"
     },
     "update": {
       "applied_title": "已应用的更新",

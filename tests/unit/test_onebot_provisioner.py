@@ -15,11 +15,22 @@ from mailflow_notify_onebot.gateway import (
     _instance_dir,  # pyright: ignore[reportPrivateUsage]
 )
 
+# the autouse _linux_env fixture stubs the runtime-lib preflight to []
+# for install tests; keep the real implementation for the preflight test
+_REAL_MISSING_LIBS = gw_mod._missing_qq_runtime_libs  # pyright: ignore[reportPrivateUsage]
+
 
 @pytest.fixture(autouse=True)
 def _linux_env(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]
     # simulate the Linux host path (AppImage flow) regardless of the OS
     monkeypatch.setattr(gw_mod, "_IS_WINDOWS", False)
+
+    # the CI/test host is not a QQ desktop image: pretend the runtime
+    # libraries exist so the tests exercise the install/launch logic
+    def _no_missing_libs() -> list[str]:
+        return []
+
+    monkeypatch.setattr(gw_mod, "_missing_qq_runtime_libs", _no_missing_libs)
 
 
 @pytest.mark.asyncio
@@ -225,3 +236,30 @@ async def test_qr_clears_cached_uin_when_logged_out(
 
 async def _async_true() -> bool:
     return True
+
+
+@pytest.mark.asyncio
+async def test_missing_qq_runtime_libs_detects_absent_gtk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The preflight reports a package when its shared library is absent
+    from the ldconfig cache, so minimal containers get the apt command
+    instead of a cryptic 'major.node: cannot open shared object file'."""
+
+    def _fake_ldconfig(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args[0] if args else [],
+            0,
+            stdout="\n".join(
+                [
+                    "\tlibnss3.so => /lib/x86_64-linux-gnu/libnss3.so",
+                    "\tlibgbm.so.1 => /lib/x86_64-linux-gnu/libgbm.so.1",
+                    "\tlibasound.so.2 => /lib/x86_64-linux-gnu/libasound.so.2",
+                ]
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(gw_mod, "_missing_qq_runtime_libs", _REAL_MISSING_LIBS)
+    monkeypatch.setattr(gw_mod.subprocess, "run", _fake_ldconfig)
+    missing = gw_mod._missing_qq_runtime_libs()  # pyright: ignore[reportPrivateUsage]
+    assert "libgtk-3-0" in missing  # absent -> reported
+    assert "libnss3" not in missing  # present -> not reported

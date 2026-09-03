@@ -7,6 +7,16 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **NapCat Linux preflight reports missing QQ runtime libraries** — a
+  minimal container (no desktop packages) fails to load the bundled
+  Electron/QQ runtime with a cryptic "major.node: cannot open shared
+  object file". The installer now checks the common runtime libraries via
+  `ldconfig -p` before downloading and prints the exact apt command
+  (`apt-get install -y xvfb xauth libnss3 libgbm1 libasound2 ...`).
+- **Bulk re-analyze failed gives immediate feedback** — "Re-analyze
+  failed" now shows "Re-analyzing N failed mail(s)…" before the first LLM
+  call, so the action is visibly running even when nothing is selected in
+  the table (each re-analysis can take seconds / rate-limit).
 - **No phantom NapCat logins after cleanup** — three related fixes: (1)
   `start()` only reuses a NapCat process MailFlow itself spawned and that
   is still alive; a port occupied by an unknown process (a stale NapCat

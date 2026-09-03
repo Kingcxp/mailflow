@@ -160,6 +160,73 @@ async def _respond(writer: asyncio.StreamWriter, status: int, payload: dict[str,
     await writer.drain()
 
 
+# shared libraries the QQ NT / Electron runtime inside the NapCat AppImage
+# needs at load time; a minimal container (no desktop packages) lacks them
+# and the AppImage dies with "major.node: cannot open shared object file".
+# Checked via ldconfig before downloading so the operator gets the exact
+# apt command instead of a cryptic preload failure.
+_QQ_RUNTIME_LIBS: tuple[tuple[str, str], ...] = (
+    ("libnss3.so", "libnss3"),
+    ("libgbm.so.1", "libgbm1"),
+    ("libasound.so.2", "libasound2"),
+    ("libatk-1.0.so.0", "libatk1.0-0"),
+    ("libatk-bridge-2.0.so.0", "libatk-bridge2.0-0"),
+    ("libcups.so.2", "libcups2"),
+    ("libdrm.so.2", "libdrm2"),
+    ("libxkbcommon.so.0", "libxkbcommon0"),
+    ("libXcomposite.so.1", "libxcomposite1"),
+    ("libXdamage.so.1", "libxdamage1"),
+    ("libXrandr.so.2", "libxrandr2"),
+    ("libXfixes.so.3", "libxfixes3"),
+    ("libX11-xcb.so.1", "libx11-xcb"),
+    ("libxcb-dri3.so.0", "libxcb-dri3-0"),
+    ("libgtk-3.so.0", "libgtk-3-0"),
+    ("libpango-1.0.so.0", "libpango-1.0-0"),
+    ("libcairo.so.2", "libcairo2"),
+    ("libgdk_pixbuf-2.0.so.0", "libgdk-pixbuf2.0-0"),
+    ("libnss3", "libnss3"),
+    ("libxss.so.1", "libxss1"),
+)
+
+
+def _missing_qq_runtime_libs() -> list[str]:
+    """Names of QQ/Electron shared libraries absent from the system.
+
+    Uses ``ldconfig -p`` when available (the authoritative library cache);
+    on hosts without ldconfig we check the common loader paths directly so
+    the preflight still works in minimal images.
+    """
+    available: set[str] = set()
+    try:
+        result = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if "=>" in line:
+                    available.add(line.split("=>")[0].strip())
+    except Exception:
+        # fall back to probing the loader's default search paths
+        paths = [
+            "/lib/x86_64-linux-gnu",
+            "/usr/lib/x86_64-linux-gnu",
+            "/lib64",
+            "/usr/lib64",
+            "/lib",
+            "/usr/lib",
+        ]
+        for path in paths:
+            try:
+                for entry in os.listdir(path):
+                    available.add(entry)
+            except OSError:
+                continue
+    missing: list[str] = []
+    for lib, package in _QQ_RUNTIME_LIBS:
+        if not any(lib in name for name in available):
+            missing.append(package)
+    # de-duplicate while keeping order
+    return list(dict.fromkeys(missing))
+
+
 def _find_node() -> str | None:
     """Path to a usable ``node`` binary (NapCat needs Node >= 18)."""
     node = shutil.which("node")
@@ -751,12 +818,19 @@ class NapCatProvisioner:
         missing: list[str] = []
         if _sh.which("xvfb-run") is None:
             missing.append("xvfb-run (apt install xvfb xauth)")
+        libs_missing = _missing_qq_runtime_libs()
+        if libs_missing:
+            missing.append(
+                "QQ/Electron runtime libraries (apt install " + " ".join(libs_missing) + ")"
+            )
         if missing:
             raise RuntimeError(
                 "NapCat AppImage on Linux needs these missing pieces — "
                 "install them first, then retry:\n  - "
                 + "\n  - ".join(missing)
-                + "\n(example: apt-get install -y xvfb xauth)"
+                + "\n(example: apt-get install -y xvfb xauth "
+                + " ".join(libs_missing)
+                + ")"
             )
         if _sh.which("fusermount") is None:
             # AppImages normally need FUSE to mount; containers/VMs often
