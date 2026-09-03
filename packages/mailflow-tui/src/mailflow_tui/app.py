@@ -1308,6 +1308,15 @@ class LogsPane(Vertical):
         "storage": "storage",
     }
 
+    # platform-level sub-identifiers within the chat category: tag text
+    # suffix and color, so NapCat/WeChaty/OpenWeChat lines are distinguishable
+    _CHAT_PLATFORMS: ClassVar[dict[str, tuple[str, str]]] = {
+        "napcat": ("napcat", "#F56C6C"),
+        "wechaty": ("wechaty", "#67C23A"),
+        "openwechat": ("openwechat", "#E6A23C"),
+        "openclaw": ("openclaw", "#7EA7F8"),
+    }
+
     @staticmethod
     def _category_of(logger_name: str) -> str:
         """User-facing category for a raw logger name; 'system' fallback.
@@ -1485,13 +1494,22 @@ class LogsPane(Vertical):
         category = self._category_of(logger_name)
         cat_label = self._service.t(f"tui.logs_cat_{category}")
         cat_style = self._CATEGORY_STYLES.get(category, "")
-        # Layout: HH:MM:SS LEVEL [Category] message — the category tag is
-        # color-coded, the message indented under it so the eye groups
-        # every line by its subsystem instead of reading raw logger names.
+        # chat category: append the concrete platform (napcat/wechaty/...)
+        # with its own color, so mixed-platform deployments are readable
+        platform_suffix = ""
+        if category == "chat":
+            for segment in logger_name.split("."):
+                if segment in self._CHAT_PLATFORMS:
+                    platform_suffix = f"·{self._CHAT_PLATFORMS[segment][0]}"
+                    cat_style = self._CHAT_PLATFORMS[segment][1]
+                    break
+        # Layout: HH:MM:SS LEVEL [Category·platform]  message — the tag is
+        # color-coded per platform, the message indented two spaces past
+        # the bracket for a clear visual hierarchy.
         text = Text(f"{time_part} ")
         text.append(f"{level:<7}", style=self._LEVEL_STYLES.get(level, "bold"))
-        text.append(f" [{cat_label}]", style=cat_style)
-        text.append(f" {message}")
+        text.append(f" [{cat_label}{platform_suffix}]", style=cat_style)
+        text.append(f"  {message}")
         return text
 
     def _append_new_lines(self, new_lines: list[str]) -> None:

@@ -15,9 +15,12 @@ All notable changes are recorded here; the format follows
   WARNING+, which hid the INFO-level chat-command lines exactly when
   diagnosing a silent bot; the default level is now INFO. Every line now
   carries a color-coded, localized category tag (`[聊天机器人]`,
-  `[邮件]`, `[AI 分析]`, ...) instead of the raw logger name, and
-  duplicate-mail skips were demoted to DEBUG so routine noise no longer
-  buries the chat and analysis lines.
+  `[邮件]`, `[AI 分析]`, ...) instead of the raw logger name; chat lines
+  additionally carry a per-platform tag with its own color
+  (`[聊天机器人·napcat]` red / `·wechaty` green / `·openwechat` amber),
+  the message is indented past the tag, and duplicate-mail skips were
+  demoted to DEBUG so routine noise no longer buries the chat and
+  analysis lines.
 - **Create your own todo items** — the Actions tab gains an "Add todo"
   button opening a form (summary, type, due time, notes); user-created
   todos live in the custom-action store, join the reminder scheduler like
