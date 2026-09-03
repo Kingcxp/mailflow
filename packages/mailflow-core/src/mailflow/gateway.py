@@ -140,7 +140,14 @@ class GatewayManager:
         for instance in await self._list_persisted():
             key = self._key(instance.provider, instance.instance_id)
             self._instances[key] = instance
-            if instance.status == _STATUS_RUNNING and instance.extra.get("autostart", True):
+            # resume RUNNING instances, but ALSO instances left in `error`
+            # (e.g. the deploy failed on missing system libraries): once the
+            # operator fixed the environment and restarted, the supervisor
+            # must retry the deploy — otherwise the instance is stuck in
+            # error forever and the only way out is deleting the notifier.
+            if instance.status in (_STATUS_RUNNING, "error") and instance.extra.get(
+                "autostart", True
+            ):
                 self._supervise_tasks[instance.instance_id] = asyncio.create_task(
                     self._supervise(instance, resume=True),
                     name=f"gateway-{instance.instance_id}",

@@ -269,6 +269,14 @@ async def test_ensure_bridge_syncs_per_account_on_healthy_poll() -> None:
         Any, _LiveBridge()
     )
     prov._sync_per_account_config = _fake_sync  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
+    # the sync returns False, but a fresh bridge still triggers the bounce
+    # restart — mock it so the test never touches the real process table
+    restarts: list[str] = []
+
+    async def _fake_restart(iid: str, options: dict[str, Any]) -> None:
+        restarts.append(iid)
+
+    prov._restart_for_config = _fake_restart  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
 
     try:
         await prov.ensure_bridge("napcat-1", {"bot_url": "http://127.0.0.1:18789/bot/message"})
@@ -276,6 +284,10 @@ async def test_ensure_bridge_syncs_per_account_on_healthy_poll() -> None:
         assert syncs == ["napcat-1"], (
             "healthy-poll path must run the per-account sync even when the bridge already exists"
         )
+        # a healthy poll with an UNCHANGED config must not bounce the
+        # child every cycle (that would restart NapCat every 60s); the
+        # bounce belongs to bridge *creation* and repaired configs
+        assert restarts == []
     finally:
         listener.close()
 
