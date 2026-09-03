@@ -229,6 +229,11 @@ ActionModal {
     margin: 0 1;
 }
 
+/* the export button must match the Select's bordered 3-row height */
+#logs-export {
+    height: 3;
+}
+
 #log-view {
     border: round $accent;
     height: 100%;

@@ -475,6 +475,10 @@ class NapCatProvisioner:
         # instances currently being repaired (delete + reinstall): guards
         # the self-heal path against infinite repair loops
         self._repairing: set[str] = set()
+        # instances inside a bridge-recreation restart: the relaunch's own
+        # ensure_bridge call recreates the bridge and must NOT trigger
+        # another restart (infinite loop guard)
+        self._relaunching: set[str] = set()
         # last per-account config signature written per instance
         # ("uin:bridge_url:port") — dedupes the healthy-poll sync so the
         # file is only rewritten when something actually changed
@@ -645,6 +649,7 @@ class NapCatProvisioner:
         the QR/session is hot-reloaded by NapCat, so login persists.
         """
         logger.info("napcat %s: restarting to load updated OneBot config", instance_id)
+        self._relaunching.add(instance_id)
         await self.stop(instance_id)
         # stop() pops the bridge; ensure_bridge on the relaunch recreates
         # it on the same deterministic port, keeping the httpClients URL
@@ -660,7 +665,10 @@ class NapCatProvisioner:
         # surface relaunch failures: swallowing them silently would leave
         # the gateway "running" without a bridge — exactly the phantom
         # state where NapCat pushes events to a dead port
-        await self.start(instance_id, options)
+        try:
+            await self.start(instance_id, options)
+        finally:
+            self._relaunching.discard(instance_id)
 
     async def ensure_bridge(
         self, instance_id: str, options: dict[str, Any]
@@ -720,11 +728,13 @@ class NapCatProvisioner:
         self._bridges[instance_id] = bridge
         logger.info("napcat %s: event bridge recreated on :%d", instance_id, bridge.port)
         healed = await self._sync_per_account_config(instance_id)
-        if healed:
-            # NapCat only reads its OneBot config at startup; a stale
-            # per-account file (no httpClients) means the running process
-            # will never push events to the bridge. Restart it once so the
-            # corrected config takes effect.
+        # Restart when the per-account config was repaired, or when the
+        # bridge was RECREATED (not reused): events pushed while MailFlow
+        # was down were refused with ECONNREFUSED, so bounce the child once
+        # to make its pusher re-attach deterministically. The relaunch's
+        # own bridge recreation must not re-trigger this (loop guard).
+        must_restart = healed or instance_id not in self._relaunching
+        if must_restart:
             await self._restart_for_config(instance_id, options)
         return bridge
 
