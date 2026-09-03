@@ -79,7 +79,10 @@ class OpenWechatPlugin:
     def mailflow_register(self, registrar: PluginRegistrar, config: MailFlowConfig) -> None:
         registrar.add_notifier("openwechat", OpenWechatNotifier)
         registrar.add_gateway_provisioner("openwechat", lambda: OpenWechatProvisioner())
-        logger.info("registered notifier + gateway provisioner openwechat")
+        # component registration is routine startup detail, not something
+        # the user needs at INFO — it fires on every app start whether or
+        # not any instance is deployed
+        logger.debug("registered notifier + gateway provisioner openwechat")
 
 
 plugin = OpenWechatPlugin()

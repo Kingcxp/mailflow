@@ -1031,6 +1031,11 @@ class NapCatProvisioner:
         Called when the child dies with corruption fingerprints (missing
         runtime objects, preload failures). The data dir is wiped so the
         next install downloads a clean copy, then start() runs again once.
+
+        Repair fixes a corrupt *install* (broken download, half-removed
+        dir). It cannot fix missing system libraries — if the relaunched
+        child dies the same way again, the error escalates with the apt
+        command instead of looping the download forever.
         """
         logger.warning(
             "napcat %s: install looks corrupted (%s) — deleting and reinstalling automatically",
@@ -1043,7 +1048,20 @@ class NapCatProvisioner:
             self._terminate(instance_id)
             await asyncio.to_thread(shutil.rmtree, target, True)
             await self.install(instance_id, options)
-            return await self.start(instance_id, options)
+            try:
+                return await self.start(instance_id, options)
+            except Exception as exc:
+                # the reinstall died the same way: this is not a corrupt
+                # download but a missing runtime environment (system
+                # libraries). Escalate with the apt command and stop —
+                # supervisor treats GatewayNotInstalledError as final.
+                libs_hint = " ".join(pkg for _, pkg in _QQ_RUNTIME_LIBS)
+                raise GatewayNotInstalledError(
+                    f"napcat {instance_id}: reinstall completed but the "
+                    f"runtime still fails ({exc}). The container is missing "
+                    f"QQ/Electron system libraries — install them once with: "
+                    f"apt-get install -y xvfb xauth {libs_hint}"
+                ) from exc
         finally:
             self._repairing.discard(instance_id)
 

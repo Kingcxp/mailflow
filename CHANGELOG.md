@@ -30,7 +30,10 @@ All notable changes are recorded here; the format follows
   object file`, `preload] failed`, `Trace/breakpoint trap`), the gateway
   provisioner now deletes the instance's data dir and reinstalls NapCat
   automatically before giving up (one repair attempt per start, no
-  infinite loop). The Linux runtime-library preflight was also downgraded
+  infinite loop). If the reinstall still dies the same way, the error
+  escalates with the exact apt command and supervision stops — a missing
+  system-library environment cannot be fixed by re-downloading. The
+  Linux runtime-library preflight was also downgraded
   from a hard error to a warning: the ldconfig cache can lag a fresh
   `apt install` (and package names vary), so a false positive must not
   block deployment — if the libraries really are absent the launch fails
