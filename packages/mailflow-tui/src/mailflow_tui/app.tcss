@@ -208,7 +208,7 @@ ActionModal {
 
 #actions-table {
     width: 100%;
-    height: 70%;
+    height: 1fr;
     border: round $primary;
 }
 
