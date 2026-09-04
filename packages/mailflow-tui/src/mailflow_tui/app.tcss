@@ -241,8 +241,9 @@ ActionModal {
 
 /* Log export modal */
 #log-export-dialog {
-    width: 80;
-    height: 80%;
+    width: 90%;
+    max-width: 120;
+    height: 90%;
     border: round $accent;
     background: $surface;
     padding: 0 1;
@@ -326,6 +327,10 @@ ReplyModal {
 }
 
 FeedbackModal {
+    align: center middle;
+}
+
+LogExportScreen {
     align: center middle;
 }
 

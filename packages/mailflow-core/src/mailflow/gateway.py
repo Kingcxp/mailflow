@@ -260,6 +260,24 @@ class GatewayManager:
                 except TimeoutError:
                     continue
                 return
+            if current.status == "starting":
+                # the child process is alive but its HTTP API is not up yet
+                # (NapCat: waiting for a QR scan). Restarting here KILLS the
+                # login flow and loops forever — the exact restart storm
+                # from the user log (ready -> starting -> restarting every
+                # 5s). Wait patiently; only a dead process ("stopped") or
+                # an error falls through to the restart path.
+                logger.debug(
+                    "gateway %s.%s starting (%s); waiting",
+                    instance.provider,
+                    instance.instance_id,
+                    current.error or "waiting for login",
+                )
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=30)
+                except TimeoutError:
+                    continue
+                return
             if current.status == "stopped":
                 if resume and first:
                     # startup resume: the gateway was running at shutdown

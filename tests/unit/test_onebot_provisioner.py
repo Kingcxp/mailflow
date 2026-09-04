@@ -186,9 +186,10 @@ async def test_qr_fresh_keeps_waiting(monkeypatch: pytest.MonkeyPatch, tmp_path:
 async def test_start_refuses_stale_process_on_port(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A port occupied by a process MailFlow does not manage (a stale
-    NapCat left over after clearing the gateway data dir) must surface as
-    an error — silently reusing it would report a phantom login."""
+    """A port occupied by an unmanaged process (a stale NapCat left
+    over after a crash) must be killed and, when the kill cannot free
+    the port, surface as an error — silently reusing it would report a
+    phantom login."""
     monkeypatch.chdir(tmp_path)
     instance = _instance_dir("A-Bot-NapCat-5baf4a")  # pyright: ignore[reportPrivateUsage]
     instance.mkdir(parents=True, exist_ok=True)
@@ -203,7 +204,10 @@ async def test_start_refuses_stale_process_on_port(
         lambda self, port, wait_seconds=2.0: _async_true(),  # pyright: ignore[reportUnknownLambdaType,reportUnknownArgumentType]
     )
     prov = NapCatProvisioner()
-    with pytest.raises(RuntimeError, match=r"does not manage|stale NapCat"):
+    # the stale-port owner lookup finds nothing (test sandbox has no
+    # listener PID for the mocked port), so the fresh start still hits the
+    # 'still in use' error after the kill attempt
+    with pytest.raises(RuntimeError, match=r"still in use|could not terminate"):
         await prov.start("A-Bot-NapCat-5baf4a", {"port": "39999"})
 
 

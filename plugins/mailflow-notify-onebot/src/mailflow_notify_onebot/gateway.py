@@ -573,6 +573,35 @@ class NapCatProvisioner:
             owner = str(data.get("instance_id") or "")
             if uin.isdigit() and owner:
                 self._uins[owner] = uin
+        # second source: NapCat's own per-account config written by an
+        # earlier run (onebot11_<uin>.json). Covers a fresh session.json
+        # state — e.g. the instance dir was recreated — while the QQ
+        # profile still remembers the account.
+        if not _IS_WINDOWS:
+            napcat_cfg = (
+                Path(os.environ.get("HOME") or str(Path.home()))
+                / ".config"
+                / "QQ"
+                / "NapCat"
+                / "config"
+            )
+            try:
+                for cfg in napcat_cfg.glob("onebot11_*.json"):
+                    uin = cfg.name[len("onebot11_") : -len(".json")]
+                    if uin.isdigit():
+                        # attribute to the single known instance: one QQ
+                        # profile serves every local napcat instance
+                        for directory in _data_root().glob("napcat-*"):
+                            owner_session = directory / "session.json"
+                            if not owner_session.exists():
+                                owner_session.write_text(
+                                    json.dumps({"uin": uin, "instance_id": directory.name}),
+                                    encoding="utf-8",
+                                )
+                            self._uins.setdefault(directory.name, uin)
+                        break
+            except OSError:
+                pass
         # instances currently being repaired (delete + reinstall): guards
         # the self-heal path against infinite repair loops
         self._repairing: set[str] = set()
@@ -733,7 +762,7 @@ class NapCatProvisioner:
                 ):
                     changed = True
                 account_path.write_text(serialized, encoding="utf-8")
-            logger.info(
+            logger.debug(
                 "napcat %s: OneBot HTTP config written to %s%s",
                 instance_id,
                 _target,
@@ -1296,13 +1325,26 @@ class NapCatProvisioner:
                 extra={"port": port, "reused": True},
             )
         if await self._wait_http_port(port, wait_seconds=1.0):
-            raise RuntimeError(
-                f"napcat {instance_id}: port {port} is already in use by a "
-                "process MailFlow does not manage (a stale NapCat left over "
-                "after clearing the gateway data dir?). Stop that process or "
-                "run the gateway cleanup, then start again — reusing it would "
-                "report a phantom login."
+            # an unmanaged process occupies the instance's deterministic
+            # port — in practice always a stale NapCat child that survived
+            # a crash (the user log: 'port 3000 is already in use by a
+            # process MailFlow does not manage'). It answers get_login_info
+            # with the OLD session, which is exactly the phantom 'still
+            # logged in' after logging out on the phone. MailFlow OWNS this
+            # port (deterministic per instance id), so the stale process is
+            # killed by port owner before relaunching.
+            logger.warning(
+                "napcat %s: port %d is held by a stale process — killing it and relaunching",
+                instance_id,
+                port,
             )
+            await self._kill_port_owner(port)
+            if await self._wait_http_port(port, wait_seconds=1.0):
+                raise RuntimeError(
+                    f"napcat {instance_id}: port {port} is still in use by "
+                    "a process MailFlow could not terminate; stop it "
+                    "manually, then start again."
+                )
         # config for NapCat: HTTP server on the instance port plus the
         # httpClients entry pushing message events to the in-process
         # bridge (chat commands). Written to the default onebot11.json AND
@@ -1500,6 +1542,69 @@ class NapCatProvisioner:
         except Exception:
             pass
 
+    async def _kill_port_owner(self, port: int) -> None:
+        """Kill whatever process listens on ``port`` (cross-platform).
+
+        Only used for MailFlow's own deterministic instance ports, where a
+        listener is by construction a stale NapCat child (crash leftover,
+        orphaned after the manager was stopped)."""
+        pids = await asyncio.to_thread(self._find_port_pids, port)
+        await asyncio.to_thread(self._kill_pids, pids, port)
+        if pids:
+            await asyncio.sleep(1.0)  # let the kernel release the socket
+
+    def _find_port_pids(self, port: int) -> set[int]:
+        pids: set[int] = set()
+        try:
+            if _IS_WINDOWS:
+                out = subprocess.run(
+                    ["netstat", "-ano", "-p", "TCP"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout
+                for line in out.splitlines():
+                    parts = line.split()
+                    # TCP    127.0.0.1:3000    ...    LISTENING    1234
+                    if (
+                        len(parts) >= 5
+                        and parts[3] == "LISTENING"
+                        and parts[1].rsplit(":", 1)[-1] == str(port)
+                    ):
+                        try:
+                            pids.add(int(parts[4]))
+                        except ValueError:
+                            continue
+            else:
+                # fuser prints the PIDs of the socket owner directly
+                fuser = subprocess.run(
+                    ["fuser", "-n", "tcp", str(port)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                pids.update(
+                    int(tok) for tok in fuser.stdout.split() + fuser.stderr.split() if tok.isdigit()
+                )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning("napcat: port %d owner lookup failed: %s", port, exc)
+        return pids
+
+    def _kill_pids(self, pids: set[int], port: int) -> None:
+        for pid in pids:
+            logger.warning("napcat: killing stale process %d on port %d", pid, port)
+            try:
+                if _IS_WINDOWS:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        capture_output=True,
+                        timeout=10,
+                    )
+                else:
+                    os.kill(pid, 9)  # SIGKILL
+            except (OSError, subprocess.SubprocessError) as exc:
+                logger.warning("napcat: kill %d failed: %s", pid, exc)
+
     async def stop(self, instance_id: str) -> None:
         bridge = self._bridges.pop(instance_id, None)
         if bridge is not None:
@@ -1597,7 +1702,7 @@ class NapCatProvisioner:
             await self._sync_per_account_config(instance_id)
         if probe != getattr(self, "_last_probe", None):
             self._last_probe = probe
-            logger.info(
+            logger.debug(
                 "napcat %s: login probe -> %s (%s)",
                 instance_id,
                 "logged in" if logged_in else "waiting",
