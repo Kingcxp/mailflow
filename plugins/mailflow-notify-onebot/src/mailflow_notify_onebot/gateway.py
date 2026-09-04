@@ -350,26 +350,57 @@ class _OneBotEventBridge:
             self._server = None
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """One HTTP request: parse Content-Length and read the body exactly.
+
+        The old implementation did `reader.read(65536)` without honoring
+        Content-Length: NapCat's client keeps the connection alive, so the
+        read hung waiting for 64 KiB or EOF, the event never dispatched,
+        and the eventual 500 showed up on NapCat's side as 'Unexpected
+        status code: 500' while the MailFlow log stayed silent — the exact
+        'bridge receives nothing' symptom."""
         try:
-            request_line = await reader.readline()
+            request_line = await asyncio.wait_for(reader.readline(), timeout=10.0)
             parts = request_line.decode("utf-8", "replace").strip().split()
             if len(parts) < 2 or parts[0] != "POST":
                 await _respond(writer, 404, {})
                 return
+            content_length = 0
             while True:
-                line = await reader.readline()
+                line = await asyncio.wait_for(reader.readline(), timeout=10.0)
                 if line in (b"\r\n", b"\n", b""):
                     break
-            body = await reader.read(65536)
+                name, _, value = line.decode("latin-1").partition(":")
+                if name.strip().lower() == "content-length":
+                    try:
+                        content_length = int(value.strip())
+                    except ValueError:
+                        content_length = 0
+            if content_length <= 0:
+                await _respond(writer, 400, {})
+                return
+            body = await asyncio.wait_for(reader.readexactly(content_length), timeout=15.0)
             payload = json.loads(body.decode("utf-8", "replace") or "{}")
             if payload.get("post_type") == "message":
                 await self._dispatch(payload)
-            await _respond(writer, 200, {})
+                await _respond(writer, 200, {})
+            else:
+                # non-message events (heartbeats, notices) are ACKed without
+                # dispatching; NapCat treats any 2xx as delivered
+                await _respond(writer, 200, {})
+        except TimeoutError:
+            logger.warning("onebot event bridge: request read timed out")
+            await _respond(writer, 408, {})
+        except (json.JSONDecodeError, asyncio.IncompleteReadError) as exc:
+            logger.warning("onebot event bridge: malformed request (%s)", exc)
+            await _respond(writer, 400, {})
+        except (ConnectionResetError, BrokenPipeError):
+            # the sender hung up before we could answer — nothing to reply to
+            logger.debug("onebot event bridge: client disconnected mid-request")
         except Exception as exc:
-            logger.debug("onebot event bridge failed: %s", exc)
+            logger.warning("onebot event bridge: request failed: %s", exc)
             await _respond(writer, 500, {})
         finally:
-            with __import__("contextlib").suppress(Exception):
+            with contextlib.suppress(Exception):
                 writer.close()
 
     @staticmethod

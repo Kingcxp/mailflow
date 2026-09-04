@@ -61,6 +61,15 @@ All notable changes are recorded here; the format follows
   leaks the NapCat log tail into the UI error (the guide showed "QR
   shown: rows x cols" and the gateway returned "empty/short (N bytes)"
   with a log tail attached).
+- **OneBot event bridge: exact HTTP body reads (fixed silent 500)** — the
+  bridge read request bodies with `reader.read(65536)` without honoring
+  Content-Length: NapCat's client keeps the connection alive, so the read
+  hung waiting for 64 KiB or EOF, the event was never dispatched, and
+  NapCat logged `Unexpected status code: 500` while the MailFlow log
+  stayed silent — the exact "notifier receives no messages" symptom.
+  Bodies are now read exactly per Content-Length with per-stage timeouts,
+  malformed requests answer 400, and client disconnects mid-request no
+  longer raise a second BrokenPipeError while answering 500.
 - **NapCat per-account config sync runs on every healthy poll** — the
   per-account OneBot config (`onebot11_<uin>.json`) is only learnable
   AFTER the QQ account logs in, but the sync previously ran once at bridge

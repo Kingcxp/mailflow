@@ -185,6 +185,59 @@ async def test_full_chat_command_chain_replies() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bridge_handles_large_body_and_keepalive() -> None:
+    """Regression for the reported 'bridge receives nothing' failure: a
+    large group-message event (emoji-rich array-format bodies run tens of
+    KB) over a keep-alive-style connection with Content-Length. The old
+    handler did reader.read(65536) without honoring Content-Length, which
+    hung on the open connection and returned 500 to NapCat."""
+    bot = _Recorder(reply="ok")
+    onebot = _Recorder()
+    await bot.start()
+    await onebot.start()
+    import asyncio as _asyncio
+
+    # bind a throwaway server to grab a free port deterministically
+    probe = await _asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
+    free_port = probe.sockets[0].getsockname()[1]  # pyright: ignore[reportUnknownMemberType]
+    probe.close()
+    await probe.wait_closed()
+
+    bridge = _OneBotEventBridge("napcat-big", free_port, f"{bot.url}/bot/message", onebot.url)
+    await bridge.start()
+
+    # a large event body (~30 KB), well under the 64 KiB old read cap but
+    # larger than a single TCP segment — Content-Length must be honored
+    filler = "字" * 15000
+    event = {
+        "post_type": "message",
+        "message_type": "group",
+        "user_id": 404291187,
+        "group_id": 565424593,
+        "raw_message": f"#mailflow help {filler}",
+        "message": [{"type": "text", "data": {"text": f"#mailflow help {filler}"}}],
+    }
+
+    try:
+        # two sequential POSTs over separate connections (NapCat dials per
+        # event), each with an exact Content-Length
+        for _ in range(2):
+            import httpx
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(f"http://127.0.0.1:{bridge.port}/onebot/event", json=event)
+            assert resp.status_code == 200, f"bridge returned {resp.status_code}"
+        await asyncio.sleep(0.2)
+        assert len(bot.requests) == 2
+        for _path, payload in bot.requests:
+            assert payload["text"].startswith("#mailflow help")
+    finally:
+        await bridge.stop()
+        await bot.stop()
+        await onebot.stop()
+
+
+@pytest.mark.asyncio
 async def test_chain_silently_loses_events_without_bot_url() -> None:
     """A bridge created without bot_url (the silent-failure mode) must be
     detectable: ensure_bridge reports it instead of quietly returning."""
