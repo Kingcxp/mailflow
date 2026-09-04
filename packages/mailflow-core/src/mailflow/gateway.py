@@ -232,6 +232,18 @@ class GatewayManager:
             except Exception as exc:
                 current = instance.model_copy(update={"error": str(exc)})
             if current.status == _STATUS_RUNNING:
+                # status() returns a bare instance without extra; storing
+                # it as-is would drop extra.options (bot_url) and
+                # extra.autostart from the in-memory state — the bridge
+                # then never recreates after an app restart (phantom
+                # running, ECONNREFUSED on the bridge port)
+                current = current.model_copy(
+                    update={
+                        "extra": {**instance.extra, **current.extra}
+                        if current.extra
+                        else instance.extra,
+                    }
+                )
                 self._instances[self._key(instance.provider, instance.instance_id)] = current
                 await self._save_state(current)
                 backoff = 5
@@ -277,6 +289,9 @@ class GatewayManager:
                     started = await self.provisioner(instance.provider).start(
                         instance.instance_id, instance.extra.get("options", {})
                     )
+                # merge persisted options/autostart into the relaunched
+                # instance's bare extra (same reason as in provision())
+                started = started.model_copy(update={"extra": {**instance.extra, **started.extra}})
                 self._instances[self._key(started.provider, started.instance_id)] = started
                 await self._save_state(started)
                 backoff = 5
@@ -300,6 +315,13 @@ class GatewayManager:
                 logger.error(
                     "gateway %s.%s restart failed: %s", instance.provider, instance.instance_id, exc
                 )
+                # surface the failure in the UI: an unpersisted error left
+                # the table showing "running" while nothing would answer
+                failed = instance.model_copy(
+                    update={"status": "error", "error": f"restart failed: {exc}"}
+                )
+                self._instances[self._key(instance.provider, instance.instance_id)] = failed
+                await self._save_state(failed)
 
     # -- provisioning API (used by the Bots tab guide) ---------------------------
 
@@ -354,6 +376,10 @@ class GatewayManager:
             instance.error = f"start failed: {exc}"
             await self._save_state(instance)
             raise RuntimeError(instance.error) from exc
+        # start() returns a bare extra ({port, pid}); the persisted
+        # options/autostart must survive the swap or the supervisor's next
+        # restart loses bot_url and the bridge never comes back
+        running = running.model_copy(update={"extra": {**instance.extra, **running.extra}})
         self._instances[key] = running
         await self._save_state(running)
         # record the instance id in the provider's list for restart scanning

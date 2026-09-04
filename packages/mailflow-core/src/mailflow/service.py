@@ -9,6 +9,7 @@ sources, notifiers, events, logging and the runtime.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import json
@@ -128,6 +129,51 @@ class _DraftLocks:
 
     def for_draft(self, draft_id: str) -> asyncio.Lock:
         return self._locks.setdefault(draft_id, asyncio.Lock())
+
+
+def _flatten_admins(raw: Any) -> list[str]:
+    """Normalize the persisted admins value to flat string ids.
+
+    Configs edited by the buggy list editor may hold arbitrarily nested
+    lists ("[['404291187']]") or JSON-ish strings ("['404291187']"); the
+    editor itself is fixed, but saved values must still match real sender
+    ids."""
+    out: list[str] = []
+
+    def walk(item: Any) -> None:
+        if isinstance(item, (list, tuple)):
+            subs = [x for x in item]  # pyright: ignore[reportUnknownVariableType]
+            for sub in subs:  # pyright: ignore[reportUnknownVariableType]
+                walk(sub)
+            return
+        if item is None:
+            return
+        text = str(item).strip()
+        # unwrap one level of stringified list: "['a', 'b']"
+        if text.startswith("[") and text.endswith("]"):
+            parsed: Any = None
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                try:
+                    # single-quoted "['a', 'b']" written by str(list)
+                    parsed = ast.literal_eval(text)
+                except (ValueError, SyntaxError):
+                    parsed = None
+            if isinstance(parsed, (list, tuple, str, int, float)):
+                walk(parsed)
+                return
+            # not valid JSON: strip the wrappers and keep the residue only
+            # if it looks like a bare id (digits / wxid-style token)
+            inner = text.strip("[]").strip().strip(chr(34)).strip(chr(39)).strip()
+            if inner and (inner.isdigit() or inner.replace("-", "").isalnum()):
+                out.append(inner)
+            return
+        if text:
+            out.append(text)
+
+    walk(raw)
+    return out
 
 
 class MailFlowService:
@@ -1376,8 +1422,7 @@ be one of ad|info|important|urgent. The original mail body is never edited.
         for notifier in self.config.notifiers:
             if provider and notifier.provider != provider:
                 continue
-            raw_admins: list[Any] = list(notifier.options.get("admins") or [])
-            admins = [str(a) for a in raw_admins]
+            admins = _flatten_admins(notifier.options.get("admins") or [])
             if sender in admins:
                 return True
         return False

@@ -147,6 +147,19 @@ def _instance_dir(instance_id: str) -> Path:
     return _data_root() / f"napcat-{_safe_token(instance_id)}"
 
 
+def _save_uin(instance_id: str, uin: str) -> None:
+    if not uin.isdigit():
+        return
+    try:
+        directory = _instance_dir(instance_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "session.json").write_text(
+            json.dumps({"uin": uin, "instance_id": instance_id}), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
 async def _respond(writer: asyncio.StreamWriter, status: int, payload: dict[str, Any]) -> None:
     body = json.dumps(payload).encode("utf-8")
     reason = {200: "OK", 404: "Not Found", 500: "Internal Server Error"}.get(status, "OK")
@@ -519,7 +532,17 @@ class _OneBotEventBridge:
         )
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
-                await client.post(endpoint, json=payload, headers=headers)
+                resp = await client.post(endpoint, json=payload, headers=headers)
+                # a non-2xx (bad token, not-logged-in API) previously
+                # vanished silently — the message was simply never sent
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "onebot reply to %s:%s rejected: HTTP %d %s",
+                        message_type,
+                        chat_id,
+                        resp.status_code,
+                        resp.text[:120],
+                    )
             except Exception as exc:
                 logger.warning("onebot reply to %s:%s failed: %s", message_type, chat_id, exc)
 
@@ -537,6 +560,19 @@ class NapCatProvisioner:
         # used to keep the per-account onebot11_<uin>.json in sync with
         # the httpClients bridge entry after login
         self._uins: dict[str, str] = {}
+        # seed quick-login numbers from the previous session's probe so a
+        # config restart after an app restart still relaunches with
+        # `-q <uin>` (the in-memory map starts empty on every boot)
+        for directory in _data_root().glob("napcat-*"):
+            try:
+                raw = (directory / "session.json").read_text("utf-8")
+                data = json.loads(raw)
+            except (OSError, ValueError):
+                continue
+            uin = str(data.get("uin") or "")
+            owner = str(data.get("instance_id") or "")
+            if uin.isdigit() and owner:
+                self._uins[owner] = uin
         # instances currently being repaired (delete + reinstall): guards
         # the self-heal path against infinite repair loops
         self._repairing: set[str] = set()
@@ -591,6 +627,7 @@ class NapCatProvisioner:
             uin = await self._probe_uin(instance_id)
             if uin:
                 self._uins[instance_id] = uin
+                _save_uin(instance_id, uin)
         if not uin:
             return False
         bridge = self._bridges.get(instance_id)
@@ -781,6 +818,16 @@ class NapCatProvisioner:
             return existing
         bot_url = str(options.get("bot_url") or "")
         if not bot_url:
+            # silent None here produced the phantom-running state: the
+            # gateway child pushes events at a port nothing listens on.
+            # Happens when the persisted instance state lost its options
+            # (old MailFlow bug) — name the fix: re-save the notifier.
+            logger.warning(
+                "napcat %s: no bot_url in gateway options — event bridge "
+                "cannot be created; re-save the notifier config so the "
+                "chat endpoint is persisted",
+                instance_id,
+            )
             return None
         bridge = _OneBotEventBridge(
             instance_id,
@@ -1301,6 +1348,12 @@ class NapCatProvisioner:
                     # Linux headless: run the AppImage (QQ + NapCat
                     # bundled) under xvfb. The AppImage is self-contained;
                     # its cache and QR land next to the file (cwd).
+                    # A known QQ number (from a previous get_login_info
+                    # probe) is passed as `-q <uin>` — NapCat's quick
+                    # login (same flag the official Docker entrypoint
+                    # uses) — so a config-restart or app restart resumes
+                    # the session from disk instead of demanding a fresh
+                    # QR scan.
                     command = [
                         "xvfb-run",
                         "-a",
@@ -1311,11 +1364,14 @@ class NapCatProvisioner:
                         # does not get OOM-killed (QQ wants ~1.5-2 GB)
                         "--max-old-space-size=1024",
                     ]
+                    quick_uin = self._uins.get(instance_id) or ""
+                    if quick_uin.isdigit():
+                        command += ["-q", quick_uin]
                     cwd = str(run_target.resolve())
                 return subprocess.Popen(
                     command,
                     cwd=cwd,
-                    env={**__import__("os").environ, **env},
+                    env={**os.environ, **env},
                     stdout=handle,
                     stderr=subprocess.STDOUT,
                 )
@@ -1397,12 +1453,12 @@ class NapCatProvisioner:
         if process is None:
             return
         if process.poll() is None:
-            with __import__("contextlib").suppress(Exception):
+            with contextlib.suppress(Exception):
                 process.terminate()
             try:
                 process.wait(timeout=5)
             except Exception:
-                with __import__("contextlib").suppress(Exception):
+                with contextlib.suppress(Exception):
                     process.kill()
         # NapCat spawns QQ (xvfb-run + dbus-run-session on Linux, boot exe
         # on Windows): kill the whole tree so no orphan QQ process remains.
@@ -1447,7 +1503,7 @@ class NapCatProvisioner:
     async def stop(self, instance_id: str) -> None:
         bridge = self._bridges.pop(instance_id, None)
         if bridge is not None:
-            with __import__("contextlib").suppress(Exception):
+            with contextlib.suppress(Exception):
                 await bridge.stop()
         # terminate can block up to 5s waiting for the process tree; run it
         # off the event loop so the TUI never freezes on cancel
@@ -1524,6 +1580,7 @@ class NapCatProvisioner:
                         )
                         if uin:
                             self._uins[instance_id] = uin
+                            _save_uin(instance_id, uin)
                         break
                 except Exception as exc:
                     probe = f"{endpoint} ERR {type(exc).__name__}"
@@ -1531,6 +1588,10 @@ class NapCatProvisioner:
         # logged out (or the stale process died): drop the cached QQ
         # number so state never shows a phantom login
         if not logged_in:
+            # drop the in-memory map, but KEEP the persisted session.json:
+            # a probe miss also happens while the child is still booting,
+            # and wiping the quick-login seed would force a QR rescan on
+            # the next relaunch even though the session is still on disk
             self._uins.pop(instance_id, None)
         if logged_in:
             await self._sync_per_account_config(instance_id)
