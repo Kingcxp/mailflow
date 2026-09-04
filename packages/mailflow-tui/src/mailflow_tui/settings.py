@@ -685,9 +685,15 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             elif extra.kind == "lines":
                 from mailflow_tui.list_editor import ListEditor
 
-                current_lines = [
-                    ln.strip() for ln in (self._extra_value(extra) or "").splitlines() if ln.strip()
-                ]
+                raw_lines = self._extra_value(extra)
+                if isinstance(raw_lines, (list, tuple)):
+                    # admins/targets persist as a real list; str()-ing it
+                    # wrapped one more [] around the value on every edit
+                    current_lines = [str(ln).strip() for ln in raw_lines if str(ln).strip()]
+                else:
+                    current_lines = [
+                        ln.strip() for ln in str(raw_lines or "").splitlines() if ln.strip()
+                    ]
                 yield ListEditor(
                     current_lines,
                     placeholder=str(extra.default or self._t("tui.list_editor_placeholder")),

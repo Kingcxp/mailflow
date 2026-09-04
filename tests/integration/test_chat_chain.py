@@ -238,6 +238,64 @@ async def test_bridge_handles_large_body_and_keepalive() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bridge_accepts_chunked_encoding() -> None:
+    """NapCat's HTTP client sends large array-format events with
+    `Transfer-Encoding: chunked` and no Content-Length. The bridge used to
+    answer 400 for exactly those requests (the user's 'Unexpected status
+    code: 400' log); chunked bodies must decode and dispatch."""
+    bot = _Recorder(reply="ok")
+    onebot = _Recorder()
+    await bot.start()
+    await onebot.start()
+    import asyncio as _asyncio
+
+    probe = await _asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
+    free_port = probe.sockets[0].getsockname()[1]  # pyright: ignore[reportUnknownMemberType]
+    probe.close()
+    await probe.wait_closed()
+    bridge = _OneBotEventBridge("napcat-chunked", free_port, f"{bot.url}/bot/message", onebot.url)
+    await bridge.start()
+
+    body = json.dumps(
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 404291187,
+            "group_id": 565424593,
+            "raw_message": "#mailflow help",
+        }
+    ).encode()
+
+    try:
+        # raw chunked POST: 3 chunks + terminating 0-chunk, NO Content-Length
+        reader, writer = await asyncio.open_connection("127.0.0.1", bridge.port)
+        chunks = [body[:50], body[50:120], body[120:]]
+        head = (
+            b"POST /onebot/event HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Transfer-Encoding: chunked\r\n"
+            b"Connection: close\r\n\r\n"
+        )
+        payload = head
+        for chunk in chunks:
+            payload += f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n"
+        payload += b"0\r\n\r\n"
+        writer.write(payload)
+        await writer.drain()
+        resp = await asyncio.wait_for(reader.read(-1), timeout=10.0)
+        assert b"200 OK" in resp, f"chunked request must ACK 200, got {resp[:60]!r}"
+        writer.close()
+        await asyncio.sleep(0.2)
+        assert len(bot.requests) == 1
+        assert bot.requests[0][1]["text"] == "#mailflow help"
+    finally:
+        await bridge.stop()
+        await bot.stop()
+        await onebot.stop()
+
+
+@pytest.mark.asyncio
 async def test_chain_silently_loses_events_without_bot_url() -> None:
     """A bridge created without bot_url (the silent-failure mode) must be
     detectable: ensure_bridge reports it instead of quietly returning."""

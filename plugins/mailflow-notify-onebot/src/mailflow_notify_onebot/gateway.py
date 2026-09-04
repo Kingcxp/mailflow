@@ -349,6 +349,28 @@ class _OneBotEventBridge:
             await self._server.wait_closed()
             self._server = None
 
+    @staticmethod
+    async def _read_chunked(reader: asyncio.StreamReader) -> bytes:
+        """Decode a chunked request body: per-chunk size line, size bytes,
+        CRLF, terminated by a 0-size chunk."""
+        body = bytearray()
+        while True:
+            size_line = await reader.readline()
+            size_str = size_line.split(b";")[0].strip()
+            try:
+                size = int(size_str, 16)
+            except ValueError as exc:
+                raise json.JSONDecodeError(
+                    "bad chunk size", size_line.decode("latin-1"), 0
+                ) from exc
+            if size == 0:
+                await reader.readline()  # trailing CRLF after the last chunk
+                break
+            chunk = await reader.readexactly(size)
+            body.extend(chunk)
+            await reader.readexactly(2)  # chunk CRLF
+        return bytes(body)
+
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """One HTTP request: parse Content-Length and read the body exactly.
 
@@ -364,21 +386,33 @@ class _OneBotEventBridge:
             if len(parts) < 2 or parts[0] != "POST":
                 await _respond(writer, 404, {})
                 return
-            content_length = 0
+            # NapCat's HTTP client sends large array-format events with
+            # `Transfer-Encoding: chunked` (no Content-Length); treating
+            # a missing length as 400 was the reported 'Unexpected
+            # status code: 400' after the first fix.
+            content_length: int | None = None
+            chunked = False
             while True:
                 line = await asyncio.wait_for(reader.readline(), timeout=10.0)
                 if line in (b"\r\n", b"\n", b""):
                     break
                 name, _, value = line.decode("latin-1").partition(":")
-                if name.strip().lower() == "content-length":
+                lname = name.strip().lower()
+                if lname == "content-length":
                     try:
                         content_length = int(value.strip())
                     except ValueError:
-                        content_length = 0
-            if content_length <= 0:
-                await _respond(writer, 400, {})
-                return
-            body = await asyncio.wait_for(reader.readexactly(content_length), timeout=15.0)
+                        content_length = None
+                elif lname == "transfer-encoding" and "chunked" in value.lower():
+                    chunked = True
+            if chunked:
+                body = await asyncio.wait_for(self._read_chunked(reader), timeout=20.0)
+            elif content_length is not None and content_length > 0:
+                body = await asyncio.wait_for(reader.readexactly(content_length), timeout=20.0)
+            else:
+                # neither length nor chunked: read until EOF (older
+                # clients that close the connection to delimit the body)
+                body = await asyncio.wait_for(reader.read(-1), timeout=20.0)
             payload = json.loads(body.decode("utf-8", "replace") or "{}")
             if payload.get("post_type") == "message":
                 await self._dispatch(payload)
