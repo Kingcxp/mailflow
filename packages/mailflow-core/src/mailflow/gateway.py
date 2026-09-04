@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from mailflow.config import MailFlowConfig
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
@@ -74,6 +74,9 @@ class GatewayManager:
         self._config = config
         self._registry = registry
         self._storage = storage
+        # set by the owning service after bot_server exists; used only to
+        # heal persisted states that lost options.bot_url
+        self._service_ref: Any = None
         self._provisioners: dict[str, GatewayProvisioner] = {}
         self._instances: dict[str, GatewayInstance] = {}
         self._supervise_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -139,6 +142,32 @@ class GatewayManager:
         # scan preferences for known instances
         for instance in await self._list_persisted():
             key = self._key(instance.provider, instance.instance_id)
+            # migrate states saved by older MailFlow whose extra lost the
+            # options dict (the pre-merge status-poll bug): without
+            # options.bot_url the bridge can never come back — heal the
+            # persisted record from the current bot_url and re-save
+            options = instance.extra.get("options")
+            options_dict: dict[str, Any] = (
+                dict(cast("dict[str, Any]", options)) if isinstance(options, dict) else {}
+            )
+            if not options_dict.get("bot_url"):
+                bot_server = getattr(self._service_ref, "bot_server", None)
+                url = str(getattr(bot_server, "url", "") or "") if bot_server else ""
+                if url:
+                    instance = instance.model_copy(
+                        update={
+                            "extra": {
+                                **instance.extra,
+                                "options": {**options_dict, "bot_url": url},
+                            }
+                        }
+                    )
+                    await self._save_state(instance)
+                    logger.info(
+                        "gateway %s.%s: healed missing bot_url in persisted options",
+                        instance.provider,
+                        instance.instance_id,
+                    )
             self._instances[key] = instance
             # resume RUNNING instances, but ALSO instances left in `error`
             # (e.g. the deploy failed on missing system libraries): once the

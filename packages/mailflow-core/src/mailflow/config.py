@@ -358,7 +358,12 @@ class NotifierConfig(BaseModel):
     provider: str = Field(description="Notifier plugin component id (e.g. console)")
     enabled: bool = Field(default=True, description="Whether this notifier is active")
     minimum_urgency: Urgency = Field(
-        default=Urgency.IMPORTANT, description="Only mail at or above this urgency is delivered"
+        default=Urgency.INFO,
+        description=(
+            "Only mail at or above this urgency is delivered. INFO by default "
+            "so nothing is silently dropped (ads included); raise it in "
+            "settings to filter noise."
+        ),
     )
     options: dict[str, Any] = Field(
         default_factory=lambda: {}, description="Notifier-specific options"

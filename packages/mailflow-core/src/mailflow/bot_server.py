@@ -14,6 +14,7 @@ standard library (asyncio streams).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -103,16 +104,31 @@ class BotServer:
                     instance_id=instance,
                 )
                 if reply:
-                    logger.info("chat[%s] reply to %s: %.80r", instance, chat_id, reply)
-                await self._respond(writer, 200, {"reply": reply or ""})
+                    preview = f"{len(reply)} chunks" if isinstance(reply, list) else f"{reply:.80r}"
+                    logger.info("chat[%s] reply to %s: %s", instance, chat_id, preview)
+                # a chunk list passes through as a JSON array — the onebot
+                # bridge renders it as one merged-forward message
+                # chat platforms cap single-message length; mark the cut
+                # instead of letting the platform silently clip the tail
+                marker = self._service.t("truncated_marker")
+                limit = 4000
+                if isinstance(reply, list):
+                    payload_reply: Any = [
+                        chunk if len(chunk) <= limit else chunk[:limit] + marker for chunk in reply
+                    ]
+                else:
+                    payload_reply = (
+                        reply if not reply or len(reply) <= limit else reply[:limit] + marker
+                    )
+                await self._respond(writer, 200, {"reply": payload_reply})
             else:
                 await self._respond(writer, 404, {"reply": ""})
         except Exception as exc:
             logger.debug("bot endpoint request failed: %s", exc)
-            with __import__("contextlib").suppress(Exception):
+            with contextlib.suppress(Exception):
                 await self._respond(writer, 500, {"reply": ""})
         finally:
-            with __import__("contextlib").suppress(Exception):
+            with contextlib.suppress(Exception):
                 writer.close()
 
     @staticmethod

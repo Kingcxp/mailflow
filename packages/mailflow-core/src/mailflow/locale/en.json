@@ -739,7 +739,44 @@
       "summary_ad_rules": "Advertisement detected by rules",
       "reason_ad_keywords": "matches advertising keywords",
       "reason_important_sender": "sender is on the important-senders list"
-    }
+    },
+    "chat": {
+      "namespace_hint": "Unknown command '{command}'. MailFlow commands live under '{prefix}mailflow …' — try '{prefix}mailflow help'.",
+      "needs_context": "This command needs a chat context (private chat or group).",
+      "not_admin": "You are not an admin of this bot; ask the owner to add you.",
+      "subscribed": "Subscribed to mail notifications in this chat.",
+      "already_subscribed": "This chat is already subscribed.",
+      "unsubscribed": "Unsubscribed from mail notifications.",
+      "not_subscribed": "This chat was not subscribed.",
+      "status": "MailFlow bot running (gateway {gateway}). Subscribed chats: {chats}.",
+      "router_missing": "MailFlow command router is not wired.",
+      "help_title": "MailFlow commands — {prefix}mailflow <subcommand> (1/5 mail, 2/5 reply, 3/5 schedule, 4/5 bot, 5/5 system)",
+      "help_mail": "MAIL\n{lines}",
+      "help_reply": "REPLY (token-confirmed, no double-send)\n{lines}",
+      "help_action": "SCHEDULE / ACTIONS\n{lines}",
+      "help_bot": "BOT\n{lines}",
+      "help_system": "SYSTEM\n{lines}",
+      "example_mail": "[{urgency}] {subject}\nFrom: {sender}\n{summary}",
+      "example_ad": "[{urgency}] {subject}\nFrom: {sender}\nAds are delivered too — nothing is silently dropped; use feedback to teach the classifier.",
+      "example_reminder": "REMINDER — {summary}\nDue: {due}",
+      "example_digest": "DAILY DIGEST — {count} actions due today, sent once per morning.",
+      "example_footer": "Configure deliveries with {prefix}mailflow subscribe / minimum urgency in settings.",
+      "example_subject": "Assignment 2 due next Friday",
+      "example_summary": "The LLM extracted a deadline and created a schedule entry.",
+      "example_ad_subject": "Weekly newsletter",
+      "example_action": "Submit assignment 2"
+    },
+    "urgency": {
+      "info": "INFO",
+      "important": "IMPORTANT",
+      "critical": "CRITICAL"
+    },
+    "reminder": {
+      "reminder_log": "REMINDER [{kind}] due {range} — {summary} (mail {source})",
+      "reminder_log_notes": "REMINDER [{kind}] due {range} — {summary} (mail {source}; notes: {notes})",
+      "digest_log": "DIGEST {date}: {today} due today, {soon} approaching in {days} days"
+    },
+    "truncated_marker": "…(truncated)"
   },
   "tui.extras_base_url": "OpenClaw WeChat service URL, e.g. http://127.0.0.1:8000"
 }

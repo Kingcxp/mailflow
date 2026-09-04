@@ -960,6 +960,60 @@ class TestMailWipe:
 
 
 @pytest.mark.asyncio
+async def test_chat_help_is_sectioned() -> None:
+    """help returns one chunk per section: long help must survive
+    platforms that cap single-message length."""
+    from mailflow.config import MailFlowConfig
+    from mailflow.i18n import I18n
+    from mailflow.service import MailFlowService
+
+    cfg = MailFlowConfig()
+    cfg.general.command_prefix = "/"
+    service = MailFlowService.__new__(MailFlowService)
+    service.config = cfg
+    service.i18n = I18n()
+    chunks = service._chat_help("/")  # pyright: ignore[reportPrivateUsage]
+    assert len(chunks) == 6  # title + 5 sections
+    joined = "\n".join(chunks)
+    for expected in (
+        "mail list",
+        "reply confirm",
+        "action add",
+        "mailflow subscribe",
+        "plugin list",
+    ):
+        assert expected in joined, expected
+
+
+@pytest.mark.asyncio
+async def test_chat_example_returns_chunks() -> None:
+    """example renders one chunk per notification type (mail, ad, reminder,
+    digest) so the bridge can forward-merge or pace them."""
+    from mailflow.config import MailFlowConfig
+    from mailflow.i18n import I18n
+    from mailflow.service import MailFlowService
+
+    cfg = MailFlowConfig()
+    service = MailFlowService.__new__(MailFlowService)
+    service.config = cfg
+    service.i18n = I18n()
+    chunks = await service._chat_example("napcat", "n1")  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(chunks, list) and len(chunks) == 3
+    other = await service._chat_example("console", "n1")  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(other, list) and len(other) == 5
+
+
+@pytest.mark.asyncio
+async def test_minimum_urgency_default_is_info() -> None:
+    """INFO by default: ads are delivered too — nothing is silently
+    dropped (user requirement)."""
+    from mailflow.config import NotifierConfig
+    from mailflow.domain import Urgency
+
+    notifier = NotifierConfig(notifier_id="n", provider="onebot")
+    assert notifier.minimum_urgency is Urgency.INFO
+
+
 async def test_command_dispatch_prefix_filtering() -> None:
     """Chat messages only dispatch when they start with the prefix."""
     from mailflow.config import MailFlowConfig
@@ -970,6 +1024,9 @@ async def test_command_dispatch_prefix_filtering() -> None:
     cfg.general.command_prefix = "/"
     service = MailFlowService.__new__(MailFlowService)
     service.config = cfg
+    from mailflow.i18n import I18n as _I18n
+
+    service.i18n = _I18n()
 
     calls: list[str] = []
 
@@ -979,14 +1036,23 @@ async def test_command_dispatch_prefix_filtering() -> None:
             return CommandResponse.plain(f"ok:{line}")
 
     service.commands = FakeRouter()
-    assert await service.command_dispatch("/mail list") == "ok:mail list"
+    # bare commands no longer execute: everything lives in the mailflow
+    # namespace, the reply teaches the corrected form instead
+    bare = await service.command_dispatch("/mail list")
+    assert bare is not None and "mailflow help" in bare
     assert await service.command_dispatch("hello") is None
-    assert await service.command_dispatch("/help") == "ok:help"
-    assert calls == ["mail list", "help"]
+    # only the namespace dispatches; non-subscription commands route
+    # straight to the shared router (their own semantics apply)
+    assert await service.command_dispatch("/mailflow mail list") == "ok:mail list"
+    assert calls == ["mail list"]
+    # subscription commands without a chat get the context hint
+    hinted = await service.command_dispatch("/mailflow subscribe")
+    assert hinted is not None and "chat context" in hinted
+    assert calls == ["mail list"]
 
     # custom prefix
     cfg.general.command_prefix = "!"
-    assert await service.command_dispatch("!mail list") == "ok:mail list"
+    assert await service.command_dispatch("!mailflow mail list") == "ok:mail list"
     assert await service.command_dispatch("/mail list") is None
 
 
@@ -999,8 +1065,12 @@ async def test_command_dispatch_no_router() -> None:
     cfg.general.command_prefix = "/"
     service = MailFlowService.__new__(MailFlowService)
     service.config = cfg
+    from mailflow.i18n import I18n as _I18n
+
+    service.i18n = _I18n()
     service.commands = None
-    assert await service.command_dispatch("/mail") == "MailFlow command router is not wired"
+    hinted = await service.command_dispatch("/mail")
+    assert hinted is not None and "mailflow help" in hinted
     assert await service.command_dispatch("x") is None
 
 
@@ -1020,6 +1090,9 @@ async def test_mailflow_subscribe_requires_admin() -> None:
     ]
     service = MailFlowService.__new__(MailFlowService)
     service.config = cfg
+    from mailflow.i18n import I18n as _I18n
+
+    service.i18n = _I18n()
     service.commands = None
 
     class FakeSubs:
@@ -1074,10 +1147,13 @@ async def test_mailflow_subscribe_requires_admin() -> None:
     # malformed and silently dropped by the notifier
     assert "group:group-1" in onebot.options["targets"]
 
-    # help
-    help_text = await service.command_dispatch("/mailflow help", sender="10001")
-    assert help_text is not None and "mailflow subscribe" in help_text
-    assert help_text is not None and "mailflow help" in help_text
+    # help: section-grouped chunks, every section carries mailflow commands
+    help_chunks = await service.command_dispatch("/mailflow help", sender="10001")
+    assert isinstance(help_chunks, list) and len(help_chunks) == 6
+    joined = "\n".join(help_chunks)
+    assert "mailflow subscribe" in joined
+    assert "mailflow mail list" in joined
+    assert "mailflow reply confirm" in joined
 
 
 @pytest.mark.asyncio
@@ -1100,6 +1176,9 @@ async def test_mailflow_unsubscribe_removes_target() -> None:
     ]
     service = MailFlowService.__new__(MailFlowService)
     service.config = cfg
+    from mailflow.i18n import I18n as _I18n
+
+    service.i18n = _I18n()
     service.commands = None
 
     class FakeSubs:

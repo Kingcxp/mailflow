@@ -216,6 +216,7 @@ class MailFlowService:
             notifier_configs=notifier_configs,
             events=events,
             account_configs=config.accounts,
+            i18n=self.i18n,
         )
         from mailflow.plugin_market import PluginMarket, Repository
 
@@ -223,6 +224,7 @@ class MailFlowService:
             [Repository(repo.name, repo.url) for repo in config.plugins.repositories]
         )
         self.gateways = GatewayManager(config, registry, storage)
+        self.gateways._service_ref = self  # pyright: ignore[reportPrivateUsage]
         from mailflow.subscriptions import Subscriptions
 
         self.subscriptions = Subscriptions(storage)
@@ -239,11 +241,16 @@ class MailFlowService:
         await self.storage.initialize()
         await self._load_persisted_language()
         await self.runtime.start()
-        await self.gateways.start()
+        # bot_server must exist BEFORE gateways resume: the supervisor's
+        # first healthy poll runs ensure_bridge with the persisted options,
+        # whose bot_url points at THIS server — starting the gateways
+        # first left every resumed instance without a bridge until a later
+        # re-save ('no bot_url in gateway options' after TUI restart)
         from mailflow.bot_server import BotServer
 
         self.bot_server = BotServer(self)
         await self.bot_server.start()
+        await self.gateways.start()
         self._started = True
         self._stopped_event = asyncio.Event()
         self._update_task = asyncio.create_task(self._update_loop(), name="updates")
@@ -270,6 +277,7 @@ class MailFlowService:
         register_builtin_processors(registry)
         self.registry = registry
         self.gateways = GatewayManager(self.config, registry, self.storage)
+        self.gateways._service_ref = self  # pyright: ignore[reportPrivateUsage]
         from mailflow.subscriptions import Subscriptions
 
         self.subscriptions = Subscriptions(self.storage)
@@ -1294,22 +1302,22 @@ be one of ad|info|important|urgent. The original mail body is never edited.
         chat_type: str = "",
         provider: str = "",
         instance_id: str = "",
-    ) -> str | None:
+    ) -> str | list[str] | None:
         """Handle one chat-platform message.
 
-        Returns the reply text when the message is a MailFlow command
-        (starts with the configured prefix), else None. ``sender`` is
-        the platform user id, ``chat_id`` the group/contact id the
-        message came from, ``chat_type`` "group" or "private", and
-        ``provider``/``instance_id`` identify the gateway the message
-        arrived through (used by the subscription commands).
+        Returns the reply text (or a list of message chunks) when the
+        message is a MailFlow command, else None. Every MailFlow command
+        lives in the ``<prefix>mailflow`` namespace so bots coexisting in
+        one group never collide; a bare command shows the corrected form
+        instead of executing. ``sender`` is the platform user id,
+        ``chat_id`` the group/contact id the message came from,
+        ``chat_type`` "group" or "private", and ``provider``/
+        ``instance_id`` identify the gateway the message arrived through.
         """
         prefix = self.command_prefix()
         if not text.startswith(prefix):
             return None
         line = text[len(prefix) :].strip()
-        # mailflow namespace commands handled here (they need the chat
-        # context that the CommandRouter does not carry)
         if line.startswith("mailflow"):
             return await self._mailflow_command(
                 line[len("mailflow") :].strip(),
@@ -1319,10 +1327,17 @@ be one of ad|info|important|urgent. The original mail body is never edited.
                 provider=provider,
                 instance_id=instance_id,
             )
-        if self.commands is None:
-            return "MailFlow command router is not wired"
-        response = await self.commands.execute(line)
-        return str(response.render())
+        if not line:
+            return None
+        # a bare legacy command (e.g. "/help"): teach the namespace instead
+        # of executing — other bots in the same chat may own these words
+        head = line.split()[0]
+        return self.t("chat.namespace_hint", prefix=prefix, command=head)
+
+    # commands that need the chat context (subscriptions) or special
+    # rendering (help/example); everything else delegates to CommandRouter
+    # with the subcommand path joined back into one line
+    _CHAT_SUBCOMMANDS = frozenset({"help", "example", "subscribe", "unsubscribe", "status"})
 
     async def _mailflow_command(
         self,
@@ -1333,28 +1348,30 @@ be one of ad|info|important|urgent. The original mail body is never edited.
         chat_type: str,
         provider: str,
         instance_id: str,
-    ) -> str:
-        """Handle ``<prefix>mailflow <subcommand>`` chat commands."""
+    ) -> str | list[str]:
+        """Handle ``<prefix>mailflow <subcommand> [...]`` chat commands.
+
+        Every functional command lives under the mailflow namespace. The
+        subscription commands need the chat context the CommandRouter does
+        not carry; ``help``/``example`` render multi-message output; the
+        rest (mail/action/reply/feedback/...) delegate to the shared
+        CommandRouter so chat and TUI keep one implementation."""
         parts = args.split()
         sub = parts[0] if parts else "help"
+        prefix = self.command_prefix()
         if sub == "help":
-            return (
-                "MailFlow commands\n"
-                f"  {self.command_prefix()}mailflow help — this help\n"
-                f"  {self.command_prefix()}mailflow subscribe — receive mail "
-                "notifications in this chat\n"
-                f"  {self.command_prefix()}mailflow unsubscribe — stop "
-                "notifications in this chat\n"
-                f"  {self.command_prefix()}mailflow status — bot status\n"
-                "Manage mail:\n"
-                f"  {self.command_prefix()}mail list — list recent mail\n"
-                f"  {self.command_prefix()}action list — pending actions\n"
-                f"  {self.command_prefix()}help — full command help"
-            )
-        if not chat_id:
-            return "This command needs a chat context (private chat or group)."
-        if not self._is_admin(sender, provider):
-            return "You are not an admin of this bot; ask the owner to add you."
+            return self._chat_help(prefix)
+        if sub == "example":
+            return await self._chat_example(provider, instance_id)
+        # subscription commands are the only ones bound to the chat they
+        # were sent from: everything else routes to the shared router (its
+        # own permission semantics apply — mail reads are harmless, writes
+        # touch the same config the TUI exposes)
+        if sub in ("subscribe", "unsubscribe"):
+            if not chat_id:
+                return self.t("chat.needs_context")
+            if not self._is_admin(sender, provider):
+                return self.t("chat.not_admin")
         if sub == "subscribe":
             ok = await self.subscriptions.add(provider, instance_id, chat_id)
             await self._sync_subscription_targets(
@@ -1362,18 +1379,115 @@ be one of ad|info|important|urgent. The original mail body is never edited.
             )
             # rebuild the notifiers so the new target takes effect
             await self.reload_runtime()
-            return "Subscribed to mail notifications." if ok else "Already subscribed."
+            return self.t("chat.subscribed") if ok else self.t("chat.already_subscribed")
         if sub == "unsubscribe":
             ok = await self.subscriptions.remove(provider, instance_id, chat_id)
             await self._sync_subscription_targets(
                 provider, chat_id, chat_type=chat_type, subscribe=False
             )
             await self.reload_runtime()
-            return "Unsubscribed." if ok else "Not subscribed."
+            return self.t("chat.unsubscribed") if ok else self.t("chat.not_subscribed")
         if sub == "status":
             subs = await self.subscriptions.subscribers(provider, instance_id)
-            return f"MailFlow bot running (gateway {instance_id}). Subscribed chats: {len(subs)}."
-        return f"Unknown mailflow subcommand '{sub}'. Use {self.command_prefix()}mailflow help."
+            return self.t("chat.status", gateway=instance_id, chats=len(subs))
+        if self.commands is None:
+            return self.t("chat.router_missing")
+        response = await self.commands.execute(args)
+        rendered: Any = response.render()
+        return str(rendered)
+
+    def _chat_help(self, prefix: str) -> list[str]:
+        """Section-grouped help: one message chunk per group so long help
+        survives platforms that cap single-message length."""
+        sections: list[tuple[str, list[str]]] = [
+            (
+                "mail",
+                [
+                    "mail list [--query q] [page]",
+                    "mail show <id>",
+                    "mail urgency <id> <info|important|critical>",
+                    "mail delete <id>",
+                    f"feedback <id> <reason>  ({prefix}mailflow feedback …)",
+                ],
+            ),
+            (
+                "reply",
+                [
+                    "reply create <mail_id>",
+                    "reply compose <mail_id> <lang>",
+                    "reply show <draft_id>",
+                    "reply edit <draft_id> <lang> <markup>",
+                    "reply prepare <draft_id>  -> token",
+                    "reply confirm <draft_id> <token>",
+                    "reply cancel <draft_id>",
+                ],
+            ),
+            (
+                "action",
+                [
+                    "action list",
+                    "action add <summary> --due <time> [--type t] [--notes n]",
+                    "action done <item_id>",
+                    "action drop <item_id>",
+                ],
+            ),
+            (
+                "bot",
+                [
+                    "subscribe / unsubscribe  (this chat)",
+                    "status",
+                    "example  (notification samples)",
+                ],
+            ),
+            (
+                "system",
+                [
+                    "runtime status",
+                    "account list",
+                    "llm status",
+                    "lang get | lang set <code>",
+                    "config get <key>",
+                    "plugin list",
+                    "trash list | trash restore <id>",
+                ],
+            ),
+        ]
+        chunks = [self.t("chat.help_title", prefix=prefix)]
+        for name, lines in sections:
+            body = "\n".join(f"  {prefix}mailflow {line}" for line in lines)
+            chunks.append(self.t(f"chat.help_{name}", lines=body))
+        return chunks
+
+    async def _chat_example(self, provider: str, instance_id: str) -> str | list[str]:
+        """One sample notification per type so users see what they will
+        receive. Rendered as message chunks; the OneBot bridge merges them
+        into a forward node list when it can."""
+        prefix = self.command_prefix()
+        sections = [
+            self.t(
+                "chat.example_mail",
+                urgency=self.t("urgency.important"),
+                subject=self.t("chat.example_subject"),
+                sender="teacher@example.com",
+                summary=self.t("chat.example_summary"),
+            ),
+            self.t(
+                "chat.example_ad",
+                urgency=self.t("urgency.info"),
+                subject=self.t("chat.example_ad_subject"),
+                sender="news@example.com",
+            ),
+            self.t(
+                "chat.example_reminder",
+                summary=self.t("chat.example_action"),
+                due="2026-09-10 09:00",
+            ),
+            self.t("chat.example_digest", count=3),
+            self.t("chat.example_footer", prefix=prefix),
+        ]
+        if provider in ("napcat", "onebot"):
+            return ["\n".join(sections[:2]), sections[2], "\n".join(sections[3:])]
+        return sections
 
     async def _sync_subscription_targets(
         self,

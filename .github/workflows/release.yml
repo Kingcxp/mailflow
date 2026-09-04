@@ -1,0 +1,107 @@
+name: release
+
+# Build per-platform installers on a version tag and publish a GitHub
+# release with them. The first release ships without notes (nothing has
+# been user-tested yet); later releases embed their CHANGELOG section.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  wheels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build wheels
+        run: uv build --all-packages --out-dir dist-wheels
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels
+          path: dist-wheels/*.whl
+          if-no-files-found: error
+
+  frozen:
+    name: frozen (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: mailflow-linux-x86_64
+          - os: windows-latest
+            artifact: mailflow-windows-x86_64.exe
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install dependencies (incl. nuitka)
+        run: uv sync --frozen --all-packages --group dev
+      - name: Build frozen onefile executable
+        run: uv run python tools/build_exe.py --mode onefile
+      - name: Rename artifact
+        shell: bash
+        run: |
+          mkdir -p dist-release
+          if [ -f dist/onefile-mailflow.exe ] || [ -f "dist/onefile-${{ matrix.artifact }}" ]; then
+            mv dist/onefile-* "dist-release/${{ matrix.artifact }}"
+          else
+            # linux onefile has no extension
+            mv dist/onefile-* "dist-release/${{ matrix.artifact }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist-release/*
+          if-no-files-found: error
+
+  publish:
+    needs: [wheels, frozen]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec mv {} release/ \;
+          ls -la release/
+      - name: Extract release notes
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if uv run python tools/changelog_for_release.py "$VERSION" > notes.md 2>/dev/null; then
+            echo "notes found for $VERSION"
+          else
+            echo "no CHANGELOG section for $VERSION — using fallback note"
+            echo "First packaged release of MailFlow. See CHANGELOG.md for the full history." > notes.md
+          fi
+      - name: Publish pre-release
+        # every automated release is a pre-release until explicitly
+        # promoted: the project has not shipped a user-tested stable yet
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          body_path: notes.md
+          files: release/*
+          fail_on_unmatched_files: true

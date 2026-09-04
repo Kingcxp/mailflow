@@ -74,6 +74,7 @@ class MailFlowRuntime:
         notifier_configs: list[NotifierConfig],
         events: EventBus,
         account_configs: list[MailAccountConfig],
+        i18n: Any = None,
     ) -> None:
         self._config = config
         self._sources = dict(sources)
@@ -83,6 +84,9 @@ class MailFlowRuntime:
         self._notifier_configs = list(notifier_configs)
         self._events = events
         self._account_configs = list(account_configs)
+        # i18n for user-visible reminder/digest log lines; None keeps the
+        # English fallback (standalone test harnesses)
+        self._i18n = i18n
 
         self._queue: asyncio.Queue[MailMessage] = asyncio.Queue(maxsize=config.general.queue_size)
         self._stop_event = asyncio.Event()
@@ -505,7 +509,7 @@ class MailFlowRuntime:
             items=soon,
         )
         reminder_logger.warning(
-            "DIGEST %s: %d due today, %d approaching in %d days",
+            self._rt("reminder.digest_log") or "DIGEST %s: %d due today, %d approaching in %d days",
             today_key,
             today_count,
             len(soon) - today_count,
@@ -561,16 +565,38 @@ class MailFlowRuntime:
                 scheduled=when,
             )
             source = record.record_id if record is not None else "user"
-            reminder_logger.warning(
-                "REMINDER [%s] due %s — %s (mail %s%s)",
-                kind,
-                item.time_range,
-                item.summary,
-                source,
-                f"; notes: {item.notes}" if item.notes else "",
-            )
+            if item.notes:
+                template = self._rt("reminder.reminder_log_notes")
+                reminder_logger.warning(
+                    template or "REMINDER [%s] due %s — %s (mail %s; notes: %s)",
+                    kind,
+                    item.time_range,
+                    item.summary,
+                    source,
+                    item.notes,
+                )
+            else:
+                template = self._rt("reminder.reminder_log")
+                reminder_logger.warning(
+                    template or "REMINDER [%s] due %s — %s (mail %s)",
+                    kind,
+                    item.time_range,
+                    item.summary,
+                    source,
+                )
             fired += 1
         return fired
+
+    def _rt(self, key: str, **params: Any) -> str:
+        """Translate a user-visible runtime message via the service i18n;
+        '' when no i18n is wired (fallback template at the call site)."""
+        if self._i18n is None:
+            return ""
+        try:
+            translated: Any = self._i18n.t(key, **params) if params else self._i18n.t(key)
+            return str(translated)
+        except Exception:
+            return ""
 
     # -- status -----------------------------------------------------------------------
 

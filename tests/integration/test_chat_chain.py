@@ -172,12 +172,23 @@ async def test_full_chat_command_chain_replies() -> None:
         )
         await asyncio.sleep(0.3)
 
-        # 5) the reply went back through the OneBot HTTP API
+        # 5) the reply went back through the OneBot HTTP API. help returns
+        # section chunks: the bridge merges them into ONE forward message
         assert onebot.requests, "no reply was sent to the OneBot API"
         path, payload = onebot.requests[0]
-        assert path == "/send_group_msg"
+        assert path == "/send_group_forward_msg", path
         assert payload["group_id"] == 565424593
-        assert "mailflow help" in str(payload["message"])
+        nodes: list[dict[str, Any]] = list(payload["messages"])
+        assert len(nodes) == 6  # title + 5 sections
+        parts: list[str] = []
+        for node in nodes:
+            content: list[dict[str, Any]] = list(node["data"]["content"])
+            for seg in content:
+                text_data: dict[str, Any] = dict(seg["data"])
+                parts.append(str(text_data["text"]))
+        joined = "".join(parts)
+        assert "#mailflow mail list" in joined
+        assert "#mailflow subscribe" in joined
     finally:
         await bridge.stop()
         await bot_server.stop()

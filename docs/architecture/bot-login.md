@@ -183,18 +183,46 @@ per item in the bot form's list editor) may run commands; others get a
 permission-denied reply.
 
 ```
-/ mailflow help          - full command help
-/ mailflow subscribe     - receive mail notifications in this chat
-/ mailflow unsubscribe   - stop notifications in this chat
-/ mailflow status        - bot status + subscribed chat count
-/ mail list              - list recent mail
-/ action list            - pending action items
-/ help                   - full MailFlow command help
+/mailflow help                       - section-grouped help (multi-message)
+/mailflow example                    - sample notification of every type
+/mailflow subscribe                  - receive mail notifications in this chat
+/mailflow unsubscribe                - stop notifications in this chat
+/mailflow status                     - bot status + subscribed chat count
+/mailflow mail list [--query q]      - list recent mail
+/mailflow mail show <id>             - one mail with summary/feedback
+/mailflow mail urgency <id> <level>  - override urgency (info/important/critical)
+/mailflow feedback <id> <reason>     - teach the classifier (reject mail)
+/mailflow reply create <mail_id>     - draft a reply
+/mailflow reply prepare <draft_id>   - get the confirm token
+/mailflow reply confirm <id> <token> - send (token-gated, no double-send)
+/mailflow reply cancel <draft_id>    - drop the draft
+/mailflow action add <summary> --due "YYYY-MM-DD HH:MM" [--type t] [--notes n]
+/mailflow action list                - schedule entries
+/mailflow action done <item_id>      - complete a schedule entry
+/mailflow runtime status             - pipeline status
+/mailflow lang get | set <code>      - display language
 ```
+
+Every MailFlow command lives in the `mailflow` namespace so other bots in
+the same group never collide: a bare `/help` or `/mail` is not executed —
+the reply teaches the corrected form instead. `help`, `example` and
+`status` need no admin; subscriptions require the chat context and an
+admin; all other commands delegate to the same router the TUI/CLI use.
+
+`help` and `example` return a list of message chunks. The OneBot bridge
+sends them as one merged-forward message (node list); platforms without
+forward support fall back to plain segments paced a few seconds apart.
+Oversized chunks are cut with a localized `…(truncated)` marker instead of
+being silently clipped by the platform.
 
 Subscribing adds the chat (group id / contact id) to the notifier's
 targets and persists it (`gateway.sub.<provider>.<instance>` in the
 preferences store), so notifications arrive after a restart too.
+
+Notifiers deliver mail at `minimum_urgency` or above — the default is
+`info`, so nothing (ads included) is silently dropped; raise it in the
+bot form to filter noise. Reminder and daily-digest log lines follow
+`general.language`.
 
 ## NapCat OneBot HTTP endpoint
 

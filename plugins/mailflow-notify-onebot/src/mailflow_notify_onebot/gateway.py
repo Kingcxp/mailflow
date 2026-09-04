@@ -428,8 +428,13 @@ class _OneBotEventBridge:
                 body = await asyncio.wait_for(reader.read(-1), timeout=20.0)
             payload = json.loads(body.decode("utf-8", "replace") or "{}")
             if payload.get("post_type") == "message":
-                await self._dispatch(payload)
+                # ACK FIRST, then dispatch: NapCat's quick-operation client
+                # times out around 15s and retries; a multi-chunk reply
+                # (help/example, paced fallback segments) can exceed that —
+                # blocking the ACK on the full dispatch would make NapCat
+                # log 'HTTP上报返回快速操作失败' and re-push duplicates.
                 await _respond(writer, 200, {})
+                await self._dispatch(payload)
             else:
                 # non-message events (heartbeats, notices) are ACKed without
                 # dispatching; NapCat treats any 2xx as delivered
@@ -505,16 +510,35 @@ class _OneBotEventBridge:
             except Exception as exc:
                 logger.warning("onebot dispatch to bot_server failed: %s", exc)
                 return
-        reply = str(data.get("reply") or "")
-        if reply:
+        # bot_server may return a plain string or a chunk list (multi-
+        # message help/example). Chunk lists go out as one merged-forward
+        # node message when the platform supports it — clearer than a
+        # wall of text and immune to per-message length caps.
+        raw_reply: Any = data.get("reply") or ""
+        if isinstance(raw_reply, list):
+            items: list[Any] = [entry for entry in raw_reply]  # pyright: ignore[reportUnknownVariableType]
+        else:
+            items = [raw_reply]
+        chunks: list[str] = [str(item) for item in items if str(item).strip()]
+        if chunks:
             logger.info(
-                "onebot bridge %s: replying to %s:%s: %.60r",
+                "onebot bridge %s: replying to %s:%s (%d chunk(s))",
                 self._instance_id,
                 message_type,
                 chat_id,
-                reply,
+                len(chunks),
             )
-            await self._send_reply(reply, message_type, chat_id, str(user_id))
+            if len(chunks) > 1:
+                sent = await self._send_forward(chunks, message_type, chat_id, user_id)
+                if not sent:
+                    # platform refused the forward (old NapCat, private
+                    # chat quirks): fall back to paced segments
+                    for index, chunk in enumerate(chunks):
+                        if index:
+                            await asyncio.sleep(3.0)
+                        await self._send_reply(chunk, message_type, chat_id, str(user_id))
+            else:
+                await self._send_reply(chunks[0], message_type, chat_id, str(user_id))
 
     async def _send_reply(self, reply: str, message_type: str, chat_id: str, user_id: str) -> None:
         headers = {"Content-Type": "application/json"}
@@ -545,6 +569,60 @@ class _OneBotEventBridge:
                     )
             except Exception as exc:
                 logger.warning("onebot reply to %s:%s failed: %s", message_type, chat_id, exc)
+
+    async def _send_forward(
+        self, chunks: list[str], message_type: str, chat_id: str, user_id: Any
+    ) -> bool:
+        """Send chunks as one merged-forward node message; True on success.
+
+        OneBot v11's standard forward node shape works on NapCat; other
+        implementations may reject it — the caller then falls back to
+        paced plain segments."""
+        headers = {"Content-Type": "application/json"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        endpoint = (
+            f"{self._onebot_url}/send_group_forward_msg"
+            if message_type == "group"
+            else f"{self._onebot_url}/send_private_forward_msg"
+        )
+        nodes = [
+            {
+                "type": "node",
+                "data": {
+                    "name": "MailFlow",
+                    "uin": str(user_id),
+                    "content": [{"type": "text", "data": {"text": chunk}}],
+                },
+            }
+            for chunk in chunks
+        ]
+        payload: dict[str, Any] = (
+            {"group_id": int(chat_id), "messages": nodes}
+            if message_type == "group"
+            else {"user_id": int(user_id), "messages": nodes}
+        )
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.post(endpoint, json=payload, headers=headers)
+                if resp.status_code < 400:
+                    body: Any = resp.json() or {}
+                    # OneBot v11: retcode 0 = accepted (data shape varies
+                    # between implementations — NapCat echoes a message
+                    # object, others just ok/retcode)
+                    if "retcode" in body:
+                        return int(body.get("retcode") or 0) == 0
+                    return bool(body.get("data") or body.get("message_id"))
+                logger.warning(
+                    "onebot forward to %s:%s rejected: HTTP %d %s",
+                    message_type,
+                    chat_id,
+                    resp.status_code,
+                    resp.text[:120],
+                )
+            except Exception as exc:
+                logger.warning("onebot forward to %s:%s failed: %s", message_type, chat_id, exc)
+        return False
 
 
 class NapCatProvisioner:

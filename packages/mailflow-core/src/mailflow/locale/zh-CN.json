@@ -739,7 +739,44 @@
       "summary_ad_rules": "规则判定为广告",
       "reason_ad_keywords": "命中广告关键词",
       "reason_important_sender": "发件人在重要发件人名单中"
-    }
+    },
+    "chat": {
+      "namespace_hint": "未知命令“{command}”。MailFlow 命令都在“{prefix}mailflow …”下——试试“{prefix}mailflow help”。",
+      "needs_context": "该命令需要聊天上下文（私聊或群聊）。",
+      "not_admin": "你不是本机器人的管理员；请联系所有者添加。",
+      "subscribed": "已订阅本聊天的邮件通知。",
+      "already_subscribed": "本聊天已订阅。",
+      "unsubscribed": "已退订邮件通知。",
+      "not_subscribed": "本聊天尚未订阅。",
+      "status": "MailFlow 机器人运行中（网关 {gateway}）。已订阅聊天：{chats} 个。",
+      "router_missing": "MailFlow 命令路由未接入。",
+      "help_title": "MailFlow 命令 — {prefix}mailflow <子命令>（1/5 邮件、2/5 回复、3/5 日程、4/5 机器人、5/5 系统）",
+      "help_mail": "邮件\n{lines}",
+      "help_reply": "回复（token 确认，防重复发送）\n{lines}",
+      "help_action": "日程 / 待办\n{lines}",
+      "help_bot": "机器人\n{lines}",
+      "help_system": "系统\n{lines}",
+      "example_mail": "[{urgency}] {subject}\n来自：{sender}\n{summary}",
+      "example_ad": "[{urgency}] {subject}\n来自：{sender}\n广告邮件也会投递——不会静默丢弃；可用 feedback 教分类器。",
+      "example_reminder": "日程提醒 — {summary}\n截止：{due}",
+      "example_digest": "每日摘要 — 今日 {count} 项日程，每晨发送一次。",
+      "example_footer": "用 {prefix}mailflow subscribe 配置投递；在设置中调整最低通知紧急度。",
+      "example_subject": "作业 2 下周五截止",
+      "example_summary": "LLM 已提取截止时间并创建了日程。",
+      "example_ad_subject": "每周新闻简报",
+      "example_action": "提交作业 2"
+    },
+    "urgency": {
+      "info": "INFO",
+      "important": "重要",
+      "critical": "紧急"
+    },
+    "reminder": {
+      "reminder_log": "日程提醒 [{kind}] 截止 {range} — {summary}（邮件 {source}）",
+      "reminder_log_notes": "日程提醒 [{kind}] 截止 {range} — {summary}（邮件 {source}；备注：{notes}）",
+      "digest_log": "摘要 {date}：今日 {today} 项，{days} 天内还有 {soon} 项"
+    },
+    "truncated_marker": "…（已截断）"
   },
   "tui.extras_base_url": "OpenClaw 微信服务地址，例如 http://127.0.0.1:8000"
 }

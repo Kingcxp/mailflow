@@ -7,6 +7,27 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **Full chat command surface in the mailflow namespace** — every
+  MailFlow command now lives under `<prefix>mailflow …` so bots
+  coexisting in one group never collide; a bare legacy command
+  (`/help`, `/mail`) is not executed any more — the reply teaches the
+  corrected form. New chat capabilities: schedule management
+  (`action add/list/done/drop`), mail triage (`mail list/show/urgency`,
+  `feedback <id> <reason>` — the same reject/teach flow as the TUI) and
+  full reply workflow with token confirmation (`reply create → prepare →
+  confirm <token>`, persisted-SENT semantics prevent double sends).
+  `help` returns section-grouped chunks (mail / reply / schedule / bot /
+  system); `mailflow example` renders one sample notification per type
+  (important mail, ad, reminder, daily digest) — the OneBot bridge
+  delivers the chunks as one merged-forward message, other platforms as
+  paced segments.
+- **Nothing is silently dropped** — notifier `minimum_urgency` now
+  defaults to `info`, so ad-level mail is delivered too (raise it in the
+  bot form to filter noise). Reminder and daily-digest log lines follow
+  `general.language`, and oversized chat replies are cut with a
+  localized `…(truncated)` marker instead of being silently clipped by
+  the platform.
+
 - **Actions tab fills the pane** — the todo table used a fixed 70% height
   and the button row split the remaining space 50/50 (Textual's Horizontal
   defaults to height:1fr), so the table showed only half the pane. Both
