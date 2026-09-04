@@ -444,9 +444,14 @@ async def test_plugin_scaffold_wizard(tmp_path: Path) -> None:
                     break
                 await pilot.pause(0.05)
             app.screen.query_one("#scaffold-generate", Button).press()
+            # wait for the FULL scaffold, not just the first file: on slow
+            # Windows runners plugin.json can land while the worker thread
+            # is still writing src/ (the window between the two asserts)
+            plugin_py = (
+                tmp_path / "mailflow-demo-wizard" / "src" / "mailflow_demo_wizard" / "plugin.py"
+            )
             for _ in range(200):
-                target = tmp_path / "mailflow-demo-wizard"
-                if (target / "plugin.json").is_file():
+                if plugin_py.is_file():
                     break
                 await pilot.pause(0.05)
             assert (tmp_path / "mailflow-demo-wizard" / "plugin.json").is_file()
