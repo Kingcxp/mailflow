@@ -104,8 +104,12 @@ async def test_bridge_forwards_message_and_sends_reply() -> None:
             "raw_message": "/mailflow subscribe",
         },
     )
-    await asyncio.sleep(0.2)
-    # forwarded to bot_server with chat context
+    # the bridge ACKs before dispatching: wait for the forward instead of
+    # a fixed sleep (slow Windows runners)
+    for _ in range(100):
+        if bot.requests:
+            break
+        await asyncio.sleep(0.05)
     assert len(bot.requests) == 1
     path, payload = bot.requests[0]
     assert path == "/bot/message"
@@ -115,7 +119,11 @@ async def test_bridge_forwards_message_and_sends_reply() -> None:
     assert payload["chat_type"] == "group"
     assert payload["provider"] == "napcat"
     assert payload["instance_id"] == "napcat-1"
-    # reply sent back via OneBot group API
+    # reply sent back via OneBot group API (after the dispatch completes)
+    for _ in range(100):
+        if onebot.requests:
+            break
+        await asyncio.sleep(0.05)
     assert len(onebot.requests) == 1
     rpath, rpayload = onebot.requests[0]
     assert rpath == "/send_group_msg"
