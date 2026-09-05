@@ -59,13 +59,70 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
 
 ## 安装
 
-需要 **Python ≥ 3.11** 与 [uv](https://docs.astral.sh/uv/)。
+### 1. 前置要求
+
+| 要求 | 用途 | 检查 |
+|---|---|---|
+| **Python ≥ 3.11** | 运行 MailFlow | `python --version` |
+| **[uv](https://docs.astral.sh/uv/) ≥ 0.5** | 工作区/依赖管理 | `uv --version` |
+| **git** | 克隆仓库 | `git --version` |
+
+按功能可选：
+
+| 功能 | 额外要求 |
+|---|---|
+| TUI 终端界面 | Windows 下建议 Windows Terminal，其它任意 ANSI 终端 |
+| QQ 机器人（NapCat） | 见下方"聊天平台前置要求" |
+| 微信机器人（WeChaty） | Node.js ≥ 18 与 Go 工具链（缺失时部署器会给出准确的 apt 命令） |
+| 构建单文件可执行 | dev 依赖组自带 Nuitka；C 编译器自动下载 |
+
+### 2. 安装 uv
+
+**Windows**（PowerShell）：
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# 或：winget install --id=astral-sh.uv -e
+```
+
+**macOS / Linux**：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# 或：brew install uv
+```
+
+### 3. 获取 MailFlow 并同步依赖
 
 ```bash
 git clone https://github.com/Kingcxp/mailflow.git
 cd mailflow
 uv sync --all-packages --group dev
 ```
+
+`uv` 会创建虚拟环境、以可编辑方式安装全部工作区包以及 dev 依赖组
+（pytest、ruff、mypy、pyright、nuitka）。若系统没有 Python 3.11+，uv 会
+自动下载。
+
+### 聊天平台前置要求（QQ 机器人 / NapCat）
+
+NapCat 网关运行完整的 QQ 桌面客户端，Linux 上需要额外系统库；Windows 与
+macOS 除 MailFlow 本身外无需其它——Windows 上机器人需要本机安装 QQ 桌面
+客户端以供注入。
+
+**Linux（Debian/Ubuntu）**：
+
+```bash
+sudo apt-get install -y xvfb xauth fuse libnss3 libgbm1 libasound2 \
+  libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
+  libxcomposite1 libxdamage1 libxrandr2 libxfixes3 libgtk-3-0 \
+  libpango-1.0-0 libcairo2
+```
+
+（MailFlow 部署时会校验这些库，缺失时打印这条完整命令。）
+
+**macOS**：不支持 NapCat 的 Linux AppImage 部署方式；如需在 macOS 上使用
+QQ，请参考 [NapCat 项目](https://github.com/NapNeko) 的 Docker 部署方案。
 
 ## 快速开始
 

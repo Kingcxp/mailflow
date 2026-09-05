@@ -185,9 +185,10 @@ async def test_full_chat_command_chain_replies() -> None:
         parts: list[str] = []
         for node in nodes:
             node_data: dict[str, Any] = dict(node["data"])
-            # forward nodes must carry the BOT identity (self_id), never
-            # the command sender's qq, and a per-topic lifted name
-            assert str(node_data["uin"]) == "3174143625", node_data["uin"]
+            # a fake forward node must use an UNMATCHABLE placeholder uin:
+            # QQ resolves a real user's uin (bot's included) to their actual
+            # nickname, ignoring the custom node name
+            assert str(node_data["uin"]) == "10000", node_data["uin"]
             assert str(node_data["name"]).startswith("MailFlow"), node_data["name"]
             content: list[dict[str, Any]] = list(node_data["content"])
             for seg in content:

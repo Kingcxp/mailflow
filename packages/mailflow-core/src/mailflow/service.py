@@ -1399,12 +1399,15 @@ be one of ad|info|important|urgent. The original mail body is never edited.
     def _chat_help(self, prefix: str) -> list[str]:
         """The chat user manual: one forward-node-sized section per topic,
         each opening with a '【MailFlow · topic】' title line (the OneBot
-        bridge lifts it into the node name), followed by per-command
-        usage + explanation + example — the reader should understand each
-        command without external docs, like a good CLI manual page."""
+        bridge lifts it into the node name). Copy is compact — phone
+        bubbles wrap long prose badly, so every command is a usage line
+        plus one short explanation."""
         p = f"{prefix}mailflow"
+        m = self.t("chat.arg_mail")
+        d = self.t("chat.arg_draft")
+        item = self.t("chat.arg_item")
+        reason = self.t("chat.arg_reason")
         sections: list[str] = [
-            # -- getting started ------------------------------------------------
             self.t(
                 "chat.manual_intro",
                 prefix=prefix,
@@ -1412,43 +1415,39 @@ be one of ad|info|important|urgent. The original mail body is never edited.
                 cmd_status=f"{p} status",
                 cmd_example=f"{p} example",
             ),
-            # -- reading and triaging mail --------------------------------------
             self.t(
                 "chat.manual_mail",
                 prefix=prefix,
                 cmd_list=f"{p} mail list",
-                cmd_show=f"{p} mail show <邮件ID>",
-                cmd_urgency=f"{p} mail urgency <邮件ID> <info|important|critical>",
-                cmd_delete=f"{p} mail delete <邮件ID>",
-                cmd_feedback=f"{p} feedback <邮件ID> <意见>",
+                cmd_show=f"{p} mail show <{m}>",
+                cmd_urgency=f"{p} mail urgency <{m}> <info|important|critical>",
+                cmd_delete=f"{p} mail delete <{m}>",
+                cmd_feedback=f"{p} feedback <{m}> <{reason}>",
                 ex_show=f"{p} mail show a1b2c3",
                 ex_urgency=f"{p} mail urgency a1b2c3 critical",
-                ex_feedback=f"{p} feedback a1b2c3 这类促销邮件以后不用提醒",
+                ex_feedback=f"{p} feedback a1b2c3 …",
             ),
-            # -- replying --------------------------------------------------------
             self.t(
                 "chat.manual_reply",
                 prefix=prefix,
-                cmd_create=f"{p} reply create <邮件ID>",
-                cmd_prepare=f"{p} reply prepare <草稿ID>",
-                cmd_confirm=f"{p} reply confirm <草稿ID> <token>",
-                cmd_cancel=f"{p} reply cancel <草稿ID>",
+                cmd_create=f"{p} reply create <{m}>",
+                cmd_prepare=f"{p} reply prepare <{d}>",
+                cmd_confirm=f"{p} reply confirm <{d}> <token>",
+                cmd_cancel=f"{p} reply cancel <{d}>",
                 ex_flow=(
                     f"{p} reply create a1b2c3\n"
                     f"{p} reply prepare d4e5f6\n"
                     f"{p} reply confirm d4e5f6 123456"
                 ),
             ),
-            # -- schedule ---------------------------------------------------------
             self.t(
                 "chat.manual_action",
                 prefix=prefix,
-                cmd_add=f'{p} action add <事项> --due "YYYY-MM-DD HH:MM" [--type 类型] [--notes 备注]',
+                cmd_add=f'{p} action add <{self.t("chat.arg_summary")}> --due "{self.t("chat.arg_due")}" [--type …] [--notes …]',
                 cmd_list=f"{p} action list",
-                cmd_done=f"{p} action done <事项ID>",
-                ex_add=f'{p} action add 提交作业二 --due "2026-09-12 23:59" --type exam',
+                cmd_done=f"{p} action done <{item}>",
+                ex_add=f'{p} action add … --due "2026-09-12 23:59"',
             ),
-            # -- subscription -------------------------------------------------------
             self.t(
                 "chat.manual_bot",
                 prefix=prefix,
@@ -1457,7 +1456,6 @@ be one of ad|info|important|urgent. The original mail body is never edited.
                 cmd_status=f"{p} status",
                 cmd_example=f"{p} example",
             ),
-            # -- system -----------------------------------------------------------
             self.t(
                 "chat.manual_system",
                 prefix=prefix,

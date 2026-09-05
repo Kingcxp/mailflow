@@ -343,9 +343,6 @@ class _OneBotEventBridge:
         self._bot_url = bot_url
         self._onebot_url = onebot_url
         self._token = token
-        # the bot's own QQ number, learned from event self_id — forward
-        # nodes must carry the BOT identity, not the command sender's
-        self._bot_uin = ""
         self._server: asyncio.AbstractServer | None = None
 
     @property
@@ -476,9 +473,6 @@ class _OneBotEventBridge:
         return "".join(parts)
 
     async def _dispatch(self, event: dict[str, Any]) -> None:
-        self_id = str(event.get("self_id") or "")
-        if self_id.isdigit():
-            self._bot_uin = self_id
         message_type = event.get("message_type")
         if message_type not in ("group", "private"):
             return
@@ -610,7 +604,12 @@ class _OneBotEventBridge:
                         "name": node_name,
                         # the BOT's qq — using the sender's would forge the
                         # user's identity inside the forwarded bubbles
-                        "uin": self._bot_uin or "10000",
+                        # QQ resolves a real user's uin to their ACTUAL
+                        # nickname, ignoring `name` — a fake node must use
+                        # an unmatchable placeholder uin (10000, the classic
+                        # OneBot choice) for the custom name to stick;
+                        # the bot's real qq shows its own nickname instead
+                        "uin": "10000",
                         "content": [{"type": "text", "data": {"text": text}}],
                     },
                 }

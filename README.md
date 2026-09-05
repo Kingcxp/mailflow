@@ -81,13 +81,72 @@ notifiers, storage — installed from a plugin marketplace.
 
 ## Install
 
-Requires **Python ≥ 3.11** and [uv](https://docs.astral.sh/uv/).
+### 1. Prerequisites
+
+| Requirement | Why | Check |
+|---|---|---|
+| **Python ≥ 3.11** | runs MailFlow | `python --version` |
+| **[uv](https://docs.astral.sh/uv/) ≥ 0.5** | workspace/dependency manager | `uv --version` |
+| **git** | clone the repo | `git --version` |
+
+Optional, per feature:
+
+| Feature | Extra requirement |
+|---|---|
+| TUI in a modern terminal | Windows Terminal (Windows), or any ANSI terminal |
+| QQ bot (NapCat) | see *Chat-platform prerequisites* below |
+| WeChat bot (WeChaty) | Node.js ≥ 18 and a Go toolchain (the provisioner reports the exact apt command if missing) |
+| Building frozen executables | included in the dev group (Nuitka); a C compiler is auto-provisioned |
+
+### 2. Install uv
+
+**Windows** (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# or: winget install --id=astral-sh.uv -e
+```
+
+**macOS / Linux**:
 
 ```bash
-git clone https://github.com/mailflow/mailflow.git
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# or: brew install uv
+```
+
+### 3. Get MailFlow and sync
+
+```bash
+git clone https://github.com/Kingcxp/mailflow.git
 cd mailflow
 uv sync --all-packages --group dev
 ```
+
+`uv` creates the virtualenv, installs every workspace package (editable) and
+the dev group (pytest, ruff, mypy, pyright, nuitka). Python itself is
+provisioned automatically by uv if 3.11+ is not present.
+
+### Chat-platform prerequisites (QQ bot via NapCat)
+
+The NapCat gateway runs the full QQ desktop client, which needs extra system
+libraries on Linux. Windows and macOS need nothing beyond MailFlow itself —
+on Windows the bot needs a locally installed QQ desktop client to inject into.
+
+**Linux (Debian/Ubuntu)**:
+
+```bash
+sudo apt-get install -y xvfb xauth fuse libnss3 libgbm1 libasound2 \
+  libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
+  libxcomposite1 libxdamage1 libxrandr2 libxfixes3 libgtk-3-0 \
+  libpango-1.0-0 libcairo2
+```
+
+(MailFlow verifies these at deploy time and prints this exact command if any
+are missing.)
+
+**macOS**: NapCat's Linux AppImage deployment is not supported; use the
+Docker-based setups from the [NapCat project](https://github.com/NapNeko) if
+you need QQ on macOS.
 
 ## Quick start
 
