@@ -961,8 +961,9 @@ class TestMailWipe:
 
 @pytest.mark.asyncio
 async def test_chat_help_is_sectioned() -> None:
-    """help returns one chunk per section: long help must survive
-    platforms that cap single-message length."""
+    """help is a per-topic manual: every chunk opens with a '【…】' title
+    (lifted into the forward-node name) and explains commands with usage,
+    meaning and an example."""
     from mailflow.config import MailFlowConfig
     from mailflow.i18n import I18n
     from mailflow.service import MailFlowService
@@ -973,14 +974,17 @@ async def test_chat_help_is_sectioned() -> None:
     service.config = cfg
     service.i18n = I18n()
     chunks = service._chat_help("/")  # pyright: ignore[reportPrivateUsage]
-    assert len(chunks) == 6  # title + 5 sections
+    assert len(chunks) == 6
+    for chunk in chunks:
+        assert chunk.startswith("【MailFlow ·"), chunk[:30]
+        assert "\n" in chunk  # every section has body beyond the title
     joined = "\n".join(chunks)
     for expected in (
         "mail list",
         "reply confirm",
         "action add",
         "mailflow subscribe",
-        "plugin list",
+        "token",
     ):
         assert expected in joined, expected
 
@@ -998,9 +1002,12 @@ async def test_chat_example_returns_chunks() -> None:
     service.config = cfg
     service.i18n = I18n()
     chunks = await service._chat_example("napcat", "n1")  # pyright: ignore[reportPrivateUsage]
-    assert isinstance(chunks, list) and len(chunks) == 3
+    assert isinstance(chunks, list) and len(chunks) == 4
+    # every node carries a lifted '【…】' title (bot identity in forward)
+    for chunk in chunks:
+        assert chunk.startswith("【MailFlow ·"), chunk[:30]
     other = await service._chat_example("console", "n1")  # pyright: ignore[reportPrivateUsage]
-    assert isinstance(other, list) and len(other) == 5
+    assert isinstance(other, list) and len(other) == 6
 
 
 @pytest.mark.asyncio

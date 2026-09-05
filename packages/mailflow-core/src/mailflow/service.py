@@ -1397,66 +1397,76 @@ be one of ad|info|important|urgent. The original mail body is never edited.
         return str(rendered)
 
     def _chat_help(self, prefix: str) -> list[str]:
-        """Section-grouped help: one message chunk per group so long help
-        survives platforms that cap single-message length."""
-        sections: list[tuple[str, list[str]]] = [
-            (
-                "mail",
-                [
-                    "mail list [--query q] [page]",
-                    "mail show <id>",
-                    "mail urgency <id> <info|important|critical>",
-                    "mail delete <id>",
-                    f"feedback <id> <reason>  ({prefix}mailflow feedback …)",
-                ],
+        """The chat user manual: one forward-node-sized section per topic,
+        each opening with a '【MailFlow · topic】' title line (the OneBot
+        bridge lifts it into the node name), followed by per-command
+        usage + explanation + example — the reader should understand each
+        command without external docs, like a good CLI manual page."""
+        p = f"{prefix}mailflow"
+        sections: list[str] = [
+            # -- getting started ------------------------------------------------
+            self.t(
+                "chat.manual_intro",
+                prefix=prefix,
+                cmd_help=f"{p} help",
+                cmd_status=f"{p} status",
+                cmd_example=f"{p} example",
             ),
-            (
-                "reply",
-                [
-                    "reply create <mail_id>",
-                    "reply compose <mail_id> <lang>",
-                    "reply show <draft_id>",
-                    "reply edit <draft_id> <lang> <markup>",
-                    "reply prepare <draft_id>  -> token",
-                    "reply confirm <draft_id> <token>",
-                    "reply cancel <draft_id>",
-                ],
+            # -- reading and triaging mail --------------------------------------
+            self.t(
+                "chat.manual_mail",
+                prefix=prefix,
+                cmd_list=f"{p} mail list",
+                cmd_show=f"{p} mail show <邮件ID>",
+                cmd_urgency=f"{p} mail urgency <邮件ID> <info|important|critical>",
+                cmd_delete=f"{p} mail delete <邮件ID>",
+                cmd_feedback=f"{p} feedback <邮件ID> <意见>",
+                ex_show=f"{p} mail show a1b2c3",
+                ex_urgency=f"{p} mail urgency a1b2c3 critical",
+                ex_feedback=f"{p} feedback a1b2c3 这类促销邮件以后不用提醒",
             ),
-            (
-                "action",
-                [
-                    "action list",
-                    "action add <summary> --due <time> [--type t] [--notes n]",
-                    "action done <item_id>",
-                    "action drop <item_id>",
-                ],
+            # -- replying --------------------------------------------------------
+            self.t(
+                "chat.manual_reply",
+                prefix=prefix,
+                cmd_create=f"{p} reply create <邮件ID>",
+                cmd_prepare=f"{p} reply prepare <草稿ID>",
+                cmd_confirm=f"{p} reply confirm <草稿ID> <token>",
+                cmd_cancel=f"{p} reply cancel <草稿ID>",
+                ex_flow=(
+                    f"{p} reply create a1b2c3\n"
+                    f"{p} reply prepare d4e5f6\n"
+                    f"{p} reply confirm d4e5f6 123456"
+                ),
             ),
-            (
-                "bot",
-                [
-                    "subscribe / unsubscribe  (this chat)",
-                    "status",
-                    "example  (notification samples)",
-                ],
+            # -- schedule ---------------------------------------------------------
+            self.t(
+                "chat.manual_action",
+                prefix=prefix,
+                cmd_add=f'{p} action add <事项> --due "YYYY-MM-DD HH:MM" [--type 类型] [--notes 备注]',
+                cmd_list=f"{p} action list",
+                cmd_done=f"{p} action done <事项ID>",
+                ex_add=f'{p} action add 提交作业二 --due "2026-09-12 23:59" --type exam',
             ),
-            (
-                "system",
-                [
-                    "runtime status",
-                    "account list",
-                    "llm status",
-                    "lang get | lang set <code>",
-                    "config get <key>",
-                    "plugin list",
-                    "trash list | trash restore <id>",
-                ],
+            # -- subscription -------------------------------------------------------
+            self.t(
+                "chat.manual_bot",
+                prefix=prefix,
+                cmd_sub=f"{p} subscribe",
+                cmd_unsub=f"{p} unsubscribe",
+                cmd_status=f"{p} status",
+                cmd_example=f"{p} example",
+            ),
+            # -- system -----------------------------------------------------------
+            self.t(
+                "chat.manual_system",
+                prefix=prefix,
+                cmd_lang=f"{p} lang set zh-CN",
+                cmd_runtime=f"{p} runtime status",
+                cmd_trash=f"{p} trash list",
             ),
         ]
-        chunks = [self.t("chat.help_title", prefix=prefix)]
-        for name, lines in sections:
-            body = "\n".join(f"  {prefix}mailflow {line}" for line in lines)
-            chunks.append(self.t(f"chat.help_{name}", lines=body))
-        return chunks
+        return sections
 
     async def _chat_example(self, provider: str, instance_id: str) -> str | list[str]:
         """One sample notification per type so users see what they will
@@ -1464,6 +1474,10 @@ be one of ad|info|important|urgent. The original mail body is never edited.
         into a forward node list when it can."""
         prefix = self.command_prefix()
         sections = [
+            self.t(
+                "chat.example_intro",
+                prefix=prefix,
+            ),
             self.t(
                 "chat.example_mail",
                 urgency=self.t("urgency.important"),
@@ -1486,7 +1500,14 @@ be one of ad|info|important|urgent. The original mail body is never edited.
             self.t("chat.example_footer", prefix=prefix),
         ]
         if provider in ("napcat", "onebot"):
-            return ["\n".join(sections[:2]), sections[2], "\n".join(sections[3:])]
+            # keep each forward node one topic: intro+important mail,
+            # ad, reminder, digest — titles become node names
+            return [
+                "\n".join(sections[:2]),
+                sections[2],
+                sections[3],
+                sections[4],
+            ]
         return sections
 
     async def _sync_subscription_targets(

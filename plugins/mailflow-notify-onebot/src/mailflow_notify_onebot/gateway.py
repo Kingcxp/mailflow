@@ -343,6 +343,9 @@ class _OneBotEventBridge:
         self._bot_url = bot_url
         self._onebot_url = onebot_url
         self._token = token
+        # the bot's own QQ number, learned from event self_id — forward
+        # nodes must carry the BOT identity, not the command sender's
+        self._bot_uin = ""
         self._server: asyncio.AbstractServer | None = None
 
     @property
@@ -473,6 +476,9 @@ class _OneBotEventBridge:
         return "".join(parts)
 
     async def _dispatch(self, event: dict[str, Any]) -> None:
+        self_id = str(event.get("self_id") or "")
+        if self_id.isdigit():
+            self._bot_uin = self_id
         message_type = event.get("message_type")
         if message_type not in ("group", "private"):
             return
@@ -586,17 +592,29 @@ class _OneBotEventBridge:
             if message_type == "group"
             else f"{self._onebot_url}/send_private_forward_msg"
         )
-        nodes = [
-            {
-                "type": "node",
-                "data": {
-                    "name": "MailFlow",
-                    "uin": str(user_id),
-                    "content": [{"type": "text", "data": {"text": chunk}}],
-                },
-            }
-            for chunk in chunks
-        ]
+        nodes: list[dict[str, Any]] = []
+        for chunk in chunks:
+            node_title, _, node_text = chunk.partition("\n")
+            # a "【…】" first line is the node title; plain chunks keep the
+            # generic bot name
+            if node_title.startswith("【") and "】" in node_title:
+                node_name = node_title.strip("【】")
+                text = node_text.lstrip("\n")
+            else:
+                node_name = "MailFlow"
+                text = chunk
+            nodes.append(
+                {
+                    "type": "node",
+                    "data": {
+                        "name": node_name,
+                        # the BOT's qq — using the sender's would forge the
+                        # user's identity inside the forwarded bubbles
+                        "uin": self._bot_uin or "10000",
+                        "content": [{"type": "text", "data": {"text": text}}],
+                    },
+                }
+            )
         payload: dict[str, Any] = (
             {"group_id": int(chat_id), "messages": nodes}
             if message_type == "group"

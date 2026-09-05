@@ -168,6 +168,8 @@ async def test_full_chat_command_chain_replies() -> None:
                 "user_id": 404291187,
                 "group_id": 565424593,
                 "raw_message": "#mailflow help",
+                # OneBot events carry the BOT's qq in self_id
+                "self_id": 3174143625,
             },
         )
         await asyncio.sleep(0.3)
@@ -182,7 +184,12 @@ async def test_full_chat_command_chain_replies() -> None:
         assert len(nodes) == 6  # title + 5 sections
         parts: list[str] = []
         for node in nodes:
-            content: list[dict[str, Any]] = list(node["data"]["content"])
+            node_data: dict[str, Any] = dict(node["data"])
+            # forward nodes must carry the BOT identity (self_id), never
+            # the command sender's qq, and a per-topic lifted name
+            assert str(node_data["uin"]) == "3174143625", node_data["uin"]
+            assert str(node_data["name"]).startswith("MailFlow"), node_data["name"]
+            content: list[dict[str, Any]] = list(node_data["content"])
             for seg in content:
                 text_data: dict[str, Any] = dict(seg["data"])
                 parts.append(str(text_data["text"]))
