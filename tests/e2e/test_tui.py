@@ -17,6 +17,7 @@ from mailflow.service import start_service
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import FakeMailSource, make_mail
 from mailflow_tui.app import MailFlowApp
+from textual.css.query import NoMatches
 from textual.widgets import (
     Button,
     DataTable,
