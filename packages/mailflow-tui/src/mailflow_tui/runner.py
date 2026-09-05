@@ -14,6 +14,7 @@ Three launch shapes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import queue as queue_module
 import secrets
@@ -126,7 +127,6 @@ async def _run_local(config_path: str | None, *, with_server: bool) -> None:
     CommandRouter(service)
     server = None
     server_task = None
-    stopped = False
     try:
         if with_server:
             server, server_task = await _start_embedded_server(service, config, log_queue)
@@ -141,9 +141,12 @@ async def _run_local(config_path: str | None, *, with_server: bool) -> None:
             if server_task is not None:
                 await asyncio.gather(server_task, return_exceptions=True)
             await service.stop()
-            stopped = True
-    except Exception:
-        if not stopped:
+    except BaseException:
+        # cancel/ctrl+c/SIGHUP unwind: the finally above already ran, but
+        # if IT raised (loop already cancelling), make one last direct
+        # attempt to stop the service — a half-finished shutdown leaves
+        # NapCat/QQ processes holding the ports
+        with contextlib.suppress(Exception):
             await service.stop()
         raise
 
@@ -235,7 +238,30 @@ def run_tui(config_path: str | None, *, local: bool = False, remote_url: str | N
             return
         await _run_local(config_path, with_server=local)
 
-    asyncio.run(_run())
+    # SIGTERM (docker stop, systemd, kill) / SIGHUP (ssh drop, terminal
+    # close) must unwind through the normal path: asyncio.run cancels the
+    # main task, _run_local's finally then stops the service and kills the
+    # NapCat/QQ process tree. Without this the children survive the TUI
+    # and hold the ports until the next boot fails on them.
+    loop = asyncio.new_event_loop()
+
+    def _cancel_all(signum: int, _frame: Any) -> None:
+        for task in asyncio.all_tasks(loop):
+            task.cancel()
+
+    import signal as signal_mod
+
+    try:
+        signal_mod.signal(signal_mod.SIGTERM, _cancel_all)
+        if hasattr(signal_mod, "SIGHUP"):
+            # POSIX only; windows stubs lack the attribute entirely
+            signal_mod.signal(signal_mod.SIGHUP, _cancel_all)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue]
+    except (ValueError, OSError):
+        pass  # not the main thread / unsupported platform
+    try:
+        loop.run_until_complete(_run())
+    finally:
+        loop.close()
 
 
 async def _run_remote_with_override(remote_url: str) -> None:

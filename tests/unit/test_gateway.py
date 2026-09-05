@@ -349,3 +349,36 @@ async def test_notifier_pane_merge_gateway_error_shows_reconfig() -> None:
     assert "is not installed" in results["qq-1"]
     # non-gateway notifiers are untouched
     assert results["plain-2"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_app_shutdown_persists_running_for_next_boot() -> None:
+    """The TUI-exit path (persist_running=True) kills the children but
+    keeps the persisted RUNNING status: the resume filter (running|error)
+    must find the instance on the next boot and restart it. The old
+    behavior wrote 'stopped' here, which read as a USER stop — after a
+    normal TUI exit the gateways never came back (no logs, no retries)."""
+    provisioner = FakeProvisioner()
+    manager, storage = _manager(provisioner)
+    await manager.provision("fake-gw", "gw-1", {"token": "x"})
+    assert "running" in storage.preferences["gateway.instance.fake-gw.gw-1"]
+
+    await manager.stop(persist_running=True)
+
+    assert provisioner.stopped == ["gw-1"]  # the child WAS killed
+    persisted = storage.preferences["gateway.instance.fake-gw.gw-1"]
+    assert '"running"' in persisted, persisted  # and still marked running
+
+
+@pytest.mark.asyncio
+async def test_explicit_shutdown_marks_stopped() -> None:
+    """A user-stop via the Bots tab keeps the old semantics: no autostart
+    on the next boot."""
+    provisioner = FakeProvisioner()
+    manager, storage = _manager(provisioner)
+    await manager.provision("fake-gw", "gw-1", {})
+
+    await manager.shutdown_instance("fake-gw", "gw-1")
+
+    persisted = storage.preferences["gateway.instance.fake-gw.gw-1"]
+    assert '"stopped"' in persisted, persisted

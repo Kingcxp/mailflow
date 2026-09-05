@@ -129,6 +129,25 @@ def default_text(spec: OptionSpec) -> str:
     return escape(text)
 
 
+def _unwrap_listish(text: str) -> str:
+    """Undo the damage of the old list-editor bug: values saved as
+    "['404291187']" (a stringified list rendered as one item) come back
+    as the bare id so the editor never nests another layer."""
+    stripped = text.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        import ast as _ast
+
+        try:
+            parsed = _ast.literal_eval(stripped)
+        except (ValueError, SyntaxError):
+            parsed = None
+        if isinstance(parsed, list):
+            items: list[Any] = [v for v in parsed]  # pyright: ignore[reportUnknownVariableType]
+            inner = [str(v).strip() for v in items if str(v).strip()]
+            return "\n".join(inner)
+    return stripped
+
+
 class ListEditScreen(ModalScreen[str | None]):
     """Edit a list or mapping value as text: one entry per line."""
 
@@ -573,6 +592,13 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         raw: Any = fallback if not extra.into_options else pool.get(extra.field_id, fallback)
         if raw is None or raw == "":
             return extra.default
+        if extra.kind == "lines" and isinstance(raw, (list, tuple)):
+            # list fields flow back as a real list (admins/targets); the
+            # lines editor consumes one string — join without str()-wrapping
+            # (str(['a']) rendered the whole list as ONE line item)
+            raw_items: list[Any] = [x for x in raw]  # pyright: ignore[reportUnknownVariableType]
+            cleaned = [str(item).strip() for item in raw_items if str(item).strip()]
+            return "\n".join(cleaned)
         return str(raw)
 
     # -- composition -----------------------------------------------------------
@@ -686,14 +712,11 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 from mailflow_tui.list_editor import ListEditor
 
                 raw_lines = self._extra_value(extra)
-                if isinstance(raw_lines, (list, tuple)):
-                    # admins/targets persist as a real list; str()-ing it
-                    # wrapped one more [] around the value on every edit
-                    current_lines = [str(ln).strip() for ln in raw_lines if str(ln).strip()]
-                else:
-                    current_lines = [
-                        ln.strip() for ln in str(raw_lines or "").splitlines() if ln.strip()
-                    ]
+                current_lines = [
+                    _unwrap_listish(ln.strip())
+                    for ln in str(raw_lines or "").splitlines()
+                    if ln.strip()
+                ]
                 yield ListEditor(
                     current_lines,
                     placeholder=str(extra.default or self._t("tui.list_editor_placeholder")),

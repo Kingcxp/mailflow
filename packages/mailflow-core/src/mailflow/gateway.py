@@ -199,8 +199,16 @@ class GatewayManager:
                     found.append(instance)
         return found
 
-    async def stop(self) -> None:
-        """Terminate every supervised gateway and cancel supervisors."""
+    async def stop(self, *, persist_running: bool = False) -> None:
+        """Terminate every supervised gateway and cancel supervisors.
+
+        ``persist_running`` is the APP-SHUTDOWN path: the child processes
+        are killed but the persisted status stays RUNNING, so the next
+        boot's autostart resumes them. Writing 'stopped' here (the old
+        behavior) made the resume filter skip every instance — after a
+        normal TUI exit the gateways never came back, with no start logs
+        and no supervision. Only an explicit per-instance shutdown (the
+        Bots tab / guide) marks a user stop."""
         self._stop_event.set()
         tasks = list(self._supervise_tasks.values())
         for task in tasks:
@@ -219,7 +227,8 @@ class GatewayManager:
                         instance.instance_id,
                         exc,
                     )
-                instance.status = "stopped"
+                if not persist_running:
+                    instance.status = "stopped"
                 await self._save_state(instance)
 
     async def _ensure_side_channels(self, instance: GatewayInstance) -> None:

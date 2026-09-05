@@ -260,7 +260,10 @@ class MailFlowService:
         self._stopped_event.set()
         if self._update_task is not None:
             self._update_task.cancel()
-        await self.gateways.stop()
+        # app shutdown: kill the children but KEEP the persisted running
+        # status so the next boot's autostart resumes them (writing
+        # 'stopped' here made the resume filter skip every gateway)
+        await self.gateways.stop(persist_running=True)
         if getattr(self, "bot_server", None) is not None:
             await self.bot_server.stop()
         await self.runtime.stop()
