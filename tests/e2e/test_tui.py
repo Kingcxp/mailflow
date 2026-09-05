@@ -359,7 +359,14 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
 
             market_pane = app.query_one(MarketPane)
             await market_pane.refresh_market()
+            # the fetch runs in a worker thread: on slow CI runners the
+            # table is still empty when refresh_market returns — poll
+            # until the rows land (bounded)
             market_table = cast(DataTable[Any], app.query_one("#market-table", DataTable))
+            for _ in range(100):
+                if market_table.row_count >= 1:
+                    break
+                await pilot.pause(0.05)
             assert market_table.row_count >= 1
             market_rows = " ".join(
                 " ".join(str(cell) for cell in market_table.get_row_at(i))
