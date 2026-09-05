@@ -642,6 +642,55 @@ class _OneBotEventBridge:
         return False
 
 
+def _proc_socket_pids(port: int) -> set[int]:
+    """PIDs listening on ``port`` via /proc — no external tools needed.
+
+    Parses /proc/net/tcp (and tcp6) for the LISTEN socket's inode, then
+    matches every process's fd table against it. Works on any Linux
+    with /proc mounted (minimal containers included); empty on
+    non-Linux or when the listener belongs to another namespace."""
+    inodes: set[str] = set()
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            lines = Path(table).read_text("utf-8").splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            cols = line.split()
+            # sl local_address state ... inode
+            if len(cols) < 10 or cols[3] != "0A":  # 0A = TCP_LISTEN
+                continue
+            local = cols[1]
+            if local.rsplit(":", 1)[-1].upper() == f"{port:04X}":
+                inodes.add(cols[9])
+    if not inodes:
+        return set()
+    pids: set[int] = set()
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return set()
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        fddir = f"/proc/{entry}/fd"
+        try:
+            fds = os.listdir(fddir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(f"{fddir}/{fd}")
+            except OSError:
+                continue
+            # socket:[inode]
+            if target.startswith("socket:[") and target[8:-1] in inodes:
+                with contextlib.suppress(ValueError):
+                    pids.add(int(entry))
+                break
+    return pids
+
+
 class NapCatProvisioner:
     """OneBot v11 gateway backed by a local NapCat process."""
 
@@ -1671,7 +1720,9 @@ class NapCatProvisioner:
                         except ValueError:
                             continue
             else:
-                # fuser prints the PIDs of the socket owner directly
+                # fuser prints the PIDs of the socket owner directly —
+                # but minimal containers ship without psmisc; fall back
+                # to a pure /proc scan before giving up
                 fuser = subprocess.run(
                     ["fuser", "-n", "tcp", str(port)],
                     capture_output=True,
@@ -1681,9 +1732,16 @@ class NapCatProvisioner:
                 pids.update(
                     int(tok) for tok in fuser.stdout.split() + fuser.stderr.split() if tok.isdigit()
                 )
+                if not pids:
+                    pids = _proc_socket_pids(port)
         except (OSError, subprocess.SubprocessError) as exc:
             logger.warning("napcat: port %d owner lookup failed: %s", port, exc)
+            pids = _proc_socket_pids(port)
         return pids
+
+    async def _kill_pids_async(self, pids: set[int], port: int) -> None:
+        await asyncio.to_thread(self._kill_pids, pids, port)
+        await asyncio.sleep(1.0)  # let the kernel release the socket
 
     def _kill_pids(self, pids: set[int], port: int) -> None:
         for pid in pids:
@@ -1708,6 +1766,21 @@ class NapCatProvisioner:
         # terminate can block up to 5s waiting for the process tree; run it
         # off the event loop so the TUI never freezes on cancel
         await asyncio.to_thread(self._terminate, instance_id)
+        # belt and braces: if the instance's deterministic port is STILL
+        # held after the managed-tree kill (a reused-orphan boot has no
+        # Popen record, or the tree kill missed an adoptee), clear the
+        # port owner — a surviving NapCat answers get_login_info with the
+        # old session and produces the phantom-logged-in state
+        port = self._port_for(instance_id)
+        pids = await asyncio.to_thread(self._find_port_pids, port)
+        if pids:
+            logger.warning(
+                "napcat %s: port %d still held after stop (pids %s) — killing",
+                instance_id,
+                port,
+                sorted(pids),
+            )
+            await self._kill_pids_async(pids, port)
 
     async def status(self, instance_id: str) -> GatewayInstance:
         endpoint = self._endpoint(instance_id)
