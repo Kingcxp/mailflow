@@ -165,7 +165,7 @@ async def set_select_value(pilot: Any, select: Any, value: str) -> None:
     """Assign a Select value, retrying once around the Textual render race
     where a programmatic assignment can hit the widget before its internal
     label node exists (intermittent '#label' NoMatches on Python 3.12)."""
-    from textual.css.query import QueryError
+    from textual.css.query import NoMatches, QueryError
 
     for attempt in range(2):
         try:
@@ -340,8 +340,14 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             filtered: set[str] = set()
             for _ in range(120):
                 # re-query every iteration: a late remount replaces the pane
-                # and its input, detaching the previously captured widget
-                search = app.query_one("#settings-search", Input)
+                # and its input, detaching the previously captured widget.
+                # The settings pane itself may not be mounted yet on a slow
+                # runner — skip this tick until it is.
+                try:
+                    search = app.query_one("#settings-search", Input)
+                except NoMatches:
+                    await pilot.pause(0.05)
+                    continue
                 if search.value != "reminder_hour":
                     search.value = "reminder_hour"
                 filtered = {card.spec.key for card in app.query(OptionCard)}
