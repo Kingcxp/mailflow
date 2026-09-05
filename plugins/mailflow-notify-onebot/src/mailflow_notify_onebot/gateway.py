@@ -85,6 +85,56 @@ def _available_memory_mb() -> float | None:
     return None
 
 
+# A QQ/Electron instance growing past this RSS (MB) is leaking: V8 is
+# capped at 1024 MB via --max-old-space-size, so native/Renderer growth
+# beyond ~2.5x that is never coming back. Restart the gateway before the
+# host runs out of memory entirely (user report: weeks of uptime ended
+# in an OS reboot).
+_QQ_RSS_LIMIT_MB = 2560.0
+
+
+def _process_rss_mb(pid: int) -> float | None:
+    """Resident set size of ``pid`` in MB, or None when unavailable."""
+
+    if _IS_WINDOWS:
+        return None  # psutil-free: the Windows boot exe is a thin wrapper
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
+            if line.startswith("VmRSS:"):
+                return float(line.split()[1]) / 1024.0
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _tree_rss_mb(pid: int) -> float:
+    """Sum of RSS over ``pid`` and all its descendants (QQ under
+    xvfb-run is a multi-process tree; the main process alone hides the
+    renderer/gpu memory). Unknown members count as 0."""
+    total = 0.0
+    visited: set[int] = set()
+    stack = [pid]
+    while stack:
+        current = stack.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        rss = _process_rss_mb(current)
+        if rss is not None:
+            total += rss
+        try:
+            out = subprocess.run(
+                ["pgrep", "-P", str(current)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout
+            stack.extend(int(child) for child in out.split())
+        except (OSError, subprocess.SubprocessError, ValueError):
+            continue
+    return total
+
+
 def _path_exists(path: Path) -> bool:
     """Sync existence check (Path.exists in async functions trips ASYNC240)."""
     return path.exists()
@@ -1786,11 +1836,28 @@ class NapCatProvisioner:
         endpoint = self._endpoint(instance_id)
         running = await self._wait_http(instance_id, wait_seconds=2.0)
         if running:
+            extra: dict[str, Any] = {}
+            # memory watchdog: a leaking QQ/Electron tree eventually eats
+            # the host (weeks of uptime -> OS reboot). Flag the instance
+            # so the supervisor restarts it while MailFlow still runs.
+            process = self._processes.get(instance_id)
+            if process is not None and process.poll() is None:
+                rss = await asyncio.to_thread(_tree_rss_mb, process.pid)
+                if rss > _QQ_RSS_LIMIT_MB:
+                    extra["memory_exhausted"] = True
+                    logger.warning(
+                        "napcat %s: process tree RSS %.0f MB exceeds the "
+                        "%.0f MB leak limit — supervisor will restart it",
+                        instance_id,
+                        rss,
+                        _QQ_RSS_LIMIT_MB,
+                    )
             return GatewayInstance(
                 provider="napcat",
                 instance_id=instance_id,
                 status="running",
                 endpoint=endpoint,
+                extra=extra,
             )
         process = self._processes.get(instance_id)
         if process is not None and process.poll() is None:

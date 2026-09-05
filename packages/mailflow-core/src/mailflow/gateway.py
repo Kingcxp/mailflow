@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, cast
 
 from mailflow.config import MailFlowConfig
@@ -36,6 +37,21 @@ class GatewayNotInstalledError(RuntimeError):
 
 
 _STATUS_RUNNING = "running"
+
+# host-level OOM guard: when free memory falls under this, recycle the
+# gateway rather than let the kernel OOM-kill (or panic — a host rebooted
+# after weeks of uptime with a leaking QQ tree).
+_HOST_MIN_FREE_MB = 400.0
+
+
+def _host_free_mb() -> float | None:
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                return float(line.split()[1]) / 1024.0
+    except OSError:
+        return None
+    return None
 
 
 @dataclass
@@ -285,19 +301,57 @@ class GatewayManager:
                 self._instances[self._key(instance.provider, instance.instance_id)] = current
                 await self._save_state(current)
                 backoff = 5
-                # the gateway process is alive, but in-process side channels
-                # (e.g. the onebot event bridge that lives in *this* process,
-                # not in the gateway's) can still be missing after an app
-                # restart. Let the provisioner resurrect them.
-                await self._ensure_side_channels(instance)
-                # poll every 60s while healthy (the status probe hits the
-                # network; on low-RAM VMs the gateway itself is the
-                # resource hog, so keep supervision light)
-                try:
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=60)
-                except TimeoutError:
-                    continue
-                return
+                # memory watchdogs — recycle the gateway BEFORE the host
+                # runs out of memory (a leaking QQ/Electron tree ended in
+                # an OS reboot after weeks of uptime):
+                #   1. the provisioner flagged the tree past its RSS limit
+                #   2. the HOST's free memory fell under the OOM guard
+                # A graceful stop+start: the session survives (quick-login
+                # resumes from disk), the restart is logged.
+                recycle_reason = ""
+                if current.extra.get("memory_exhausted"):
+                    recycle_reason = "memory limit exceeded"
+                else:
+                    free = _host_free_mb()
+                    if free is not None and free < _HOST_MIN_FREE_MB:
+                        recycle_reason = (
+                            f"host free memory {free:.0f} MB below the "
+                            f"{_HOST_MIN_FREE_MB:.0f} MB guard"
+                        )
+                if recycle_reason:
+                    logger.warning(
+                        "gateway %s.%s recycled: %s",
+                        instance.provider,
+                        instance.instance_id,
+                        recycle_reason,
+                    )
+                    try:
+                        await self.provisioner(instance.provider).stop(instance.instance_id)
+                    except Exception as exc:
+                        logger.warning(
+                            "gateway %s.%s recycle-stop failed: %s",
+                            instance.provider,
+                            instance.instance_id,
+                            exc,
+                        )
+                    # mark as a SELF-recycle: the 'stopped' branch falls
+                    # through (not a user stop) and the restart path skips
+                    # the backoff sleep
+                    current = current.model_copy(update={"status": "stopped", "error": "recycled"})
+                    self._instances[self._key(instance.provider, instance.instance_id)] = current
+                else:
+                    # healthy: resurrect in-process side channels (e.g. the
+                    # onebot event bridge living in THIS process, missing
+                    # after an app restart)
+                    await self._ensure_side_channels(instance)
+                    # poll every 60s while healthy (the status probe hits the
+                    # network; on low-RAM VMs the gateway itself is the
+                    # resource hog, so keep supervision light)
+                    try:
+                        await asyncio.wait_for(self._stop_event.wait(), timeout=60)
+                    except TimeoutError:
+                        continue
+                    return
             if current.status == "starting":
                 # the child process is alive but its HTTP API is not up yet
                 # (NapCat: waiting for a QR scan). Restarting here KILLS the
@@ -317,7 +371,11 @@ class GatewayManager:
                     continue
                 return
             if current.status == "stopped":
-                if resume and first:
+                if current.error == "recycled":
+                    # our own recycle marked it: fall through to the
+                    # immediate restart below (NOT a user stop)
+                    pass
+                elif resume and first:
                     # startup resume: the gateway was running at shutdown
                     # but is not now — start it once
                     first = False
@@ -329,17 +387,20 @@ class GatewayManager:
                 else:
                     # user stopped it: stop supervising
                     return
-            # error/unknown: restart after backoff
+            # error/unknown: restart after backoff — a SELF-recycle is
+            # healthy hostkeeping and restarts immediately
+            recycled = current.error == "recycled"
             logger.warning(
-                "gateway %s.%s not running (%s); restarting in %ds",
+                "gateway %s.%s not running (%s); restarting%s",
                 instance.provider,
                 instance.instance_id,
                 current.error or current.status,
-                backoff,
+                " now" if recycled else f" in {backoff}s",
             )
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
-            backoff = min(backoff * 2, 60)
+            if not recycled:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+                backoff = min(backoff * 2, 60)
             try:
                 async with self._start_limiter:
                     started = await self.provisioner(instance.provider).start(

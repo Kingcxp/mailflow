@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
 
 import pytest
@@ -382,3 +383,58 @@ async def test_explicit_shutdown_marks_stopped() -> None:
 
     persisted = storage.preferences["gateway.instance.fake-gw.gw-1"]
     assert '"stopped"' in persisted, persisted
+
+
+@pytest.mark.asyncio
+async def test_memory_exhausted_gateway_is_recycled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A gateway whose provisioner flags extra.memory_exhausted gets
+    stopped and restarted immediately (no backoff sleep) — the graceful
+    recycle that keeps a leaking QQ tree from eating the host."""
+    import mailflow.gateway as gw_mod
+
+    monkeypatch.setattr(gw_mod, "_host_free_mb", lambda: 8000.0)  # host healthy
+
+    class Leaky(FakeProvisioner):
+        async def status(self, instance_id: str) -> GatewayInstance:
+            # after the recycle-stop, the fresh process reports starting
+            # (fresh RSS below the limit) — an always-exhausted fake would
+            # recycle forever without ever reaching start()
+            if provisioner.stopped:
+                return GatewayInstance(
+                    provider="fake-gw",
+                    instance_id=instance_id,
+                    status="starting",
+                    endpoint="http://127.0.0.1:9001",
+                )
+            return GatewayInstance(
+                provider="fake-gw",
+                instance_id=instance_id,
+                status="running",
+                endpoint="http://127.0.0.1:9001",
+                extra={"memory_exhausted": True},
+            )
+
+    provisioner = Leaky()
+    manager, _storage = _manager(provisioner)
+    await manager.provision("fake-gw", "gw-1", {})
+    await manager.stop()  # cancel the first supervisor
+
+    # fresh supervision picks up the flag and recycles within the poll
+    provisioner.started.clear()
+    provisioner.stopped.clear()  # count only the recycle cycle from here
+    manager._stop_event.clear()  # pyright: ignore[reportPrivateUsage]
+    instance = manager.instance("fake-gw", "gw-1")
+    assert instance is not None
+    task = asyncio.create_task(manager._supervise(instance, resume=False))  # pyright: ignore[reportPrivateUsage]
+    for _ in range(100):
+        if provisioner.stopped:
+            break
+        await asyncio.sleep(0.02)
+    for _ in range(100):
+        if provisioner.started:
+            break
+        await asyncio.sleep(0.02)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    assert provisioner.stopped.count("gw-1") >= 1, "leaky gateway was not recycled"
+    assert provisioner.started == ["gw-1"], "recycle did not restart the gateway"

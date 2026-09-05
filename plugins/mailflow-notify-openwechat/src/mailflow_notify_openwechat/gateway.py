@@ -128,12 +128,16 @@ class OpenWechatProvisioner(GatewayProvisioner):
         if progress is not None:
             progress.update(5.0, "building Go bridge (first run downloads Go modules)", "building")
         logger.info("openwechat %s: building bridge with %s", instance_id, go)
+        # build INSIDE the module dir: single-file mode ignores go.mod and
+        # fails with 'no required module provides package
+        # github.com/eatmoreapple/openwechat' (the user's deploy log)
         result = await asyncio.to_thread(
             subprocess.run,
-            [go, "build", "-o", str(bridge), str(_BRIDGE_GO)],
+            [go, "build", "-o", str(bridge.resolve()), "."],
             capture_output=True,
             text=True,
             timeout=300,
+            cwd=str(_BRIDGE_GO.parent.resolve()),
         )
         if result.returncode != 0:
             raise RuntimeError(
