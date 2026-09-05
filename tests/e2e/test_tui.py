@@ -165,7 +165,7 @@ async def set_select_value(pilot: Any, select: Any, value: str) -> None:
     """Assign a Select value, retrying once around the Textual render race
     where a programmatic assignment can hit the widget before its internal
     label node exists (intermittent '#label' NoMatches on Python 3.12)."""
-    from textual.css.query import NoMatches, QueryError
+    from textual.css.query import QueryError
 
     for attempt in range(2):
         try:
