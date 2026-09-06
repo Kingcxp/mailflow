@@ -142,14 +142,34 @@ func main() {
 		}
 		storage := openwechat.NewFileHotReloadStorage("openwechat-session.json")
 		defer storage.Close()
-		// PushLogin: first run scans the QR (UUID callback), later runs
-		// reuse the stored session (hot login, no re-scan)
-		if err := bot.PushLogin(storage); err != nil {
+		// Session file exists -> PushLogin (hot login, no re-scan).
+		// PushLogin UNCONDITIONALLY hot-reloads: on a first run the
+		// storage has nothing to read and fails with 'invalid storage'
+		// before any QR flow starts. No session -> plain Login, which
+		// runs the QR flow through the UUIDCallback above; the session
+		// file is written on success so later runs hot-login.
+		var loginErr error
+		if _, statErr := os.Stat("openwechat-session.json"); statErr == nil {
+			loginErr = bot.PushLogin(storage)
+			if loginErr != nil {
+				// a saved session can be stale/revoked: fall back to a
+				// fresh QR login instead of erroring out
+				loginErr = bot.Login()
+			}
+		} else {
+			loginErr = bot.Login()
+		}
+		if loginErr != nil {
 			st.mu.Lock()
 			st.status = "error"
-			st.errMsg = fmt.Sprintf("login failed: %v", err)
+			st.errMsg = fmt.Sprintf("login failed: %v", loginErr)
 			st.mu.Unlock()
 			return
+		}
+		// persist the session so later runs hot-login (PushLogin); the
+		// file's existence is also the branch condition above
+		if dumpErr := bot.DumpHotReloadStorage(); dumpErr != nil {
+			log.Printf("[openwechat-bridge] session dump failed: %v", dumpErr)
 		}
 		user, err := bot.GetCurrentUser()
 		name := "wechat"
