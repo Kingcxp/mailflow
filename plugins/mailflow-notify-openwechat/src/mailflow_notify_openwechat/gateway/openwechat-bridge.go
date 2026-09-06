@@ -167,10 +167,47 @@ func main() {
 			return
 		}
 		// persist the session so later runs hot-login (PushLogin); the
-		// file's existence is also the branch condition above
-		if dumpErr := bot.DumpHotReloadStorage(); dumpErr != nil {
+		// file's existence is also the branch condition above. A scan
+		// login never wires bot.hotReloadStorage, so DumpHotReloadStorage
+		// would refuse — dump straight to the storage writer instead.
+		if dumpErr := bot.DumpTo(storage); dumpErr != nil {
 			log.Printf("[openwechat-bridge] session dump failed: %v", dumpErr)
 		}
+		// aliveness supervisor: the web/desktop protocol is short-lived
+		// (10-minute dropouts, phone-logout kicks) — when the session
+		// dies, rebuild the bot and hot-login from the saved session;
+		// if that fails (revoked), a fresh QR login runs through the
+		// same UUIDCallback so the TUI shows a new QR.
+		go func() {
+			for {
+				time.Sleep(30 * time.Second)
+				if bot.Alive() {
+					continue
+				}
+				log.Printf("[openwechat-bridge] session died; hot-relogin")
+				st.mu.Lock()
+				st.status = "relogin"
+				st.errMsg = "session dropped — hot relogin"
+				st.mu.Unlock()
+				if err := bot.PushLogin(storage); err != nil {
+					log.Printf("[openwechat-bridge] hot relogin failed (%v); fresh QR", err)
+					if err := bot.Login(); err != nil {
+						st.mu.Lock()
+						st.status = "error"
+						st.errMsg = fmt.Sprintf("relogin failed: %v", err)
+						st.mu.Unlock()
+						return
+					}
+				}
+				if dumpErr := bot.DumpTo(storage); dumpErr != nil {
+					log.Printf("[openwechat-bridge] session dump failed: %v", dumpErr)
+				}
+				st.mu.Lock()
+				st.status = "logged_in"
+				st.errMsg = ""
+				st.mu.Unlock()
+			}
+		}()
 		user, err := bot.GetCurrentUser()
 		name := "wechat"
 		if err == nil && user != nil {
