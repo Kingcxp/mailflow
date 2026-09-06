@@ -138,6 +138,11 @@ class OpenWechatProvisioner(GatewayProvisioner):
             text=True,
             timeout=300,
             cwd=str(_BRIDGE_GO.parent.resolve()),
+            # CGO disabled: a cgo binary is dynamically linked against the
+            # BUILD host's glibc and fails with a confusing
+            # 'No such file or directory' (missing ELF interpreter) on
+            # any other machine. A pure-Go static binary runs everywhere.
+            env={**os.environ, "CGO_ENABLED": "0"},
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -186,10 +191,22 @@ class OpenWechatProvisioner(GatewayProvisioner):
                     stderr=subprocess.STDOUT,
                 )
 
+        # resolve: the bridge and log paths must survive the cwd they are
+        # launched with, and a clear ENOENT beats a confusing relative one
+        bridge = bridge.resolve()
+        log_file = log_file.resolve()
+        target = target.resolve()
         try:
             process = await asyncio.to_thread(_launch)
         except OSError as exc:
-            raise RuntimeError(f"failed to launch openwechat {instance_id}: {exc}") from exc
+            detail = f"failed to launch openwechat {instance_id}: {exc}"
+            if not bridge.exists():
+                detail += (
+                    "; the bridge binary is missing — the build likely ran "
+                    "with CGO enabled and this host cannot execute it; "
+                    "delete the gateway data dir and re-run the setup"
+                )
+            raise RuntimeError(detail) from exc
         self._processes = getattr(self, "_processes", {})
         self._processes[instance_id] = process
         endpoint = self._endpoint(instance_id)
