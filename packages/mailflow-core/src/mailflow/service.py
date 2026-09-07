@@ -1498,7 +1498,6 @@ be one of ad|info|important|urgent. The original mail body is never edited.
                 due="2026-09-10 09:00",
             ),
             self.t("chat.example_digest", count=3),
-            self.t("chat.example_footer", prefix=prefix),
         ]
         if provider in ("napcat", "onebot"):
             # keep each forward node one topic: intro+important mail,

@@ -1007,7 +1007,7 @@ async def test_chat_example_returns_chunks() -> None:
     for chunk in chunks:
         assert chunk.startswith("【MailFlow ·"), chunk[:30]
     other = await service._chat_example("console", "n1")  # pyright: ignore[reportPrivateUsage]
-    assert isinstance(other, list) and len(other) == 6
+    assert isinstance(other, list) and len(other) == 5
 
 
 @pytest.mark.asyncio

@@ -249,6 +249,13 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             await pilot.pause(0.05)
             assert table.row_count == 1
 
+            # search matches the BODY too: "before 17:00" only appears in
+            # the ID-card mail's body_text, never in its subject/summary
+            search.value = "before 17:00"
+            await pilot.pause(0.05)
+            assert table.row_count == 1
+            assert "student ID" in " ".join(str(cell) for cell in table.get_row_at(0))
+
             search.value = ""
             await pilot.pause(0.05)
             assert table.row_count == 3

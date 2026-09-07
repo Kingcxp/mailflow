@@ -523,10 +523,27 @@ class MailPane(Vertical):
         table.clear()
         self._ensure_columns()
         self._refresh_view_options()
-        self._records = await self._service.list_mails()
         search = self.query_one_optional("#mail-search", Input)
         query = search.value.strip().lower() if search is not None else ""
-        records = list(self._records)
+        if query and self._records:
+            # while searching, filter the in-memory cache synchronously —
+            # no storage round-trip on every keystroke (a full
+            # list_mails() deserializes every mail and stalls typing on
+            # big mailboxes). The re-read below runs in the background so
+            # new mail still lands without blocking the render.
+            records = list(self._records)
+            if not getattr(self, "_cache_reread_running", False):
+                self._cache_reread_running = True
+
+                async def _background_reread() -> None:
+                    try:
+                        self._records = await self._service.list_mails()
+                    finally:
+                        self._cache_reread_running = False
+
+                self.run_worker(_background_reread(), exclusive=True, group="mail-cache")
+        else:
+            records = self._records = await self._service.list_mails()
         if query:
             records = [record for record in records if self._matches(record, query)]
         urgency_filter = self._select_value("#mail-urgency-filter")
@@ -607,8 +624,15 @@ class MailPane(Vertical):
         )
 
     def _matches(self, record: MailRecord, query: str) -> bool:
-        haystack = f"{record.mail.subject} {record.mail.sender.address} {record.summary}".lower()
-        return query in haystack
+        """Search subject, sender, summary AND the body — users remember
+        phrases from the mail text, not just the subject line."""
+        if query in f"{record.mail.subject} {record.mail.sender.address} {record.summary}".lower():
+            return True
+        body = record.mail.body_text
+        if not body and record.mail.body_html:
+            body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", record.mail.body_html)
+            body = re.sub(r"<[^>]+>", " ", body)
+        return query in body.lower()
 
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "mail-search":

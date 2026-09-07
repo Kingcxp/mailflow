@@ -754,7 +754,6 @@
       "example_ad": "【MailFlow · Everything is delivered】\n[{urgency}] {subject}\nFrom: {sender}\nAds are delivered too — nothing is silently dropped; use feedback to teach the classifier.",
       "example_reminder": "【MailFlow · Schedule reminder】\nREMINDER — {summary}\nDue: {due}",
       "example_digest": "【MailFlow · Daily digest】\nDAILY DIGEST — {count} actions due today, sent once per morning.",
-      "example_footer": "Configure deliveries with {prefix}mailflow subscribe / minimum urgency in settings.",
       "example_subject": "Assignment 2 due next Friday",
       "example_summary": "The LLM extracted a deadline and created a schedule entry.",
       "example_ad_subject": "Weekly newsletter",
