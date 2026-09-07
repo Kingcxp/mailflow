@@ -168,15 +168,15 @@ async def set_select_value(pilot: Any, select: Any, value: str) -> None:
     label node exists (intermittent '#label' NoMatches on Python 3.12)."""
     from textual.css.query import QueryError
 
-    for attempt in range(2):
+    for attempt in range(10):
         try:
             select.value = value
             await pilot.pause(0.15)
             return
         except QueryError:
-            if attempt == 1:
+            if attempt == 9:
                 raise
-            await pilot.pause(0.3)
+            await pilot.pause(0.2)
 
 
 async def test_tui_compose_and_data(tmp_path: Path) -> None:
