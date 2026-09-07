@@ -532,10 +532,9 @@ class _OneBotEventBridge:
         if not text or user_id is None:
             return
         chat_id = str(group_id) if message_type == "group" else str(user_id)
-        # an INFO line per message event makes the chat-command chain
-        # observable: if this line is missing in the app log, NapCat never
-        # pushed the event (httpClients config issue, not a dispatch bug)
-        logger.info(
+        # demoted to DEBUG: bot_server logs the dispatched message at
+        # INFO — two near-identical lines per message was log noise
+        logger.debug(
             "onebot bridge %s: %s message from %s in %s: %.60r",
             self._instance_id,
             message_type,

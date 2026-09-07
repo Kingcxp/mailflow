@@ -781,7 +781,15 @@
     "reminder": {
       "reminder_log": "REMINDER [{kind}] due {range} — {summary} (mail {source})",
       "reminder_log_notes": "REMINDER [{kind}] due {range} — {summary} (mail {source}; notes: {notes})",
-      "digest_log": "DIGEST {date}: {today} due today, {soon} approaching in {days} days"
+      "digest_log": "DIGEST {date}: {today} due today, {soon} approaching in {days} days",
+      "reminder": {
+        "reminder_log": "Schedule reminder [{kind}] due {range} — {summary} (mail {source})",
+        "reminder_log_notes": "Schedule reminder [{kind}] due {range} — {summary} (mail {source}; notes: {notes})",
+        "digest_log": "Digest {date}: {today} due today, {soon} within {days} days",
+        "push": "【Schedule reminder】\"{summary}\" is due ({due})",
+        "digest_push": "【Daily schedule】{today} today / {total} upcoming:",
+        "digest_item": "{index}. {summary} ({due})"
+      }
     },
     "truncated_marker": "…(truncated)"
   },

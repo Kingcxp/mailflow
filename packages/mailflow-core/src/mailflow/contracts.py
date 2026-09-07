@@ -164,7 +164,13 @@ class LLMEnhancer(Protocol):
 
 
 class Notifier(Protocol):
-    """Delivers an already-computed mail analysis to a channel."""
+    """Delivers an already-computed mail analysis to a channel.
+
+    Chat-capable notifiers MAY additionally implement
+    ``async def push_text(self, text: str) -> None`` for plain-text
+    pushes (schedule reminders, daily digest); call it through
+    ``getattr(notifier, "push_text", None)`` — the runtime treats it as
+    optional and mail-only notifiers skip silently."""
 
     async def notify(self, record: MailRecord) -> None: ...
 

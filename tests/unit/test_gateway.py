@@ -316,7 +316,7 @@ async def test_notifier_pane_merge_gateway_error_shows_reconfig() -> None:
             return f"t({key})"
 
         def gateway_providers(self) -> list[str]:
-            return ["napcat", "wechaty"]
+            return ["napcat"]
 
         async def gateway_instances(self) -> list[Any]:
             return [

@@ -15,8 +15,8 @@ a platform in a form, and MailFlow installs, starts and configures the
 gateway — including driving the QR login inside the TUI.
 
 Status: implemented (round 1 + fixes). NapCat (via the `napcat` provisioner
-in mailflow-notify-onebot) and WeChaty (via the `wechaty` provisioner in
-mailflow-notify-wechaty) are auto-installed, launched and supervised by the
+in mailflow-notify-onebot) and WeChat (via the `openwechat` provisioner in
+mailflow-notify-openwechat) are auto-installed, launched and supervised by the
 GatewayManager. openwechat (via the `openwechat` provisioner in
 mailflow-notify-openwechat) is a third gateway: a Go bridge built on
 install that logs into WeChat with a plain QR scan — no platform token.
@@ -53,7 +53,7 @@ status.
      because both NapCat and WeChaty gateways are single-session processes.
 3. **Non-blocking**: installs and gateway startup run in workers; the TUI
    stays responsive. A failing gateway never blocks other platforms.
-4. **Marketplace stays open**: onebot/wechaty are bundled by default, but
+4. **Marketplace stays open**: onebot/openwechat are bundled by default, but
    other chat-platform plugins remain installable from the marketplace
    (a notifier plugin + a gateway provisioner plugin per platform).
 
@@ -65,12 +65,12 @@ TUI Bots tab (form: basics → Next → provider guide)
         ▼
 GatewayProvisioner registry (new component kind or notifier extension)
         ├── onebot  → NapCat provisioner (download/install/start/QR)
-        └── wechaty → WeChaty gateway provisioner (npm install/start/QR)
+        └── openwechat → OpenWeChat bridge provisioner (go build/start/QR)
         ▼
 managed child processes (subprocess, owned by the runtime)
         │  state persisted in storage preferences (installed, port, pid dir)
         ▼
-existing notifiers (mailflow-notify-onebot / mailflow-notify-wechaty)
+existing notifiers (mailflow-notify-onebot / mailflow-notify-openwechat)
 ```
 
 - `mailflow.gateway` is a new core module: a `GatewayProvisioner` protocol

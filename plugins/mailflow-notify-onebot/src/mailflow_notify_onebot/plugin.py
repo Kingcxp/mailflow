@@ -48,6 +48,40 @@ class OneBotNotifier:
                 continue
             self._targets.append((kind, identifier.strip()))
 
+    async def push_text(self, text: str) -> None:
+        """Push a plain-text message (schedule reminders, daily digest)
+        to every configured target through the OneBot HTTP API."""
+        if not self._url or not self._targets:
+            return
+        headers = {"Content-Type": "application/json"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for kind, identifier in self._targets:
+                endpoint = (
+                    f"{self._url}/send_private_msg"
+                    if kind == "user"
+                    else f"{self._url}/send_group_msg"
+                )
+                payload = (
+                    {"user_id": int(identifier), "message": text}
+                    if kind == "user"
+                    else {"group_id": int(identifier), "message": text}
+                )
+                try:
+                    resp = await client.post(endpoint, json=payload, headers=headers)
+                    if resp.status_code >= 400:
+                        logger.warning(
+                            "onebot notifier: text push to %s:%s rejected: HTTP %d",
+                            kind,
+                            identifier,
+                            resp.status_code,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "onebot notifier: text push to %s:%s failed: %s", kind, identifier, exc
+                    )
+
     async def notify(self, record: MailRecord) -> None:
         if not self._url or not self._targets:
             logger.warning(

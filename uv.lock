@@ -24,7 +24,6 @@ members = [
     "mailflow-notify-openclaw-weixin",
     "mailflow-notify-openwechat",
     "mailflow-notify-telegram",
-    "mailflow-notify-wechaty",
     "mailflow-server",
     "mailflow-storage-sqlite",
     "mailflow-testkit",
@@ -492,7 +491,6 @@ dependencies = [
     { name = "mailflow-notify-console" },
     { name = "mailflow-notify-onebot" },
     { name = "mailflow-notify-openclaw-weixin" },
-    { name = "mailflow-notify-wechaty" },
     { name = "mailflow-storage-sqlite" },
 ]
 
@@ -510,7 +508,6 @@ requires-dist = [
     { name = "mailflow-notify-console", editable = "plugins/mailflow-notify-console" },
     { name = "mailflow-notify-onebot", editable = "plugins/mailflow-notify-onebot" },
     { name = "mailflow-notify-openclaw-weixin", editable = "plugins/mailflow-notify-openclaw-weixin" },
-    { name = "mailflow-notify-wechaty", editable = "plugins/mailflow-notify-wechaty" },
     { name = "mailflow-storage-sqlite", editable = "plugins/mailflow-storage-sqlite" },
 ]
 
@@ -710,17 +707,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }]
-
-[[package]]
-name = "mailflow-notify-wechaty"
-version = "0.1.0"
-source = { editable = "plugins/mailflow-notify-wechaty" }
-dependencies = [
-    { name = "httpx" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
 
 [[package]]
 name = "mailflow-server"

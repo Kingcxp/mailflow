@@ -271,6 +271,30 @@ class MailFlowService:
         self._started = False
         logger.info("mailflow service stopped")
 
+    async def _rebuild_notifiers(self) -> None:
+        """Hot-swap only the notifier components (targets changed). Keeps
+        gateways, sources and the LLM pipeline untouched — a full
+        reload_runtime() here orphaned live gateway bridges and killed
+        all further chat command responses."""
+        registry = getattr(self, "registry", None)
+        if registry is None:
+            return  # minimal test harness: nothing to rebuild
+        notifiers: list[Notifier] = []
+        notifier_configs: list[NotifierConfig] = []
+        for notifier in self.config.notifiers:
+            if not notifier.enabled:
+                continue
+            if not registry.has(ComponentKind.NOTIFIER, notifier.provider):
+                logger.warning(
+                    "notifier %r: provider %r not loaded; skipping",
+                    notifier.notifier_id,
+                    notifier.provider,
+                )
+                continue
+            notifiers.append(registry.notifier_factory(notifier.provider)(notifier))
+            notifier_configs.append(notifier)
+        await self.runtime.reconfigure_notifiers(notifiers, notifier_configs)
+
     async def reload_runtime(self) -> None:
         """Rebuild sources, LLMs, pipeline and notifiers from the current
         config without restarting: plugin enable/disable, account edits and
@@ -1380,15 +1404,19 @@ be one of ad|info|important|urgent. The original mail body is never edited.
             await self._sync_subscription_targets(
                 provider, chat_id, chat_type=chat_type, subscribe=True
             )
-            # rebuild the notifiers so the new target takes effect
-            await self.reload_runtime()
+            # rebuild ONLY the notifier components: a full reload_runtime()
+            # would also replace GatewayManager — orphaning the running
+            # gateway processes, their bridges and supervisors, after which
+            # every further chat command went unanswered (the reported
+            # 'subscribe works but then nothing responds').
+            await self._rebuild_notifiers()
             return self.t("chat.subscribed") if ok else self.t("chat.already_subscribed")
         if sub == "unsubscribe":
             ok = await self.subscriptions.remove(provider, instance_id, chat_id)
             await self._sync_subscription_targets(
                 provider, chat_id, chat_type=chat_type, subscribe=False
             )
-            await self.reload_runtime()
+            await self._rebuild_notifiers()
             return self.t("chat.unsubscribed") if ok else self.t("chat.not_subscribed")
         if sub == "status":
             subs = await self.subscriptions.subscribers(provider, instance_id)

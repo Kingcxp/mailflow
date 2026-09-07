@@ -487,9 +487,9 @@ async def test_notifier_form_mounts_with_valid_provider_default(tmp_path: Path) 
             assert value in option_values, f"default {value!r} not in {option_values}"
             assert value == "onebot"
             # the form is actually interactive (switch provider rebuilds)
-            provider_select.value = "wechaty"
+            provider_select.value = "openwechat"
             await pilot.pause(0.2)
-            assert str(provider_select.value) == "wechaty"
+            assert str(provider_select.value) == "openwechat"
     finally:
         await service.stop()
 

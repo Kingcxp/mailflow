@@ -781,7 +781,15 @@
     "reminder": {
       "reminder_log": "日程提醒 [{kind}] 截止 {range} — {summary}（邮件 {source}）",
       "reminder_log_notes": "日程提醒 [{kind}] 截止 {range} — {summary}（邮件 {source}；备注：{notes}）",
-      "digest_log": "摘要 {date}：今日 {today} 项，{days} 天内还有 {soon} 项"
+      "digest_log": "摘要 {date}：今日 {today} 项，{days} 天内还有 {soon} 项",
+      "reminder": {
+        "reminder_log": "日程提醒 [{kind}] 截止 {range} — {summary}（邮件 {source}）",
+        "reminder_log_notes": "日程提醒 [{kind}] 截止 {range} — {summary}（邮件 {source}；备注：{notes}）",
+        "digest_log": "摘要 {date}：今日 {today} 项，{days} 天内还有 {soon} 项",
+        "push": "【日程提醒】「{summary}」即将到期（{due}）",
+        "digest_push": "【每日日程】今日 {today} 项 / 近期共 {total} 项：",
+        "digest_item": "{index}. {summary}（{due}）"
+      }
     },
     "truncated_marker": "…（已截断）"
   },

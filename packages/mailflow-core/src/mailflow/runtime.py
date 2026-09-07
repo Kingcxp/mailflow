@@ -508,12 +508,20 @@ class MailFlowRuntime:
             upcoming_count=len(soon) - today_count,
             items=soon,
         )
+        # push the digest straight to chat-capable notifiers: the events
+        # had NO subscriber in the default deployment, so the daily
+        # summary never reached QQ/WeChat users at all
+        await self._push_text(self._format_digest(today_key, soon))
         reminder_logger.warning(
-            self._rt("reminder.digest_log") or "DIGEST %s: %d due today, %d approaching in %d days",
-            today_key,
-            today_count,
-            len(soon) - today_count,
-            config.reminder_days_before,
+            self._rt(
+                "reminder.digest_log",
+                date=today_key,
+                today=today_count,
+                soon=len(soon) - today_count,
+                days=config.reminder_days_before,
+            )
+            or f"DIGEST {today_key}: {today_count} due today, "
+            f"{len(soon) - today_count} approaching in {config.reminder_days_before} days"
         )
         await self._storage.set_preference(f"digest.{today_key}", "fired")
         return 1
@@ -564,28 +572,82 @@ class MailFlowRuntime:
                 kind=kind,
                 scheduled=when,
             )
+            await self._push_text(
+                self._rt(
+                    "reminder.push",
+                    summary=item.summary,
+                    due=item.time_range,
+                )
+                or f"【日程提醒】「{item.summary}」即将到期（{item.time_range}）"
+            )
             source = record.record_id if record is not None else "user"
             if item.notes:
-                template = self._rt("reminder.reminder_log_notes")
-                reminder_logger.warning(
-                    template or "REMINDER [%s] due %s — %s (mail %s; notes: %s)",
-                    kind,
-                    item.time_range,
-                    item.summary,
-                    source,
-                    item.notes,
+                message = self._rt(
+                    "reminder.reminder_log_notes",
+                    kind=kind,
+                    range=item.time_range,
+                    summary=item.summary,
+                    source=source,
+                    notes=item.notes,
+                ) or (
+                    f"REMINDER [{kind}] due {item.time_range} — "
+                    f"{item.summary} (mail {source}; notes: {item.notes})"
                 )
             else:
-                template = self._rt("reminder.reminder_log")
-                reminder_logger.warning(
-                    template or "REMINDER [%s] due %s — %s (mail %s)",
-                    kind,
-                    item.time_range,
-                    item.summary,
-                    source,
+                message = (
+                    self._rt(
+                        "reminder.reminder_log",
+                        kind=kind,
+                        range=item.time_range,
+                        summary=item.summary,
+                        source=source,
+                    )
+                    or f"REMINDER [{kind}] due {item.time_range} — {item.summary} (mail {source})"
                 )
+            reminder_logger.warning(message)
             fired += 1
         return fired
+
+    async def _push_text(self, text: str) -> None:
+        """Deliver a plain-text push through every notifier that supports
+        chat pushes (onebot etc.); mail-only notifiers skip silently."""
+        for notifier in self._notifiers:
+            push = getattr(notifier, "push_text", None)
+            if push is None:
+                continue
+            try:
+                await push(text)
+            except Exception as exc:
+                logger.warning(
+                    "notifier %r text push failed: %s",
+                    getattr(notifier, "backend_id", type(notifier).__name__),
+                    exc,
+                )
+
+    def _format_digest(self, date_key: str, items: list[ActionItem]) -> str:
+        """Items FIRST, then the summary line — a chat message must open
+        with the content it refers to (the inverted order was reported
+        as confusing)."""
+        if self._i18n is not None:
+            lines = [
+                self._rt(
+                    "reminder.digest_item", index=index, summary=item.summary, due=item.time_range
+                )
+                or f"{index}. {item.summary}（{item.time_range}）"
+                for index, item in enumerate(items, start=1)
+            ]
+            header = self._rt(
+                "reminder.digest_push",
+                today=sum(1 for item in items if item.due_at.date().isoformat() == date_key),
+                total=len(items),
+            )
+            if header and lines:
+                return header + "\n" + "\n".join(lines)
+        lines_fallback = [
+            f"{index}. {item.summary}（{item.time_range}）"
+            for index, item in enumerate(items, start=1)
+        ]
+        return "\n".join(lines_fallback)
 
     def _rt(self, key: str, **params: Any) -> str:
         """Translate a user-visible runtime message via the service i18n;
@@ -597,6 +659,18 @@ class MailFlowRuntime:
             return str(translated)
         except Exception:
             return ""
+
+    async def reconfigure_notifiers(
+        self, notifiers: list[Notifier], notifier_configs: list[NotifierConfig]
+    ) -> None:
+        """Swap only the notifier list (subscription changes). Sources,
+        pipeline, workers and schedulers keep running — a full
+        reconfigure here stalled chat command replies for seconds and
+        dropped in-flight work."""
+        self._notifiers = list(notifiers)
+        self._notifier_configs = list(notifier_configs)
+        await self._events.emit(f"{_EVENT_PREFIX}runtime.reconfigured")
+        logger.info("runtime notifiers rebuilt: %d", len(notifiers))
 
     # -- status -----------------------------------------------------------------------
 

@@ -143,7 +143,15 @@ Calibration rules:
    must be genuinely optional/FYI (seminar you MAY attend, general notice).
    A reason like "action required" with urgency "info" is a contradiction:
    re-check and raise the urgency.
-8. Output ONLY a single JSON object, no prose, no markdown fences:
+8. Schedule/course CHANGES affecting the recipient's own commitments (a
+   class rescheduled, an exam moved, a venue/time change, a canceled or
+   added session for THEIR course) are "urgent" when the new date/time is
+   stated: the recipient must update their calendar even though no reply
+   is requested. Keywords like 调课/改期/延期/换教室/缓考/补考, "rescheduled",
+   "moved to", "postponed", "time change" next to a date are strong urgent
+   signals. Downgrade to important/info ONLY when the change clearly
+   concerns a session the recipient is not enrolled in.
+9. Output ONLY a single JSON object, no prose, no markdown fences:
 {
   "summary": "one or two sentence summary",
   "urgency": "ad|info|important|urgent",
