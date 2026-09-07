@@ -549,19 +549,27 @@ def _ascii_qr(image: str) -> str:
                 if channels == 3:
                     return (line[idx], line[idx + 1], line[idx + 2])
                 return (line[idx], line[idx + 1], line[idx + 2])
-            # sub-byte depth: pack bits per sample, then take the channel
+            # sub-byte depth: pack bits per sample, then take the channel.
+            # For palette images (color type 3) the sub-byte value is a
+            # palette INDEX, not a gray intensity — return it as the red
+            # component so the caller's palette remap fires (go-qrcode's
+            # 1-bit palette QR would otherwise read as all-white).
             bits_per_px = channels * bit_depth
-            if bits_per_px == 1:  # 1-bit gray
+            if bits_per_px == 1:
                 byte_i = x >> 3
-                v = 255 if (line[byte_i] & (0x80 >> (x & 7))) else 0
-                return (v, v, v)
-            if bits_per_px == 2:  # 2-bit gray
+                v = (line[byte_i] >> (7 - (x & 7))) & 1
+                return (255 * v, 255 * v, 255 * v) if color_type != 3 else (v, 0, 0)
+            if bits_per_px == 2:
                 shift = 6 - 2 * (x & 3)
-                v = ((line[x >> 2] >> shift) & 0x3) * 85
-                return (v, v, v)
-            if bits_per_px == 4:  # 4-bit gray
-                v = ((line[x >> 1] >> (4 * (1 - (x & 1)))) & 0xF) * 17
-                return (v, v, v)
+                v = (line[x >> 2] >> shift) & 0x3
+                if color_type == 3:
+                    return (v, 0, 0)
+                return (v * 85, v * 85, v * 85)
+            if bits_per_px == 4:
+                v = (line[x >> 1] >> (4 * (1 - (x & 1)))) & 0xF
+                if color_type == 3:
+                    return (v, 0, 0)
+                return (v * 17, v * 17, v * 17)
             if bits_per_px == 8 and channels == 1:  # 8-bit gray (depth 8 handled above)
                 v = line[x]
                 return (v, v, v)

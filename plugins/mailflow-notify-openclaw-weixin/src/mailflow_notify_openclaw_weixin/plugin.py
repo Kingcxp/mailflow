@@ -2,13 +2,25 @@
 
 Component id ``openclaw-weixin``. Talks to an OpenClaw gateway that has
 the official ``@tencent-weixin/openclaw-weixin`` channel plugin enabled.
-The gateway contract used here (``POST {base}{endpoint}`` with
-``{"to": …, "text": …}``, ``Authorization: Bearer <key>``) matches the
-OpenClaw HTTP channel surface; adjust ``endpoint`` in options when your
-gateway version differs.
 
-Options: ``base_url``, ``api_key``/``api_key_env``, ``endpoint``
-(default ``/v1/messages``), ``targets`` list of WeChat user ids.
+Contract: Gateway HTTP hooks (``https://docs.openclaw.ai/gateway/config-hooks``).
+Each notification POSTs to ``{base_url}{endpoint}`` (default ``/hooks/agent``)
+with ``Authorization: Bearer <token>`` and the hook agent payload::
+
+    {"message": <formatted mail>, "channel": "openclaw-weixin", "to": <id>}
+
+``channel``/``to`` request direct announce delivery to the WeChat channel.
+Note this submits an agent turn — the OpenClaw agent sees the mail text and
+OpenClaw may transform it before delivery — it is not a raw message relay.
+
+Prerequisites on the gateway side: ``hooks.enabled: true``, a dedicated
+``hooks.token`` (this notifier's ``api_key``), and ``"openclaw-weixin"``
+listed among the enabled channels.
+
+Options: ``base_url`` (e.g. ``http://127.0.0.1:18789``),
+``api_key``/``api_key_env`` (hook token), ``endpoint`` (default
+``/hooks/agent``; adjust when ``hooks.path`` differs), ``targets`` list of
+WeChat user ids (``xxx@im.wechat``).
 Experimental: the upstream API is still evolving; delivery failures are
 logged, never raised.
 """
@@ -33,7 +45,7 @@ class OpenClawWeixinNotifier:
 
     def __init__(self, config: NotifierConfig) -> None:
         self._url = str(config.options.get("base_url", "")).rstrip("/")
-        self._endpoint = str(config.options.get("endpoint", "/v1/messages"))
+        self._endpoint = str(config.options.get("endpoint", "/hooks/agent"))
         self._api_key = str(config.options.get("api_key", ""))
         env_name = config.options.get("api_key_env")
         if not self._api_key and env_name:
@@ -55,7 +67,7 @@ class OpenClawWeixinNotifier:
         url = f"{self._url}{self._endpoint}"
         async with httpx.AsyncClient(timeout=20.0) as client:
             for target in self._targets:
-                payload = {"to": target, "text": text}
+                payload = {"message": text, "channel": "openclaw-weixin", "to": target}
                 try:
                     response = await client.post(url, json=payload, headers=headers)
                     response.raise_for_status()
@@ -85,7 +97,7 @@ PLUGIN_INFO = PluginInfo(
     version="0.1.0",
     description=(
         "Pushes mail alerts via Tencent's OpenClaw WeChat channel "
-        "(ClawBot/iLink) through an OpenClaw gateway"
+        "(ClawBot/iLink) through OpenClaw gateway HTTP hooks"
     ),
     kinds=[ComponentKind.NOTIFIER],
 )

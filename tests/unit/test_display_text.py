@@ -233,3 +233,56 @@ def test_ascii_qr_supports_4bit_gray_like_napcat() -> None:
     assert len(lines) >= 10
     content = [ln for ln in lines if ln.strip(" ")]
     assert content and ("█" in content[0] or "▀" in content[0])
+
+
+def test_ascii_qr_supports_1bit_palette_like_openwechat() -> None:
+    """The openwechat bridge emits go-qrcode PNGs: 256x256, bit depth 1,
+    color type 3 (palette). The sub-byte value is a palette INDEX, not a
+    gray level — treating it as gray reads every black module as white
+    and the renderer degenerated to an IndexError fallback ("(qr)"),
+    i.e. no QR on screen at all."""
+    import base64
+    import struct
+    import zlib
+
+    from mailflow_tui.gateway_guide import _ascii_qr
+
+    size = 256
+
+    def pack_bits(values: list[int]) -> bytes:
+        out = bytearray()
+        acc = 0
+        nbits = 0
+        for v in values:
+            acc = (acc << 1) | (v & 1)
+            nbits += 1
+            if nbits == 8:
+                out.append(acc)
+                acc = 0
+                nbits = 0
+        if nbits:
+            out.append((acc << (8 - nbits)) & 0xFF)
+        return bytes(out)
+
+    raw = bytearray()
+    for y in range(size):
+        vals = [1 if ((x // 8 + y // 8) % 2 == 0) else 0 for x in range(size)]
+        raw.append(0)  # filter None
+        raw += pack_bits(vals)
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        block = tag + data
+        return struct.pack(">I", len(data)) + block + struct.pack(">I", zlib.crc32(block))
+
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 1, 3, 0, 0, 0))
+    png += chunk(b"PLTE", bytes((255, 255, 255, 0, 0, 0)))  # [white, black]
+    png += chunk(b"IDAT", zlib.compress(bytes(raw)))
+    png += chunk(b"IEND", b"")
+
+    rendered = _ascii_qr(base64.b64encode(png).decode())
+    lines = rendered.splitlines()
+    assert len(lines) >= 10, f"degenerate render: {rendered[:80]!r}"
+    content = [ln for ln in lines if ln.strip(" ")]
+    assert content, "all blank"
+    assert "█" in content[0] or "▀" in content[0], f"finder lost: {content[0]!r}"
