@@ -24,7 +24,7 @@ The TUI is the terminal-facing surface of MailFlow. It should be:
 3. **Operable in one place** — the Notifications tab manages *all*
    notifiers: add/remove/enable/disable, urgency thresholds, connection
    tests with live status, and auto-connect on startup. Gateway
-   auto-deployment (NapCat, WeChaty, OpenWeChat) remains reachable from here.
+   auto-deployment (NapCat, OpenWeChat) remains reachable from here.
 
 ## Confirmed decisions
 
@@ -51,8 +51,7 @@ The TUI is the terminal-facing surface of MailFlow. It should be:
 
 The tab lists **every configured notifier** (provider, instance id, enabled,
 minimum urgency, target count, live connection status). This includes:
-- chat-platform notifiers backed by a gateway (NapCat/onebot, WeChaty,
-  OpenWeChat, OpenClaw)
+- chat-platform notifiers backed by a gateway (NapCat/onebot, OpenWeChat)
 - plain delivery notifiers (console, telegram, webhook, ntfy, smtp, ...)
 
 ### Table columns
@@ -70,8 +69,8 @@ minimum urgency, target count, live connection status). This includes:
 
 - **Add / Edit / Delete** — the existing `EntryFormScreen("notifiers")`
   flow; provider dropdown now lists *all* registered notifier providers
-  (not just IM), ordered: console → QQ (onebot, napcat) → WeChat (wechaty,
-  wechaty-manual, openwechat, openclaw) → other notifier plugins.
+  (not just IM), ordered: console → QQ (onebot, napcat) → WeChat
+  (openwechat) → other notifier plugins.
 - **Enable / Disable** — toggles `notifier.enabled` in place (hot-applies
   via `reload_runtime`).
 - **Test** — runs the connection probe (`_BotStatusProbe`, now generalized
@@ -79,7 +78,7 @@ minimum urgency, target count, live connection status). This includes:
 - **Check all** — concurrent bounded probes (already implemented with
   `asyncio.Semaphore(4)`).
 - **Deploy** — for gateway-backed providers, opens the guided setup
-  (`GatewayGuideModal`) to auto-install/start NapCat/WeChaty/OpenWeChat and
+  (`GatewayGuideModal`) to auto-install/start NapCat/OpenWeChat and
   drive the QR login; the resulting notifier entry is saved as today.
 
 ### Live status & auto-connect
@@ -120,7 +119,7 @@ manually (the manual `onebot` notifier id remains available).
 | `llm_backend` | `LLM_BACKEND` | chat-completions transports | yes |
 | `llm_enhancer` | `LLM_ENHANCER` | bounded LLM analysis customization | yes |
 | `notifier` | `NOTIFIER` | delivery channels (chat bots, IM, webhook, mail) | yes |
-| `gateway` | `GATEWAY_PROVISIONER` | **new**: gateway auto-deploy (NapCat, WeChaty, OpenWeChat) | yes |
+| `gateway` | `GATEWAY_PROVISIONER` | **new**: gateway auto-deploy (NapCat, OpenWeChat) | yes |
 | `storage` | `STORAGE` | persistence backends | yes |
 | `bot_exporter` | `BOT_EXPORTER` | export to chatbot frameworks | yes |
 | `template` | — | *not a plugin category*; the scaffold wizard itself | — |
@@ -196,7 +195,7 @@ plugin declares fields, so nothing breaks). Existing `_Extra` kinds map 1:1
 Each provider may also register an optional `probe` callable
 (`registrar.add_probe(kind, component_id, probe)`) used by the "Test"
 button and the Notifications status probe. Built-in probes (onebot
-`get_login_info`, wechaty/openwechat `/health`) become plugins' own probes.
+`get_login_info`, openwechat `/health`) become plugins' own probes.
 
 ---
 

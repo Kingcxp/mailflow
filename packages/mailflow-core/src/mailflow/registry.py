@@ -73,7 +73,7 @@ class ComponentRegistry:
         self, kind: ComponentKind, component_id: str, plugin_id: str, factory: Factory
     ) -> None:
         # the key is (kind, component_id): one id may legitimately appear in
-        # several kinds (e.g. 'wechaty' is both a NOTIFIER and a
+        # several kinds (e.g. 'napcat' is both a NOTIFIER and a
         # GATEWAY_PROVISIONER), and a conflict is only a conflict within the
         # same kind
         key = (kind, component_id)
@@ -202,7 +202,7 @@ class PluginRegistrar:
         self, component_id: str, factory: GatewayProvisionerFactory
     ) -> None:
         """Register a gateway provisioner: installs/start/supervises one
-        chat-platform bot runtime (e.g. ``napcat``, ``wechaty``). The
+        chat-platform bot runtime (e.g. ``napcat``). The
         component id is the provider key used by the Bots tab."""
         self._register(ComponentKind.GATEWAY_PROVISIONER, component_id, factory)
 

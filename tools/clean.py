@@ -10,7 +10,7 @@ history.
 
 Targeted cleanups (all ask for confirmation when run interactively):
 - ``--gateways``  delete data/gateways/ (bot gateway installs: NapCat,
-  WeChaty) so a broken/partial install can be redone from scratch.
+) so a broken/partial install can be redone from scratch.
 - ``--config``    delete local config files (configs/development.toml,
   configs/local.toml, configs/*.local.toml) so they are regenerated
   from the example.
@@ -36,7 +36,7 @@ _PRESERVED_DIRS = (
 _TARGETS: dict[str, tuple[tuple[str, ...], str]] = {
     "gateways": (
         ("data/gateways",),
-        "gateway installs under data/gateways/ (NapCat, WeChaty)",
+        "gateway installs under data/gateways/ (NapCat, OpenWeChat)",
     ),
     "config": (
         ("configs/development.toml", "configs/local.toml"),

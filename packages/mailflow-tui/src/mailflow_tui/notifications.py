@@ -2,7 +2,7 @@
 chat platforms) with live connection status.
 
 The pane lists all configured notifiers — chat-platform gateways (NapCat /
-WeChaty / OpenWeChat / OpenClaw) and plain delivery channels (console,
+OpenWeChat) and plain delivery channels (console,
 telegram, webhook, ntfy, smtp, ...). From here the user can add / edit /
 delete instances, toggle them enabled, set the delivery urgency threshold,
 probe connections and see live status. Gateway-backed providers route
@@ -59,32 +59,6 @@ class _NotifierProbe:
                     user_id = str(payload_data.get("user_id", "?"))
                     return str(t("tui.bots_logged_in_as", name=nickname, uid=user_id))
                 return http_status(response.status_code)
-            if provider == "wechaty":
-                url = str(options.get("gateway_url", "")).rstrip("/")
-                if not url:
-                    return str(t("tui.bots_not_configured"))
-                wechaty_headers: dict[str, str] = {}
-                token_w = str(options.get("token", ""))
-                if token_w:
-                    wechaty_headers["Authorization"] = f"Bearer {token_w}"
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    response = await client.get(f"{url}/health", headers=wechaty_headers)
-                return str(
-                    t("tui.bots_online")
-                    if response.status_code == 200
-                    else http_status(response.status_code)
-                )
-            if provider == "openclaw-weixin":
-                url = str(options.get("base_url", "")).rstrip("/")
-                if not url:
-                    return str(t("tui.bots_not_configured"))
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    response = await client.get(url)
-                return (
-                    t("tui.bots_gateway_reachable")
-                    if response.status_code < 500
-                    else http_status(response.status_code)
-                )
             if provider == "openwechat":
                 url = str(options.get("gateway_url", "")).rstrip("/")
                 if not url:
@@ -107,13 +81,11 @@ class NotificationsPane(Vertical):
     """通知: manage every notifier instance and check live connection state.
 
     QR scanning for gateway-backed platforms happens in the bot runtime
-    itself (NapCat / WeChaty gateway / OpenWeChat) — the pane verifies the
-    session and reports it in the status column.
+    itself (NapCat / OpenWeChat) — the pane verifies the session and
+    reports it in the status column.
     """
 
-    IM_PROVIDERS: ClassVar[frozenset[str]] = frozenset(
-        {"onebot", "wechaty", "openwechat", "openclaw-weixin"}
-    )
+    IM_PROVIDERS: ClassVar[frozenset[str]] = frozenset({"onebot", "openwechat"})
     _PROBE_INTERVAL = 30.0
 
     def __init__(self, service: MailFlowService) -> None:
@@ -411,7 +383,7 @@ class NotificationsPane(Vertical):
     @staticmethod
     def _gateway_for(service: MailFlowService, provider: str) -> str | None:
         """The gateway provisioner id backing a notifier provider
-        (napcat, wechaty map 1:1). None when manual-only."""
+        (napcat). None when manual-only."""
         if provider in service.gateway_providers():
             return provider
         return None

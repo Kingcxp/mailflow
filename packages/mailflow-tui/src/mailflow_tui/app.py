@@ -1318,9 +1318,7 @@ class LogsPane(Vertical):
         "gateway": "chat",
         "onebot": "chat",
         "napcat": "chat",
-        "wechaty": "chat",
         "openwechat": "chat",
-        "openclaw": "chat",
         "llm": "llm",
         "pipeline": "parse",
         "processor": "parse",
@@ -1333,12 +1331,10 @@ class LogsPane(Vertical):
     }
 
     # platform-level sub-identifiers within the chat category: tag text
-    # suffix and color, so NapCat/WeChaty/OpenWeChat lines are distinguishable
+    # suffix and color, so NapCat/OpenWeChat lines are distinguishable
     _CHAT_PLATFORMS: ClassVar[dict[str, tuple[str, str]]] = {
         "napcat": ("napcat", "#F56C6C"),
-        "wechaty": ("wechaty", "#67C23A"),
         "openwechat": ("openwechat", "#E6A23C"),
-        "openclaw": ("openclaw", "#7EA7F8"),
     }
 
     @staticmethod
@@ -1546,7 +1542,7 @@ class LogsPane(Vertical):
         category = self._category_of(logger_name)
         cat_label = self._service.t(f"tui.logs_cat_{category}")
         cat_style = self._CATEGORY_STYLES.get(category, "")
-        # chat category: append the concrete platform (napcat/wechaty/...)
+        # chat category: append the concrete platform (napcat/openwechat/...)
         # with its own color, so mixed-platform deployments are readable
         platform_suffix = ""
         if category == "chat":

@@ -602,11 +602,9 @@
       "history_unpicked": "未选",
       "extras_http_url": "OneBot 11 HTTP 上报地址，例如 http://127.0.0.1:5700（NapCat/Lagrange 等）",
       "extras_access_token": "access_token，与机器人端 access_token 一致时可留空",
-      "extras_gateway_url": "WeChaty 网关服务地址，例如 http://127.0.0.1:8788；登录需走平板协议（如 WeChatFerry / PaPad 等），官方 puppet-wechat 网页协议已失效且有封号风险",
       "extras_token": "网关鉴权 token",
-      "extras_endpoint": "API 路径，默认 /api/v1",
-      "extras_targets": "通知投递目标:group:<群号> / user:<QQ号>(onebot)或 room:<群名> / contact:<联系人>(wechaty)。",
-      "bots_login_help": "登录方式：扫码在机器人运行时里完成——先启动 NapCat / WeChaty 网关 / OpenClaw 并扫码登录，再在这里点“添加”填写它的地址与推送目标；状态列显示连接测试结果。",
+      "extras_targets": "通知投递目标:group:<群号> / user:<QQ号>(onebot)。",
+      "bots_login_help": "登录方式：扫码在机器人运行时里完成——先启动 NapCat 或 OpenWeChat 并扫码登录，再在这里点“添加”填写它的地址与推送目标；状态列显示连接测试结果。",
       "notify_title": "最新邮件通知",
       "feedback_marker": "已打回",
       "detail_failed_note": "解析失败",
@@ -630,7 +628,6 @@
       "bots_already_configured": "该 NapCat 实例已配置",
       "bots_configured_ok": "已配置 {instance}（minimum_urgency=important）",
       "bots_detecting": "正在探测本机机器人运行时…",
-      "bots_no_runtime": "未在本机发现机器人运行时（NapCat / WeChaty 网关）。请先启动对应服务，或手动填写配置。",
       "bots_no_url": "未填写{provider}服务地址，请在表单中填写后保存",
       "bots_saved_manual": "已保存配置；可点击“检测”验证连接",
       "bots_verify_result": "连接检测：{result}",
@@ -638,11 +635,8 @@
       "bots_wizard_pick": "选择要接入的平台：",
       "bots_provider_console": "控制台（本地输出）",
       "bots_provider_onebot": "QQ（OneBot）",
-      "bots_provider_wechaty": "微信（WeChaty 平板协议 · 自动部署）",
-      "bots_provider_openclaw": "微信（OpenClaw）",
       "bots_wizard_pick_first": "请先选择平台",
       "bots_wizard_no_runtime": "未发现{provider}运行时，请先启动对应服务后重试",
-      "bots_wizard_manual_needed": "OpenClaw 暂不支持自动配置，请稍后手动添加",
       "btn_next": "下一步",
       "bots_guide_title": "设置 {provider}",
       "bots_guide_detecting": "正在检测本机运行时…",
@@ -661,8 +655,6 @@
       "bots_provider_missing": "该平台没有可用的网关配置器",
       "bots_provider_napcat": "QQ（NapCat 自动部署）",
       "bots_guide_starting": "开始 {provider} 部署…",
-      "bots_provider_wechaty-manual": "微信（WeChaty 手动配置）",
-      "bots_manual_doc": "手动配置：自行运行 WeChaty 网关桥 — 参见 {url}",
       "notifier_test_no_url": "请先填写服务地址",
       "notifier_testing": "正在测试与 {url} 的连接…",
       "notifier_test_ok": "连接成功 — 可以保存了",
@@ -792,6 +784,5 @@
       }
     },
     "truncated_marker": "…（已截断）"
-  },
-  "tui.extras_base_url": "OpenClaw 微信服务地址，例如 http://127.0.0.1:8000"
+  }
 }

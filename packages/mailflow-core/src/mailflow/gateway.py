@@ -1,5 +1,5 @@
 """Chat-platform gateway management: install, start, supervise and stop
-gateway processes (NapCat, WeChaty bridges, ...).
+gateway processes (NapCat, OpenWeChat bridges, ...).
 
 The manager owns the *lifecycle* (persisted instance state, process
 supervision with backoff, shutdown ordering); the *how* lives in

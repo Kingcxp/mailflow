@@ -88,7 +88,7 @@ Frozen mode does not promise arbitrary post-build plugin discovery.
 | `NOTIFIER`        | `(NotifierConfig) -> Notifier`                     | `console`             |
 | `STORAGE`         | `(StorageConfig) -> StorageBackend`                | `sqlite`              |
 | `BOT_EXPORTER`    | `(BotExportContext) -> BotExportResult`            | `nonebot`, `astrbot`  |
-| `GATEWAY_PROVISIONER` | `() -> GatewayProvisioner`     | `napcat`, `wechaty`   |
+| `GATEWAY_PROVISIONER` | `() -> GatewayProvisioner`     | `napcat`, `openwechat` |
 
 `GATEWAY_PROVISIONER` factories are zero-argument callables returning a
 `GatewayProvisioner` protocol object (`mailflow.contracts.GatewayProvisioner`)

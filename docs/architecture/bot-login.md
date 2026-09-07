@@ -1,6 +1,6 @@
 # Bot platform login (auto-provisioned gateways)
 > **Superseded.** This page described the gateway auto-provisioning flow
-> (form-driven install + QR login for NapCat / WeChaty / OpenWeChat) before
+> (form-driven install + QR login for NapCat / OpenWeChat) before
 > the Notifications tab existed. That flow is now a feature of the
 > Notifications tab, managed by `NotificationsPane` in
 > `mailflow_tui/notifications.py`; the approved architecture plan is
@@ -10,7 +10,7 @@
 > historical reference.
 
 How MailFlow sets up IM chat bot platforms (QQ via OneBot/NapCat, WeChat via
-WeChaty pad protocol) with as little manual work as possible: the user picks
+openwechat web protocol) with as little manual work as possible: the user picks
 a platform in a form, and MailFlow installs, starts and configures the
 gateway — including driving the QR login inside the TUI.
 
@@ -26,7 +26,7 @@ a separate choice from the manual `onebot` notifier id, so self-hosted
 users keep the endpoint form. Choosing a gateway-backed provider and
 pressing Next opens the guided setup — a bordered dialog with a live
 timestamped/level-tagged log pane (scrollable) and the QR login inside
-the frame, buttons outside. openclaw-weixin remains manual. NapCat's
+the frame, buttons outside. NapCat's
 version is resolved from the latest GitHub release at install time (no
 more pinned, possibly-404 URLs); download errors carry the URL and HTTP
 status.
@@ -37,12 +37,6 @@ status.
    install Node packages, download binaries or hand-edit configs.
    - NapCat (OneBot v11 HTTP): auto-download + install + launch on first
      use; scan the QR inside the TUI.
-   - WeChaty gateway: auto-install the WeChaty package and the gateway
-     bridge, run it as a managed child process, surface the QR in the
-     TUI. With a pad-protocol token configured the pad puppet is used
-     (paid service); without one the free web-protocol puppet
-     (wechat4u) is tried — Tencent shut that protocol down, so it may
-     never emit a QR, but some accounts still work.
    - openwechat gateway: scan-to-login with no platform token. The
      provisioner requires a Go toolchain (reports the exact apt command
      when missing), builds the bridge, and the bridge serves the QR as a
@@ -50,7 +44,7 @@ status.
 2. **Second instance**: when the platform is already installed, "Add"
      starts *another* independent instance (own data dir, own HTTP port)
      instead of reusing the first — one account per instance by default,
-     because both NapCat and WeChaty gateways are single-session processes.
+     because NapCat gateways are single-session processes.
 3. **Non-blocking**: installs and gateway startup run in workers; the TUI
    stays responsive. A failing gateway never blocks other platforms.
 4. **Marketplace stays open**: onebot/openwechat are bundled by default, but
@@ -95,8 +89,6 @@ Add form (basics) → Next → provider guide
          on Linux download the official AppImage (QQ + NapCat bundled,
          only xvfb + fuse needed) into the instance dir and launch with
          `xvfb-run ./…AppImage --no-sandbox`
-       - WeChaty: `npm install wechaty` + gateway bridge under
-         <data>/gateways/wechaty-<instance>/ → launch with `node`
        - openwechat: `go build` the bridge under
          <data>/gateways/openwechat-<instance>/ → launch the binary
   3. start: provisioner.start(instance) → managed child process
@@ -122,11 +114,11 @@ MailFlow process, not in the gateway child. While a gateway reports
 `running` the supervisor calls the provisioner's `ensure_bridge` hook on
 every poll cycle, so the bridge is recreated after a restart even though
 `start()` is never called again — chat commands keep answering. The
-WeChaty and OpenWeChat bridges forward incoming text messages to the same
+OpenWeChat bridges forward incoming text messages to the same
 local `mailflow.bot_server` endpoint (via `MAILFLOW_BOT_URL`) and send the
-reply back, so all three gateway platforms have a working chat-command
-path; the OpenWeChat bridge gained this forwarding (previously it only
-offered `/health`, `/qr` and `/send`).
+reply back, so both gateway platforms have a working chat-command path;
+the OpenWeChat bridge gained this forwarding (previously it only offered
+`/health`, `/qr` and `/send`).
 
 NapCat's OneBot config is per-account: once a QQ number is logged in,
 `onebot11_<uin>.json` takes precedence over the default `onebot11.json`.
@@ -244,14 +236,14 @@ Target (matches the user's request):
 ```
 Add platform
   [Step 1 — basics]  name/id input,  [Next]
-  [Step 2 — provider]  provider dropdown (onebot | wechaty | openclaw |
+  [Step 2 — provider]  provider dropdown (onebot | openwechat |
                        installed marketplace plugins)  [Next]
   [Step 3 — guide]  progress status: detecting → installing (first use)
-                    → starting → QR (NapCat/WeChaty) → done
+                    → starting → QR (NapCat) → done
 ```
 
-- Step 2 lists every registered `GATEWAY_PROVISIONER` plus providers that
-  are notifier-only (openclaw: no gateway, manual config — same as today).
+- Step 2 lists every registered `GATEWAY_PROVISIONER` plus notifier-only
+  providers.
 - Step 3 is a modal with a status line and a cancel button; every network
   or process operation runs in an exclusive worker. The QR step reuses
   `NapCatQrModal`'s polling loop, generalized for any provisioner.
@@ -275,7 +267,7 @@ Add platform
 ## Security and constraints
 
 - Gateway installs download from pinned, versioned URLs (NapCat GitHub
-  releases; WeChaty via npm with a locked version). The first run records
+  releases). The first run records
   the resolved checksum; a mismatch aborts with a clear error.
 - Managed processes run with the MailFlow user's permissions, never with
   elevated rights; no credentials are passed on the command line (env vars
@@ -292,10 +284,10 @@ Add platform
   Windows and remains open.
 - NapCat download mirror for China networks (GitHub releases are slow
   there).
-- Whether openclaw-weixin gets a provisioner later (out of scope for the
-  first round; stays manual).
-- WeChaty pad-protocol tokens are user-provided (paid service); the bridge
-  reports login errors through `/qr` and `/health`.
+- WeChat-side protocol landscape: the web/UOS protocol openwechat uses is
+  subject to Tencent-side risk control (accounts can be warned or banned);
+  pad-protocol integrations are third-party and carry the same class of
+  risk.
 
 ## See also
 

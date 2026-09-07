@@ -1462,8 +1462,7 @@ class NapCatProvisioner:
                 raise RuntimeError(
                     f"NapCat needs ~1.5-2 GB of free RAM (it runs the full "
                     f"QQ client), but this host has only {mem_mb:.0f} MB "
-                    "available. Free memory or pick a lighter platform "
-                    "(e.g. WeChaty) on this machine."
+                    "available. Free memory or pick a lighter platform."
                 )
         # the AppImage (Linux) and the Shell package (Windows) both live in
         # the instance dir; on Linux the AppImage holds QQ + NapCat and

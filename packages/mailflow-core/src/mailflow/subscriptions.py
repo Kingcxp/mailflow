@@ -1,6 +1,6 @@
 """Chat subscriptions: which chats receive notifications from a gateway.
 
-A gateway instance (napcat-1, wechaty-1, ...) has a list of subscribed
+A gateway instance (napcat-1, ...) has a list of subscribed
 chats (group ids or contact ids). Mail notifications are delivered to
 every subscribed chat of every running instance, in addition to the
 notifier's configured admin targets.

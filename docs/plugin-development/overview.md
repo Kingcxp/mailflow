@@ -150,7 +150,7 @@ vocabulary.
 
 `gateway` is both a marketplace category and a component kind
 (`ComponentKind.GATEWAY_PROVISIONER`). A gateway plugin installs / starts /
-supervises an external bot runtime (NapCat, WeChaty, OpenWeChat) and drives
+supervises an external bot runtime (NapCat, OpenWeChat) and drives
 its QR login from inside the TUI; the `NotificationsPane` routes
 gateway-backed notifiers through it. Author one with the `gateway`
 scaffold (`mailflow plugin new --kind gateway`) or the declarative

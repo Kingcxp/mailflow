@@ -1274,7 +1274,7 @@ be one of ad|info|important|urgent. The original mail body is never edited.
     # -- gateway provisioning (Bots tab) ----------------------------------------------
 
     def gateway_providers(self) -> list[str]:
-        """Registered gateway provisioner component ids (napcat, wechaty, ...)."""
+        """Registered gateway provisioner component ids (napcat, ...)."""
         return self.gateways.providers()
 
     async def gateway_instances(self) -> list[Any]:
@@ -1296,7 +1296,7 @@ be one of ad|info|important|urgent. The original mail body is never edited.
         """Install (if needed), start and supervise one gateway instance.
 
         Injects the local chat-command endpoint (``bot_url``) into the
-        gateway options so gateway bridges (wechaty node bridge, onebot
+        gateway options so gateway bridges (onebot
         message listener) can forward incoming chat messages to
         ``command_dispatch`` — the notifier's chat commands work without
         deploying a separate exported bot plugin.

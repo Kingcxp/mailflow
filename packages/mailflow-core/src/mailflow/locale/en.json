@@ -602,11 +602,9 @@
       "history_unpicked": "",
       "extras_http_url": "OneBot 11 HTTP endpoint, e.g. http://127.0.0.1:5700 (NapCat/Lagrange)",
       "extras_access_token": "access_token; leave empty when the bot side has none",
-      "extras_gateway_url": "WeChaty gateway URL, e.g. http://127.0.0.1:8788; login requires a pad protocol (WeChatFerry / PaPad etc.) — the official puppet-wechat web protocol is defunct and carries a ban risk",
       "extras_token": "Gateway auth token",
-      "extras_endpoint": "API path, default /api/v1",
-      "extras_targets": "Delivery targets: group:<id> / user:<id> (onebot) or room:<name> / contact:<name> (wechaty).",
-      "bots_login_help": "Login: QR scanning happens in the bot runtime — start NapCat / the WeChaty gateway / OpenClaw and scan there first, then click Add here to enter its address and targets; the Status column shows connection-test results.",
+      "extras_targets": "Delivery targets: group:<id> / user:<id> (onebot).",
+      "bots_login_help": "Login: QR scanning happens in the bot runtime — start NapCat or OpenWeChat and scan there first, then click Add here to enter its address and targets; the Status column shows connection-test results.",
       "notify_title": "Latest mail notifications",
       "feedback_marker": "Rejected",
       "detail_failed_note": "analysis failed",
@@ -630,7 +628,6 @@
       "bots_already_configured": "This NapCat instance is already configured",
       "bots_configured_ok": "Configured {instance} (minimum_urgency=important)",
       "bots_detecting": "Detecting local bot runtimes…",
-      "bots_no_runtime": "No bot runtime (NapCat / WeChaty gateway) found on this machine. Start the service first, or fill the form manually.",
       "bots_no_url": "{provider} endpoint missing — fill it in the form and save",
       "bots_saved_manual": "Saved; press Check to verify the connection",
       "bots_verify_result": "Connection check: {result}",
@@ -638,11 +635,8 @@
       "bots_wizard_pick": "Choose the platform:",
       "bots_provider_console": "Console (local output)",
       "bots_provider_onebot": "QQ (OneBot)",
-      "bots_provider_wechaty": "WeChat (WeChaty pad protocol, auto-deploy)",
-      "bots_provider_openclaw": "WeChat (OpenClaw)",
       "bots_wizard_pick_first": "Pick a platform first",
       "bots_wizard_no_runtime": "No {provider} runtime found — start the service and retry",
-      "bots_wizard_manual_needed": "OpenClaw auto-config is not supported yet — add it manually",
       "btn_next": "Next",
       "bots_guide_title": "Set up {provider}",
       "bots_guide_detecting": "Checking for a local runtime…",
@@ -661,8 +655,6 @@
       "bots_provider_missing": "No gateway provisioner available for this platform",
       "bots_provider_napcat": "QQ (NapCat auto-deploy)",
       "bots_guide_starting": "Starting {provider} setup…",
-      "bots_provider_wechaty-manual": "WeChat (WeChaty manual)",
-      "bots_manual_doc": "Manual setup: run your own WeChaty gateway bridge — see {url}",
       "notifier_test_no_url": "Fill the endpoint URL first",
       "notifier_testing": "Testing connection to {url}…",
       "notifier_test_ok": "Connection OK — you can save",
@@ -792,6 +784,5 @@
       }
     },
     "truncated_marker": "…(truncated)"
-  },
-  "tui.extras_base_url": "OpenClaw WeChat service URL, e.g. http://127.0.0.1:8000"
+  }
 }

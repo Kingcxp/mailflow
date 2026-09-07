@@ -1,6 +1,6 @@
 """Local HTTP endpoint for chat-platform command dispatch.
 
-Gateway bridges (wechaty, openwechat, onebot) forward incoming chat
+Gateway bridges (openwechat, onebot) forward incoming chat
 messages here: ``POST /bot/message`` with ``{"text": "..."}``. Messages
 starting with the configured command prefix are routed through the
 CommandRouter; the reply is returned as ``{"reply": "..."}`` so the

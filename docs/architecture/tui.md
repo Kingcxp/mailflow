@@ -105,8 +105,8 @@ tears them down with the screen — nothing keeps ticking after it closes.
   subfolder checkbox + input, and a Generate button running
   `mailflow.bot_export.export_bot_plugin` in a worker.
 - **Notifications** (`notifications.py: NotificationsPane`): manages *every*
-  configured notifier — chat-platform gateways (NapCat/onebot, WeChaty,
-  OpenWeChat, OpenClaw) and plain delivery channels (console, telegram,
+  configured notifier — chat-platform gateways (NapCat/onebot, OpenWeChat)
+  and plain delivery channels (console, telegram,
   webhook, ntfy, smtp, ...). The table shows name / provider / enabled /
   urgency threshold / targets / live status. In-place actions toggle the
   selected notifier enabled and edit its delivery urgency; Add routes

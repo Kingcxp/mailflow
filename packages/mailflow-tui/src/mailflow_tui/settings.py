@@ -303,17 +303,6 @@ _LLM_PROVIDER_FIELDS: dict[str, tuple[_Extra, ...]] = {
         _Extra("access_token", kind="password", secret=True),
         _Extra("targets", kind="lines", required=True),
     ),
-    "wechaty": (
-        _Extra("gateway_url", required=True),
-        _Extra("token", kind="password", secret=True),
-        _Extra("targets", kind="lines", required=True),
-    ),
-    "openclaw-weixin": (
-        _Extra("base_url", required=True),
-        _Extra("endpoint", default="/v1/messages"),
-        _Extra("api_key", kind="password", secret=True, required=True),
-        _Extra("targets", kind="lines", required=True),
-    ),
 }
 # the legacy alias behaves like plain completions
 _LLM_PROVIDER_FIELDS["openai-compatible"] = _LLM_PROVIDER_FIELDS["openai-completions"]
@@ -331,11 +320,6 @@ _IMAP_PRESET_HOSTS: dict[str, tuple[str, int, bool]] = {
     "outlook": ("outlook.office365.com", 993, True),
     "gmail": ("imap.gmail.com", 993, True),
 }
-
-
-def _wechaty_doc_link() -> str:
-    """The WeChaty gateway bridge documentation URL shown for manual setup."""
-    return "https://github.com/Kingcxp/mailflow-repo/tree/main/notifier/mailflow-notify-wechaty"
 
 
 class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
@@ -376,7 +360,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             self._default_provider = "imap"
         elif group == "notifiers":
             # the TUI notifier form only lists IM platforms + gateway
-            # auto-deploy + manual wechaty; plain delivery channels (console,
+            # auto-deploy; plain delivery channels (console,
             # webhook, ntfy, ...) are managed via config. "onebot" is always
             # in that choice set, so it is a safe preselected default —
             # using "console" here crashes Textual Select's mount-time
@@ -400,17 +384,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             # notifier id (onebot) so self-hosted users keep the form
             choices = set(NotificationsPane.IM_PROVIDERS)
             choices.update(service.gateway_providers())
-            # manual WeChaty (bring your own gateway) is a distinct choice
-            choices.add("wechaty-manual")
-            # Order: console → QQ (onebot, napcat) → WeChat (wechaty, wechaty-manual, openwechat, openclaw-weixin)
+            # Order: console → QQ (onebot, napcat) → WeChat (openwechat)
             _ORDER = (
                 "console",
                 "onebot",
                 "napcat",
-                "wechaty",
-                "wechaty-manual",
                 "openwechat",
-                "openclaw-weixin",
             )
             self._provider_choices = tuple(p for p in _ORDER if p in choices) + tuple(
                 sorted(choices - set(_ORDER))
@@ -461,43 +440,17 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 _Extra("limit", default="20"),
             )
         if self._group == "notifiers":
-            if provider == "openclaw-weixin":
-                # notifier-only platform: no gateway, endpoints are manual
-                return (
-                    _Extra("base_url", required=True),
-                    _Extra("endpoint", default="/api/v1"),
-                    _Extra("targets", required=True),
-                )
-            if provider == "wechaty-manual":
-                # manual WeChaty: user runs their own gateway/bridge; the
-                # fields match the wechaty notifier options
-                return (
-                    _Extra("gateway_url", required=True),
-                    _Extra("token", kind="password", secret=True),
-                    _Extra("targets", required=True),
-                )
             if self._gateway_for(provider) is not None:
-                # gateway-backed platform (napcat/wechaty auto-deploy):
-                # admins are the platform user ids allowed to run chat
-                # commands (QQ number / wxid), one per line; everything
-                # else (subscriptions, mail queries) happens via chat
-                # commands like <prefix>mailflow subscribe
-                if provider == "wechaty":
-                    return (
-                        _Extra("token", kind="password", secret=True),
-                        _Extra("admins", kind="lines", required=True),
-                    )
+                # gateway-backed platform (napcat auto-deploy): admins are
+                # the platform user ids allowed to run chat commands (QQ
+                # number / wxid), one per line; everything else
+                # (subscriptions, mail queries) happens via chat commands
+                # like <prefix>mailflow subscribe
                 return (_Extra("admins", kind="lines", required=True),)
             if provider == "onebot":
                 return (
                     _Extra("http_url", required=True),
                     _Extra("access_token", kind="password", secret=True),
-                    _Extra("targets", required=True),
-                )
-            if provider == "wechaty":
-                return (
-                    _Extra("gateway_url", required=True),
-                    _Extra("token", kind="password", secret=True),
                     _Extra("targets", required=True),
                 )
         return ()
@@ -538,11 +491,11 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
     def _gateway_for(self, provider: str) -> str | None:
         """The gateway provisioner id backing a notifier provider.
 
-        ``napcat`` (auto-deploy) and ``wechaty`` map 1:1 to their gateway
-        provisioner; ``onebot`` is the manual notifier id and has no
-        gateway. When editing a gateway-backed entry (saved with
-        options.gateway), that marker wins over the notifier provider.
-        Returns None when the platform is manual-only."""
+        ``napcat`` (auto-deploy) maps 1:1 to its gateway provisioner;
+        ``onebot`` is the manual notifier id and has no gateway. When
+        editing a gateway-backed entry (saved with options.gateway), that
+        marker wins over the notifier provider. Returns None when the
+        platform is manual-only."""
         marker = str(self._values.get("options", {}).get("gateway") or "") if self._values else ""
         if marker in self._service.gateway_providers():
             return marker
@@ -553,11 +506,11 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
     def _sync_actions(self) -> None:
         """Enable/disable the form actions for the current provider.
 
-        - gateway-backed platform (napcat/wechaty auto-deploy): Next is
-          active, Test hidden-inactive, Save stays disabled (the guided
-          setup saves).
-        - manual platform (onebot, wechaty-manual, openclaw): Test is
-          active; Save unlocks only after a successful test.
+        - gateway-backed platform (napcat auto-deploy): Next is active,
+          Test hidden-inactive, Save stays disabled (the guided setup
+          saves).
+        - manual platform (onebot): Test is active; Save unlocks only
+          after a successful test.
         """
         save_btn = self.query_one_optional("#entry-form-save", Button)
         if self._group != "notifiers":
@@ -686,12 +639,6 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         extras = self._extras_for(provider)
         if extras:
             yield Label(self._t("tui.provider_section", provider=provider), classes="field-label")
-        if provider == "wechaty-manual":
-            # manual setup: point the user at the gateway documentation
-            yield Static(
-                self._t("tui.bots_manual_doc", url=_wechaty_doc_link()),
-                classes="field-desc",
-            )
         for extra in extras:
             widget_id = f"extra-{_slug(extra.field_id)}"
             marker = " *" if extra.required else ""
@@ -862,10 +809,6 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
     def _collect(self) -> dict[str, Any]:
         values = self._collect_core()
         values.update(self._collect_extras())
-        if values.get("provider") == "wechaty-manual":
-            # manual WeChaty still targets the 'wechaty' notifier component;
-            # 'wechaty-manual' is only a form-level distinction
-            values["provider"] = "wechaty"
         return values
 
     # -- llm connectivity test ---------------------------------------------------
@@ -969,8 +912,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         status.update(f"[green]{self._t('tui.account_test_ok', seconds=f'{elapsed:.1f}')}[/green]")
 
     async def _test_notifier(self) -> None:
-        """Probe the configured notifier endpoint (OneBot HTTP / WeChaty
-        gateway / OpenClaw); on success unlocks Save."""
+        """Probe the configured notifier endpoint (OneBot HTTP / OpenWeChat
+        health); on success unlocks Save."""
         status = self.query_one("#entry-form-status", Static)
         provider = self._current_provider()
         if provider == "console":

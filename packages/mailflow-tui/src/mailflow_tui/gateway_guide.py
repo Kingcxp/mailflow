@@ -1,5 +1,5 @@
 """Gateway provisioning guide: the Bots-tab modal that walks the user
-through installing and starting a chat-platform gateway (NapCat, WeChaty).
+through installing and starting a chat-platform gateway (NapCat).
 
 The modal is a bordered dialog: a title, a live log pane (timestamped,
 level-tagged, scrollable) and a QR area inside the frame; the buttons
@@ -221,8 +221,6 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         service = self._service
         provider = self._provider
         try:
-            # WeChaty: pad protocol when a token is set, else the web
-            # protocol (wechat4u) as a best-effort fallback
             # 1. detect
             self._log("INFO", self._t("tui.bots_guide_detecting"))
             detected = await service.gateway_detect(provider)
@@ -242,7 +240,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._show_progress(False)
             self._log("INFO", self._t("tui.bots_guide_running", endpoint=instance.endpoint))
             self._set_status(self._t("tui.bots_guide_running", endpoint=instance.endpoint), "green")
-            # 3. QR login loop (NapCat / WeChaty); the result is set now
+            # 3. QR login loop (NapCat); the result is set now
             # so the Done button (or the manual 'I'm logged in' button)
             # can finish the flow even before automatic detection fires
             self._result = {
@@ -377,7 +375,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
 
     async def _wait_for_endpoint(self) -> None:
         """Wait for the gateway HTTP endpoint to become reachable after login.
-        The OneBot HTTP server (NapCat) or health endpoint (WeChaty) only
+        The OneBot HTTP server (NapCat) or health endpoint (OpenWeChat) only
         starts serving after the user logs in via QR; this method polls
         the endpoint until it responds or a short timeout elapses, so the
         saved config is immediately usable."""

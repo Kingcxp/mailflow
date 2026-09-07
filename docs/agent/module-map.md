@@ -51,7 +51,6 @@
 | `mailflow-export-nonebot` | `nonebot` bot exporter (generates a NoneBot2 plugin) |
 | `mailflow-export-astrbot` | `astrbot` bot exporter (generates an AstrBot plugin) |
 | `mailflow-notify-onebot` | `onebot` notifier — OneBot v11 HTTP (NapCat/go-cqhttp), `user:`/`group:` targets |
-| `mailflow-notify-openclaw-weixin` | `openclaw-weixin` notifier — Tencent OpenClaw ClawBot channel through an OpenClaw gateway |
 | `mailflow-llm-google-generative-ai` | `google-generative-ai` LLM backend (Gemini API) |
 | `mailflow-llm-google-vertex` | `google-vertex` LLM backend (Vertex AI, service-account or access-token auth) |
 

@@ -189,7 +189,7 @@ class GatewayInstance(BaseModel):
 class GatewayProvisioner(Protocol):
     """Installs, starts and supervises one chat-platform gateway process.
 
-    The provisioner owns the *how* (download NapCat, npm-install WeChaty,
+    The provisioner owns the *how* (download NapCat, build the bridge,
     launch the child); ``mailflow.gateway.GatewayManager`` owns the
     lifecycle (persist state, restart on crash, stop on shutdown).
     Implementations are plugins (component kind GATEWAY_PROVISIONER), so a
