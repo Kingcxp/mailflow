@@ -1054,7 +1054,7 @@ async def test_command_dispatch_prefix_filtering() -> None:
     assert calls == ["mail list"]
     # subscription commands without a chat get the context hint
     hinted = await service.command_dispatch("/mailflow subscribe")
-    assert hinted is not None and "chat context" in hinted
+    assert hinted is not None and "group chat" in hinted
     assert calls == ["mail list"]
 
     # custom prefix
@@ -1134,7 +1134,7 @@ async def test_mailflow_subscribe_requires_admin() -> None:
         provider="napcat",
         instance_id="napcat-1",
     )
-    assert reply is not None and "not an admin" in reply
+    assert reply is not None and "administrator" in reply
 
     # admin can subscribe; targets synced into the notifier config
     reply = await service.command_dispatch(
@@ -1145,7 +1145,7 @@ async def test_mailflow_subscribe_requires_admin() -> None:
         provider="napcat",
         instance_id="napcat-1",
     )
-    assert reply is not None and "Subscribed" in reply
+    assert reply is not None and "pushed to this chat" in reply
     assert service.subscriptions.added == [  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
         ("napcat", "napcat-1", "group-1")
     ]
@@ -1213,6 +1213,6 @@ async def test_mailflow_unsubscribe_removes_target() -> None:
         provider="napcat",
         instance_id="napcat-1",
     )
-    assert reply is not None and "Unsubscribed" in reply
+    assert reply is not None and "cancelled" in reply
     onebot = next(n for n in cfg.notifiers if n.notifier_id == "napcat-1")
     assert "group:group-1" not in onebot.options["targets"]
