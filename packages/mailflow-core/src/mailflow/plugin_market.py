@@ -169,7 +169,8 @@ class PluginMarket:
         if not isinstance(categories, list):
             raise ValueError("marketplace index.json has no categories list")
         plugins: list[MarketPlugin] = []
-        for category in cast(list[Any], categories):  # type: ignore[redundant-cast]
+        category_list: list[Any] = cast("list[Any]", categories)
+        for category in category_list:
             if not isinstance(category, dict):
                 continue
             category_map = cast(dict[str, Any], category)
