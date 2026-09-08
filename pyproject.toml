@@ -25,6 +25,7 @@ mailflow-llm-anthropic = { workspace = true }
 mailflow-notify-console = { workspace = true }
 mailflow-notify-onebot = { workspace = true }
 mailflow-notify-openwechat = { workspace = true }
+mailflow-notify-wechatpadpro = { workspace = true }
 mailflow-export-nonebot = { workspace = true }
 mailflow-export-astrbot = { workspace = true }
 mailflow-llm-google-generative-ai = { workspace = true }
@@ -61,6 +62,9 @@ allowed-confusables = ["（", "）", "：", "！", "。", "，", "；", "“", "
 python_version = "3.11"
 strict = true
 warn_unused_configs = true
+# json.loads(...)[key] narrowing: mypy calls the cast redundant while pyright
+# calls the un-cast form partially unknown — quiet mypy's side of that split
+warn_redundant_casts = false
 mypy_path = [
   "packages/mailflow-core/src",
   "packages/mailflow-testkit/src",
@@ -79,6 +83,7 @@ mypy_path = [
   "plugins/mailflow-notify-telegram/src",
   "plugins/mailflow-notify-onebot/src",
   "plugins/mailflow-notify-openwechat/src",
+  "plugins/mailflow-notify-wechatpadpro/src",
   "plugins/mailflow-llm-google-generative-ai/src",
   "plugins/mailflow-llm-google-vertex/src",
 ]
@@ -106,6 +111,7 @@ extraPaths = [
   "plugins/mailflow-notify-telegram/src",
   "plugins/mailflow-notify-onebot/src",
   "plugins/mailflow-notify-openwechat/src",
+  "plugins/mailflow-notify-wechatpadpro/src",
   "plugins/mailflow-llm-google-generative-ai/src",
   "plugins/mailflow-llm-google-vertex/src",
 ]

@@ -354,6 +354,7 @@ class TestBundledRegistration:
             "mailflow-notify-console",
             "mailflow-notify-onebot",
             "mailflow-notify-openwechat",
+            "mailflow-notify-wechatpadpro",
             "mailflow-export-nonebot",
             "mailflow-export-astrbot",
         }
@@ -371,6 +372,7 @@ class TestBundledRegistration:
         assert registry.has(ComponentKind.LLM_BACKEND, "anthropic")
         assert registry.has(ComponentKind.NOTIFIER, "console")
         assert registry.has(ComponentKind.NOTIFIER, "onebot")
+        assert registry.has(ComponentKind.NOTIFIER, "wechatpadpro")
         # rules/llm-importance are built into the core, not plugin-provided;
         # start_service registers them (covered by the e2e service tests)
         assert registry.has(ComponentKind.BOT_EXPORTER, "nonebot")

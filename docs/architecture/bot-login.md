@@ -41,6 +41,14 @@ status.
      provisioner requires a Go toolchain (reports the exact apt command
      when missing), builds the bridge, and the bridge serves the QR as a
      PNG plus a hot-reload session (no re-scan on restart).
+   - wechatpadpro gateway: docker compose stack (WeChatPadPro + MySQL +
+     Redis) with a generated ADMIN_KEY per instance. Login keys are
+     minted from the admin API, the QR renders in the TUI
+     (`GetLoginQrCodeNewX` + `CheckLoginStatus` polling), incoming
+     messages arrive over a webhook bridge into the same chat-command
+     endpoint, and replies go out through `/Msg/SendTxt`. The Pad
+     protocol is third-party: WeChat risk control can warn or ban the
+     account (same class of risk as the web protocol).
 2. **Second instance**: when the platform is already installed, "Add"
      starts *another* independent instance (own data dir, own HTTP port)
      instead of reusing the first — one account per instance by default,

@@ -27,8 +27,27 @@ tears them down with the screen — nothing keeps ticking after it closes.
 
 ## Tabs
 
-- **Mail**: search `Input` with placeholder; urgency-colored `DataTable`
+- **Mail**: search `Input` with placeholder plus a **Smart find** button;
+  urgency-colored `DataTable`
   (■ + value in the contract color) that fills the pane height; the scrollable
+  detail pane follows the highlighted row (single click or arrow keys — no
+  double-click needed) and shows summary, reason, action items, the
+  **original body**
+  (HTML rendered as text, binary attachment payloads detected and replaced
+  by an explanatory note, bodies truncated at 4000 chars), attachment
+  metadata (name/type/size) and failed processor notes. The bottom control
+  row holds the three selects (manual urgency — a localized
+  `ad/info/important/urgent/follow-automatic` dropdown that mirrors the
+  selected mail — plus urgency filter and sort) and a two-row button
+  container (refresh/trash/Ask & Correct then reply/re-analyze/re-analyze-
+  failed)
+  with equal-width buttons. An empty view shows a hint (no mail yet vs. no
+  match for the search/filter). Reply opens the confirmation-gated modal.
+  **Smart find** (`service.smart_search`): the LLM first derives a filter
+  plan (keywords/senders/date range) to narrow the mailbox, then batches the
+  candidates for a relevance pick; the table shows only matches while the
+  button turns into **Cancel search** — cancelling (or a failure) restores
+  the pre-search view.
   detail pane shows summary, reason, action items, the **original body**
   (HTML rendered as text, binary attachment payloads detected and replaced
   by an explanatory note, bodies truncated at 4000 chars), attachment
@@ -41,7 +60,9 @@ tears them down with the screen — nothing keeps ticking after it closes.
   with equal-width buttons. An empty view shows a hint (no mail yet vs. no
   match for the search/filter). Reply opens the confirmation-gated modal.
 - **Mailboxes** (`settings.py: AccountsPane`): accounts table with
-  Add / Edit / Delete (forms, not TOML editing) plus the **history browser** —
+  Add / Edit / Delete (forms, not TOML editing; **double-click or Enter on a
+  row opens the edit form**, same for the LLM and notifier tables) plus the
+  **history browser** —
   Load history pages a mailbox newest-first through
   `service.fetch_history(account_id, limit=, offset=)`, rows are toggled with
   Enter/click, and *Analyze selected* runs only the picked mails through

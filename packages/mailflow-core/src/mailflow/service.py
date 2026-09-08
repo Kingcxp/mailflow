@@ -790,6 +790,144 @@ be one of ad|info|important|urgent. The original mail body is never edited.
                     break
         return {"reply": reply, "corrections": corrections}
 
+    _SMART_SEARCH_PROMPT = """You are MailFlow's smart mail finder. The user
+describes what they are looking for. You receive a compact list of candidate
+mails (id, date, sender, subject, summary). Return ONLY the ids of mails that
+match the user's need, as a JSON array of strings, nothing else:
+
+["id1", "id2"]
+
+Match on intent, not just keywords (e.g. "that payment deadline mail from
+last month" matches a fee notice with a due date). Return [] when nothing
+matches."""
+
+    async def smart_search(self, query: str, *, progress: Any = None) -> list[MailRecord]:
+        """Find mails matching a free-form need via the LLM.
+
+        1. asks the LLM for a compact filter plan applied to the full
+           mailbox (keyword/date/sender narrowing), then
+        2. batches the remaining candidates to the LLM for the final
+           relevance pick.
+
+        ``progress(done, total)`` is called as batches complete so the TUI
+        can show status and cancel. Returns matching records, newest first.
+        """
+        if not query.strip():
+            return []
+        records = await self.list_mails()
+        records.sort(key=lambda record: record.mail.received_at, reverse=True)
+        if not self.config.llms:
+            raise RuntimeError("No LLM is configured; add one in Settings → LLMs.")
+        llm_ids = [llm.llm_id for llm in self.config.llms]
+
+        def _brief(record: MailRecord) -> str:
+            from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
+
+            body = _plain_body(record.mail)[:300].replace("\n", " ")
+            return (
+                f"id={record.record_id}\n"
+                f"date={record.mail.received_at.date().isoformat()}\n"
+                f"from={record.mail.sender.address}\n"
+                f"subject={record.mail.subject}\n"
+                f"summary={record.summary or ''}\n"
+                f"body={body}"
+            )
+
+        # plan once: let the LLM narrow the field with hard filters first
+        plan_messages: list[dict[str, str]] = [
+            {
+                "role": "system",
+                "content": (
+                    "You narrow a mail search. The user states a need; you "
+                    "reply with a compact JSON filter plan and nothing else: "
+                    '{"keywords": ["..."], "senders": ["..."], '
+                    '"after": "YYYY-MM-DD" | null, "before": "YYYY-MM-DD" | null}. '
+                    "keywords are lowercase substrings likely in subject/summary/"
+                    "body; senders are lowercase domain or address fragments."
+                ),
+            },
+            {"role": "user", "content": query},
+        ]
+        plan_completion = await self.router.chat(
+            plan_messages,
+            primary=llm_ids[0],
+            fallback=llm_ids[1:],
+            options={"temperature": 0.1},
+        )
+        candidates = records
+        try:
+            raw_plan: Any = json.loads(plan_completion.text.strip().strip("`"))
+            plan: dict[str, Any] = (
+                cast("dict[str, Any]", raw_plan) if isinstance(raw_plan, dict) else {}
+            )
+            raw_keywords: Any = plan.get("keywords") or []
+            raw_senders: Any = plan.get("senders") or []
+            if plan:
+                raw_keyword_items = (
+                    cast("list[Any]", raw_keywords) if isinstance(raw_keywords, list) else []
+                )
+                raw_sender_items = (
+                    cast("list[Any]", raw_senders) if isinstance(raw_senders, list) else []
+                )
+                keywords = [str(k).lower() for k in raw_keyword_items]
+                senders = [str(s).lower() for s in raw_sender_items]
+                if keywords or senders:
+
+                    def _hard_filter(record: MailRecord) -> bool:
+                        from mailflow.processors import (
+                            _plain_body,  # pyright: ignore[reportPrivateUsage]
+                        )
+
+                        haystack = " ".join(
+                            (
+                                record.mail.subject or "",
+                                record.mail.sender.address,
+                                record.summary or "",
+                                _plain_body(record.mail)[:4000],
+                            )
+                        ).lower()
+                        return not (
+                            (senders and not any(s in haystack for s in senders))
+                            or (keywords and not any(k in haystack for k in keywords))
+                        )
+
+                    candidates = [record for record in records if _hard_filter(record)]
+        except Exception:
+            candidates = records  # plan parse failure: fall back to all mails
+
+        # final relevance pass in batches
+        matched: list[MailRecord] = []
+        batch_size = 25
+        batches = [candidates[i : i + batch_size] for i in range(0, len(candidates), batch_size)]
+        done = 0
+        total = len(candidates)
+        for batch in batches:
+            listing = "\n\n".join(_brief(record) for record in batch)
+            messages: list[dict[str, str]] = [
+                {"role": "system", "content": self._SMART_SEARCH_PROMPT},
+                {"role": "user", "content": f"Need: {query}\n\nMails:\n{listing}"},
+            ]
+            try:
+                completion = await self.router.chat(
+                    messages,
+                    primary=llm_ids[0],
+                    fallback=llm_ids[1:],
+                    options={"temperature": 0.1},
+                )
+                raw_ids: Any = json.loads(completion.text.strip().strip("`"))
+                id_items: list[Any] = (
+                    cast("list[Any]", raw_ids) if isinstance(raw_ids, list) else []
+                )
+                wanted = {str(i).lower() for i in id_items}
+                matched.extend(r for r in batch if r.record_id in wanted)
+            except Exception:
+                logger.warning("smart search batch failed; skipping batch")
+            done += len(batch)
+            if progress is not None:
+                progress(done, total)
+        matched.sort(key=lambda record: record.mail.received_at, reverse=True)
+        return matched
+
     async def update_mail_analysis(
         self,
         record_id: str,

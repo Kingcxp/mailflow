@@ -604,7 +604,7 @@
       "extras_access_token": "access_token; leave empty when the bot side has none",
       "extras_token": "Gateway auth token",
       "extras_targets": "Delivery targets: group:<id> / user:<id> (onebot).",
-      "bots_login_help": "Login: QR scanning happens in the bot runtime — start NapCat or OpenWeChat and scan there first, then click Add here to enter its address and targets; the Status column shows connection-test results.",
+      "bots_login_help": "Login: QR scanning happens in the bot runtime — start NapCat, OpenWeChat or WeChatPadPro and scan there first, then click Add here to enter its address and targets; the Status column shows connection-test results.",
       "notify_title": "Latest mail notifications",
       "feedback_marker": "Rejected",
       "detail_failed_note": "analysis failed",
@@ -714,7 +714,12 @@
       "log_export_filename_placeholder": "File name, e.g. mailflow.log",
       "log_export_filename_required": "Please enter a file name",
       "log_export_failed": "Save failed: {error}",
-      "logs_exported": "Logs saved to {path}"
+      "logs_exported": "Logs saved to {path}",
+      "bots_provider_wechatpadpro": "WeChat (WeChatPadPro pad protocol, auto-deploy)",
+      "smart_search": "Smart find…",
+      "smart_search_cancel": "Cancel search",
+      "smart_search_running": "Smart search running… click the button to cancel.",
+      "smart_search_failed": "Smart search failed: {error}"
     },
     "update": {
       "applied_title": "Applied updates",

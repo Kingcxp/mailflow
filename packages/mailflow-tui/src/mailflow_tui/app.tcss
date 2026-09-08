@@ -55,6 +55,14 @@ Button:focus {
     text-style: bold reverse;
 }
 
+#mail-search-row {
+    height: auto;
+}
+
+#smart-search {
+    margin-left: 1;
+}
+
 #mail-search {
     dock: top;
     margin: 0 1 1 1;
@@ -184,6 +192,19 @@ ActionModal {
 
 #mail-summary {
     color: $text;
+    margin-bottom: 1;
+}
+
+#mail-reason {
+    margin-bottom: 1;
+}
+
+#mail-actions {
+    margin-bottom: 1;
+}
+
+#mail-attachments {
+    margin-bottom: 1;
 }
 
 #mail-body {

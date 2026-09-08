@@ -85,7 +85,7 @@ class NotificationsPane(Vertical):
     reports it in the status column.
     """
 
-    IM_PROVIDERS: ClassVar[frozenset[str]] = frozenset({"onebot", "openwechat"})
+    IM_PROVIDERS: ClassVar[frozenset[str]] = frozenset({"onebot", "openwechat", "wechatpadpro"})
     _PROBE_INTERVAL = 30.0
 
     def __init__(self, service: MailFlowService) -> None:
@@ -219,6 +219,14 @@ class NotificationsPane(Vertical):
     def on_data_table_row_highlighted(self, event: Any) -> None:
         self._selected_id = str(event.row_key.value)
         self._sync_selection_controls()
+
+    async def on_data_table_row_selected(self, event: Any) -> None:
+        self._selected_id = str(event.row_key.value)
+        self._sync_selection_controls()
+        from mailflow_tui.settings import _double_clicked
+
+        if _double_clicked("notifiers", self._selected_id):
+            await self._edit_selected()
 
     def _refresh_urgency_options(self) -> None:
         urgency = self.query_one_optional("#notif-urgency", Select)

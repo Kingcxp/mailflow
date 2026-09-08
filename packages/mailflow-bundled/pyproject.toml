@@ -14,6 +14,8 @@ dependencies = [
   "mailflow-llm-anthropic",
   "mailflow-notify-console",
   "mailflow-notify-onebot",
+  "mailflow-notify-openwechat",
+  "mailflow-notify-wechatpadpro",
   "mailflow-export-nonebot",
   "mailflow-export-astrbot",
 ]

@@ -604,7 +604,7 @@
       "extras_access_token": "access_token，与机器人端 access_token 一致时可留空",
       "extras_token": "网关鉴权 token",
       "extras_targets": "通知投递目标:group:<群号> / user:<QQ号>(onebot)。",
-      "bots_login_help": "登录方式：扫码在机器人运行时里完成——先启动 NapCat 或 OpenWeChat 并扫码登录，再在这里点“添加”填写它的地址与推送目标；状态列显示连接测试结果。",
+      "bots_login_help": "登录方式：扫码在机器人运行时里完成——先启动 NapCat、OpenWeChat 或 WeChatPadPro 并扫码登录，再在这里点“添加”填写它的地址与推送目标；状态列显示连接测试结果。",
       "notify_title": "最新邮件通知",
       "feedback_marker": "已打回",
       "detail_failed_note": "解析失败",
@@ -714,7 +714,12 @@
       "log_export_filename_placeholder": "文件名，例如 mailflow.log",
       "log_export_filename_required": "请输入文件名",
       "log_export_failed": "保存失败：{error}",
-      "logs_exported": "日志已保存到 {path}"
+      "logs_exported": "日志已保存到 {path}",
+      "bots_provider_wechatpadpro": "微信（WeChatPadPro 平板协议 · 自动部署）",
+      "smart_search": "智能查找…",
+      "smart_search_cancel": "取消查找",
+      "smart_search_running": "智能查找进行中…点击按钮可取消。",
+      "smart_search_failed": "智能查找失败：{error}"
     },
     "update": {
       "applied_title": "已应用的更新",

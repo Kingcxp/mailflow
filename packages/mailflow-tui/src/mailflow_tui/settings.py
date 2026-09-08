@@ -390,6 +390,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 "onebot",
                 "napcat",
                 "openwechat",
+                "wechatpadpro",
             )
             self._provider_choices = tuple(p for p in _ORDER if p in choices) + tuple(
                 sorted(choices - set(_ORDER))
@@ -1381,6 +1382,34 @@ class _NotifyFeed:
         return list(self._entries)
 
 
+_CLICK_WINDOW_SECONDS = 0.5
+"""Double-click window for list rows (this textual has no RowActivated)."""
+
+
+_double_click_state: tuple[str, str, float] | None = None
+"""Last (table, row, monotonic time) click for _double_clicked."""
+
+
+def _double_clicked(stamp_key: str, row_key: str) -> bool:
+    """True on the SECOND selection of the same row within the window."""
+    global _double_click_state
+    import time as _time
+
+    now = _time.monotonic()
+    stamp = _double_click_state
+    if stamp is not None:
+        last_table, last_key, last_time = stamp
+        if (
+            last_table == stamp_key
+            and last_key == row_key
+            and now - last_time <= _CLICK_WINDOW_SECONDS
+        ):
+            _double_click_state = None
+            return True
+    _double_click_state = (stamp_key, row_key, now)
+    return False
+
+
 class LLMPane(Vertical):
     """The ordered LLM chain: first entry is default, the rest are fallbacks."""
 
@@ -1479,12 +1508,21 @@ class LLMPane(Vertical):
             self._selected = None
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if _table_id(event) == "llms-table":
+        if _table_id(event) == "llms-table" and event.row_key.value is not None:
             self._selected = int(str(event.row_key.value))
+            if _double_clicked("llms", str(event.row_key.value)):
+                self._open_form(self._selected)
 
     async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if _table_id(event) == "llms-table" and event.row_key.value is not None:
             self._selected = int(str(event.row_key.value))
+
+    async def on_data_table_row_activated(self, event: Any) -> None:
+        """Enter on an LLM row opens the edit form (double-click handled
+        by _register_row_click in row_selected)."""
+        if _table_id(event) == "llms-table" and event.row_key.value is not None:
+            self._selected = int(str(event.row_key.value))
+            self._open_form(self._selected)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
@@ -1697,8 +1735,12 @@ class AccountsPane(Vertical):
     # -- events ------------------------------------------------------------
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if _table_id(event) == "accounts-table":
+        if _table_id(event) == "accounts-table" and event.row_key.value is not None:
             self._selected = int(str(event.row_key.value))
+            if _double_clicked("accounts", str(event.row_key.value)):
+                index = self._selected
+                if index < len(self._service.config.accounts):
+                    self._open_form(index)
             return
         if _table_id(event) == "history-table":
             record_id = str(event.row_key.value)

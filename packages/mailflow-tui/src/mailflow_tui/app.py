@@ -326,10 +326,10 @@ class ActionModal(ModalScreen[Any]):
         item = self._item
         yield Static(self._service.t("tui.action_detail"), id="action-title")
         with ScrollableContainer(id="action-detail-scroll"):
-            yield Label(f"{self._service.t('tui.action_time')}: {escape(item.time_range)}")
-            yield Label(f"{self._service.t('tui.action_type')}: {escape(item.action_type)}")
-            yield Label(f"{self._service.t('tui.action_content')}: {escape(item.summary)}")
-            yield Label(f"{self._service.t('tui.action_notes')}: {escape(item.notes or '-')}")
+            yield Label(f"{self._service.t('tui.action_time')}: {escape(item.time_range)}\n")
+            yield Label(f"{self._service.t('tui.action_type')}: {escape(item.action_type)}\n")
+            yield Label(f"{self._service.t('tui.action_content')}:\n{escape(item.summary)}\n")
+            yield Label(f"{self._service.t('tui.action_notes')}: {escape(item.notes or '-')}\n")
             yield Label(f"{self._service.t('tui.action_source')}: {escape(item.mail_id)}")
             # the source mail's own details load asynchronously below
             yield Static("", id="action-mail-detail")
@@ -358,25 +358,26 @@ class ActionModal(ModalScreen[Any]):
             body = re.sub(r"<[^>]+>", " ", body)
             body = re.sub(r"[ \t\r\f\v]+", " ", body).strip()
         lines = [
-            f"[bold]{self._service.t('tui.column_subject')}:[/bold] {escape(mail.subject)}",
+            f"[bold]{self._service.t('tui.column_subject')}:[/bold] {escape(mail.subject)}\n",
             f"[bold]{self._service.t('tui.column_sender')}:[/bold] "
-            f"{escape(mail.sender.display or mail.sender.address)}",
+            f"{escape(mail.sender.display or mail.sender.address)}\n",
             f"[bold]{self._service.t('tui.column_date')}:[/bold] "
-            f"{mail.date.strftime('%Y-%m-%d %H:%M')}",
+            f"{mail.date.strftime('%Y-%m-%d %H:%M')}\n",
         ]
         analysis_summary = record.analysis.summary if record.analysis else ""
         if analysis_summary:
             lines.append(
-                f"[bold]{self._service.t('tui.detail_summary')}:[/bold] {escape(analysis_summary)}"
+                f"[bold]{self._service.t('tui.detail_summary')}:[/bold]\n"
+                f"{escape(analysis_summary)}\n"
             )
         reason = record.analysis.reason if record.analysis else ""
         if reason:
             lines.append(
-                f"[bold]{self._service.t('tui.detail_reason')}:[/bold] "
-                f"{escape(self._service.display_text(reason))}"
+                f"[bold]{self._service.t('tui.detail_reason')}:[/bold]\n"
+                f"{escape(self._service.display_text(reason))}\n"
             )
         lines.append(
-            f"[bold]{self._service.t('tui.detail_body')}:[/bold] "
+            f"[bold]{self._service.t('tui.detail_body')}:[/bold]\n"
             f"{escape(body[:800] or '(no body)')}"
         )
         node.update("\n".join(lines))
@@ -396,13 +397,21 @@ class MailPane(Vertical):
         # changes, reload-all); concurrent clear+add_row passes interleave
         # into DuplicateKeys — serialize them
         self._refresh_lock = asyncio.Lock()
+        # smart search: while active, the table shows ONLY the LLM-picked
+        # results; cancel restores the previous view. The snapshot is the
+        # full record list taken when the search started.
+        self._smart_searching = False
+        self._smart_search_task: asyncio.Task[list[MailRecord]] | None = None
+        self._smart_snapshot: list[MailRecord] = []
 
     def compose(self) -> ComposeResult:
         # the urgency Select auto-selects "auto" while mounting and fires
         # Changed; swallow that programmatic event (and the relabel restore)
         # so it never stamps an override onto the selected mail
         self._urgency_suppress = True
-        yield Input(placeholder=self._service.t("tui.search_placeholder"), id="mail-search")
+        with Horizontal(id="mail-search-row"):
+            yield Input(placeholder=self._service.t("tui.search_placeholder"), id="mail-search")
+            yield Button(self._service.t("tui.smart_search"), id="smart-search", variant="primary")
         yield Static("", id="mail-empty-hint")
         with Horizontal():
             yield DataTable(id="mail-table")
@@ -647,6 +656,80 @@ class MailPane(Vertical):
             self._sync_urgency_select(record)
         await self._show_selected()
 
+    async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Cursor movement (arrow keys) highlights rows without selecting;
+        the detail pane must follow the highlight so what the user looks at
+        is what the right side shows."""
+        if event.row_key.value is None or getattr(self, "_smart_searching", False):
+            return
+        self._selected_id = event.row_key.value
+        record = next((r for r in self._records if r.record_id == self._selected_id), None)
+        if record is not None:
+            self._sync_urgency_select(record)
+        await self._show_selected()
+
+    def _smart_button(self) -> Button | None:
+        return self.query_one_optional("#smart-search", Button)
+
+    def _set_smart_label(self, key: str) -> None:
+        button = self._smart_button()
+        if button is not None:
+            button.label = self._service.t(key)
+
+    async def _toggle_smart_search(self) -> None:
+        search = self.query_one_optional("#mail-search", Input)
+        query = search.value.strip() if search is not None else ""
+        if self._smart_searching:
+            # cancel: stop the task and restore the pre-search view
+            if self._smart_search_task is not None and not self._smart_search_task.done():
+                self._smart_search_task.cancel()
+            self._smart_searching = False
+            self._records = self._smart_snapshot
+            self._smart_search_task = None
+            self._set_smart_label("tui.smart_search")
+            await self.refresh_mail()
+            return
+        if not query:
+            return
+        self._smart_snapshot = list(self._records)
+        self._smart_searching = True
+        self._set_smart_label("tui.smart_search_cancel")
+        hint = self.query_one_optional("#mail-empty-hint", Static)
+        if hint is not None:
+            hint.update(self._service.t("tui.smart_search_running"))
+            hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+        table = self._mail_table()
+        if table is not None:
+            table.clear()
+
+        async def _run() -> list[MailRecord]:
+            def _progress(done: int, total: int) -> None:
+                pass  # per-batch UI updates come from the polling loop below
+
+            return await self._service.smart_search(query, progress=_progress)
+
+        self._smart_search_task = asyncio.create_task(_run())
+        try:
+            results = await self._smart_search_task
+        except asyncio.CancelledError:
+            return  # cancel path restores the view itself
+        except Exception as exc:
+            if self._smart_searching:
+                self._smart_searching = False
+                self._records = self._smart_snapshot
+                self._set_smart_label("tui.smart_search")
+                if hint is not None:
+                    hint.update(
+                        f"[red]{self._service.t('tui.smart_search_failed', error=str(exc))}[/red]"
+                    )
+                    hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+            return
+        self._smart_searching = False
+        self._smart_search_task = None
+        self._set_smart_label("tui.smart_search")
+        self._records = results
+        await self.refresh_mail()
+
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id in ("mail-urgency-filter", "mail-sort"):
             await self.refresh_mail()
@@ -774,6 +857,9 @@ class MailPane(Vertical):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
+        if button_id == "smart-search":
+            await self._toggle_smart_search()
+            return
         if button_id == "btn-refresh":
             await self.refresh_mail()
             return
@@ -1319,6 +1405,7 @@ class LogsPane(Vertical):
         "onebot": "chat",
         "napcat": "chat",
         "openwechat": "chat",
+        "wechatpadpro": "chat",
         "llm": "llm",
         "pipeline": "parse",
         "processor": "parse",
@@ -1335,6 +1422,7 @@ class LogsPane(Vertical):
     _CHAT_PLATFORMS: ClassVar[dict[str, tuple[str, str]]] = {
         "napcat": ("napcat", "#F56C6C"),
         "openwechat": ("openwechat", "#E6A23C"),
+        "wechatpadpro": ("wechatpadpro", "#67C23A"),
     }
 
     @staticmethod

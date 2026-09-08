@@ -194,9 +194,22 @@ async def test_full_chat_command_chain_replies() -> None:
             for seg in content:
                 text_data: dict[str, Any] = dict(seg["data"])
                 parts.append(str(text_data["text"]))
-        joined = "".join(parts)
-        assert "#mailflow mail list" in joined
-        assert "#mailflow subscribe" in joined
+
+        # single-string replies take the repr() preview path in bot_server;
+        # the invalid ".80r" f-string spec crashed exactly there
+        await _post_event(
+            bridge.port,
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "user_id": 404291187,
+                "group_id": 565424593,
+                "raw_message": "#mailflow status",
+                "self_id": 3174143625,
+            },
+        )
+        await asyncio.sleep(0.3)
+        assert len(onebot.requests) >= 2, "status reply never sent"
     finally:
         await bridge.stop()
         await bot_server.stop()

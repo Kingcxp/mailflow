@@ -22,6 +22,7 @@ from mailflow_mail_imap.plugin import plugin as imap_plugin
 from mailflow_notify_console.plugin import plugin as notify_plugin
 from mailflow_notify_onebot.plugin import plugin as onebot_plugin
 from mailflow_notify_openwechat.plugin import plugin as openwechat_plugin
+from mailflow_notify_wechatpadpro.plugin import plugin as wechatpadpro_plugin
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 
 BUNDLED_PLUGINS: tuple[Any, ...] = (
@@ -35,6 +36,7 @@ BUNDLED_PLUGINS: tuple[Any, ...] = (
     notify_plugin,
     onebot_plugin,
     openwechat_plugin,
+    wechatpadpro_plugin,
     nonebot_export_plugin,
     astrbot_export_plugin,
 )

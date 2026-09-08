@@ -104,7 +104,14 @@ class BotServer:
                     instance_id=instance,
                 )
                 if reply:
-                    preview = f"{len(reply)} chunks" if isinstance(reply, list) else f"{reply:.80r}"
+                    # !r then slice: ".80r" is an invalid format spec
+                    # (ValueError: Unknown format code 'r') — it crashed
+                    # the reply log line and turned every successful
+                    # single-string reply into a 500 AFTER the command
+                    # had already succeeded
+                    preview = (
+                        f"{len(reply)} chunks" if isinstance(reply, list) else repr(reply)[:80]
+                    )
                     logger.info("chat[%s] reply to %s: %s", instance, chat_id, preview)
                 # a chunk list passes through as a JSON array — the onebot
                 # bridge renders it as one merged-forward message
