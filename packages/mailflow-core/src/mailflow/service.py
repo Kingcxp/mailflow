@@ -1391,6 +1391,34 @@ be one of ad|info|important|urgent. The original mail body is never edited.
         not carry; ``help``/``example`` render multi-message output; the
         rest (mail/action/reply/feedback/...) delegate to the shared
         CommandRouter so chat and TUI keep one implementation."""
+        try:
+            return await self._mailflow_command_inner(
+                args,
+                sender=sender,
+                chat_id=chat_id,
+                chat_type=chat_type,
+                provider=provider,
+                instance_id=instance_id,
+            )
+        except Exception:
+            # A chat command must NEVER die silently: the user has no way
+            # to tell 'crashed' from 'ignored'. Log the traceback (the
+            # bot_server DEBUG swallow hid a live 500 with zero trace) and
+            # return a visible error reply.
+            logger.exception("chat command %r failed", args)
+            return self.t("chat.error_reply")
+
+    async def _mailflow_command_inner(
+        self,
+        args: str,
+        *,
+        sender: str,
+        chat_id: str,
+        chat_type: str,
+        provider: str,
+        instance_id: str,
+    ) -> str | list[str]:
+        """The actual mailflow subcommand dispatch (see _mailflow_command)."""
         parts = args.split()
         sub = parts[0] if parts else "help"
         prefix = self.command_prefix()

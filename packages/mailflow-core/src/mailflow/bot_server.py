@@ -123,8 +123,10 @@ class BotServer:
                 await self._respond(writer, 200, {"reply": payload_reply})
             else:
                 await self._respond(writer, 404, {"reply": ""})
-        except Exception as exc:
-            logger.debug("bot endpoint request failed: %s", exc)
+        except Exception:
+            # DEBUG swallowed live 500s with zero trace — an endpoint that
+            # fails is a bug worth seeing at WARNING with the traceback
+            logger.warning("bot endpoint request failed", exc_info=True)
             with contextlib.suppress(Exception):
                 await self._respond(writer, 500, {"reply": ""})
         finally:

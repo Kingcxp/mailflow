@@ -742,6 +742,7 @@
       "not_subscribed": "当前聊天尚未订阅。",
       "status": "机器人运行中（网关 {gateway}），共 {chats} 个聊天接收推送。",
       "router_missing": "命令服务未启动，请重启 MailFlow。",
+      "error_reply": "命令执行出错（内部错误），请查看 MailFlow 日志。",
       "example_mail": "【MailFlow · 新的重要邮件】\n[{urgency}] {subject}\n来自：{sender}\n{summary}",
       "example_ad": "【MailFlow · 普通邮件】\n[{urgency}] {subject}\n来自：{sender}\n普通邮件同样推送，不会被过滤；如分类有误，可发送 feedback 纠正。",
       "example_reminder": "【MailFlow · 日程提醒】\n「{summary}」即将到期\n截止时间：{due}",

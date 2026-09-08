@@ -742,6 +742,7 @@
       "not_subscribed": "This chat is not subscribed.",
       "status": "Bot is running (gateway {gateway}); {chats} chat(s) are receiving pushes.",
       "router_missing": "The command service is not running. Please restart MailFlow.",
+      "error_reply": "The command failed with an internal error. Check the MailFlow logs for details.",
       "example_mail": "【MailFlow · New important mail】\n[{urgency}] {subject}\nFrom: {sender}\n{summary}",
       "example_ad": "【MailFlow · Ordinary mail】\n[{urgency}] {subject}\nFrom: {sender}\nOrdinary mail is delivered as well and is not filtered out; send feedback if a category is incorrect.",
       "example_reminder": "【MailFlow · Schedule reminder】\n\"{summary}\" is due soon\nDue: {due}",

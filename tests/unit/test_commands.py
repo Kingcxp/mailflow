@@ -1106,6 +1106,35 @@ async def test_unprefixed_mailflow_text_gets_namespace_hint() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mailflow_command_crash_returns_error_reply() -> None:
+    """An internal crash must never reach the user as silence. A broken
+    internal state (reported live: subscribe/status/unsubscribe 500ing on
+    a running instance with no visible trace — bot_server logged the
+    failure at DEBUG) now yields a visible error reply and a logged
+    traceback."""
+    from mailflow.config import MailFlowConfig
+    from mailflow.service import MailFlowService
+
+    cfg = MailFlowConfig()
+    service = MailFlowService.__new__(MailFlowService)
+    service.config = cfg
+    from mailflow.i18n import I18n as _I18n
+
+    service.i18n = _I18n()
+    # subscriptions deliberately unset -> AttributeError inside the dispatch
+    reply = await service.command_dispatch(
+        "/mailflow status",
+        sender="10001",
+        chat_id="888",
+        chat_type="group",
+        provider="napcat",
+        instance_id="qq-bot-1",
+    )
+    assert reply is not None
+    assert "internal error" in reply or "内部错误" in reply
+
+
+@pytest.mark.asyncio
 async def test_mailflow_subscribe_requires_admin() -> None:
     from mailflow.config import MailFlowConfig, NotifierConfig
     from mailflow.service import MailFlowService
