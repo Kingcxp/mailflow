@@ -164,7 +164,8 @@
         "storage.provider": "存储后端组件 id（内置：sqlite）。",
         "general": {
           "command_prefix": "聊天平台消息的命令前缀（如 /mail list）；不以它开头的消息会被忽略"
-        }
+        },
+        "general.hourly_summary": "每小时由 LLM 将该小时内收到的所有邮件汇总为简报，并推送给启用了此项的 notifier（options.hourly_summary = true）；该小时没有邮件则不发送"
       },
       "description": "说明",
       "legend": "* 表示机密字段，输出中已隐藏。带 [] 的是列表项（显示第一项）；列表请在 TOML 文件中编辑。",
@@ -719,7 +720,14 @@
       "smart_search": "智能查找…",
       "smart_search_cancel": "取消查找",
       "smart_search_running": "智能查找进行中…点击按钮可取消。",
-      "smart_search_failed": "智能查找失败：{error}"
+      "smart_search_failed": "智能查找失败：{error}",
+      "hourly_usage": "用法：hourly on | hourly off | hourly（查看状态）",
+      "hourly_on": "已开启本聊天的每小时邮件简报。",
+      "hourly_off": "已关闭本聊天的每小时邮件简报。",
+      "hourly_status_on": "本聊天的每小时邮件简报：已开启。",
+      "hourly_status_off": "本聊天的每小时邮件简报：已关闭。",
+      "manual_bot": "【MailFlow · 机器人与推送】\n{cmd_sub} — 推送新邮件到本聊天\n{cmd_unsub} — 停止推送到本聊天\nhourly on | hourly off — 开/关本聊天的每小时 LLM 邮件简报\nhourly — 查看简报是否开启\n{cmd_status} — 机器人状态",
+      "manual_system": "【MailFlow · 系统】\n{cmd_lang} — 切换语言\n{cmd_runtime} — 运行时状态\n{cmd_trash} — 回收站列表"
     },
     "update": {
       "applied_title": "已应用的更新",
@@ -747,6 +755,11 @@
       "not_subscribed": "当前聊天尚未订阅。",
       "status": "机器人运行中（网关 {gateway}），共 {chats} 个聊天接收推送。",
       "router_missing": "命令服务未启动，请重启 MailFlow。",
+      "hourly_usage": "用法：hourly on | hourly off | hourly（查看状态）",
+      "hourly_on": "已开启本聊天的每小时邮件简报。",
+      "hourly_off": "已关闭本聊天的每小时邮件简报。",
+      "hourly_status_on": "本聊天的每小时邮件简报：已开启。",
+      "hourly_status_off": "本聊天的每小时邮件简报：已关闭。",
       "error_reply": "命令执行出错（内部错误），请查看 MailFlow 日志。",
       "example_mail": "【MailFlow · 新的重要邮件】\n[{urgency}] {subject}\n来自：{sender}\n{summary}",
       "example_ad": "【MailFlow · 普通邮件】\n[{urgency}] {subject}\n来自：{sender}\n普通邮件同样推送，不会被过滤；如分类有误，可发送 feedback 纠正。",

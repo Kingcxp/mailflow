@@ -112,6 +112,29 @@ class WechatPadProNotifier:
                 except Exception as exc:
                     logger.warning("wechatpadpro text push to %s failed: %s", wxid, exc)
 
+    async def push_to_target(self, target: str, text: str) -> None:
+        """Push one plain-text message to a single ``user:<wxid>`` or
+        ``group:<chatroom>`` target (per-chat hourly-summary delivery)."""
+        _kind, _, wxid = target.partition(":")
+        wxid = wxid.strip() or target.strip()
+        if not wxid:
+            return
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            key = await self._key(client)
+            if not key:
+                return
+            response = await client.post(
+                f"{self._url}/Msg/SendTxt",
+                params={"key": key},
+                json={"Wxid": "", "ToWxid": wxid, "Content": text, "Type": 0},
+            )
+            if response.status_code >= 400:
+                logger.warning(
+                    "wechatpadpro notifier: targeted push to %s rejected: HTTP %d",
+                    wxid,
+                    response.status_code,
+                )
+
     async def notify(self, record: MailRecord) -> None:
         if not self._url or not self._targets:
             logger.warning(

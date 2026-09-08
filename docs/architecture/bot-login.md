@@ -221,7 +221,8 @@ preferences store), so notifications arrive after a restart too.
 
 Notifiers deliver mail at `minimum_urgency` or above — the default is
 `info`, so nothing (ads included) is silently dropped; raise it in the
-bot form to filter noise. Reminder and daily-digest log lines follow
+bot form to filter noise. Reminder, daily-digest and hourly-summary log
+lines follow
 `general.language`.
 
 ## NapCat OneBot HTTP endpoint
@@ -296,6 +297,18 @@ Add platform
   subject to Tencent-side risk control (accounts can be warned or banned);
   pad-protocol integrations are third-party and carry the same class of
   risk.
+
+## Hourly mail summary
+
+With `general.hourly_summary = true` the scheduler summarizes the mail
+received during each closed hour with the primary LLM and pushes the
+briefing through the chat notifiers that opted in
+(`[[notifiers].options.hourly_summary = true`). An hour with no mail
+stays silent; the hour is processed exactly once (persisted marker), on
+the first scheduler tick after it ends. Per-chat opt-out from chat:
+`<prefix>mailflow hourly on|off` (admin-gated) stores the choice per
+notifier provider + instance + chat id; a target that never toggled
+defaults to on. Requires an LLM in Settings → LLMs.
 
 ## See also
 

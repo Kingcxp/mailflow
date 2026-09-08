@@ -164,7 +164,8 @@
         "storage.provider": "Storage backend component id (built in: sqlite).",
         "general": {
           "command_prefix": "Command prefix for chat-platform messages (e.g. /mail list); messages without it are ignored"
-        }
+        },
+        "general.hourly_summary": "Every hour the LLM summarizes all mail received in that hour into a briefing pushed through the notifiers that opted in (options.hourly_summary = true); silent when the hour had no mail"
       },
       "description": "DESCRIPTION",
       "legend": "* marks secret fields, redacted from output. Entries with [] are list items (first configured entry shown); edit lists in the TOML file.",
@@ -719,7 +720,14 @@
       "smart_search": "Smart find…",
       "smart_search_cancel": "Cancel search",
       "smart_search_running": "Smart search running… click the button to cancel.",
-      "smart_search_failed": "Smart search failed: {error}"
+      "smart_search_failed": "Smart search failed: {error}",
+      "hourly_usage": "Usage: hourly on | hourly off | hourly (status)",
+      "hourly_on": "Hourly mail briefing enabled for this chat.",
+      "hourly_off": "Hourly mail briefing disabled for this chat.",
+      "hourly_status_on": "Hourly mail briefing is ON for this chat.",
+      "hourly_status_off": "Hourly mail briefing is OFF for this chat.",
+      "manual_bot": "【MailFlow · Bot & pushes】\n{cmd_sub} — push new mail to this chat\n{cmd_unsub} — stop pushing to this chat\nhourly on | hourly off — hourly LLM mail briefing for this chat\nhourly — show whether the briefing is on\n{cmd_status} — bot status",
+      "manual_system": "【MailFlow · System】\n{cmd_lang} — switch language\n{cmd_runtime} — runtime status\n{cmd_trash} — trash list"
     },
     "update": {
       "applied_title": "Applied updates",
@@ -747,6 +755,11 @@
       "not_subscribed": "This chat is not subscribed.",
       "status": "Bot is running (gateway {gateway}); {chats} chat(s) are receiving pushes.",
       "router_missing": "The command service is not running. Please restart MailFlow.",
+      "hourly_usage": "Usage: hourly on | hourly off | hourly (status)",
+      "hourly_on": "Hourly mail briefing enabled for this chat.",
+      "hourly_off": "Hourly mail briefing disabled for this chat.",
+      "hourly_status_on": "Hourly mail briefing is ON for this chat.",
+      "hourly_status_off": "Hourly mail briefing is OFF for this chat.",
       "error_reply": "The command failed with an internal error. Check the MailFlow logs for details.",
       "example_mail": "【MailFlow · New important mail】\n[{urgency}] {subject}\nFrom: {sender}\n{summary}",
       "example_ad": "【MailFlow · Ordinary mail】\n[{urgency}] {subject}\nFrom: {sender}\nOrdinary mail is delivered as well and is not filtered out; send feedback if a category is incorrect.",

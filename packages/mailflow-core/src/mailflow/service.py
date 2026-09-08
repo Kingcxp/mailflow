@@ -1510,7 +1510,9 @@ matches."""
     # commands that need the chat context (subscriptions) or special
     # rendering (help/example); everything else delegates to CommandRouter
     # with the subcommand path joined back into one line
-    _CHAT_SUBCOMMANDS = frozenset({"help", "example", "subscribe", "unsubscribe", "status"})
+    _CHAT_SUBCOMMANDS = frozenset(
+        {"help", "example", "subscribe", "unsubscribe", "status", "hourly"}
+    )
 
     async def _mailflow_command(
         self,
@@ -1595,6 +1597,25 @@ matches."""
         if sub == "status":
             subs = await self.subscriptions.subscribers(provider, instance_id)
             return self.t("chat.status", gateway=instance_id, chats=len(subs))
+        if sub == "hourly":
+            # hourly LLM mail briefing: on/off per chat, or a status read.
+            # Admin-gated like subscribe: it changes what the bot pushes.
+            if not chat_id:
+                return self.t("chat.needs_context")
+            if not self._is_admin(sender, provider):
+                return self.t("chat.not_admin")
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            if arg not in ("on", "off", ""):
+                return self.t("chat.hourly_usage")
+            notifier_provider = "onebot" if provider == "napcat" else provider
+            pref_key = f"hourly_summary.chat.{notifier_provider}.{instance_id}.{chat_id}"
+            if arg == "":
+                enabled = bool(await self.storage.get_preference(pref_key))
+                return (
+                    self.t("chat.hourly_status_on") if enabled else self.t("chat.hourly_status_off")
+                )
+            await self.storage.set_preference(pref_key, "on" if arg == "on" else "off")
+            return self.t("chat.hourly_on") if arg == "on" else self.t("chat.hourly_off")
         if self.commands is None:
             return self.t("chat.router_missing")
         response = await self.commands.execute(args)

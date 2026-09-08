@@ -1135,6 +1135,91 @@ async def test_mailflow_command_crash_returns_error_reply() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mailflow_hourly_toggle() -> None:
+    """'hourly on/off' toggles a persisted per-chat preference; bare
+    'hourly' reads the state; non-admins are rejected."""
+    from mailflow.config import MailFlowConfig, NotifierConfig
+    from mailflow.service import MailFlowService
+
+    cfg = MailFlowConfig()
+    cfg.notifiers = [
+        NotifierConfig(
+            notifier_id="napcat-1",
+            provider="onebot",
+            options={"admins": ["10001"], "targets": ["group:888"], "http_url": "http://x"},
+        )
+    ]
+    service = MailFlowService.__new__(MailFlowService)
+    service.config = cfg
+    from mailflow.i18n import I18n as _I18n
+
+    service.i18n = _I18n()
+    service.commands = None
+    store: dict[str, str] = {}
+
+    class FakeSubs:
+        async def add(self, p: str, i: str, c: str) -> bool:
+            return True
+
+        async def remove(self, p: str, i: str, c: str) -> bool:
+            return True
+
+        async def subscribers(self, p: str, i: str) -> list[str]:
+            return []
+
+    service.subscriptions = FakeSubs()  # pyright: ignore[reportAttributeAccessIssue]
+
+    class S:
+        async def get_preference(self, k: str) -> str | None:
+            return store.get(k)
+
+        async def set_preference(self, k: str, v: str) -> None:
+            store[k] = v
+
+    service.storage = S()  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def rebuild() -> None:
+        pass
+
+    service._rebuild_notifiers = rebuild  # type: ignore[method-assign]
+
+    async def sync(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    service._sync_subscription_targets = sync  # type: ignore[method-assign]
+
+    async def call(text: str, sender: str = "10001") -> str:
+        result = await service.command_dispatch(
+            text,
+            sender=sender,
+            chat_id="888",
+            chat_type="group",
+            provider="napcat",
+            instance_id="napcat-1",
+        )
+        return str(result)
+
+    assert "OFF" in await call("/mailflow hourly") or "已关闭" in await call("/mailflow hourly")
+    assert "enabled" in await call("/mailflow hourly on") or "已开启" in await call(
+        "/mailflow hourly on"
+    )
+    assert await call("/mailflow hourly on")  # twice: idempotent
+    assert "ON" in await call("/mailflow hourly") or "已开启" in await call("/mailflow hourly")
+    assert store["hourly_summary.chat.onebot.napcat-1.888"] == "on"
+    assert "disabled" in await call("/mailflow hourly off") or "已关闭" in await call(
+        "/mailflow hourly off"
+    )
+    assert store["hourly_summary.chat.onebot.napcat-1.888"] == "off"
+    # non-admin rejected
+    rejected = await call("/mailflow hourly on", sender="99999")
+    assert "administrator" in rejected or "管理员" in rejected
+    # bad arg
+    assert "Usage" in await call("/mailflow hourly maybe") or "用法" in await call(
+        "/mailflow hourly maybe"
+    )
+
+
+@pytest.mark.asyncio
 async def test_mailflow_subscribe_requires_admin() -> None:
     from mailflow.config import MailFlowConfig, NotifierConfig
     from mailflow.service import MailFlowService

@@ -36,6 +36,27 @@ class OpenWechatNotifier:
             if kind in ("contact", "room") and name.strip():
                 self._targets.append((kind, name.strip()))
 
+    async def push_to_target(self, target: str, text: str) -> None:
+        """Push one plain-text message to a single ``contact:<name>`` or
+        ``room:<name>`` target (per-chat hourly-summary delivery)."""
+        kind, _, name = target.partition(":")
+        kind = kind.strip().lower()
+        name = name.strip() or target.strip()
+        if kind not in ("contact", "room"):
+            kind, name = "contact", target.strip()
+        payload = {
+            "to": {"type": "room" if kind == "room" else "contact", "name": name},
+            "text": text,
+        }
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(f"{self._url}/send", json=payload)
+            if response.status_code >= 400:
+                logger.warning(
+                    "openwechat notifier: targeted push to %s rejected: HTTP %d",
+                    target,
+                    response.status_code,
+                )
+
     async def notify(self, record: MailRecord) -> None:
         if not self._url or not self._targets:
             logger.warning("openwechat notifier: gateway_url/targets not configured; skipping")

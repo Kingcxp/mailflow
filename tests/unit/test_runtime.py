@@ -716,3 +716,188 @@ class TestDailyDigest:
             account_configs=[],
         )
         assert await runtime._fire_daily_digest(early, config.general) == 0  # pyright: ignore[reportPrivateUsage]
+
+
+class TestHourlySummary:
+    async def test_hourly_summary_pushes_to_opted_notifiers(self) -> None:
+        """With hourly_summary on, a closed hour with mail summarizes via
+        the LLM and pushes through opted-in notifiers only."""
+        from datetime import datetime as dt
+
+        class FakeRouter:
+            def __init__(self) -> None:
+                self.calls: list[list[dict[str, str]]] = []
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                self.calls.append(messages)
+
+                class C:
+                    text = "Hour briefing: one important mail."
+
+                return C()
+
+        class PushRecorder:
+            def __init__(self) -> None:
+                self.pushed: list[str] = []
+
+            async def push_text(self, text: str) -> None:
+                self.pushed.append(text)
+
+            async def push_to_target(self, target: str, text: str) -> None:
+                self.pushed.append(f"{target}: {text}")
+
+        storage = FakeStorage()
+        mail = make_mail()
+        mail.received_at = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
+        record = MailRecord(record_id=mail.normalized_message_id(), mail=mail)
+        await storage.save_mail(record)
+        config = MailFlowConfig.model_validate(
+            {
+                "general": {"workers": 1, "hourly_summary": True},
+                "llms": [{"llm_id": "llm-1"}],
+            }
+        )
+        engine = PipelineEngine([])
+        engine._router = FakeRouter()  # pyright: ignore[reportPrivateUsage]
+        pusher = PushRecorder()
+        notifier_config = NotifierConfig(
+            notifier_id="n0",
+            provider="onebot",
+            options={"hourly_summary": True, "targets": ["group:888"]},
+        )
+        runtime = MailFlowRuntime(
+            config,
+            sources={},
+            pipeline=engine,
+            storage=storage,
+            notifiers=[pusher],  # type: ignore[arg-type]
+            notifier_configs=[notifier_config],
+            events=EventBus(),
+            account_configs=[],
+        )
+        now = dt(2026, 8, 16, 10, 5, tzinfo=UTC)  # hour 09 is closed
+        assert await runtime._fire_hourly_summary(now, config.general) == 1  # pyright: ignore[reportPrivateUsage]
+        assert len(pusher.pushed) == 1
+        assert "group:888" in pusher.pushed[0]
+        # once per hour
+        assert await runtime._fire_hourly_summary(now, config.general) == 0  # pyright: ignore[reportPrivateUsage]
+        assert len(pusher.pushed) == 1
+
+    async def test_hourly_summary_silent_without_mail(self) -> None:
+        from datetime import datetime as dt
+
+        storage = FakeStorage()
+        config = MailFlowConfig.model_validate({"general": {"workers": 1, "hourly_summary": True}})
+        runtime = MailFlowRuntime(
+            config,
+            sources={},
+            pipeline=PipelineEngine([]),
+            storage=storage,
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            account_configs=[],
+        )
+        now = dt(2026, 8, 16, 10, 5, tzinfo=UTC)
+        assert await runtime._fire_hourly_summary(now, config.general) == 0  # pyright: ignore[reportPrivateUsage]
+        # the empty hour is still marked so it never retries
+        assert await storage.get_preference("hourly_summary.2026-08-16T09:00")  # pyright: ignore[reportPrivateUsage]
+
+    async def test_hourly_summary_disabled_is_noop(self) -> None:
+        from datetime import datetime as dt
+
+        storage = FakeStorage()
+        mail = make_mail()
+        mail.received_at = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        config = MailFlowConfig.model_validate({"general": {"workers": 1}})
+        runtime = MailFlowRuntime(
+            config,
+            sources={},
+            pipeline=PipelineEngine([]),
+            storage=storage,
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            account_configs=[],
+        )
+        now = dt(2026, 8, 16, 10, 5, tzinfo=UTC)
+        assert await runtime._fire_hourly_summary(now, config.general) == 0  # pyright: ignore[reportPrivateUsage]
+
+    async def test_hourly_summary_skips_open_hour(self) -> None:
+        """The current still-open hour is not summarized (partial picture)."""
+        from datetime import datetime as dt
+
+        storage = FakeStorage()
+        mail = make_mail()
+        mail.received_at = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        config = MailFlowConfig.model_validate({"general": {"workers": 1, "hourly_summary": True}})
+        runtime = MailFlowRuntime(
+            config,
+            sources={},
+            pipeline=PipelineEngine([]),
+            storage=storage,
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            account_configs=[],
+        )
+        now = dt(2026, 8, 16, 9, 45, tzinfo=UTC)  # inside hour 09
+        assert await runtime._fire_hourly_summary(now, config.general) == 0  # pyright: ignore[reportPrivateUsage]
+
+    async def test_hourly_summary_per_chat_opt_out(self) -> None:
+        """A chat that turned hourly off via the command is skipped."""
+        from datetime import datetime as dt
+
+        class PushRecorder:
+            def __init__(self) -> None:
+                self.pushed: list[str] = []
+
+            async def push_text(self, text: str) -> None:
+                self.pushed.append(text)
+
+            async def push_to_target(self, target: str, text: str) -> None:
+                self.pushed.append(f"{target}: {text}")
+
+        storage = FakeStorage()
+        mail = make_mail()
+        mail.received_at = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        await storage.set_preference("hourly_summary.chat.onebot.n0.888", "off")
+        config = MailFlowConfig.model_validate(
+            {
+                "general": {"workers": 1, "hourly_summary": True},
+                "llms": [{"llm_id": "llm-1"}],
+            }
+        )
+
+        class FakeRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                class C:
+                    text = "briefing"
+
+                return C()
+
+        engine = PipelineEngine([])
+        engine._router = FakeRouter()  # pyright: ignore[reportPrivateUsage]
+        pusher = PushRecorder()
+        notifier_config = NotifierConfig(
+            notifier_id="n0",
+            provider="onebot",
+            options={"hourly_summary": True, "targets": ["group:888", "group:999"]},
+        )
+        runtime = MailFlowRuntime(
+            config,
+            sources={},
+            pipeline=engine,
+            storage=storage,
+            notifiers=[pusher],  # type: ignore[arg-type]
+            notifier_configs=[notifier_config],
+            events=EventBus(),
+            account_configs=[],
+        )
+        now = dt(2026, 8, 16, 10, 5, tzinfo=UTC)
+        await runtime._fire_hourly_summary(now, config.general)  # pyright: ignore[reportPrivateUsage]
+        # group:888 opted out; group:999 (never toggled) still receives
+        assert pusher.pushed == ["group:999: briefing"]

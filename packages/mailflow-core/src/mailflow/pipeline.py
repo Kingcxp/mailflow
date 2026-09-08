@@ -80,6 +80,13 @@ class PipelineEngine:
     def bindings(self) -> list[ProcessorBinding]:
         return list(self._bindings)
 
+    @property
+    def router(self) -> LLMRouter | None:
+        """The LLM router handed in at construction (None in bare test
+        harnesses); the runtime's hourly summary reuses it so it follows
+        the same fallback chain as analysis."""
+        return self._router
+
     def _sanitize(self, message: str) -> str:
         # Belt-and-braces: strip anything that looks like a credential from
         # persisted notes. Backend plugins are expected to sanitize already.

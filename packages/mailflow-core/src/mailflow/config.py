@@ -141,6 +141,14 @@ class GeneralConfig(BaseModel):
         le=3600,
         description="How often the reminder scheduler checks due action items",
     )
+    hourly_summary: bool = Field(
+        default=False,
+        description=(
+            "Every hour the LLM summarizes all mail received in that hour "
+            "into a briefing pushed through the notifiers that opted in "
+            "(options.hourly_summary = true); silent when the hour had no mail"
+        ),
+    )
     auto_update: bool = Field(
         default=True,
         description="Check daily for MailFlow releases and plugin updates, and apply them automatically",

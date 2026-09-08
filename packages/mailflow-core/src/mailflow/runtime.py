@@ -11,7 +11,7 @@ import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from mailflow.config import GeneralConfig, MailAccountConfig, MailFlowConfig, NotifierConfig
@@ -478,6 +478,7 @@ class MailFlowRuntime:
         for item in await self._storage.list_custom_actions():
             fired += await self._fire_reminder(item, None, now, config)
         await self._fire_daily_digest(now, config)
+        await self._fire_hourly_summary(now, config)
         return fired
 
     async def _fire_daily_digest(self, now: datetime, config: GeneralConfig) -> int:
@@ -525,6 +526,154 @@ class MailFlowRuntime:
         )
         await self._storage.set_preference(f"digest.{today_key}", "fired")
         return 1
+
+    async def _fire_hourly_summary(self, now: datetime, config: GeneralConfig) -> int:
+        """Every hour (once per clock hour, persisted), summarize the mail
+        received during that hour with the LLM and push the briefing through
+        the notifiers that opted in (``options.hourly_summary``). An hour
+        with no mail is marked and stays silent."""
+        if not config.hourly_summary:
+            return 0
+        local_now = now.astimezone(ZoneInfo(config.timezone))
+        # summarize the LAST CLOSED hour: this tick fires every
+        # reminder_interval, so the boundary hour is caught on the first
+        # tick after it ends and the open hour is never partially summed
+        hour_start = to_utc(
+            local_now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+        )
+        hour_end = hour_start + timedelta(hours=1)
+        hour_key = hour_start.strftime("%Y-%m-%dT%H:00")
+        if await self._storage.get_preference(f"hourly_summary.{hour_key}"):
+            return 0
+        # mark FIRST: an LLM failure must not re-run the hour on every tick
+        await self._storage.set_preference(f"hourly_summary.{hour_key}", "fired")
+        mails = [
+            record
+            for record in await self._storage.list_mails()
+            if hour_start <= record.mail.received_at < hour_end
+        ]
+        opted_in = [
+            notifier
+            for notifier, notifier_config in zip(
+                self._notifiers, self._notifier_configs, strict=True
+            )
+            if notifier_config.options.get("hourly_summary")
+        ]
+        if not mails or not opted_in:
+            return 0
+        briefing = await self._summarize_hour(mails, hour_start, hour_end)
+        if not briefing:
+            return 0
+        for notifier, notifier_config in zip(self._notifiers, self._notifier_configs, strict=True):
+            if notifier not in opted_in:
+                continue
+            push = getattr(notifier, "push_text", None)
+            if push is None:
+                continue
+            try:
+                await self._push_hourly_targeted(notifier, notifier_config, briefing)
+            except Exception as exc:
+                logger.warning(
+                    "notifier %r hourly summary push failed: %s",
+                    getattr(notifier, "backend_id", type(notifier).__name__),
+                    exc,
+                )
+        reminder_logger.warning(
+            self._rt("reminder.hourly_log", hour=hour_key, count=len(mails))
+            or f"HOURLY SUMMARY {hour_key}: {len(mails)} mail(s)"
+        )
+        return 1
+
+    async def _push_hourly_targeted(
+        self,
+        notifier: Notifier,
+        notifier_config: NotifierConfig,
+        briefing: str,
+    ) -> None:
+        """Push the hourly briefing honoring the per-chat on/off toggles:
+        each configured target is skipped when its chat turned hourly off
+        (``hourly_summary.chat.<provider>.<instance>.<chat_id>`` = off);
+        targets never toggled default to on. Uses push-targeted sends when
+        the notifier supports them, else the plain chat push."""
+        raw_targets: Any = notifier_config.options.get("targets") or []
+        targets = [str(t) for t in cast("list[Any]", raw_targets) if str(t).strip()]
+        send_targeted = getattr(notifier, "push_to_target", None)
+        if not targets or send_targeted is None:
+            push = getattr(notifier, "push_text", None)
+            if push is not None:
+                await push(briefing)
+            return
+        for target in targets:
+            _kind, _, chat_id = target.partition(":")
+            chat_id = (chat_id or target).strip()
+            pref = f"hourly_summary.chat.{notifier_config.provider}.{self._instance_for(notifier_config)}.{chat_id}"
+            if await self._storage.get_preference(pref) == "off":
+                continue
+            try:
+                await send_targeted(target, briefing)
+            except Exception as exc:
+                logger.warning("wechatpadpro/onebot hourly push to %s failed: %s", target, exc)
+
+    def _instance_for(self, notifier_config: NotifierConfig) -> str:
+        """The gateway instance id backing this notifier: the notifier_id
+        is the instance id by guided-setup convention."""
+        return notifier_config.notifier_id
+
+    async def _summarize_hour(
+        self, mails: list[MailRecord], hour_start: datetime, hour_end: datetime
+    ) -> str:
+        """LLM briefing for one hour of mail; '' when no router/LLM is
+        wired or the request fails."""
+        router = self._pipeline.router
+        if router is None:
+            logger.warning("hourly summary: no LLM router wired; skipping")
+            return ""
+        llm_ids = [llm.llm_id for llm in self._config.llms]
+        if not llm_ids:
+            logger.warning("hourly summary: no LLM configured; skipping")
+            return ""
+        from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
+
+        lines: list[str] = []
+        for record in mails[:50]:  # bound the prompt: 50 mails is plenty for an hour
+            body = _plain_body(record.mail)[:400].replace("\n", " ")
+            lines.append(
+                f"- [{record.mail.received_at:%H:%M}] "
+                f"{record.mail.sender.address}: {record.mail.subject} — "
+                f"{record.summary or body}"
+            )
+        messages: list[dict[str, str]] = [
+            {
+                "role": "system",
+                "content": (
+                    "You write MailFlow's hourly mail briefing. You receive "
+                    "the mails received in one hour. Reply with a compact "
+                    "briefing in the user's language: one line per "
+                    "noteworthy mail (sender, subject, why it matters); "
+                    "group trivial/ad mail into a single closing line; "
+                    "no greeting, no sign-off, no markdown headers. If "
+                    "nothing is noteworthy, say so in one line."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Window: {hour_start:%H:00}-{hour_end:%H:00} "
+                    f"({len(mails)} mail(s))\n\n" + "\n".join(lines)
+                ),
+            },
+        ]
+        try:
+            completion = await router.chat(
+                messages,
+                primary=llm_ids[0],
+                fallback=llm_ids[1:],
+                options={"temperature": 0.3},
+            )
+            return completion.text.strip()
+        except Exception as exc:
+            logger.error("hourly summary LLM request failed: %s", exc)
+            return ""
 
     async def _approaching_actions(self, day_start: datetime, days_before: int) -> list[ActionItem]:
         """Actions due within ``days_before`` days from ``day_start``, soonest first."""
