@@ -64,8 +64,13 @@ Button:focus {
 }
 
 #mail-search {
-    dock: top;
+    margin: 0 0 1 1;
+    width: 1fr;
+}
+
+#smart-search {
     margin: 0 1 1 1;
+    height: auto;
 }
 
 #mail-empty-hint {

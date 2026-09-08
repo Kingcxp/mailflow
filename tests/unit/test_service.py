@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
-from mailflow.config import MailFlowConfig
+from mailflow.config import LLMConfig, MailFlowConfig
 from mailflow.contracts import LLMRouter, MailMessage, ReplyDraft
 from mailflow.domain import (
     MailAddress,
@@ -342,3 +342,122 @@ class TestMailboxHistory:
         # selecting the same mail again is a no-op, not a duplicate record
         assert await service.process_mail(mail) is None
         assert len(await service.list_mails()) == 1
+
+
+class TestSmartSearch:
+    """The LLM-driven mail finder: JSON extraction robustness is the
+    contract — a fenced/prose-wrapped reply once voided every result."""
+
+    def _service(self, router: Any) -> MailFlowService:
+        config = MailFlowConfig()
+        config.llms = [LLMConfig(llm_id="llm-1")]
+        return MailFlowService(
+            config=config,
+            registry=ComponentRegistry(),
+            plugin_manager=cast(Any, None),
+            storage=cast(Any, MemoryStorage()),
+            sources={},
+            router=cast(LLMRouter, router),
+            pipeline=PipelineEngine([]),
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            i18n=I18n(),
+        )
+
+    async def test_fenced_reply_is_parsed(self) -> None:
+        """The original bug: ```json fences made json.loads fail, the plan
+        was dropped and every batch came back empty for trivial queries."""
+
+        class FencedRouter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                self.calls += 1
+                payload = (
+                    '```json\n{"keywords": ["fee"], "senders": ["bursar"], '
+                    '"after": null, "before": null}\n```'
+                    if self.calls == 1
+                    else '```json\n["m1"]\n```'
+                )
+
+                class C:
+                    text = payload
+
+                return C()
+
+        service = self._service(FencedRouter())
+        storage = cast(Any, service.storage)
+        from mailflow.domain import MailRecord
+
+        for mid in ("m1", "m2"):
+            mail = make_mail(mid, minute=10)
+            await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        stages: list[tuple[str, int, int, str]] = []
+
+        def _progress(stage: str, done: int, total: int, detail: str = "") -> None:
+            stages.append((stage, done, total, detail))
+
+        matched = await service.smart_search("the fee notice", progress=_progress)
+        assert [r.record_id for r in matched] == ["m1"]
+        # detailed progress surfaced to the caller: plan, filter, match
+        assert [s for s, *_ in stages] == ["plan", "filter", "match"]
+
+    async def test_prose_wrapped_ids_are_parsed(self) -> None:
+        class ProseRouter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                self.calls += 1
+                payload = (
+                    "{}"
+                    if self.calls == 1
+                    else 'Here are the matching mails:\n["m2"]\nHope that helps.'
+                )
+
+                class C:
+                    text = payload
+
+                return C()
+
+        service = self._service(ProseRouter())
+        storage = cast(Any, service.storage)
+        from mailflow.domain import MailRecord
+
+        for mid in ("m1", "m2"):
+            mail = make_mail(mid, minute=10)
+            await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        matched = await service.smart_search("anything about m2")
+        assert [r.record_id for r in matched] == ["m2"]
+
+    async def test_unparseable_batch_is_retried_then_skipped(self) -> None:
+        class BadRouter:
+            def __init__(self) -> None:
+                self.batch_calls = 0
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                if self.batch_calls == 0:
+                    self.batch_calls += 1
+
+                    class Plan:
+                        text = '{"keywords": []}'
+
+                    return Plan()
+                self.batch_calls += 1
+
+                class Garbage:
+                    text = "I could not find anything, sorry!"
+
+                return Garbage()
+
+        service = self._service(BadRouter())
+        storage = cast(Any, service.storage)
+        from mailflow.domain import MailRecord
+
+        for mid in ("m1", "m2"):
+            mail = make_mail(mid, minute=10)
+            await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        matched = await service.smart_search("receipts")
+        assert matched == []  # retried, still garbage, batch skipped cleanly

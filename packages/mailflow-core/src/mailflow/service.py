@@ -91,6 +91,82 @@ _LIVE_GROUPS = frozenset({"accounts", "llms", "processors", "notifiers"})
 """Config groups whose changes hot-apply to the running runtime."""
 
 
+def _extract_json_typed(
+    text: str, expect: type[list[Any]] | type[dict[str, Any]]
+) -> list[Any] | dict[str, Any] | None:
+    from typing import get_origin
+
+    origin = get_origin(expect) or expect
+    """Pull the first JSON value of ``expect``'s kind out of an LLM reply.
+
+    Models wrap JSON in markdown fences (```json … ```) or add prose around
+    it; ``json.loads`` on the raw text fails on those forms and once
+    silently voided every smart-search result. Tries fenced blocks first,
+    then bracket-balanced spans. Returns None when nothing parses as the
+    expected kind."""
+    import re as _re
+
+    fenced = _re.findall(r"```(?:json)?\s*(.*?)```", text, _re.DOTALL)
+    opener, closer = ("{", "}") if origin is dict else ("[", "]")
+    candidates = [block.strip() for block in fenced] + [text.strip()]
+    for candidate in candidates:
+        start = candidate.find(opener)
+        if start == -1:
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(candidate)):
+            char = candidate[index]
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == opener:
+                depth += 1
+            elif char == closer:
+                depth -= 1
+                if depth == 0:
+                    span = candidate[start : index + 1]
+                    try:
+                        parsed: Any = json.loads(span)
+                    except Exception:
+                        break  # malformed span; keep scanning
+                    if origin is dict and isinstance(parsed, dict):
+                        raw_map: dict[Any, Any] = cast("dict[Any, Any]", parsed)
+                        return {str(k): v for k, v in raw_map.items()}
+                    if origin is list and isinstance(parsed, list):
+                        raw_items: list[Any] = cast("list[Any]", parsed)
+                        return list(raw_items)
+                    break
+    return None
+
+
+def _extract_json_array(text: str) -> list[str] | None:
+    """The first JSON string-array in ``text`` ([] when absent/mismatched)."""
+    value = _extract_json_typed(text, list[Any])
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return None
+
+
+def _extract_json_object(text: str) -> dict[str, str] | None:
+    """The first JSON object in ``text`` (values stringified for the plan:
+    keywords/senders are lists rendered by str(); the filter only needs the
+    shapes, not nested types)."""
+    value = _extract_json_typed(text, dict[str, Any])
+    if isinstance(value, dict):
+        return {str(k): v for k, v in value.items()}
+    return None
+
+
 def _bind_llm_processor(config: MailFlowConfig) -> MailFlowConfig:
     """Give the built-in LLM analysis a binding as soon as an LLM exists.
 
@@ -809,13 +885,16 @@ matches."""
         2. batches the remaining candidates to the LLM for the final
            relevance pick.
 
-        ``progress(done, total)`` is called as batches complete so the TUI
-        can show status and cancel. Returns matching records, newest first.
+        ``progress(stage, done, total, detail)`` is called as the search
+        advances (stage: plan/filter/match) so the TUI can show detailed
+        status and cancel. Returns matching records, newest first.
         """
         if not query.strip():
             return []
         records = await self.list_mails()
         records.sort(key=lambda record: record.mail.received_at, reverse=True)
+        if progress is not None:
+            progress("plan", 0, 1, f"{len(records)} mails in the mailbox")
         if not self.config.llms:
             raise RuntimeError("No LLM is configured; add one in Settings → LLMs.")
         llm_ids = [llm.llm_id for llm in self.config.llms]
@@ -855,11 +934,10 @@ matches."""
             options={"temperature": 0.1},
         )
         candidates = records
+        keywords: list[str] = []
+        senders: list[str] = []
         try:
-            raw_plan: Any = json.loads(plan_completion.text.strip().strip("`"))
-            plan: dict[str, Any] = (
-                cast("dict[str, Any]", raw_plan) if isinstance(raw_plan, dict) else {}
-            )
+            plan = _extract_json_object(plan_completion.text) or {}
             raw_keywords: Any = plan.get("keywords") or []
             raw_senders: Any = plan.get("senders") or []
             if plan:
@@ -873,7 +951,12 @@ matches."""
                 senders = [str(s).lower() for s in raw_sender_items]
                 if keywords or senders:
 
-                    def _hard_filter(record: MailRecord) -> bool:
+                    def _plan_score(record: MailRecord) -> int:
+                        """2 = matches a plan sender, 1 = matches a plan
+                        keyword, 0 = no plan hint. Used to ORDER candidates
+                        so hint-matching mails are summarized first — the
+                        plan's guesses must never hard-exclude mails (a
+                        wrong guess silently dropped the true matches)."""
                         from mailflow.processors import (
                             _plain_body,  # pyright: ignore[reportPrivateUsage]
                         )
@@ -886,14 +969,23 @@ matches."""
                                 _plain_body(record.mail)[:4000],
                             )
                         ).lower()
-                        return not (
-                            (senders and not any(s in haystack for s in senders))
-                            or (keywords and not any(k in haystack for k in keywords))
-                        )
+                        if senders and any(s in haystack for s in senders):
+                            return 2
+                        if keywords and any(k in haystack for k in keywords):
+                            return 1
+                        return 0
 
-                    candidates = [record for record in records if _hard_filter(record)]
+                    candidates = sorted(records, key=_plan_score, reverse=True)
         except Exception:
             candidates = records  # plan parse failure: fall back to all mails
+        if progress is not None:
+            progress(
+                "filter",
+                len(records) - len(candidates),
+                len(records),
+                f"plan narrowed to {len(candidates)} candidates "
+                f"(keywords={keywords or []}, senders={senders or []})",
+            )
 
         # final relevance pass in batches
         matched: list[MailRecord] = []
@@ -901,30 +993,48 @@ matches."""
         batches = [candidates[i : i + batch_size] for i in range(0, len(candidates), batch_size)]
         done = 0
         total = len(candidates)
+        batch_number = 0
         for batch in batches:
             listing = "\n\n".join(_brief(record) for record in batch)
             messages: list[dict[str, str]] = [
                 {"role": "system", "content": self._SMART_SEARCH_PROMPT},
                 {"role": "user", "content": f"Need: {query}\n\nMails:\n{listing}"},
             ]
-            try:
+            ids: list[Any] | None = None
+            for attempt in (1, 2):  # one retry: a malformed reply must not
+                # void the batch — the ids were correctly computed and then
+                # thrown away by a strict parse (the original empty-result bug)
                 completion = await self.router.chat(
                     messages,
                     primary=llm_ids[0],
                     fallback=llm_ids[1:],
                     options={"temperature": 0.1},
                 )
-                raw_ids: Any = json.loads(completion.text.strip().strip("`"))
-                id_items: list[Any] = (
-                    cast("list[Any]", raw_ids) if isinstance(raw_ids, list) else []
+                ids = _extract_json_array(completion.text)
+                if ids is not None:
+                    break
+                logger.warning(
+                    "smart search batch %d: unparseable reply (attempt %d): %.120r",
+                    batch_number,
+                    attempt,
+                    completion.text,
                 )
-                wanted = {str(i).lower() for i in id_items}
-                matched.extend(r for r in batch if r.record_id in wanted)
-            except Exception:
-                logger.warning("smart search batch failed; skipping batch")
             done += len(batch)
+            batch_number += 1
+            if ids is None:
+                if progress is not None:
+                    progress("match", done, total, f"batch {batch_number} unreadable, skipped")
+                continue
+            wanted = {str(i).lower() for i in ids}
+            batch_matched = sum(1 for r in batch if r.record_id in wanted)
+            matched.extend(r for r in batch if r.record_id in wanted)
             if progress is not None:
-                progress(done, total)
+                progress(
+                    "match",
+                    done,
+                    total,
+                    f"batch {batch_number}/{len(batches)}, {batch_matched} matched",
+                )
         matched.sort(key=lambda record: record.mail.received_at, reverse=True)
         return matched
 

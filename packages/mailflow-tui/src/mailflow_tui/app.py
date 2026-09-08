@@ -695,18 +695,28 @@ class MailPane(Vertical):
         self._smart_searching = True
         self._set_smart_label("tui.smart_search_cancel")
         hint = self.query_one_optional("#mail-empty-hint", Static)
-        if hint is not None:
-            hint.update(self._service.t("tui.smart_search_running"))
-            hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+
+        def _show_progress(stage: str, done: int, total: int, detail: str) -> None:
+            # thread-safe enough: called from the task running on the same
+            # event loop; Textual batches the repaint
+            if hint is not None and self._smart_searching:
+                message = self._service.t(
+                    "tui.smart_search_progress",
+                    stage=stage,
+                    done=done,
+                    total=total,
+                    detail=detail,
+                )
+                hint.update(message)
+                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+
+        _show_progress("plan", 0, 1, f"{len(self._records)}")
         table = self._mail_table()
         if table is not None:
             table.clear()
 
         async def _run() -> list[MailRecord]:
-            def _progress(done: int, total: int) -> None:
-                pass  # per-batch UI updates come from the polling loop below
-
-            return await self._service.smart_search(query, progress=_progress)
+            return await self._service.smart_search(query, progress=_show_progress)
 
         self._smart_search_task = asyncio.create_task(_run())
         try:

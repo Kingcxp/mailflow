@@ -727,7 +727,8 @@
       "hourly_status_on": "本聊天的每小时邮件简报：已开启。",
       "hourly_status_off": "本聊天的每小时邮件简报：已关闭。",
       "manual_bot": "【MailFlow · 机器人与推送】\n{cmd_sub} — 推送新邮件到本聊天\n{cmd_unsub} — 停止推送到本聊天\nhourly on | hourly off — 开/关本聊天的每小时 LLM 邮件简报\nhourly — 查看简报是否开启\n{cmd_status} — 机器人状态",
-      "manual_system": "【MailFlow · 系统】\n{cmd_lang} — 切换语言\n{cmd_runtime} — 运行时状态\n{cmd_trash} — 回收站列表"
+      "manual_system": "【MailFlow · 系统】\n{cmd_lang} — 切换语言\n{cmd_runtime} — 运行时状态\n{cmd_trash} — 回收站列表",
+      "smart_search_progress": "智能查找 [{stage}] {done}/{total} — {detail}（点击取消）"
     },
     "update": {
       "applied_title": "已应用的更新",
