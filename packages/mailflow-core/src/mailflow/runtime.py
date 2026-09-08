@@ -651,12 +651,17 @@ class MailFlowRuntime:
 
     def _rt(self, key: str, **params: Any) -> str:
         """Translate a user-visible runtime message via the service i18n;
-        '' when no i18n is wired (fallback template at the call site)."""
+        '' when no i18n is wired or the key is missing (the caller's
+        fallback template at the call site applies). ``I18n.t`` returns
+        the key itself on a miss — echoing an internal key to a chat
+        push is worse than the English fallback, so that case counts as
+        a miss here."""
         if self._i18n is None:
             return ""
         try:
             translated: Any = self._i18n.t(key, **params) if params else self._i18n.t(key)
-            return str(translated)
+            text = str(translated)
+            return "" if text == key else text
         except Exception:
             return ""
 

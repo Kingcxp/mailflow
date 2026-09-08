@@ -65,6 +65,31 @@ class OpenWechatNotifier:
                 except Exception as exc:
                     logger.warning("openwechat delivery to %s:%s failed: %s", kind, name, exc)
 
+    async def push_text(self, text: str) -> None:
+        """Push a plain-text message (schedule reminders, daily digest)
+        to every configured target through the bridge's /send endpoint.
+        Mirrors the onebot notifier's push_text so chat pushes reach
+        WeChat users too."""
+        if not self._url or not self._targets:
+            return
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for kind, name in self._targets:
+                payload = {
+                    "to": {"type": "room" if kind == "room" else "contact", "name": name},
+                    "text": text,
+                }
+                try:
+                    response = await client.post(f"{self._url}/send", json=payload)
+                    if response.status_code >= 400:
+                        logger.warning(
+                            "openwechat text push to %s:%s rejected: HTTP %d",
+                            kind,
+                            name,
+                            response.status_code,
+                        )
+                except Exception as exc:
+                    logger.warning("openwechat text push to %s:%s failed: %s", kind, name, exc)
+
 
 class OpenWechatPlugin:
     def mailflow_plugin_info(self) -> PluginInfo:

@@ -15,8 +15,9 @@ _TUI = _ROOT / "packages" / "mailflow-tui" / "src" / "mailflow_tui"
 _CLI = _ROOT / "packages" / "mailflow-cli" / "src" / "mailflow_cli"
 _CORE_COMMANDS = _ROOT / "packages" / "mailflow-core" / "src" / "mailflow" / "commands.py"
 
-_KEY = re.compile(r"""(?:\b_t|\bservice\.t|\bself\.t)\(\s*["']([a-z][\w.]+)["']""")
-_USED = re.compile(r"""(?:\b_t|\bservice\.t|\bself\.t)\(\s*f?["']([a-z][\w.]+)["']""")
+_KEY = re.compile(r"""(?:\b_t|\b_rt|\bservice\.t|\bself\.t)\(\s*["']([a-z][\w.]+)["']""")
+_USED = re.compile(r"""(?:\b_t|\b_rt|\bservice\.t|\bself\.t)\(\s*f?["']([a-z][\w.]+)["']""")
+_RUNTIME = _ROOT / "packages" / "mailflow-core" / "src" / "mailflow" / "runtime.py"
 
 
 def _locale_keys(code: str) -> set[str]:
@@ -38,7 +39,7 @@ def _locale_keys(code: str) -> set[str]:
 
 def _referenced_keys() -> set[str]:
     keys: set[str] = set()
-    for root in (_TUI, _CLI, _CORE_COMMANDS):
+    for root in (_TUI, _CLI, _CORE_COMMANDS, _RUNTIME):
         for path in root.rglob("*.py"):
             text = path.read_text(encoding="utf-8")
             keys |= set(_KEY.findall(text))
