@@ -1343,6 +1343,14 @@ be one of ad|info|important|urgent. The original mail body is never edited.
         """
         prefix = self.command_prefix()
         if not text.startswith(prefix):
+            # The bare word ("mailflow unsubscribe" without the prefix)
+            # previously returned None — the bridge sent no reply at all
+            # and the user could not tell executed from ignored. Reply
+            # with the namespace hint (unless this chat has no context,
+            # where silence stays correct for non-command chatter).
+            stripped = text.strip()
+            if stripped.split()[:1] == ["mailflow"]:
+                return self.t("chat.namespace_hint", prefix=prefix, command=stripped)
             return None
         line = text[len(prefix) :].strip()
         if line.startswith("mailflow"):

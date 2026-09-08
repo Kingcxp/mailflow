@@ -1082,6 +1082,30 @@ async def test_command_dispatch_no_router() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unprefixed_mailflow_text_gets_namespace_hint() -> None:
+    """'mailflow unsubscribe' WITHOUT the prefix used to return None —
+    no reply at all, and the user could not tell ignored from executed
+    (reported: an unsubscribe with zero feedback). The namespace hint
+    must fire for bare 'mailflow ...' text; ordinary chatter stays
+    silent."""
+    from mailflow.config import MailFlowConfig
+    from mailflow.service import MailFlowService
+
+    cfg = MailFlowConfig()
+    cfg.general.command_prefix = "/"
+    service = MailFlowService.__new__(MailFlowService)
+    service.config = cfg
+    from mailflow.i18n import I18n as _I18n
+
+    service.i18n = _I18n()
+    service.commands = None
+    hinted = await service.command_dispatch("mailflow unsubscribe")
+    assert hinted is not None and "mailflow help" in hinted
+    # non-command text is not ours: keep it silent
+    assert await service.command_dispatch("早上好") is None
+
+
+@pytest.mark.asyncio
 async def test_mailflow_subscribe_requires_admin() -> None:
     from mailflow.config import MailFlowConfig, NotifierConfig
     from mailflow.service import MailFlowService
