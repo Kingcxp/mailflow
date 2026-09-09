@@ -240,7 +240,10 @@
       "wipe_confirm_hint": "执行请输入：`mail wipe CONFIRM`",
       "wipe_done": "已清空 {mails} 封活动邮件与 {trash} 条回收站记录，去重状态已重置——超出拉取上限的旧邮件可在重启后通过邮箱浏览器重新解析。",
       "wipe_warn_body": "所有解析结果都会被清除；之后的轮询只重新拉取新收到的邮件。仍显示在邮箱历史浏览器中的邮件可逐批强制重新解析。",
-      "wipe_warn_title": "此操作将永久删除全部已处理邮件。"
+      "wipe_warn_title": "此操作将永久删除全部已处理邮件。",
+      "id_hint": "编号 {mail_id}…",
+      "list_hint": "查看：mail show <#> · 翻页：mail list <页码>",
+      "trash_hint": "恢复：trash restore <#> · 翻页：trash list <页码>"
     },
     "plugin": {
       "already_installed": "{plugin_id} 已安装",

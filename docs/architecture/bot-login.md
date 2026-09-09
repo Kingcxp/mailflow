@@ -188,9 +188,9 @@ permission-denied reply.
 /mailflow subscribe                  - receive mail notifications in this chat
 /mailflow unsubscribe                - stop notifications in this chat
 /mailflow status                     - bot status + subscribed chat count
-/mailflow mail list [--query q]      - list recent mail
-/mailflow mail show <id>             - one mail with summary/feedback
-/mailflow mail urgency <id> <level>  - override urgency (info/important/critical)
+/mailflow mail list [page] [--query q] - numbered list, LLM summary headlines
+/mailflow mail show <#n|id>          - one mail with summary/feedback
+/mailflow mail urgency <#n|id> <level> - override urgency (info/important/critical)
 /mailflow feedback <id> <reason>     - teach the classifier (reject mail)
 /mailflow reply create <mail_id>     - draft a reply
 /mailflow reply prepare <draft_id>   - get the confirm token

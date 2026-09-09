@@ -240,7 +240,10 @@
       "wipe_confirm_hint": "Run `mail wipe CONFIRM` to execute.",
       "wipe_done": "Wiped {mails} active mail(s) and {trash} trash record(s). Dedup state cleared — restart or use the mailbox browser to re-ingest older mail beyond the fetch limit.",
       "wipe_warn_body": " All analyses are erased; new polls re-ingest only newly received mail. Mails still listed in the Mailboxes history browser can be force re-analyzed individually.",
-      "wipe_warn_title": "This will PERMANENTLY delete every processed mail."
+      "wipe_warn_title": "This will PERMANENTLY delete every processed mail.",
+      "id_hint": "id {mail_id}…",
+      "list_hint": "open: mail show <#> · next page: mail list <page>",
+      "trash_hint": "restore: trash restore <#> · next page: trash list <page>"
     },
     "plugin": {
       "already_installed": "{plugin_id} is already installed",

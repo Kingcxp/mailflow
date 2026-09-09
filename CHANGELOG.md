@@ -175,6 +175,22 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **Gateway setup crash** — `Unable to serialize unknown type:
+  <class 'function'>`: the sudo-prompt callback injected by the setup
+  guide leaked into the persisted instance options. Per-call transport
+  keys (`_progress`, `_ask_sudo_password`) are now stripped before
+  persistence.
+- **Chat listings overhauled** — `mail list` rows are numbered (`#n`)
+  with the LLM summary as the headline (raw subjects were long, wrapped
+  mid-word and carried no overview value), ids render as a short
+  `id xxx…` tail, and the footer teaches paging. `mail list <page>`
+  (positional) pages like `--page`. `mail show/delete/urgency` accept
+  the list numbers (`#3`, `3`), an id or a unique prefix. Same treatment
+  for `trash list` (numbered, paginated, `trash restore <#>`), `action
+  list` (numbered, raw hash ids dropped; `action show/delete <#>`), and
+  `account list` / `llm list` / `plugin market list` (fixed-width CJK
+  columns collided in chat transports; per-entry label rows now).
+
 - **Mail tab search box height** — the search input lost its top border row:
   both `#mail-search` and `#mail-empty-hint` were `dock: top`, and the empty
   hint (an empty `Static`) still occupied the top dock slot, compressing the

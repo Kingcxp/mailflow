@@ -9,6 +9,7 @@ travels as style *metadata*, never embedded ANSI bytes.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import logging
 import re
@@ -349,9 +350,17 @@ class CommandRouter:
 
     async def _cmd_mail(self, args: list[str]) -> CommandResponse:
         if not args or args[0] == "list":
-            _positionals, flags = _split_flags(args[1:])
+            positionals, flags = _split_flags(args[1:])
             query = flags.get("query", "").strip().lower()
-            return await self._mail_list(page=_page_number(flags), query=query)
+            # `mail list 2` (positional) and `mail list --page 2` both page
+            page = _page_number(flags)
+            if positionals:
+                try:
+                    page = int(positionals[0])
+                except ValueError:
+                    # a bare word filters, like mail list <query>
+                    query = query or positionals[0].strip().lower()
+            return await self._mail_list(page=page, query=query)
         sub, rest = args[0], args[1:]
         if sub == "show":
             return await self._mail_show(rest)
@@ -400,29 +409,61 @@ class CommandRouter:
         if not records:
             spans.append(StyleSpan(text=f"\n{self._t('tui.empty')}", style=_STYLE_MUTED))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
-        for record in page_records:
-            # compact two-line layout: wraps cleanly on narrow chat screens
-            spans.append(StyleSpan(text="  "))
+        # stable ids for follow-ups: `mail show <n>` / `mail delete <n>`
+        # accept the number shown here; the raw record_id is unreadable
+        start_index = (page - 1) * _PAGE_SIZE + 1
+        for offset, record in enumerate(page_records):
+            number = start_index + offset
+            spans.append(StyleSpan(text="\n", style=""))
             spans.extend(self._urgency_span(record.effective_urgency))
-            spans.append(StyleSpan(text=f" {record.mail.subject or '(no subject)'}"))
-            spans.append(StyleSpan(text="\n"))
+            spans.append(StyleSpan(text=f" #{number} "))
+            # the LLM summary IS the overview; the raw subject usually a
+            # long unwieldy marketing line
+            headline = (record.summary or record.mail.subject or "(no subject)").splitlines()
+            spans.append(StyleSpan(text=headline[0][:90]))
             spans.append(
                 StyleSpan(
-                    text=f"  {record.record_id} · {record.mail.sender.address} · "
-                    f"{self._fmt_time(record.mail.received_at)}",
+                    text=f"\n     {self._short_sender(record.mail.sender.address)} · "
+                    f"{self._fmt_time(record.mail.received_at)} · "
+                    f"{self._t('mail.id_hint', mail_id=record.record_id[:12])}",
                     style=_STYLE_MUTED,
                 )
             )
-            spans.append(StyleSpan(text="\n"))
+        spans.append(
+            StyleSpan(
+                text=f"\n\n{self._t('mail.list_hint')}",
+                style=_STYLE_MUTED,
+            )
+        )
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
+    @staticmethod
+    def _short_sender(address: str) -> str:
+        """The readable part of an address: ``Name <a@b>`` → ``a@b``;
+        long domains collapse to the org part."""
+        addr = address.split("<")[-1].rstrip(">")
+        if "@" in addr and len(addr) > 34:
+            local, _, domain = addr.partition("@")
+            return f"{local[:18]}@{domain.split('.')[0]}"
+        return addr[:34]
+
     async def _find_mail(self, mail_id: str) -> MailRecord | None:
-        """Exact id wins; otherwise a unique prefix (ids shown by the list)."""
-        if not mail_id.strip():
+        """Exact id wins; then the list's ``#n``/``n`` (newest-first index,
+        as printed by `mail list`); then a unique id prefix."""
+        token = mail_id.strip().lstrip("#")
+        if not token:
+            return None
+        records = await self.service.list_mails()
+        if token.isdigit():
+            # 1-based, newest-first — the same order `mail list` prints
+            index = int(token) - 1
+            ordered = sorted(records, key=lambda r: r.mail.received_at, reverse=True)
+            if 0 <= index < len(ordered):
+                return ordered[index]
             return None
         matches = [
             record
-            for record in await self.service.list_mails()
+            for record in records
             if record.record_id == mail_id or record.record_id.startswith(mail_id)
         ]
         return matches[0] if len(matches) == 1 else None
@@ -640,20 +681,18 @@ class CommandRouter:
         if not items:
             spans.append(StyleSpan(text=f"\n{self._t('action.empty')}", style=_STYLE_MUTED))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
-        for item in page_items:
+        start_index = (page - 1) * _PAGE_SIZE + 1
+        for offset, item in enumerate(page_items):
+            due = self._fmt_time(item.due_at)
             spans.append(
                 StyleSpan(
-                    text=f"  {self._fmt_time(item.due_at)} [{item.action_type}] {item.summary}"
+                    text=f"\n#{start_index + offset} {due} [{item.action_type}] {item.summary}"
                 )
             )
-            spans.append(
-                StyleSpan(
-                    text=f"  {item.item_id} · {(item.mail_id or self._t('action.source_user'))}"
-                    + (f" · {item.notes}" if item.notes else ""),
-                    style=_STYLE_MUTED,
-                )
-            )
-            spans.append(StyleSpan(text="\n"))
+            detail = item.mail_id or self._t("action.source_user")
+            if item.notes:
+                detail += f" · {item.notes}"
+            spans.append(StyleSpan(text=f"     {detail}", style=_STYLE_MUTED))
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
     async def _action_add(self, args: list[str]) -> CommandResponse:
@@ -734,14 +773,19 @@ class CommandRouter:
             return False
 
     async def _find_action(self, item_id: str) -> ActionItem | None:
-        """Exact id wins; otherwise a unique prefix (the list truncates ids
-        to ten characters, so the shown id must resolve)."""
-        if not item_id.strip():
+        """Exact id wins; then the ``#n``/``n`` printed by `action list`
+        (same order); then a unique prefix."""
+        clean = item_id.strip().lstrip("#")
+        if not clean:
+            return None
+        items = await self.service.list_actions()
+        if clean.isdigit():
+            index = int(clean) - 1
+            if 0 <= index < len(items):
+                return items[index]
             return None
         matches = [
-            item
-            for item in await self.service.list_actions()
-            if item.item_id == item_id or item.item_id.startswith(item_id)
+            item for item in items if item.item_id == item_id or item.item_id.startswith(item_id)
         ]
         return matches[0] if len(matches) == 1 else None
 
@@ -784,22 +828,18 @@ class CommandRouter:
                 StyleSpan(
                     text=self._t("plugin.market_title", count=len(entries)), style=_STYLE_TITLE
                 ),
-                StyleSpan(
-                    text=f"\n{self._t('plugin.header_id'):<34} {self._t('plugin.header_version'):<10} "
-                    f"{self._t('plugin.market_categories'):<26} {self._t('plugin.market_description')}\n",
-                    style=_STYLE_HEADER,
-                ),
             ]
-            for _repo, plugin in entries:
+            for index, (_repo, plugin) in enumerate(entries, start=1):
                 installed = (
                     " [installed]" if market.is_installed(plugin.id, package=plugin.package) else ""
                 )
                 categories = ",".join(plugin.categories)
                 description = plugin.description_for(self.service.i18n.language)
-                spans.append(StyleSpan(text=f"{plugin.id:<34} "))
-                spans.append(StyleSpan(text=f"{plugin.version:<10} ", style=_STYLE_MUTED))
-                spans.append(StyleSpan(text=f"{categories:<26} ", style=_STYLE_ACCENT))
-                spans.append(StyleSpan(text=f"{description[:40]}{installed}\n"))
+                spans.append(StyleSpan(text=f"\n#{index} {plugin.id} "))
+                spans.append(StyleSpan(text=f"v{plugin.version}{installed}", style=_STYLE_MUTED))
+                spans.append(
+                    StyleSpan(text=f"\n     [{categories}] {description[:56]}", style=_STYLE_MUTED)
+                )
             if not entries:
                 spans.append(
                     StyleSpan(text=f"\n{self._t('plugin.market_empty')}", style=_STYLE_MUTED)
@@ -1064,11 +1104,6 @@ class CommandRouter:
             StyleSpan(
                 text=self._t("account.title", count=len(snapshot.accounts)), style=_STYLE_TITLE
             ),
-            StyleSpan(
-                text=f"\n{self._t('account.header_id'):<24} {self._t('account.header_email'):<36} "
-                f"{self._t('account.header_provider'):<24} {self._t('account.header_status')}\n",
-                style=_STYLE_HEADER,
-            ),
         ]
         for account in snapshot.accounts:
             status_key = f"account.status_{account.status}"
@@ -1077,11 +1112,15 @@ class CommandRouter:
                 if status_key in self.service.i18n.keys(self.service.i18n.language)
                 else account.status
             )
-            spans.append(StyleSpan(text=f"{account.account_id:<24} "))
-            spans.append(StyleSpan(text=f"{account.email:<36} "))
-            spans.append(StyleSpan(text=f"{account.provider:<24} ", style=_STYLE_MUTED))
+            # one "id — status" line plus a muted detail line: fixed-width
+            # columns collide on CJK display widths, and chat transports
+            # rewrap them into unreadable rows
             color = _STYLE_ERROR if account.status == "error" else _STYLE_OK
+            spans.append(StyleSpan(text=f"\n● {account.account_id} "))
             spans.append(StyleSpan(text=f"{status_text}\n", style=color))
+            spans.append(
+                StyleSpan(text=f"     {account.email} · {account.provider}", style=_STYLE_MUTED)
+            )
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
     async def _cmd_llm(self, args: list[str]) -> CommandResponse:
@@ -1106,21 +1145,17 @@ class CommandRouter:
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         spans = [
             StyleSpan(text=self._t("llm.title", count=len(snapshot.llms)), style=_STYLE_TITLE),
-            StyleSpan(
-                text=f"\n{self._t('llm.header_id'):<20} {self._t('llm.header_name'):<20} "
-                f"{self._t('llm.header_backend'):<30} {self._t('llm.header_model'):<20} {self._t('llm.header_default')}\n",
-                style=_STYLE_HEADER,
-            ),
         ]
         for llm in snapshot.llms:
-            spans.append(StyleSpan(text=f"{llm.llm_id:<20} "))
-            spans.append(StyleSpan(text=f"{llm.name:<20} "))
-            spans.append(StyleSpan(text=f"{llm.backend:<30} ", style=_STYLE_MUTED))
-            spans.append(StyleSpan(text=f"{llm.model:<20} "))
+            default_mark = self._t("common.yes") if llm.default else ""
+            display = llm.name or llm.llm_id
+            spans.append(StyleSpan(text=f"\n● {display}"))
+            if default_mark:
+                spans.append(StyleSpan(text=f" ({default_mark})", style=_STYLE_ACCENT))
             spans.append(
                 StyleSpan(
-                    text=f"{self._t('common.yes') if llm.default else ''}\n",
-                    style=_STYLE_ACCENT if llm.default else "",
+                    text=f"\n     {llm.llm_id} · {llm.backend} · {llm.model}",
+                    style=_STYLE_MUTED,
                 )
             )
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
@@ -1320,30 +1355,67 @@ class CommandRouter:
     async def _cmd_trash(self, args: list[str]) -> CommandResponse:
         if not args or args[0] == "list":
             items = await self.service.list_trash()
+            positionals, flags = _split_flags(args[1:])
+            page = _page_number(flags)
+            if positionals:
+                with contextlib.suppress(ValueError):
+                    page = int(positionals[0])
+            page_items, pages = _paginate(items, page)
             spans = [
-                StyleSpan(text=self._t("mail.trash_title", count=len(items)), style=_STYLE_TITLE),
+                StyleSpan(
+                    text=self._t("mail.trash_title", count=len(items)) + f" — {page}/{pages}",
+                    style=_STYLE_TITLE,
+                ),
             ]
             if not items:
                 spans.append(StyleSpan(text=f"\n{self._t('mail.trash_empty')}", style=_STYLE_MUTED))
                 return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
-            header = (
-                f"{self._t('mail.header_id'):<26} {'':<2} {self._t('mail.header_urgency'):<10} "
-                f"{self._t('mail.header_subject'):<40} {self._t('mail.header_deleted'):<16}"
+            start_index = (page - 1) * _PAGE_SIZE + 1
+            for offset, item in enumerate(page_items):
+                record = item.to_mail_record()
+                spans.append(StyleSpan(text="\n", style=""))
+                spans.extend(self._urgency_span(record.effective_urgency))
+                spans.append(StyleSpan(text=f" #{start_index + offset} "))
+                headline = (record.summary or record.mail.subject or "(no subject)").splitlines()
+                spans.append(StyleSpan(text=headline[0][:90]))
+                spans.append(
+                    StyleSpan(
+                        text=f"\n     {self._short_sender(record.mail.sender.address)} · "
+                        f"{self._fmt_time(item.deleted_at)} · "
+                        f"{self._t('mail.id_hint', mail_id=item.record_id[:12])}",
+                        style=_STYLE_MUTED,
+                    )
+                )
+            spans.append(
+                StyleSpan(
+                    text=f"\n\n{self._t('mail.trash_hint')}",
+                    style=_STYLE_MUTED,
+                )
             )
-            spans.append(StyleSpan(text=f"\n{header}\n", style=_STYLE_HEADER))
-            for item in items:
-                spans.append(StyleSpan(text=f"{item.record_id:<26} ", style=_STYLE_MUTED))
-                spans.extend(self._urgency_span(item.to_mail_record().effective_urgency))
-                spans.append(StyleSpan(text=f"{item.mail.subject[:38]:<40} "))
-                spans.append(StyleSpan(text=self._fmt_time(item.deleted_at), style=_STYLE_MUTED))
-                spans.append(StyleSpan(text="\n"))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         if args[0] == "restore" and len(args) == 2:
-            record = await self.service.restore_mail(args[1])
+            target = await self._find_trash_item(args[1])
+            if target is None:
+                return self._err(self._t("mail.trash_not_found", mail_id=args[1]))
+            record = await self.service.restore_mail(target.record_id)
             if record is None:
                 return self._err(self._t("mail.trash_not_found", mail_id=args[1]))
-            return self._ok(self._t("mail.restored", mail_id=args[1]))
+            return self._ok(self._t("mail.restored", mail_id=record.mail.subject[:40]))
         return self._err(self._t("mail.trash_usage"))
+
+    async def _find_trash_item(self, token: str) -> Any:
+        """Exact id, unique prefix, or the ``#n``/``n`` from `trash list`."""
+        clean = token.strip().lstrip("#")
+        if not clean:
+            return None
+        items = await self.service.list_trash()
+        if clean.isdigit():
+            index = int(clean) - 1
+            if 0 <= index < len(items):
+                return items[index]
+            return None
+        matches = [i for i in items if i.record_id == token or i.record_id.startswith(token)]
+        return matches[0] if len(matches) == 1 else None
 
     # -- configuration ------------------------------------------------------------------
 

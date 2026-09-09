@@ -321,10 +321,32 @@ class TestCommandRouter:
         commands, _ = router
         response = await commands.execute("mail list")
         assert response.ok
-        assert "m1" in response.text
-        assert "m3" in response.text
+        # numbered rows + urgency + pagination hint; raw ids stay truncated
+        # (the full id never fit chat width — numbers are the interface)
+        assert "#1" in response.text
         assert "important" in response.text
         assert "urgent" in response.text
+        assert "mail show <#>" in response.text
+
+    async def test_mail_show_accepts_list_number(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, _ = router
+        # the number printed by `mail list` must resolve to the same mail
+        # as its id: newest-first, 1-based
+        by_number = await commands.execute("mail show 1")
+        assert by_number.ok
+        # page 1 of the listing starts with the NEWEST mail
+        assert "Bring your student ID" in by_number.text
+
+    async def test_mail_list_page_accepts_positional(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, _ = router
+        positional = await commands.execute("mail list 2")
+        flag = await commands.execute("mail list --page 2")
+        assert positional.ok and flag.ok
+        assert positional.text == flag.text
 
     async def test_mail_show_original_body(
         self, router: tuple[CommandRouter, MemoryStorage]
@@ -389,10 +411,14 @@ class TestCommandRouter:
         commands, _ = router
         response = await commands.execute("action list")
         assert response.ok
-        assert "a1" in response.text
+        assert "#1" in response.text
         assert "exam" in response.text
         assert "Final calculus exam" in response.text
         assert "m3" in response.text  # source mail backlink
+        # the number resolves for show (delete uses the same finder)
+        shown = await commands.execute("action show 1")
+        assert shown.ok
+        assert "Final calculus exam" in shown.text
         response = await commands.execute("action show a1")
         assert response.ok
         assert "Bring student ID and calculator" in response.text
@@ -817,16 +843,20 @@ class TestPaginationAndFeedback:
         page1 = await commands.execute("mail list --page 1")
         assert page1.ok
         assert "1/2" in page1.text
-        assert "mail-00-abcdef123456" in page1.text
-        assert "mail-11-abcdef123456" not in page1.text  # page 2 content
+        assert "#10" in page1.text  # rows 1..10 on page 1
+        assert "#11" not in page1.text  # page 2 content
         page2 = await commands.execute("mail list --page 2")
         assert page2.ok
         assert "2/2" in page2.text
-        assert "mail-11-abcdef123456" in page2.text
+        assert "#11" in page2.text
+        assert "#10" not in page2.text
         filtered = await commands.execute("mail list --query 'subject 05'")
         assert filtered.ok
-        assert "mail-05-abcdef123456" in filtered.text
-        assert "mail-00-abcdef123456" not in filtered.text
+        # the query matches the raw subject; the row shows the LLM summary
+        # with the id tail identifying WHICH mail matched
+        assert "Mails (1)" in filtered.text
+        assert "mail-05" in filtered.text
+        assert "mail-00" not in filtered.text
 
     async def test_mail_commands_accept_prefix_ids(self) -> None:
         commands, storage = await self._many_mails_router()
