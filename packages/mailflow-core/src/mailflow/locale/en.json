@@ -334,6 +334,7 @@
       "usage": "trash <list|restore <id>>"
     },
     "tui": {
+      "sudo_prompt_label": "sudo password:",
       "detail_attachments": "Attachments",
       "detail_binary_body": "(this mail's body is binary attachment content, e.g. a PDF invoice — see the original mailbox)",
       "btn_reparse": "Re-analyze",

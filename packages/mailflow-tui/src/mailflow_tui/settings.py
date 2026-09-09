@@ -447,13 +447,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 # number / wxid), one per line; everything else
                 # (subscriptions, mail queries) happens via chat commands
                 # like <prefix>mailflow subscribe
-                return (
-                    _Extra("admins", kind="lines", required=True),
-                    # optional: on Linux the wechatpadpro auto-install runs
-                    # apt under sudo with this password; never persisted
-                    # with the notifier config
-                    _Extra("sudo_password", kind="password", secret=True),
-                )
+                return (_Extra("admins", kind="lines", required=True),)
             if provider == "onebot":
                 return (
                     _Extra("http_url", required=True),

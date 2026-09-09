@@ -102,13 +102,30 @@ def _apt_available() -> bool:
     return shutil.which("apt-get") is not None
 
 
-def install_docker_dependencies(sudo_password: str, progress: Any = None) -> str:
+def install_docker_dependencies(ask_sudo_password: Any = None, progress: Any = None) -> str:
     """Install Docker Engine + compose when missing (Linux/Debian via apt;
     Windows via winget for Docker Desktop). Returns the compose command
     found/installed. Raises RuntimeError with the failing output.
 
-    The password is used only for this sudo invocation and never logged or
-    persisted."""
+    ``ask_sudo_password()`` is invoked lazily — only when an apt step
+    actually needs sudo (Linux). Returns the password string. The host
+    (TUI) supplies the prompt so the password is collected at the moment
+    of need and never stored; one answer is reused for the remaining
+    steps of this install."""
+    sudo_password: str | None = None
+
+    def _password() -> str:
+        nonlocal sudo_password
+        if sudo_password is None:
+            if ask_sudo_password is None:
+                raise RuntimeError(
+                    "docker is missing and installing it needs sudo — "
+                    "provide the password when prompted or install docker "
+                    "manually, then retry"
+                )
+            sudo_password = str(ask_sudo_password())
+        return sudo_password
+
     if _find_docker_compose() is not None:
         return _find_docker_compose() or ""
 
@@ -171,14 +188,18 @@ def install_docker_dependencies(sudo_password: str, progress: Any = None) -> str
                 f"apt: {step[0]} {' '.join(step[1:])}",
                 "installing",
             )
-        code, output = _sudo_run(step, sudo_password)
+        code, output = _sudo_run(step, _password())
         if code != 0:
-            # docker-compose-v2 may not exist on older suites; fall back to
-            # the standalone docker-compose-plugin package name
-            if "docker-compose-v2" in step:
+            # a wrong password surfaces as an apt failure: ask again once
+            if "incorrect password" in output or "try again" in output.lower():
+                sudo_password = None  # force re-prompt
+                code, output = _sudo_run(step, _password())
+            if code != 0 and "docker-compose-v2" in step:
+                # docker-compose-v2 may not exist on older suites; fall
+                # back to the standalone docker-compose-plugin name
                 code, output = _sudo_run(
                     ["apt-get", "install", "-y", "docker-compose-plugin"],
-                    sudo_password,
+                    _password(),
                 )
             if code != 0:
                 raise RuntimeError(f"apt install failed: {output.strip()[:400]}")
@@ -404,11 +425,12 @@ class WechatPadProProvisioner:
         compose = _find_docker_compose()
         if compose is None:
             # docker missing: provision it now. On Windows winget needs no
-            # password; on Linux apt runs under sudo -S with the password
-            # the setup UI collected. The password is never logged or
-            # persisted.
-            sudo_password = str(options.get("sudo_password") or "")
-            compose = await asyncio.to_thread(install_docker_dependencies, sudo_password)
+            # password; on Linux apt runs under sudo -S — the password is
+            # requested through the ``_ask_sudo_password`` callback the
+            # host (TUI guide) injects into options, asked only at the
+            # moment of need, never stored or logged.
+            ask = options.get("_ask_sudo_password")
+            compose = await asyncio.to_thread(install_docker_dependencies, ask)
         target = _instance_dir(instance_id)
         target.mkdir(parents=True, exist_ok=True)
         compose_file = target / "compose.yml"

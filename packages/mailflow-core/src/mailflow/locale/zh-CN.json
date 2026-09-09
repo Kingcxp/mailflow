@@ -334,6 +334,7 @@
       "usage": "trash <list|restore <id>>"
     },
     "tui": {
+      "sudo_prompt_label": "sudo 密码：",
       "detail_attachments": "附件",
       "detail_binary_body": "（该邮件正文为二进制附件内容（如 PDF 发票），请到原邮箱查看）",
       "btn_reparse": "重新解析",

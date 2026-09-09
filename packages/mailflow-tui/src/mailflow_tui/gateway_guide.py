@@ -12,16 +12,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, ClassVar
 
 from mailflow.service import MailFlowService
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
     Button,
+    Input,
     RichLog,
     Static,
 )
@@ -71,6 +74,22 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         align: center middle;
         grid-gutter: 2 2;
     }
+    #sudo-prompt {
+        display: none;
+        height: auto;
+        padding: 0 1;
+    }
+    #sudo-prompt-label {
+        height: 1;
+    }
+    #sudo-prompt-input {
+        width: 1fr;
+        height: 3;
+    }
+    #sudo-prompt-ok {
+        height: 3;
+        margin-left: 1;
+    }
     #guide-done, #guide-logged-in, #guide-cancel {
         height: 1;
         min-height: 1;
@@ -114,6 +133,16 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 yield RichLog(
                     id="guide-log", wrap=True, highlight=True, markup=True, max_lines=5000
                 )
+            # hidden sudo prompt: shown on demand when the installer
+            # needs sudo (Linux apt); the password never leaves the guide
+            with Horizontal(id="sudo-prompt"):
+                yield Static("", id="sudo-prompt-label")
+                yield Input(
+                    password=True,
+                    placeholder="",
+                    id="sudo-prompt-input",
+                )
+                yield Button("OK", id="sudo-prompt-ok", variant="primary")
             yield Static("", id="guide-status")
             with Horizontal(id="guide-actions"):
                 yield Button(
@@ -269,9 +298,22 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 last_pct = progress.percent
                 self._update_progress(progress.percent, progress.message)
 
+        # the installer may need sudo (Linux apt under sudo -S): inject a
+        # prompt callback so the password is asked in the guide UI at the
+        # moment of need. The installer runs in a worker thread
+        # (asyncio.to_thread); bridge the request to the UI loop.
+        loop = asyncio.get_running_loop()
+        install_options = dict(self._options)
+
+        def _ask_sudo_password() -> str:
+            future = asyncio.run_coroutine_threadsafe(self._ask_sudo_password_flow(), loop)
+            return future.result()
+
+        install_options["_ask_sudo_password"] = _ask_sudo_password
+
         # keep the TUI live while the provisioner installs
         task = asyncio.create_task(
-            service.gateway_provision(provider, self._instance_id, self._options)
+            service.gateway_provision(provider, self._instance_id, install_options)
         )
         try:
             while not task.done():
@@ -294,6 +336,52 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             with contextlib.suppress(Exception):
                 await service.gateway_shutdown(provider, self._instance_id)
             raise
+
+    # -- sudo password prompt -----------------------------------------------
+
+    async def _ask_sudo_password_flow(self) -> str:
+        """Show the inline password row and resolve when the user submits.
+
+        Runs as the ``_ask_sudo_password`` callback the installer invokes
+        (via asyncio.run_coroutine_threadsafe from its worker thread):
+        the password lives only in this closure — never in options,
+        config, or logs."""
+        prompt = self.query_one("#sudo-prompt", Horizontal)
+        label = self.query_one("#sudo-prompt-label", Static)
+        field = self.query_one("#sudo-prompt-input", Input)
+        field.value = ""
+        label.update(self._t("tui.sudo_prompt_label"))
+        prompt.styles.display = "block"  # pyright: ignore[reportUnknownMemberType]
+        field.focus()
+        fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+        def _submit() -> None:
+            if not fut.done():
+                fut.set_result(field.value)
+            prompt.styles.display = "none"  # pyright: ignore[reportUnknownMemberType]
+            field.value = ""
+
+        self._sudo_submit: Callable[[], None] | None = _submit
+        try:
+            return await fut
+        finally:
+            self._sudo_submit = None
+            prompt.styles.display = "none"  # pyright: ignore[reportUnknownMemberType]
+            field.value = ""
+
+    @on(Button.Pressed, "#sudo-prompt-ok")
+    async def _sudo_prompt_ok(self, event: Button.Pressed) -> None:
+        event.stop()
+        submit = getattr(self, "_sudo_submit", None)
+        if submit is not None:
+            submit()
+
+    @on(Input.Submitted, "#sudo-prompt-input")
+    async def _sudo_prompt_enter(self, event: Input.Submitted) -> None:
+        event.stop()
+        submit = getattr(self, "_sudo_submit", None)
+        if submit is not None:
+            submit()
 
     _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 
