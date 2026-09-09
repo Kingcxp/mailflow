@@ -456,6 +456,9 @@ class NotificationsPane(Vertical):
         else:
             options["gateway_url"] = endpoint
         form_opts = dict(form_values.get("options") or {}) if form_values else {}
+        # sudo_password is a one-shot installer secret (Linux apt): consumed
+        # by the gateway guide, never persisted with the notifier entry
+        form_opts.pop("sudo_password", None)
         merged_options = {**form_opts, **options, "gateway": provider}
         values = {
             "notifier_id": instance_id,

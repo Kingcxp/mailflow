@@ -679,6 +679,10 @@ class MailPane(Vertical):
         button = self._smart_button()
         if button is not None:
             button.label = self._service.t(key)
+            # while searching the button is the only visible sign that
+            # something is running: make it shout (red) so cancel is
+            # impossible to miss; back to primary when idle
+            button.variant = "error" if key == "tui.smart_search_cancel" else "primary"
 
     async def _toggle_smart_search(self) -> None:
         search = self.query_one_optional("#mail-search", Input)

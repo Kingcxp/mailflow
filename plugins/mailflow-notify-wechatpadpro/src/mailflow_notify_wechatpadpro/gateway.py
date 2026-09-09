@@ -28,6 +28,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import platform
 import secrets
 import shutil
 import subprocess
@@ -55,17 +56,142 @@ def _instance_dir(instance_id: str) -> Path:
     return _data_root() / f"wechatpadpro-{safe}"
 
 
+_DOCKER_DESKTOP_CLI = Path("C:/Program Files/Docker/Docker/resources/bin/docker.exe")
+
+
+def _docker_exe() -> str | None:
+    """A runnable docker CLI: PATH first, then the Docker Desktop default."""
+    found = shutil.which("docker")
+    if found:
+        return found
+    if _DOCKER_DESKTOP_CLI.exists():
+        return str(_DOCKER_DESKTOP_CLI)
+    return None
+
+
 def _find_docker_compose() -> str | None:
     """A runnable ``docker compose`` (v2 plugin) or ``docker-compose``."""
-    if shutil.which("docker"):
+    docker = _docker_exe()
+    if docker:
         result = subprocess.run(
-            ["docker", "compose", "version"], capture_output=True, text=True, timeout=30
+            [docker, "compose", "version"], capture_output=True, text=True, timeout=30
         )
         if result.returncode == 0:
-            return "docker compose"
+            return docker
     if shutil.which("docker-compose"):
         return "docker-compose"
     return None
+
+
+def _sudo_run(command: list[str], sudo_password: str) -> tuple[int, str]:
+    """Run ``command`` through ``sudo -S`` (password on stdin); returns
+    (returncode, combined output). Linux only — Windows uses its own
+    install paths."""
+    prefixed = ["sudo", "-S", "-p", "", *command]
+    result = subprocess.run(
+        prefixed,
+        input=sudo_password + "\n",
+        capture_output=True,
+        text=True,
+        timeout=1800,
+    )
+    return result.returncode, (result.stdout + result.stderr)
+
+
+def _apt_available() -> bool:
+    return shutil.which("apt-get") is not None
+
+
+def install_docker_dependencies(sudo_password: str, progress: Any = None) -> str:
+    """Install Docker Engine + compose when missing (Linux/Debian via apt;
+    Windows via winget for Docker Desktop). Returns the compose command
+    found/installed. Raises RuntimeError with the failing output.
+
+    The password is used only for this sudo invocation and never logged or
+    persisted."""
+    if _find_docker_compose() is not None:
+        return _find_docker_compose() or ""
+
+    system = platform.system()
+    if system == "Windows":
+        if shutil.which("winget"):
+            if progress is not None:
+                progress(5.0, "installing Docker Desktop via winget", "installing")
+            result = subprocess.run(
+                [
+                    "winget",
+                    "install",
+                    "--id",
+                    "Docker.DockerDesktop",
+                    "--accept-source-agreements",
+                    "--accept-package-agreements",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=3600,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Docker Desktop winget install failed: {result.stderr.strip()[:400]}"
+                )
+            compose = _find_docker_compose()
+            if compose is None:
+                raise RuntimeError(
+                    "Docker Desktop installed but not usable yet — start "
+                    "Docker Desktop once, then retry the setup"
+                )
+            return compose
+        raise RuntimeError(
+            "Docker is missing and winget is unavailable — install Docker "
+            "Desktop from https://www.docker.com/products/docker-desktop/"
+        )
+
+    # Linux: apt-only supported path
+    if not _apt_available():
+        raise RuntimeError(
+            "docker is missing and this distro has no apt-get — install "
+            "docker.io and docker-compose-plugin with the system package "
+            "manager, then retry"
+        )
+    steps = [
+        ["apt-get", "update"],
+        [
+            "apt-get",
+            "install",
+            "-y",
+            "docker.io",
+            "docker-compose-v2",
+        ],
+    ]
+    total = len(steps)
+    for index, step in enumerate(steps, start=1):
+        if progress is not None:
+            progress(
+                5.0 + 40.0 * index / total,
+                f"apt: {step[0]} {' '.join(step[1:])}",
+                "installing",
+            )
+        code, output = _sudo_run(step, sudo_password)
+        if code != 0:
+            # docker-compose-v2 may not exist on older suites; fall back to
+            # the standalone docker-compose-plugin package name
+            if "docker-compose-v2" in step:
+                code, output = _sudo_run(
+                    ["apt-get", "install", "-y", "docker-compose-plugin"],
+                    sudo_password,
+                )
+            if code != 0:
+                raise RuntimeError(f"apt install failed: {output.strip()[:400]}")
+    # docker group for non-root use; passwordless docker needs a re-login,
+    # so keep sudo for the compose up path when the user is not in the group
+    compose = _find_docker_compose()
+    if compose is None:
+        raise RuntimeError(
+            "docker packages installed but `docker compose` still not "
+            "resolvable — start the docker service (systemctl start docker) "
+            "and retry"
+        )
+    return compose
 
 
 def _port_for(instance_id: str, base: int) -> int:
@@ -277,11 +403,12 @@ class WechatPadProProvisioner:
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:
         compose = _find_docker_compose()
         if compose is None:
-            raise GatewayNotInstalledError(
-                "wechatpadpro needs Docker with compose (v2 plugin or docker-"
-                "compose) — install Docker Desktop / engine first; MailFlow "
-                "never installs system packages itself"
-            )
+            # docker missing: provision it now. On Windows winget needs no
+            # password; on Linux apt runs under sudo -S with the password
+            # the setup UI collected. The password is never logged or
+            # persisted.
+            sudo_password = str(options.get("sudo_password") or "")
+            compose = await asyncio.to_thread(install_docker_dependencies, sudo_password)
         target = _instance_dir(instance_id)
         target.mkdir(parents=True, exist_ok=True)
         compose_file = target / "compose.yml"
@@ -321,7 +448,7 @@ class WechatPadProProvisioner:
             progress.update(10.0, "pulling wechatpadpro/mysql/redis images", "installing")
         result = await asyncio.to_thread(
             subprocess.run,
-            [*compose.split(), "-f", str(compose_file), "pull"],
+            [compose, "-f", str(compose_file), "pull"],
             capture_output=True,
             text=True,
             timeout=900,
@@ -356,7 +483,7 @@ class WechatPadProProvisioner:
             )
         await asyncio.to_thread(
             subprocess.run,
-            [*compose.split(), "-f", str(compose_file), "up", "-d"],
+            [compose, "-f", str(compose_file), "up", "-d"],
             capture_output=True,
             text=True,
             timeout=600,
@@ -390,7 +517,7 @@ class WechatPadProProvisioner:
             return
         await asyncio.to_thread(
             subprocess.run,
-            [*compose.split(), "-f", str(compose_file), "stop"],
+            [compose, "-f", str(compose_file), "stop"],
             capture_output=True,
             text=True,
             timeout=300,

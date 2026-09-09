@@ -432,6 +432,80 @@ class TestSmartSearch:
         matched = await service.smart_search("anything about m2")
         assert [r.record_id for r in matched] == ["m2"]
 
+    async def test_plan_date_range_is_applied(self) -> None:
+        """The plan's after/before are advertised in the prompt but were
+        silently ignored — a 'last month' query matched nothing when mails
+        sat outside the plan window."""
+
+        class PlanRouter:
+            def __init__(self) -> None:
+                self.batch_queries: list[str] = []
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                user = messages[-1]["content"]
+                if "Subject m" not in user:
+                    self.batch_queries.append(user)
+                    return '```json\n{"keywords": [], "senders": [], "after": "2026-02-01", "before": null}\n```'
+
+                class C:
+                    text = "[]"
+
+                return C()
+
+        router = PlanRouter()
+        service = self._service(router)
+        storage = cast(Any, service.storage)
+        from mailflow.domain import MailRecord
+
+        for mid in ("m1", "m2"):
+            mail = make_mail(mid, minute=10)
+            await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        matched = await service.smart_search("fee mails from last month")
+        # January mails fall outside the plan's after=2026-02-01: no batch
+        # for them is ever sent, result is empty — the date filter worked
+        assert matched == []
+        assert len(router.batch_queries) == 1  # plan call only, no batch call
+
+    async def test_multilingual_plan_keywords_rank_batch(self) -> None:
+        """The seminar bug: an English-only plan ('seminar') does not rank
+        Chinese mails ('研讨会') — the batch relevance pass must still see
+        every mail, and a bilingual plan must rank the true match first."""
+
+        class BilingualPlanRouter:
+            def __init__(self) -> None:
+                self.batch_calls = 0
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                user = messages[-1]["content"]
+                if "Subject m" not in user:
+                    return (
+                        '```json\n{"keywords": ["seminar", "webinar", "研讨会", "讲座"], '
+                        '"senders": [], "after": null, "before": null}\n```'
+                    )
+                self.batch_calls += 1
+                # the seminar mail must be IN the batch listing (nothing
+                # hard-excluded) — the keyword in the listing is what makes
+                # this reply correct
+                assert "研讨会" in user
+
+                class C:
+                    text = '```json\n["m1"]\n```'
+
+                return C()
+
+        service = self._service(BilingualPlanRouter())
+        storage = cast(Any, service.storage)
+        from mailflow.domain import MailRecord
+
+        mail = make_mail("m1", minute=10)
+        mail = mail.model_copy(update={"subject": "线上研讨会通知"})
+        record = MailRecord(record_id=mail.normalized_message_id(), mail=mail)
+        await storage.save_mail(record)
+        other = make_mail("m2", minute=20)
+        await storage.save_mail(MailRecord(record_id=other.normalized_message_id(), mail=other))
+        matched = await service.smart_search("我需要参加线上研讨会")
+        assert [r.record_id for r in matched] == ["m1"]
+
     async def test_unparseable_batch_is_retried_then_skipped(self) -> None:
         class BadRouter:
             def __init__(self) -> None:

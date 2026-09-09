@@ -874,8 +874,10 @@ match the user's need, as a JSON array of strings, nothing else:
 ["id1", "id2"]
 
 Match on intent, not just keywords (e.g. "that payment deadline mail from
-last month" matches a fee notice with a due date). Return [] when nothing
-matches."""
+last month" matches a fee notice with a due date). Keywords in the user's
+request may appear translated in the mails — judge meaning, not literal
+strings. Return [] ONLY after checking every mail in the list; when in
+doubt, include the mail."""
 
     async def smart_search(self, query: str, *, progress: Any = None) -> list[MailRecord]:
         """Find mails matching a free-form need via the LLM.
@@ -902,7 +904,7 @@ matches."""
         def _brief(record: MailRecord) -> str:
             from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
 
-            body = _plain_body(record.mail)[:300].replace("\n", " ")
+            body = _plain_body(record.mail)[:800].replace("\n", " ")
             return (
                 f"id={record.record_id}\n"
                 f"date={record.mail.received_at.date().isoformat()}\n"
@@ -921,8 +923,11 @@ matches."""
                     "reply with a compact JSON filter plan and nothing else: "
                     '{"keywords": ["..."], "senders": ["..."], '
                     '"after": "YYYY-MM-DD" | null, "before": "YYYY-MM-DD" | null}. '
-                    "keywords are lowercase substrings likely in subject/summary/"
-                    "body; senders are lowercase domain or address fragments."
+                    "keywords are lowercase substrings likely in "
+                    "subject/summary/body — include translations and "
+                    "synonyms in every language the mail could be in (e.g. "
+                    "for a seminar: seminar, webinar, 研讨会, 讲座, workshop); "
+                    "senders are lowercase domain or address fragments."
                 ),
             },
             {"role": "user", "content": query},
@@ -936,10 +941,24 @@ matches."""
         candidates = records
         keywords: list[str] = []
         senders: list[str] = []
+        after: str | None = None
+        before: str | None = None
         try:
             plan = _extract_json_object(plan_completion.text) or {}
             raw_keywords: Any = plan.get("keywords") or []
             raw_senders: Any = plan.get("senders") or []
+            after = str(plan["after"]) if plan.get("after") else None
+            before = str(plan["before"]) if plan.get("before") else None
+            if after or before:
+                from datetime import date as _date
+
+                def _in_range(record: MailRecord) -> bool:
+                    day = record.mail.received_at.date()
+                    if after and day < _date.fromisoformat(after):
+                        return False
+                    return not (before and day > _date.fromisoformat(before))
+
+                candidates = [r for r in candidates if _in_range(r)]
             if plan:
                 raw_keyword_items = (
                     cast("list[Any]", raw_keywords) if isinstance(raw_keywords, list) else []
@@ -989,7 +1008,7 @@ matches."""
 
         # final relevance pass in batches
         matched: list[MailRecord] = []
-        batch_size = 25
+        batch_size = 15
         batches = [candidates[i : i + batch_size] for i in range(0, len(candidates), batch_size)]
         done = 0
         total = len(candidates)
