@@ -464,10 +464,16 @@ class GatewayManager:
         """
         provisioner = self.provisioner(provider)
         key = self._key(provider, instance_id)
+        # underscore-prefixed keys are per-call transport (_progress,
+        # _ask_sudo_password): callables the provisioner consumes during
+        # THIS install — they must not persist into extra.options (a
+        # function there breaks model_dump_json) and must not survive the
+        # call
+        persistent_options = {k: v for k, v in options.items() if not k.startswith("_")}
         instance = self._instances.get(key) or GatewayInstance(
             provider=provider,
             instance_id=instance_id,
-            extra={"options": options, "autostart": autostart},
+            extra={"options": persistent_options, "autostart": autostart},
         )
         self._instances[key] = instance
         instance.status = "installing"
