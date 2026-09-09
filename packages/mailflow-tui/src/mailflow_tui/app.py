@@ -402,7 +402,6 @@ class MailPane(Vertical):
         # full record list taken when the search started.
         self._smart_searching = False
         self._smart_search_task: asyncio.Task[list[MailRecord]] | None = None
-        self._smart_snapshot: list[MailRecord] = []
 
     def compose(self) -> ComposeResult:
         # the urgency Select auto-selects "auto" while mounting and fires
@@ -522,6 +521,11 @@ class MailPane(Vertical):
         await self.refresh_mail()
 
     async def refresh_mail(self) -> None:
+        if getattr(self, "_smart_searching", False):
+            # an active smart search owns the table: a re-read here would
+            # replace the results-only view with the full mailbox mid-search
+            # (and clobber the cancel-restore snapshot)
+            return
         async with self._refresh_lock:
             await self._refresh_mail_unlocked()
 
@@ -680,18 +684,18 @@ class MailPane(Vertical):
         search = self.query_one_optional("#mail-search", Input)
         query = search.value.strip() if search is not None else ""
         if self._smart_searching:
-            # cancel: stop the task and restore the pre-search view
+            # cancel: stop the task and restore the normal view — re-read
+            # from storage rather than the pre-search snapshot so mail that
+            # arrived during the search is not lost
             if self._smart_search_task is not None and not self._smart_search_task.done():
                 self._smart_search_task.cancel()
             self._smart_searching = False
-            self._records = self._smart_snapshot
             self._smart_search_task = None
             self._set_smart_label("tui.smart_search")
             await self.refresh_mail()
             return
         if not query:
             return
-        self._smart_snapshot = list(self._records)
         self._smart_searching = True
         self._set_smart_label("tui.smart_search_cancel")
         hint = self.query_one_optional("#mail-empty-hint", Static)
@@ -726,13 +730,13 @@ class MailPane(Vertical):
         except Exception as exc:
             if self._smart_searching:
                 self._smart_searching = False
-                self._records = self._smart_snapshot
                 self._set_smart_label("tui.smart_search")
                 if hint is not None:
                     hint.update(
                         f"[red]{self._service.t('tui.smart_search_failed', error=str(exc))}[/red]"
                     )
                     hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+                await self.refresh_mail()
             return
         self._smart_searching = False
         self._smart_search_task = None

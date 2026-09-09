@@ -56,21 +56,17 @@ Button:focus {
 }
 
 #mail-search-row {
-    height: auto;
-}
-
-#smart-search {
-    margin-left: 1;
+    height: 3;
 }
 
 #mail-search {
-    margin: 0 0 1 1;
     width: 1fr;
+    height: 100%;
 }
 
 #smart-search {
-    margin: 0 1 1 1;
-    height: auto;
+    height: 100%;
+    margin: 0 1 0 1;
 }
 
 #mail-empty-hint {
