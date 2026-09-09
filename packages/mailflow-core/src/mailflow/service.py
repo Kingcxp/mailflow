@@ -1044,7 +1044,11 @@ doubt, include the mail."""
                 if progress is not None:
                     progress("match", done, total, f"batch {batch_number} unreadable, skipped")
                 continue
-            wanted = {str(i).lower() for i in ids}
+            # case-sensitive compare: record ids mix cases (JavaMail,
+            # Outlook GUIDs) and the LLM echoes them verbatim — lowercasing
+            # here made EVERY id with uppercase letters unmatchable, which
+            # voided all JavaMail (PolyU/QQ) hits
+            wanted = {str(i) for i in ids}
             batch_matched = sum(1 for r in batch if r.record_id in wanted)
             matched.extend(r for r in batch if r.record_id in wanted)
             if progress is not None:

@@ -432,6 +432,33 @@ class TestSmartSearch:
         matched = await service.smart_search("anything about m2")
         assert [r.record_id for r in matched] == ["m2"]
 
+    async def test_mixed_case_ids_are_matched_verbatim(self) -> None:
+        """The seminar bug: record ids embed uppercase segments
+        (JavaMail.root@, Outlook GUIDs) and the loop lowercased the LLM's
+        echoed ids — `R in r` never matched, voiding every real hit."""
+
+        class CaseRouter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                self.calls += 1
+                reply = "{}" if self.calls == 1 else '```json\n["MixedCase123"]\n```'
+
+                class C:
+                    text = reply
+
+                return C()
+
+        service = self._service(CaseRouter())
+        storage = cast(Any, service.storage)
+        from mailflow.domain import MailRecord
+
+        mail = make_mail("MixedCase123", minute=10)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        matched = await service.smart_search("the thing")
+        assert [r.record_id for r in matched] == [mail.normalized_message_id()]
+
     async def test_plan_date_range_is_applied(self) -> None:
         """The plan's after/before are advertised in the prompt but were
         silently ignored — a 'last month' query matched nothing when mails
