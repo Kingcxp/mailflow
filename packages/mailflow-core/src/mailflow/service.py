@@ -157,16 +157,6 @@ def _extract_json_array(text: str) -> list[str] | None:
     return None
 
 
-def _extract_json_object(text: str) -> dict[str, str] | None:
-    """The first JSON object in ``text`` (values stringified for the plan:
-    keywords/senders are lists rendered by str(); the filter only needs the
-    shapes, not nested types)."""
-    value = _extract_json_typed(text, dict[str, Any])
-    if isinstance(value, dict):
-        return {str(k): v for k, v in value.items()}
-    return None
-
-
 def _bind_llm_processor(config: MailFlowConfig) -> MailFlowConfig:
     """Give the built-in LLM analysis a binding as soon as an LLM exists.
 
@@ -885,21 +875,20 @@ list; when in doubt, include the mail."""
     async def smart_search(self, query: str, *, progress: Any = None) -> list[MailRecord]:
         """Find mails matching a free-form need via the LLM.
 
-        1. asks the LLM for a compact filter plan applied to the full
-           mailbox (keyword/date/sender narrowing), then
-        2. batches the remaining candidates to the LLM for the final
-           relevance pick.
+        One pass over the whole mailbox: mails are batched (newest first)
+        and all batches are scored IN PARALLEL — a 3-batch search costs
+        one LLM round-trip, not three. There is no pre-filtering stage:
+        the old keyword "plan" burned a full LLM call (often 90+ s) and
+        did not actually narrow anything (206 -> 206).
 
-        ``progress(stage, done, total, detail)`` is called as the search
-        advances (stage: plan/filter/match) so the TUI can show detailed
-        status and cancel. Returns matching records, newest first.
+        ``progress(stage, done, total, detail)`` is called as batches
+        complete (stage: warmup/match) so the TUI can show a live spinner
+        and per-batch status. Returns matching records, newest first.
         """
         if not query.strip():
             return []
         records = await self.list_mails()
         records.sort(key=lambda record: record.mail.received_at, reverse=True)
-        if progress is not None:
-            progress("plan", 0, 1, ("smart_plan", {"count": len(records)}))
         if not self.config.llms:
             raise RuntimeError("No LLM is configured; add one in Settings → LLMs.")
         llm_ids = [llm.llm_id for llm in self.config.llms]
@@ -917,112 +906,38 @@ list; when in doubt, include the mail."""
                 f"body={body}"
             )
 
-        # plan once: let the LLM narrow the field with hard filters first
-        plan_messages: list[dict[str, str]] = [
-            {
-                "role": "system",
-                "content": (
-                    "You narrow a mail search. The user states a need; you "
-                    "reply with a compact JSON filter plan and nothing else: "
-                    '{"keywords": ["..."], "senders": ["..."], '
-                    '"after": "YYYY-MM-DD" | null, "before": "YYYY-MM-DD" | null}. '
-                    "keywords are lowercase substrings likely in "
-                    "subject/summary/body — include translations and "
-                    "synonyms in every language the mail could be in (e.g. "
-                    "for a seminar: seminar, webinar, 研讨会, 讲座, workshop); "
-                    "senders are lowercase domain or address fragments."
-                ),
-            },
-            {"role": "user", "content": query},
-        ]
-        plan_completion = await self.router.chat(
-            plan_messages,
-            primary=llm_ids[0],
-            fallback=llm_ids[1:],
-            options={"temperature": 0.1},
-        )
-        candidates = records
-        keywords: list[str] = []
-        senders: list[str] = []
-        after: str | None = None
-        before: str | None = None
+        def _report(stage: str, done: int, total: int, key: str, **params: Any) -> None:
+            if progress is not None:
+                progress(stage, done, total, (key, params))
+
+        # LLM warmup: the first real call after a cold start carries the
+        # model-load cost (90+ s on a local endpoint) and used to blow the
+        # 60 s request timeout — killing the FIRST search of every session.
+        # A tiny throwaway call first absorbs that cost in bounded time.
+        _report("warmup", 0, 1, "smart_warmup")
         try:
-            plan = _extract_json_object(plan_completion.text) or {}
-            raw_keywords: Any = plan.get("keywords") or []
-            raw_senders: Any = plan.get("senders") or []
-            after = str(plan["after"]) if plan.get("after") else None
-            before = str(plan["before"]) if plan.get("before") else None
-            if after or before:
-                from datetime import date as _date
-
-                def _in_range(record: MailRecord) -> bool:
-                    day = record.mail.received_at.date()
-                    if after and day < _date.fromisoformat(after):
-                        return False
-                    return not (before and day > _date.fromisoformat(before))
-
-                candidates = [r for r in candidates if _in_range(r)]
-            if plan:
-                raw_keyword_items = (
-                    cast("list[Any]", raw_keywords) if isinstance(raw_keywords, list) else []
-                )
-                raw_sender_items = (
-                    cast("list[Any]", raw_senders) if isinstance(raw_senders, list) else []
-                )
-                keywords = [str(k).lower() for k in raw_keyword_items]
-                senders = [str(s).lower() for s in raw_sender_items]
-                if keywords or senders:
-
-                    def _plan_score(record: MailRecord) -> int:
-                        """2 = matches a plan sender, 1 = matches a plan
-                        keyword, 0 = no plan hint. Used to ORDER candidates
-                        so hint-matching mails are summarized first — the
-                        plan's guesses must never hard-exclude mails (a
-                        wrong guess silently dropped the true matches)."""
-                        from mailflow.processors import (
-                            _plain_body,  # pyright: ignore[reportPrivateUsage]
-                        )
-
-                        haystack = " ".join(
-                            (
-                                record.mail.subject or "",
-                                record.mail.sender.address,
-                                record.summary or "",
-                                _plain_body(record.mail)[:4000],
-                            )
-                        ).lower()
-                        if senders and any(s in haystack for s in senders):
-                            return 2
-                        if keywords and any(k in haystack for k in keywords):
-                            return 1
-                        return 0
-
-                    candidates = sorted(records, key=_plan_score, reverse=True)
-        except Exception:
-            candidates = records  # plan parse failure: fall back to all mails
-        if progress is not None:
-            progress(
-                "filter",
-                len(records) - len(candidates),
-                len(records),
-                (
-                    "smart_filter",
-                    {
-                        "candidates": len(candidates),
-                        "keywords": ", ".join(keywords or []) or "—",
-                        "senders": ", ".join(senders or []) or "—",
-                    },
+            await asyncio.wait_for(
+                self.router.chat(
+                    [{"role": "user", "content": "Reply with the single word: ok"}],
+                    primary=llm_ids[0],
+                    fallback=llm_ids[1:],
+                    options={"temperature": 0.0, "max_tokens": 5},
                 ),
+                timeout=180,
             )
+        except Exception as exc:
+            logger.warning("smart search warmup failed (%s); continuing", exc)
+        _report("warmup", 1, 1, "smart_warmup_done")
 
-        # final relevance pass in batches
-        matched: list[MailRecord] = []
         batch_size = 15
-        batches = [candidates[i : i + batch_size] for i in range(0, len(candidates), batch_size)]
-        done = 0
-        total = len(candidates)
-        batch_number = 0
-        for batch in batches:
+        batches = [records[i : i + batch_size] for i in range(0, len(records), batch_size)]
+        total = len(records)
+        _report("match", 0, total, "smart_start", count=total, batches=len(batches))
+        matched: list[MailRecord] = []
+        done_counter = {"n": 0}
+        progress_lock = asyncio.Lock()
+
+        async def _score(batch: list[MailRecord], batch_number: int) -> None:
             listing = "\n\n".join(_brief(record) for record in batch)
             messages: list[dict[str, str]] = [
                 {"role": "system", "content": self._SMART_SEARCH_PROMPT},
@@ -1047,38 +962,36 @@ list; when in doubt, include the mail."""
                     attempt,
                     completion.text,
                 )
-            done += len(batch)
-            batch_number += 1
+            async with progress_lock:
+                done_counter["n"] += len(batch)
+                done = done_counter["n"]
             if ids is None:
-                if progress is not None:
-                    progress(
-                        "match",
-                        done,
-                        total,
-                        ("smart_batch_unreadable", {"batch": batch_number}),
-                    )
-                continue
+                _report("match", done, total, "smart_batch_unreadable", batch=batch_number)
+                return
             # case-sensitive compare: record ids mix cases (JavaMail,
             # Outlook GUIDs) and the LLM echoes them verbatim — lowercasing
-            # here made EVERY id with uppercase letters unmatchable, which
-            # voided all JavaMail (PolyU/QQ) hits
+            # here made EVERY id with uppercase letters unmatchable
             wanted = {str(i) for i in ids}
-            batch_matched = sum(1 for r in batch if r.record_id in wanted)
-            matched.extend(r for r in batch if r.record_id in wanted)
-            if progress is not None:
-                progress(
-                    "match",
-                    done,
-                    total,
-                    (
-                        "smart_batch",
-                        {
-                            "batch": batch_number,
-                            "batches": len(batches),
-                            "matched": batch_matched,
-                        },
-                    ),
-                )
+            batch_matched = [r for r in batch if r.record_id in wanted]
+            async with progress_lock:
+                matched.extend(batch_matched)
+            _report(
+                "match",
+                done,
+                total,
+                "smart_batch",
+                batch=batch_number,
+                batches=len(batches),
+                matched=len(batch_matched),
+                mails=[r.record_id for r in batch_matched],
+            )
+
+        # all batches in flight at once: one LLM round-trip total instead
+        # of len(batches) serial 90s calls
+        await asyncio.gather(
+            *(_score(batch, number) for number, batch in enumerate(batches, start=1)),
+            return_exceptions=False,
+        )
         matched.sort(key=lambda record: record.mail.received_at, reverse=True)
         return matched
 

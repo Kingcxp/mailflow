@@ -737,14 +737,16 @@
       "manual_bot": "【MailFlow · Bot & pushes】\n{cmd_sub} — push new mail to this chat\n{cmd_unsub} — stop pushing to this chat\nhourly on | hourly off — hourly LLM mail briefing for this chat\nhourly — show whether the briefing is on\n{cmd_status} — bot status",
       "manual_system": "【MailFlow · System】\n{cmd_lang} — switch language\n{cmd_runtime} — runtime status\n{cmd_trash} — trash list",
       "smart_search_progress": "Smart search [{stage}] {done}/{total} — {detail} (click to cancel)",
-      "smart_plan": "{count} mails in the mailbox",
-      "smart_filter": "plan narrowed to {candidates} candidates (keywords: {keywords}; senders: {senders})",
       "smart_batch": "batch {batch}/{batches}, {matched} matched",
       "smart_batch_unreadable": "batch {batch} unreadable, skipped",
       "notif_relogin": "Re-login",
       "notif_relogin_manual": "Selected notifier is not gateway-backed — nothing to re-login",
       "sudo_prompt_title": " Administrator password required ",
-      "sudo_prompt_hint": "The installer needs sudo (service/package management). Password is used once and never stored."
+      "sudo_prompt_hint": "The installer needs sudo (service/package management). Password is used once and never stored.",
+      "smart_search_working": "Searching your mailbox… (click the button to cancel)",
+      "smart_warmup": "waking the LLM up (first call of the session)…",
+      "smart_warmup_done": "LLM ready",
+      "smart_start": "scanning {count} mails in {batches} parallel batches…"
     },
     "update": {
       "applied_title": "Applied updates",

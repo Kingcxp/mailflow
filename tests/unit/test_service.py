@@ -401,8 +401,12 @@ class TestSmartSearch:
 
         matched = await service.smart_search("the fee notice", progress=_progress)
         assert [r.record_id for r in matched] == ["m1"]
-        # detailed progress surfaced to the caller: plan, filter, match
-        assert [s for s, *_ in stages] == ["plan", "filter", "match"]
+        # progress surfaced: warmup, then match batches (the keyword plan
+        # stage was removed — it cost a full LLM round-trip and never
+        # actually narrowed anything)
+        assert stages[0][0] == "warmup"
+        assert stages[-1][0] == "match"
+        assert {s for s, *_ in stages} == {"warmup", "match"}
 
     async def test_prose_wrapped_ids_are_parsed(self) -> None:
         class ProseRouter:
@@ -458,40 +462,6 @@ class TestSmartSearch:
         await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
         matched = await service.smart_search("the thing")
         assert [r.record_id for r in matched] == [mail.normalized_message_id()]
-
-    async def test_plan_date_range_is_applied(self) -> None:
-        """The plan's after/before are advertised in the prompt but were
-        silently ignored — a 'last month' query matched nothing when mails
-        sat outside the plan window."""
-
-        class PlanRouter:
-            def __init__(self) -> None:
-                self.batch_queries: list[str] = []
-
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                user = messages[-1]["content"]
-                if "Subject m" not in user:
-                    self.batch_queries.append(user)
-                    return '```json\n{"keywords": [], "senders": [], "after": "2026-02-01", "before": null}\n```'
-
-                class C:
-                    text = "[]"
-
-                return C()
-
-        router = PlanRouter()
-        service = self._service(router)
-        storage = cast(Any, service.storage)
-        from mailflow.domain import MailRecord
-
-        for mid in ("m1", "m2"):
-            mail = make_mail(mid, minute=10)
-            await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        matched = await service.smart_search("fee mails from last month")
-        # January mails fall outside the plan's after=2026-02-01: no batch
-        # for them is ever sent, result is empty — the date filter worked
-        assert matched == []
-        assert len(router.batch_queries) == 1  # plan call only, no batch call
 
     async def test_multilingual_plan_keywords_rank_batch(self) -> None:
         """The seminar bug: an English-only plan ('seminar') does not rank

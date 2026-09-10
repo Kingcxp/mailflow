@@ -737,14 +737,16 @@
       "manual_bot": "【MailFlow · 机器人与推送】\n{cmd_sub} — 推送新邮件到本聊天\n{cmd_unsub} — 停止推送到本聊天\nhourly on | hourly off — 开/关本聊天的每小时 LLM 邮件简报\nhourly — 查看简报是否开启\n{cmd_status} — 机器人状态",
       "manual_system": "【MailFlow · 系统】\n{cmd_lang} — 切换语言\n{cmd_runtime} — 运行时状态\n{cmd_trash} — 回收站列表",
       "smart_search_progress": "智能查找 [{stage}] {done}/{total} — {detail}（点击取消）",
-      "smart_plan": "邮箱共 {count} 封邮件",
-      "smart_filter": "计划筛选后剩 {candidates} 封候选（关键词：{keywords}；发件人：{senders}）",
       "smart_batch": "第 {batch}/{batches} 批，匹配 {matched} 封",
       "smart_batch_unreadable": "第 {batch} 批回复无法解析，已跳过",
       "notif_relogin": "重新登录",
       "notif_relogin_manual": "所选通知不走网关，无需重新登录",
       "sudo_prompt_title": " 需要管理员密码 ",
-      "sudo_prompt_hint": "安装过程需要 sudo（服务/软件包管理）。密码仅使用一次，不会保存。"
+      "sudo_prompt_hint": "安装过程需要 sudo（服务/软件包管理）。密码仅使用一次，不会保存。",
+      "smart_search_working": "正在搜索邮箱…（点击按钮取消）",
+      "smart_warmup": "正在唤醒 LLM（本次会话首次调用）…",
+      "smart_warmup_done": "LLM 已就绪",
+      "smart_start": "正在并行扫描 {count} 封邮件（{batches} 批）…"
     },
     "update": {
       "applied_title": "已应用的更新",

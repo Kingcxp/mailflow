@@ -43,11 +43,17 @@ tears them down with the screen — nothing keeps ticking after it closes.
   failed)
   with equal-width buttons. An empty view shows a hint (no mail yet vs. no
   match for the search/filter). Reply opens the confirmation-gated modal.
-  **Smart find** (`service.smart_search`): the LLM first derives a filter
-  plan (keywords/senders/date range) to narrow the mailbox, then batches the
-  candidates for a relevance pick; the table shows only matches while the
-  button turns into **Cancel search** — cancelling (or a failure) restores
-  the pre-search view.
+  **Smart find** (`service.smart_search`): a tiny warmup call absorbs the
+  local LLM's cold-start (first search of a session used to time out),
+  then the WHOLE mailbox is scanned in one pass — mails are batched
+  (newest first) and all batches are scored IN PARALLEL, so the search
+  costs one LLM round-trip regardless of mailbox size. There is no
+  pre-filtering stage: a keyword "plan" was tried and removed (it cost a
+  full round-trip and did not actually narrow anything). While the search
+  runs a spinner + live status show in the hint line, and matches stream
+  into the table as each batch lands; the button turns into **Cancel
+  search** — cancelling (or a failure) restores the normal view. Chat
+  platforms get the same engine via `mail search <need>`.
   detail pane shows summary, reason, action items, the **original body**
   (HTML rendered as text, binary attachment payloads detected and replaced
   by an explanatory note, bodies truncated at 4000 chars), attachment
