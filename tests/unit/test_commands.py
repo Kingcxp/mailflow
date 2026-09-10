@@ -446,7 +446,10 @@ class TestCommandRouter:
         assert "m2" not in storage.mails
         response = await commands.execute("trash list")
         assert response.ok
-        assert "m2" in response.text
+        # the listing is id-free now: the deleted mail is row #1 and the
+        # raw id is never shown (numbers are the interface)
+        assert "#1" in response.text
+        assert "m2" not in response.text
         response = await commands.execute("trash restore m2")
         assert response.ok
         assert "m2" in storage.mails
@@ -898,10 +901,11 @@ class TestPaginationAndFeedback:
         filtered = await commands.execute("mail list --query 'subject 05'")
         assert filtered.ok
         # the query matches the raw subject; the row shows the LLM summary
-        # with the id tail identifying WHICH mail matched
+        # and the id tail is gone (numbers identify rows)
         assert "Mails (1)" in filtered.text
-        assert "mail-05" in filtered.text
-        assert "mail-00" not in filtered.text
+        assert "#1" in filtered.text
+        # exactly one mail matched: nothing else on the page
+        assert "Subject 00" not in filtered.text
 
     async def test_mail_commands_accept_prefix_ids(self) -> None:
         commands, storage = await self._many_mails_router()

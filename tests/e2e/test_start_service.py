@@ -235,8 +235,9 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         assert service.commands is not None
         response = await service.commands.execute("mail list")
         assert response.ok
-        assert "e2e-1" in response.text
-        show = await service.commands.execute("mail show e2e-1")
+        # the listing is id-free: the number (#1) is the handle
+        assert "#1" in response.text
+        show = await service.commands.execute("mail show 1")
         assert show.ok
         assert "Final calculus exam" in show.text  # summary
         assert "Bring your student ID" in show.text  # original body

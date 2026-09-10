@@ -412,22 +412,22 @@ class CommandRouter:
             spans.append(StyleSpan(text=f"\n{self._t('tui.empty')}", style=_STYLE_MUTED))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         # stable ids for follow-ups: `mail show <n>` / `mail delete <n>`
-        # accept the number shown here; the raw record_id is unreadable
+        # the NUMBER is the handle: `mail show 3` / `mail delete 3` accept
+        # it directly — the raw record_id (100+ chars) is noise for humans
         start_index = (page - 1) * _PAGE_SIZE + 1
         for offset, record in enumerate(page_records):
             number = start_index + offset
-            spans.append(StyleSpan(text="\n", style=""))
+            spans.append(StyleSpan(text="\n\n", style=""))  # blank line between mails
             spans.extend(self._urgency_span(record.effective_urgency))
             spans.append(StyleSpan(text=f" #{number} "))
             # the LLM summary IS the overview; the raw subject usually a
             # long unwieldy marketing line
-            headline = (record.summary or record.mail.subject or "(no subject)").splitlines()
-            spans.append(StyleSpan(text=headline[0][:90]))
+            headline = " ".join((record.summary or record.mail.subject or "(no subject)").split())
+            spans.append(StyleSpan(text=headline[:120]))
             spans.append(
                 StyleSpan(
                     text=f"\n     {self._short_sender(record.mail.sender.address)} · "
-                    f"{self._fmt_time(record.mail.received_at)} · "
-                    f"{self._t('mail.id_hint', mail_id=record.record_id[:12])}",
+                    f"{self._fmt_time(record.mail.received_at)}",
                     style=_STYLE_MUTED,
                 )
             )
@@ -474,15 +474,14 @@ class CommandRouter:
         ]
         for offset, record in enumerate(matched[:_PAGE_SIZE], start=1):
             headline = (record.summary or record.mail.subject or "(no subject)").splitlines()
-            spans.append(StyleSpan(text="\n", style=""))
+            spans.append(StyleSpan(text="\n\n", style=""))
             spans.extend(self._urgency_span(record.effective_urgency))
             spans.append(StyleSpan(text=f" #{offset} "))
-            spans.append(StyleSpan(text=headline[0][:90]))
+            spans.append(StyleSpan(text=headline[0][:120]))
             spans.append(
                 StyleSpan(
                     text=f"\n     {self._short_sender(record.mail.sender.address)} · "
-                    f"{self._fmt_time(record.mail.received_at)} · "
-                    f"{self._t('mail.id_hint', mail_id=record.record_id[:12])}",
+                    f"{self._fmt_time(record.mail.received_at)}",
                     style=_STYLE_MUTED,
                 )
             )
@@ -534,17 +533,17 @@ class CommandRouter:
 
     def _render_mail(self, record: MailRecord, feedback: str | None = None) -> CommandResponse:
         mail = record.mail
+        subject_line = " ".join((mail.subject or "").split())
         spans: list[StyleSpan] = [
-            StyleSpan(
-                text=self._t("mail.show_title", mail_id=record.record_id), style=_STYLE_TITLE
-            ),
+            StyleSpan(text=subject_line or self._t("tui.mail_no_subject"), style=_STYLE_TITLE),
             StyleSpan(text=f"\n{self._t('mail.field_from')}: {mail.sender.display}"),
             StyleSpan(
                 text=f"\n{self._t('mail.field_to')}: {', '.join(r.display for r in mail.recipients) or '-'}"
             ),
             StyleSpan(text=f"\n{self._t('mail.field_date')}: {self._fmt_time(mail.date)}"),
-            StyleSpan(text=f"\n{self._t('mail.field_subject')}: {mail.subject}"),
-            StyleSpan(text=f"\n{self._t('mail.field_account')}: {mail.account_id}"),
+            StyleSpan(
+                text=f"\n{self._t('mail.field_account')}: {mail.account_id}", style=_STYLE_MUTED
+            ),
             StyleSpan(text=f"\n{self._t('mail.field_urgency')}: ", style=_STYLE_HEADER),
         ]
         spans.extend(self._urgency_span(record.effective_urgency))
@@ -1428,16 +1427,17 @@ class CommandRouter:
             start_index = (page - 1) * _PAGE_SIZE + 1
             for offset, item in enumerate(page_items):
                 record = item.to_mail_record()
-                spans.append(StyleSpan(text="\n", style=""))
+                spans.append(StyleSpan(text="\n\n", style=""))
                 spans.extend(self._urgency_span(record.effective_urgency))
                 spans.append(StyleSpan(text=f" #{start_index + offset} "))
-                headline = (record.summary or record.mail.subject or "(no subject)").splitlines()
-                spans.append(StyleSpan(text=headline[0][:90]))
+                headline = " ".join(
+                    (record.summary or record.mail.subject or "(no subject)").split()
+                )
+                spans.append(StyleSpan(text=headline[:120]))
                 spans.append(
                     StyleSpan(
                         text=f"\n     {self._short_sender(record.mail.sender.address)} · "
-                        f"{self._fmt_time(item.deleted_at)} · "
-                        f"{self._t('mail.id_hint', mail_id=item.record_id[:12])}",
+                        f"{self._fmt_time(item.deleted_at)}",
                         style=_STYLE_MUTED,
                     )
                 )
