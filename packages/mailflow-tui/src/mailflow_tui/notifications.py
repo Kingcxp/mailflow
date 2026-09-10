@@ -103,6 +103,9 @@ class NotificationsPane(Vertical):
         with Horizontal(id="notifications-actions"):
             yield Button(self._service.t("tui.btn_add"), id="notif-add", variant="success")
             yield Button(self._service.t("tui.btn_edit"), id="notif-edit", variant="primary")
+            yield Button(
+                self._service.t("tui.notif_relogin"), id="notif-relogin", variant="warning"
+            )
             yield Button(self._service.t("tui.btn_delete"), id="notif-delete", variant="error")
             yield Button(
                 self._service.t("tui.notifications_toggle"), id="notif-toggle", variant="primary"
@@ -278,6 +281,9 @@ class NotificationsPane(Vertical):
         if button_id == "notif-edit":
             await self._edit_selected()
             return
+        if button_id == "notif-relogin":
+            await self._relogin_selected()
+            return
         if button_id == "notif-delete":
             await self._delete_selected()
             return
@@ -336,6 +342,40 @@ class NotificationsPane(Vertical):
             return
         self._render_rows()
         self._sync_selection_controls()
+
+    async def _relogin_selected(self) -> None:
+        """Re-run the guided setup for an existing gateway-backed notifier
+        (NapCat logged out / session expired): restarts the gateway
+        process and shows the QR again, then re-saves the endpoint."""
+        if self._selected_id is None:
+            self.query_one("#notifications-status", Static).update(
+                f"[red]{self._service.t('tui.notifications_select_first')}[/red]"
+            )
+            return
+        found = [n for n in self._service.config.notifiers if n.notifier_id == self._selected_id]
+        if not found:
+            return
+        entry = found[0]
+        provider = str(entry.provider or "")
+        # onebot notifiers ride a gateway recorded in options.gateway
+        # (napcat/openwechat/...); the provider id itself ('onebot') is
+        # the bot protocol, not a gateway
+        gateway = str((entry.options or {}).get("gateway") or "")
+        if gateway not in self._service.gateway_providers():
+            gateway = self._gateway_for(self._service, provider) or ""
+        if gateway not in self._service.gateway_providers():
+            self.query_one("#notifications-status", Static).update(
+                f"[yellow]{self._service.t('tui.notif_relogin_manual')}[/yellow]"
+            )
+            return
+        instance_id = entry.notifier_id
+        options = dict(entry.options or {})
+        self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
+            GatewayGuideModal(self._service, gateway, instance_id, options),
+            callback=lambda result, values={"notifier_id": instance_id, "provider": provider, "options": options}: (
+                self._after_guide(gateway, instance_id, result, values)
+            ),
+        )
 
     async def _edit_selected(self) -> None:
         if self._selected_id is None:

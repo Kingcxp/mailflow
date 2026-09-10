@@ -102,6 +102,38 @@ def _find_docker_compose(*, require_daemon: bool = True) -> str | None:
     return None
 
 
+def _start_linux_docker_service(ask: Any, progress: Any) -> bool:
+    """Start the docker service via sudo systemctl (password asked through
+    the guide's prompt). Returns True when the daemon came up."""
+    if ask is None:
+        progress(2.0, "docker service is stopped and no sudo prompt is available", "installing")
+        return False
+    for unit in ("docker", "docker.service"):
+        progress(3.0, f"starting the docker service (sudo systemctl start {unit})…", "installing")
+        code, output = _sudo_run(["systemctl", "start", unit], str(ask()))
+        if code == 0:
+            docker = _docker_exe()
+            if docker is None:
+                return False
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                progress(
+                    6.0,
+                    f"waiting for the docker daemon ({int(deadline - time.monotonic())}s left)…",
+                    "installing",
+                )
+                if _docker_daemon_up(docker):
+                    return True
+                time.sleep(2.0)
+            return False
+        if "not found" in output or "does not exist" in output:
+            continue
+        # a wrong password surfaces as sudo failure: one retry via the next
+        # ask() call happens naturally on the loop's second unit attempt
+        progress(3.0, f"systemctl start {unit} failed: {output.strip()[:120]}", "installing")
+    return False
+
+
 def _start_docker_desktop(progress: Any) -> bool:
     """Launch Docker Desktop and wait for the daemon (up to ~2.5 min).
     Returns True when the daemon came up. ``progress`` is the installer's
@@ -117,17 +149,36 @@ def _start_docker_desktop(progress: Any) -> bool:
     docker = _docker_exe()
     if docker is None:
         return False
-    deadline = time.monotonic() + 150
+    # WSL2 cold start (first boot after reboot) routinely takes 2-4 min:
+    # 150s aborted too early and read as 'daemon is not running'
+    deadline = time.monotonic() + 300
     step = 0
     while time.monotonic() < deadline:
         step += 1
         progress(
-            min(3.0 + step * 2.0, 9.0),
+            min(3.0 + step, 9.0),
             f"waiting for the docker daemon ({int(deadline - time.monotonic())}s left)…",
             "installing",
         )
         if _docker_daemon_up(docker):
             return True
+        # the GUI process dying (crash, EULA dialog closed) is fatal —
+        # keep waiting only while it is alive
+        probe = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq Docker Desktop.exe"],
+            capture_output=True,
+            timeout=15,
+        )
+        # tasklist prints in the OEM codepage (GBK on zh-CN Windows):
+        # text=True would decode utf-8 and crash the reader thread
+        stdout_text = probe.stdout.decode("utf-8", errors="replace")
+        if "Docker Desktop.exe" not in stdout_text:
+            progress(
+                9.0,
+                "Docker Desktop exited during startup (check for update/EULA dialogs)",
+                "installing",
+            )
+            return False
         time.sleep(3.0)
     return False
 
@@ -488,19 +539,19 @@ class WechatPadProProvisioner:
             def _provision_docker() -> str:
                 docker = _docker_exe()
                 if docker is not None and not _docker_daemon_up(docker):
-                    # daemon down: starting Docker Desktop is enough
-                    if platform.system() == "Windows" and _start_docker_desktop(_install_progress):
-                        return _find_docker_compose() or ""
-                    if progress is not None:
-                        progress.update(
-                            2.0,
-                            "docker daemon is not running — start Docker "
-                            "Desktop / the docker service, then retry",
-                            "installing",
-                        )
+                    # daemon down: Windows — launch Docker Desktop; Linux —
+                    # systemctl start docker under sudo (password asked via
+                    # the guide's prompt, same as apt)
+                    if platform.system() == "Windows":
+                        if _start_docker_desktop(_install_progress):
+                            return _find_docker_compose() or ""
+                    else:
+                        if _start_linux_docker_service(ask, _install_progress):
+                            return _find_docker_compose() or ""
                     raise RuntimeError(
-                        "docker daemon is not running (start Docker Desktop "
-                        "or the docker service, then retry the setup)"
+                        "docker daemon did not come up (Windows: start "
+                        "Docker Desktop; Linux: systemctl start docker) — "
+                        "then retry the setup"
                     )
                 return install_docker_dependencies(ask, _install_progress)
 

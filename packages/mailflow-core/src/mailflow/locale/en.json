@@ -736,7 +736,9 @@
       "smart_plan": "{count} mails in the mailbox",
       "smart_filter": "plan narrowed to {candidates} candidates (keywords: {keywords}; senders: {senders})",
       "smart_batch": "batch {batch}/{batches}, {matched} matched",
-      "smart_batch_unreadable": "batch {batch} unreadable, skipped"
+      "smart_batch_unreadable": "batch {batch} unreadable, skipped",
+      "notif_relogin": "Re-login",
+      "notif_relogin_manual": "Selected notifier is not gateway-backed — nothing to re-login"
     },
     "update": {
       "applied_title": "Applied updates",
