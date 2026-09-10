@@ -133,7 +133,9 @@ def install_docker_dependencies(ask_sudo_password: Any = None, progress: Any = N
     if system == "Windows":
         if shutil.which("winget"):
             if progress is not None:
-                progress(5.0, "installing Docker Desktop via winget", "installing")
+                progress(
+                    5.0, "installing Docker Desktop via winget (~500 MB download)", "downloading"
+                )
             result = subprocess.run(
                 [
                     "winget",
@@ -423,6 +425,7 @@ class WechatPadProProvisioner:
 
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:
         compose = _find_docker_compose()
+        progress = options.get("_progress")
         if compose is None:
             # docker missing: provision it now. On Windows winget needs no
             # password; on Linux apt runs under sudo -S — the password is
@@ -430,7 +433,12 @@ class WechatPadProProvisioner:
             # host (TUI guide) injects into options, asked only at the
             # moment of need, never stored or logged.
             ask = options.get("_ask_sudo_password")
-            compose = await asyncio.to_thread(install_docker_dependencies, ask)
+
+            def _install_progress(pct: float, message: str, stage: str) -> None:
+                if progress is not None:
+                    progress.update(pct, message, stage)
+
+            compose = await asyncio.to_thread(install_docker_dependencies, ask, _install_progress)
         target = _instance_dir(instance_id)
         target.mkdir(parents=True, exist_ok=True)
         compose_file = target / "compose.yml"
@@ -467,7 +475,71 @@ class WechatPadProProvisioner:
         (target / "compose.yml").write_text(compose_body, encoding="utf-8")
         progress = options.get("_progress")
         if progress is not None:
-            progress.update(10.0, "pulling wechatpadpro/mysql/redis images", "installing")
+            progress.update(10.0, "pulling wechatpadpro/mysql/redis images", "downloading")
+        await self._pull_with_progress(compose, compose_file, progress)
+
+    async def _pull_with_progress(self, compose: str, compose_file: Path, progress: Any) -> None:
+        """`docker compose pull` with live progress.
+
+        The pull streams JSON lines (compose v2.18+) with per-image byte
+        counters; when the flag is unsupported we fall back to plain pull
+        and pulse the bar between phases so the user still sees motion."""
+        process = await asyncio.create_subprocess_exec(
+            compose,
+            "-f",
+            str(compose_file),
+            "pull",
+            "--json-stream",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        streamed = False
+        buf: bytes = b""
+
+        def _emit(json_line: str) -> None:
+            # {"id":"mysql","progress":"325.4/890.1","progressDetail":{"current":n,"total":m}}
+            try:
+                data: dict[str, Any] = json.loads(json_line)
+            except Exception:
+                return
+            image = str(data.get("id") or "")
+            detail: dict[str, Any] = (
+                data["progressDetail"] if isinstance(data.get("progressDetail"), dict) else {}
+            )
+            current = float(detail.get("current") or 0)
+            total = float(detail.get("total") or 0)
+            status = str(data.get("status") or "")
+            if progress is None:
+                return
+            if total > 0:
+                pct = min(10.0 + 85.0 * (current / total), 95.0)
+                mb = current / (1024 * 1024)
+                mbt = total / (1024 * 1024)
+                progress.update(pct, f"pulling {image}: {mb:.0f}/{mbt:.0f} MB", "downloading")
+            elif status:
+                progress.update(progress.percent, f"pulling {image}: {status}", "downloading")
+
+        stdout = process.stdout
+        assert stdout is not None
+        while True:
+            block: bytes = await stdout.read(4096)
+            if not block:
+                break
+            streamed = True
+            buf += block
+            while b"\n" in buf:
+                cut = buf.index(b"\n")
+                line_bytes: bytes = buf[:cut]
+                buf = buf[cut + 1 :]
+                _emit(line_bytes.decode("utf-8", errors="replace").strip())
+        if buf.strip():
+            _emit(buf.decode("utf-8", errors="replace").strip())
+        code = await process.wait()
+        if code == 0:
+            return
+        if streamed and code != 0 and progress is not None:
+            # json-stream refused on old compose: plain pull, pulsing bar
+            progress.update(10.0, "pulling images (legacy compose)", "downloading")
         result = await asyncio.to_thread(
             subprocess.run,
             [compose, "-f", str(compose_file), "pull"],
@@ -476,9 +548,7 @@ class WechatPadProProvisioner:
             timeout=900,
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                f"wechatpadpro {instance_id}: image pull failed: {result.stderr.strip()[:400]}"
-            )
+            raise RuntimeError(f"wechatpadpro: image pull failed: {result.stderr.strip()[:400]}")
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
         target = _instance_dir(instance_id)
@@ -503,6 +573,9 @@ class WechatPadProProvisioner:
                 endpoint=endpoint,
                 extra={"reused": True},
             )
+        progress = options.get("_progress")
+        if progress is not None:
+            progress.update(96.0, "starting containers (docker compose up)", "starting")
         await asyncio.to_thread(
             subprocess.run,
             [compose, "-f", str(compose_file), "up", "-d"],
@@ -513,12 +586,18 @@ class WechatPadProProvisioner:
         deadline = asyncio.get_running_loop().time() + _READY_TIMEOUT
         while asyncio.get_running_loop().time() < deadline:
             if await self._wait_http(endpoint, wait_seconds=3.0):
+                if progress is not None:
+                    progress.update(99.0, f"gateway answering on {endpoint}", "starting")
                 await self._ensure_bridge(instance_id, options)
                 return GatewayInstance(
                     provider=self.provider,
                     instance_id=instance_id,
                     status="running",
                     endpoint=endpoint,
+                )
+            if progress is not None:
+                progress.update(
+                    97.0, f"waiting for the gateway to answer on {endpoint}…", "starting"
                 )
             await asyncio.sleep(3.0)
         raise RuntimeError(

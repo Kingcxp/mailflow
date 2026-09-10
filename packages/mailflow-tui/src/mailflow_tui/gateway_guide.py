@@ -25,6 +25,7 @@ from textual.screen import ModalScreen
 from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
     Button,
     Input,
+    ProgressBar,
     RichLog,
     Static,
 )
@@ -74,6 +75,22 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         align: center middle;
         grid-gutter: 2 2;
     }
+    #guide-progress-row {
+        display: none;
+        height: 1;
+        padding: 0 1;
+    }
+    #guide-progress-label {
+        width: 1fr;
+        height: 1;
+        overflow: hidden;
+    }
+    #guide-progress-bar {
+        width: 24;
+        height: 1;
+        margin: 0;
+        padding: 0;
+    }
     #sudo-prompt {
         display: none;
         height: auto;
@@ -114,6 +131,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._instance_id = instance_id
         self._options = options
         self._result: dict[str, Any] | None = None
+        self._progress_bucket = -1
+        self._last_progress_message = ""
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -132,6 +151,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             with Vertical(id="guide-log-wrap"):
                 yield RichLog(
                     id="guide-log", wrap=True, highlight=True, markup=True, max_lines=5000
+                )
+            # live install progress: real bar + phase label, shown while
+            # the provisioner works
+            with Horizontal(id="guide-progress-row"):
+                yield Static("", id="guide-progress-label")
+                yield ProgressBar(
+                    total=100.0, show_eta=False, show_percentage=False, id="guide-progress-bar"
                 )
             # hidden sudo prompt: shown on demand when the installer
             # needs sudo (Linux apt); the password never leaves the guide
@@ -233,13 +259,27 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     # -- install progress ---------------------------------------------------------
 
     def _show_progress(self, visible: bool) -> None:
-        # progress lines are part of the log stream; nothing to show/hide
-        pass
+        row = self.query_one_optional("#guide-progress-row", Horizontal)
+        if row is not None:
+            row.styles.display = "block" if visible else "none"  # pyright: ignore[reportUnknownMemberType]
+            if not visible:
+                bar = self.query_one_optional("#guide-progress-bar", ProgressBar)
+                if bar is not None:
+                    bar.update(progress=0.0)
+                label = self.query_one_optional("#guide-progress-label", Static)
+                if label is not None:
+                    label.update("")
 
     def _update_progress(self, percent: float, message: str) -> None:
-        # throttled log line (one per ~10%) so the pane scrolls without
-        # flooding; the message already names the file being downloaded
-        bucket = int(percent // 10)
+        """Live bar + phase label; the log only records milestone lines
+        (one per 25%) so the pane keeps a history without flooding."""
+        bar = self.query_one_optional("#guide-progress-bar", ProgressBar)
+        if bar is not None:
+            bar.update(progress=min(max(percent, 0.0), 100.0))
+        label = self.query_one_optional("#guide-progress-label", Static)
+        if label is not None:
+            label.update(f"{percent:5.1f}%  {message}")
+        bucket = int(percent // 25)
         if bucket != getattr(self, "_progress_bucket", -1):
             self._progress_bucket = bucket
             self._log("INFO", f"{percent:.0f}% — {message}")
@@ -294,8 +334,11 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             nonlocal progress, last_pct
             if progress is None or progress._done:  # pyright: ignore[reportPrivateUsage]
                 return
-            if progress.percent != last_pct or progress.message:
+            if progress.percent != last_pct or (
+                progress.message and progress.message != getattr(self, "_last_progress_message", "")
+            ):
                 last_pct = progress.percent
+                self._last_progress_message = progress.message
                 self._update_progress(progress.percent, progress.message)
 
         # the installer may need sudo (Linux apt under sudo -S): inject a

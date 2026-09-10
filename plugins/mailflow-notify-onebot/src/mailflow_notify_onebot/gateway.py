@@ -1137,6 +1137,9 @@ class NapCatProvisioner:
             raise RuntimeError(
                 "NapCat needs Node.js >= 18; install Node first (or set options.node_path)"
             )
+        progress = options.get("_progress")
+        if progress is not None:
+            progress.update(1.0, "checking NapCat runtime requirements", "installing")
         target = _instance_dir(instance_id)
         # installed means MailFlow's own copy (data/gateways) is in place:
         # the Shell zip entry point on Windows, or a bundled AppImage on
@@ -1178,6 +1181,9 @@ class NapCatProvisioner:
         progress = options.get("_progress")
         logger.info("napcat %s: downloading %s (%.1f MB)", instance_id, url, _NAPCAT_SIZE_MB)
         await asyncio.to_thread(self._download, url, archive, progress)
+        if progress is not None:
+            size_mb = archive.stat().st_size / (1024 * 1024) if archive.exists() else 0
+            progress.update(85.0, f"unpacking {archive.name} ({size_mb:.0f} MB)…", "installing")
         logger.info(
             "napcat %s: downloaded %d bytes; unpacking…",
             instance_id,
@@ -1276,6 +1282,8 @@ class NapCatProvisioner:
             progress.update(0.0, f"downloading {asset} (~190 MB)", "downloading")
         logger.info("napcat %s: downloading AppImage %s", instance_id, url)
         await asyncio.to_thread(self._download, url, appimage, progress)
+        if progress is not None:
+            progress.update(90.0, "making the AppImage executable…", "installing")
         await asyncio.to_thread(appimage.chmod, 0o755)
         logger.info(
             "napcat %s: AppImage ready (%d MB)",
@@ -1544,6 +1552,9 @@ class NapCatProvisioner:
         # (NapCat prefers the per-account file after login; without the
         # duplicate write the httpClients entry silently never loads).
         await self._write_onebot_config(instance_id, port, bridge.url if bridge else "")
+        progress = options.get("_progress")
+        if progress is not None:
+            progress.update(92.0, "launching the gateway process…", "starting")
         # Linux runs the bundled AppImage directly; only the Windows Shell
         # package needs its node entry point located inside the tree
         if not _IS_WINDOWS:
@@ -1627,7 +1638,16 @@ class NapCatProvisioner:
         ready_port = webui_port
         ready = False
         deadline = asyncio.get_running_loop().time() + _READY_TIMEOUT
+        progress = options.get("_progress")
         while asyncio.get_running_loop().time() < deadline:
+            if progress is not None:
+                remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+                waiting_for = "QR code" if not ready_port else "WebUI"
+                progress.update(
+                    95.0,
+                    f"gateway booting — waiting up to {remaining:.0f}s more for {waiting_for}/login…",
+                    "starting",
+                )
             for candidate in range(webui_port, webui_port + 5):
                 if await self._wait_http_port(candidate, wait_seconds=2.0):
                     ready_port = candidate
