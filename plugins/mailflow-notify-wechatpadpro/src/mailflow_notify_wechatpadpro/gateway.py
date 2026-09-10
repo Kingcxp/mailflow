@@ -71,13 +71,22 @@ def _docker_exe() -> str | None:
     return None
 
 
-def _docker_daemon_up(docker: str) -> bool:
+def _docker_daemon_up(docker: str, *, attempts: int = 2) -> bool:
     """The CLI alone is not enough: with Docker Desktop installed but not
     started, every compose command fails with a pipe error — and the
     auto-install silently waits forever. `docker info` answers only when
-    the daemon is up."""
-    result = subprocess.run([docker, "info"], capture_output=True, text=True, timeout=60)
-    return result.returncode == 0
+    the daemon is up. A starting engine answers intermittently (the CLI
+    sometimes wins the pipe race), so one failure is not a verdict."""
+    for attempt in range(attempts):
+        try:
+            result = subprocess.run([docker, "info"], capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                return True
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        if attempt + 1 < attempts:
+            time.sleep(2.0)
+    return False
 
 
 def _find_docker_compose(*, require_daemon: bool = True) -> str | None:
@@ -100,6 +109,26 @@ def _find_docker_compose(*, require_daemon: bool = True) -> str | None:
     if legacy and (not require_daemon or _docker_daemon_up(legacy)):
         return legacy
     return None
+
+
+def _wait_daemon(docker: str, *, seconds: int, progress: Any) -> bool:
+    """Poll `docker info` for ``seconds``; every probe is reported on the
+    progress channel so waiting is never silent."""
+    deadline = time.monotonic() + seconds
+    step = 0
+    while time.monotonic() < deadline:
+        step += 1
+        remaining = int(deadline - time.monotonic())
+        progress(
+            min(2.0 + step, 9.0),
+            f"checking the docker daemon ({remaining}s left)…",
+            "installing",
+        )
+        if _docker_daemon_up(docker, attempts=1):
+            progress(9.0, "docker daemon is up", "installing")
+            return True
+        time.sleep(3.0)
+    return False
 
 
 def _start_linux_docker_service(ask: Any, progress: Any) -> bool:
@@ -539,7 +568,13 @@ class WechatPadProProvisioner:
             def _provision_docker() -> str:
                 docker = _docker_exe()
                 if docker is not None and not _docker_daemon_up(docker):
-                    # daemon down: Windows — launch Docker Desktop; Linux —
+                    # daemon down (or still starting): the user may have
+                    # launched Docker Desktop themselves a moment ago —
+                    # give an ALREADY-RUNNING engine a grace window before
+                    # spawning anything
+                    if _wait_daemon(docker, seconds=60, progress=_install_progress):
+                        return _find_docker_compose() or ""
+                    # still down: Windows — launch Docker Desktop; Linux —
                     # systemctl start docker under sudo (password asked via
                     # the guide's prompt, same as apt)
                     if platform.system() == "Windows":

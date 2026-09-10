@@ -328,6 +328,51 @@ class TestCommandRouter:
         assert "urgent" in response.text
         assert "mail show <#>" in response.text
 
+    async def test_mail_smart_search_chat(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        """`mail search <need>` runs the LLM finder and prints numbered
+        summary-headlined rows the same way `mail list` does."""
+        commands, _ = router
+        from mailflow.config import LLMConfig
+
+        commands.service.config.llms = [LLMConfig(llm_id="llm-1")]
+
+        class SmartRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                user = messages[-1]["content"]
+                # the plan call has no candidate listing; batches do
+                if "subject=" not in user:
+
+                    class Plan:
+                        text = "{}"
+
+                    return Plan()
+
+                class Reply:
+                    text = '```json\n["m1"]\n```'
+
+                return Reply()
+
+        commands.service.router = cast(LLMRouter, SmartRouter())
+        response = await commands.execute("mail search the student ID mail")
+        assert response.ok
+        assert "#1" in response.text
+        assert "Bring your student ID" in response.text
+        # the number resolves for show
+        shown = await commands.execute("mail show 1")
+        assert shown.ok
+        assert "Bring your student ID" in shown.text
+
+    async def test_mail_smart_search_no_llm(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, _ = router
+        commands.service.config.llms = []
+        response = await commands.execute("mail search anything")
+        assert not response.ok
+        assert "LLM" in response.text
+
     async def test_mail_show_accepts_list_number(
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:

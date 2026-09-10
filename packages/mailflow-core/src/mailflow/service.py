@@ -876,8 +876,11 @@ match the user's need, as a JSON array of strings, nothing else:
 Match on intent, not just keywords (e.g. "that payment deadline mail from
 last month" matches a fee notice with a due date). Keywords in the user's
 request may appear translated in the mails — judge meaning, not literal
-strings. Return [] ONLY after checking every mail in the list; when in
-doubt, include the mail."""
+strings. Matching is CASE-INSENSITIVE and format-insensitive: a mail may
+write "Seminar", "SEMINAR" or "seminar" anywhere in its subject or body,
+and forwarded/quoted/reply-formatted mail buries the relevant text — read
+the whole body field. Return [] ONLY after checking every mail in the
+list; when in doubt, include the mail."""
 
     async def smart_search(self, query: str, *, progress: Any = None) -> list[MailRecord]:
         """Find mails matching a free-form need via the LLM.

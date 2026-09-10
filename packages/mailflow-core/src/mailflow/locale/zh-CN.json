@@ -236,14 +236,19 @@
       "urgency_reset": "邮件 {mail_id} 的紧急度已重置为自动（{urgency}）",
       "urgency_updated": "邮件 {mail_id} 的紧急度已设为 {urgency}",
       "urgency_usage": "mail urgency <邮件id> <ad|info|important|urgent|auto>",
-      "usage": "mail <list|show <id>|urgency <id> <级别>|delete <id>>",
+      "usage": "mail <list|search <需求>|show <#|id>|urgency <#|id> <级别>|delete <#|id>>",
       "wipe_confirm_hint": "执行请输入：`mail wipe CONFIRM`",
       "wipe_done": "已清空 {mails} 封活动邮件与 {trash} 条回收站记录，去重状态已重置——超出拉取上限的旧邮件可在重启后通过邮箱浏览器重新解析。",
       "wipe_warn_body": "所有解析结果都会被清除；之后的轮询只重新拉取新收到的邮件。仍显示在邮箱历史浏览器中的邮件可逐批强制重新解析。",
       "wipe_warn_title": "此操作将永久删除全部已处理邮件。",
       "id_hint": "编号 {mail_id}…",
       "list_hint": "查看：mail show <#> · 翻页：mail list <页码>",
-      "trash_hint": "恢复：trash restore <#> · 翻页：trash list <页码>"
+      "trash_hint": "恢复：trash restore <#> · 翻页：trash list <页码>",
+      "search_usage": "mail search <描述你想找的邮件>",
+      "search_no_llm": "智能查找需要配置 LLM——请先在 设置 → LLM 中添加",
+      "search_none": "没有匹配描述的邮件",
+      "search_title": "智能查找（{count}）",
+      "search_truncated": "显示 {shown}/{total} 条匹配"
     },
     "plugin": {
       "already_installed": "{plugin_id} 已安装",
@@ -738,7 +743,9 @@
       "smart_batch": "第 {batch}/{batches} 批，匹配 {matched} 封",
       "smart_batch_unreadable": "第 {batch} 批回复无法解析，已跳过",
       "notif_relogin": "重新登录",
-      "notif_relogin_manual": "所选通知不走网关，无需重新登录"
+      "notif_relogin_manual": "所选通知不走网关，无需重新登录",
+      "sudo_prompt_title": " 需要管理员密码 ",
+      "sudo_prompt_hint": "安装过程需要 sudo（服务/软件包管理）。密码仅使用一次，不会保存。"
     },
     "update": {
       "applied_title": "已应用的更新",

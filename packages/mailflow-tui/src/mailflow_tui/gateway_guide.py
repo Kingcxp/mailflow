@@ -94,10 +94,25 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     #sudo-prompt {
         display: none;
         height: auto;
-        padding: 0 1;
+        margin: 0 2 1 2;
+        padding: 1 2;
+        border: heavy $error;
+        background: $surface;
+    }
+    #sudo-prompt-title {
+        height: 1;
+        text-style: bold reverse;
+    }
+    #sudo-prompt-hint {
+        height: 1;
+        color: $text-muted;
+        margin-bottom: 1;
     }
     #sudo-prompt-label {
-        height: 1;
+        width: auto;
+        height: 3;
+        content-align: center middle;
+        text-style: bold;
     }
     #sudo-prompt-input {
         width: 1fr;
@@ -160,15 +175,19 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     total=100.0, show_eta=False, show_percentage=False, id="guide-progress-bar"
                 )
             # hidden sudo prompt: shown on demand when the installer
-            # needs sudo (Linux apt); the password never leaves the guide
-            with Horizontal(id="sudo-prompt"):
-                yield Static("", id="sudo-prompt-label")
-                yield Input(
-                    password=True,
-                    placeholder="",
-                    id="sudo-prompt-input",
-                )
-                yield Button("OK", id="sudo-prompt-ok", variant="primary")
+            # needs sudo; the password never leaves the guide. Bordered +
+            # titled so it cannot be mistaken for another log line.
+            with Vertical(id="sudo-prompt"):
+                yield Static("", id="sudo-prompt-title")
+                yield Static("", id="sudo-prompt-hint")
+                with Horizontal(id="sudo-prompt-row"):
+                    yield Static("", id="sudo-prompt-label")
+                    yield Input(
+                        password=True,
+                        placeholder="",
+                        id="sudo-prompt-input",
+                    )
+                    yield Button("OK", id="sudo-prompt-ok", variant="primary")
             yield Static("", id="guide-status")
             with Horizontal(id="guide-actions"):
                 yield Button(
@@ -389,10 +408,14 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         (via asyncio.run_coroutine_threadsafe from its worker thread):
         the password lives only in this closure — never in options,
         config, or logs."""
-        prompt = self.query_one("#sudo-prompt", Horizontal)
+        prompt = self.query_one("#sudo-prompt", Vertical)
+        title = self.query_one("#sudo-prompt-title", Static)
+        hint = self.query_one("#sudo-prompt-hint", Static)
         label = self.query_one("#sudo-prompt-label", Static)
         field = self.query_one("#sudo-prompt-input", Input)
         field.value = ""
+        title.update(self._t("tui.sudo_prompt_title"))
+        hint.update(self._t("tui.sudo_prompt_hint"))
         label.update(self._t("tui.sudo_prompt_label"))
         prompt.styles.display = "block"  # pyright: ignore[reportUnknownMemberType]
         field.focus()

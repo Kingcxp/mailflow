@@ -362,6 +362,8 @@ class CommandRouter:
                     query = query or positionals[0].strip().lower()
             return await self._mail_list(page=page, query=query)
         sub, rest = args[0], args[1:]
+        if sub == "search":
+            return await self._mail_smart_search(rest)
         if sub == "show":
             return await self._mail_show(rest)
         if sub == "delete":
@@ -446,6 +448,59 @@ class CommandRouter:
             local, _, domain = addr.partition("@")
             return f"{local[:18]}@{domain.split('.')[0]}"
         return addr[:34]
+
+    async def _mail_smart_search(self, args: list[str]) -> CommandResponse:
+        """``mail search <free-form need>`` — the LLM finds mails matching
+        the INTENT (the same engine as the TUI's smart find)."""
+        query = " ".join(args).strip()
+        if not query:
+            return self._err(self._t("mail.search_usage"))
+        if not self.service.config.llms:
+            return self._err(self._t("mail.search_no_llm"))
+
+        def _progress(stage: str, done: int, total: int, detail: Any) -> None:
+            # chat transports only see the final listing; the stages still
+            # run so a long search behaves identically to the TUI
+            pass
+
+        matched = await self.service.smart_search(query, progress=_progress)
+        if not matched:
+            return self._ok(self._t("mail.search_none"))
+        spans: list[StyleSpan] = [
+            StyleSpan(
+                text=self._t("mail.search_title", count=len(matched)),
+                style=_STYLE_TITLE,
+            ),
+        ]
+        for offset, record in enumerate(matched[:_PAGE_SIZE], start=1):
+            headline = (record.summary or record.mail.subject or "(no subject)").splitlines()
+            spans.append(StyleSpan(text="\n", style=""))
+            spans.extend(self._urgency_span(record.effective_urgency))
+            spans.append(StyleSpan(text=f" #{offset} "))
+            spans.append(StyleSpan(text=headline[0][:90]))
+            spans.append(
+                StyleSpan(
+                    text=f"\n     {self._short_sender(record.mail.sender.address)} · "
+                    f"{self._fmt_time(record.mail.received_at)} · "
+                    f"{self._t('mail.id_hint', mail_id=record.record_id[:12])}",
+                    style=_STYLE_MUTED,
+                )
+            )
+        if len(matched) > _PAGE_SIZE:
+            spans.append(
+                StyleSpan(
+                    text=f"\n\n{self._t('mail.search_truncated', shown=_PAGE_SIZE, total=len(matched))}",
+                    style=_STYLE_MUTED,
+                )
+            )
+        else:
+            spans.append(
+                StyleSpan(
+                    text=f"\n\n{self._t('mail.list_hint')}",
+                    style=_STYLE_MUTED,
+                )
+            )
+        return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
     async def _find_mail(self, mail_id: str) -> MailRecord | None:
         """Exact id wins; then the list's ``#n``/``n`` (newest-first index,

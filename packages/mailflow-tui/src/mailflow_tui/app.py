@@ -529,6 +529,41 @@ class MailPane(Vertical):
         async with self._refresh_lock:
             await self._refresh_mail_unlocked()
 
+    async def _render_records(
+        self, records: list[MailRecord], *, empty_hint_key: str = "tui.mail_empty"
+    ) -> None:
+        """Render ``records`` into the mail table as-is (no re-read, no
+        filtering): the results view after a smart search."""
+        table = self._mail_table()
+        if table is None:
+            return
+        table.clear()
+        self._ensure_columns()
+        self._refresh_view_options()
+        records = sorted(records, key=lambda record: record.mail.received_at, reverse=True)
+        for position, record in enumerate(records, start=1):
+            urgency = record.effective_urgency
+            table.add_row(
+                RichText(f"■ {urgency.value}", style=urgency.color),
+                escape(record.mail.subject or self._service.t("tui.mail_no_subject")),
+                escape(record.mail.sender.address),
+                _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
+                key=record.record_id,
+            )
+            if position % 50 == 0:
+                await asyncio.sleep(0)
+        hint = self.query_one_optional("#mail-empty-hint", Static)
+        if hint is not None:
+            if not records:
+                hint.update(self._service.t(empty_hint_key))
+                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+            else:
+                hint.update(_BLANK)
+                hint.display = "none"  # pyright: ignore[reportUnknownMemberType]
+        visible_ids = {record.record_id for record in records}
+        if self._selected_id not in visible_ids:
+            self._selected_id = records[0].record_id if records else None
+
     async def _refresh_mail_unlocked(self) -> None:
         table = self._mail_table()
         if table is None:
@@ -755,7 +790,7 @@ class MailPane(Vertical):
         self._smart_search_task = None
         self._set_smart_label("tui.smart_search")
         self._records = results
-        await self.refresh_mail()
+        await self._render_records(results, empty_hint_key="tui.mail_no_match")
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id in ("mail-urgency-filter", "mail-sort"):

@@ -189,6 +189,7 @@ permission-denied reply.
 /mailflow unsubscribe                - stop notifications in this chat
 /mailflow status                     - bot status + subscribed chat count
 /mailflow mail list [page] [--query q] - numbered list, LLM summary headlines
+/mailflow mail search <need>         - LLM smart search by intent (same as the TUI)
 /mailflow mail show <#n|id>          - one mail with summary/feedback
 /mailflow mail urgency <#n|id> <level> - override urgency (info/important/critical)
 /mailflow feedback <id> <reason>     - teach the classifier (reject mail)
