@@ -704,21 +704,30 @@ class MailPane(Vertical):
         self._set_smart_label("tui.smart_search_cancel")
         hint = self.query_one_optional("#mail-empty-hint", Static)
 
-        def _show_progress(stage: str, done: int, total: int, detail: str) -> None:
+        def _show_progress(
+            stage: str, done: int, total: int, detail: str | tuple[str, dict[str, Any]]
+        ) -> None:
             # thread-safe enough: called from the task running on the same
-            # event loop; Textual batches the repaint
+            # event loop; Textual batches the repaint. detail is either a
+            # preformatted string or a (locale_key, params) pair resolved
+            # through the active language here in the UI layer.
             if hint is not None and self._smart_searching:
+                if isinstance(detail, tuple):
+                    detail_key, detail_params = detail
+                    detail_text = self._service.t(f"tui.{detail_key}", **detail_params)
+                else:
+                    detail_text = detail
                 message = self._service.t(
                     "tui.smart_search_progress",
                     stage=stage,
                     done=done,
                     total=total,
-                    detail=detail,
+                    detail=detail_text,
                 )
                 hint.update(message)
                 hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
 
-        _show_progress("plan", 0, 1, f"{len(self._records)}")
+        _show_progress("plan", 0, 1, ("smart_plan", {"count": len(self._records)}))
         table = self._mail_table()
         if table is not None:
             table.clear()

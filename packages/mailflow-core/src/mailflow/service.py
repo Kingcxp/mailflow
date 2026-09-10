@@ -896,7 +896,7 @@ doubt, include the mail."""
         records = await self.list_mails()
         records.sort(key=lambda record: record.mail.received_at, reverse=True)
         if progress is not None:
-            progress("plan", 0, 1, f"{len(records)} mails in the mailbox")
+            progress("plan", 0, 1, ("smart_plan", {"count": len(records)}))
         if not self.config.llms:
             raise RuntimeError("No LLM is configured; add one in Settings → LLMs.")
         llm_ids = [llm.llm_id for llm in self.config.llms]
@@ -1002,8 +1002,14 @@ doubt, include the mail."""
                 "filter",
                 len(records) - len(candidates),
                 len(records),
-                f"plan narrowed to {len(candidates)} candidates "
-                f"(keywords={keywords or []}, senders={senders or []})",
+                (
+                    "smart_filter",
+                    {
+                        "candidates": len(candidates),
+                        "keywords": ", ".join(keywords or []) or "—",
+                        "senders": ", ".join(senders or []) or "—",
+                    },
+                ),
             )
 
         # final relevance pass in batches
@@ -1042,7 +1048,12 @@ doubt, include the mail."""
             batch_number += 1
             if ids is None:
                 if progress is not None:
-                    progress("match", done, total, f"batch {batch_number} unreadable, skipped")
+                    progress(
+                        "match",
+                        done,
+                        total,
+                        ("smart_batch_unreadable", {"batch": batch_number}),
+                    )
                 continue
             # case-sensitive compare: record ids mix cases (JavaMail,
             # Outlook GUIDs) and the LLM echoes them verbatim — lowercasing
@@ -1056,7 +1067,14 @@ doubt, include the mail."""
                     "match",
                     done,
                     total,
-                    f"batch {batch_number}/{len(batches)}, {batch_matched} matched",
+                    (
+                        "smart_batch",
+                        {
+                            "batch": batch_number,
+                            "batches": len(batches),
+                            "matched": batch_matched,
+                        },
+                    ),
                 )
         matched.sort(key=lambda record: record.mail.received_at, reverse=True)
         return matched

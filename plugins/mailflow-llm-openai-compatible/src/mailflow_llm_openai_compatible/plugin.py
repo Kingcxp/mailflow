@@ -19,6 +19,7 @@ API keys from any aggregated error.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any, cast
 
@@ -31,7 +32,7 @@ from mailflow.registry import PluginRegistrar
 
 logger = logging.getLogger("mailflow.llm.openai")
 
-_MAX_BACKOFF_SECONDS = 5.0
+_MAX_BACKOFF_SECONDS = 45.0
 _RETRYABLE_STATUS = {408, 429, *range(500, 600)}
 _DEFAULT_API_VERSION = "preview"
 
@@ -117,17 +118,31 @@ class OpenAIBackend:
         max_retries = max(0, min(self._config.max_retries, 20))
 
         last_error: Exception | None = None
+        # a 429 window is often longer than a doubling backoff can cover —
+        # honor Retry-After when the endpoint sends one, else wait out a
+        # longer capped curve (the old 1s/2s max-5s curve still failed the
+        # whole smart search on the AMD endpoint's per-minute quota)
+        retry_after: float | None = None
         for attempt in range(max_retries + 1):
             try:
                 async with httpx.AsyncClient(timeout=self._config.timeout_seconds) as client:
                     response = await client.post(url, headers=headers, params=params, json=body)
+                    if response.status_code == 429:
+                        raw = response.headers.get("Retry-After")
+                        if raw is not None:
+                            with contextlib.suppress(ValueError):
+                                retry_after = min(float(raw), _MAX_BACKOFF_SECONDS)
                     response.raise_for_status()
                 return self._parse(response.json())
             except Exception as exc:
                 last_error = exc
                 if attempt >= max_retries or not _retryable(exc):
                     break
-                backoff = min(2**attempt, _MAX_BACKOFF_SECONDS)
+                backoff = (
+                    retry_after
+                    if retry_after is not None
+                    else min(2**attempt, _MAX_BACKOFF_SECONDS)
+                )
                 logger.info(
                     "%s attempt %d/%d failed (%s); retrying in %.1fs",
                     self.backend_id,

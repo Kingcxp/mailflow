@@ -732,7 +732,11 @@
       "hourly_status_off": "Hourly mail briefing is OFF for this chat.",
       "manual_bot": "【MailFlow · Bot & pushes】\n{cmd_sub} — push new mail to this chat\n{cmd_unsub} — stop pushing to this chat\nhourly on | hourly off — hourly LLM mail briefing for this chat\nhourly — show whether the briefing is on\n{cmd_status} — bot status",
       "manual_system": "【MailFlow · System】\n{cmd_lang} — switch language\n{cmd_runtime} — runtime status\n{cmd_trash} — trash list",
-      "smart_search_progress": "Smart search [{stage}] {done}/{total} — {detail} (click to cancel)"
+      "smart_search_progress": "Smart search [{stage}] {done}/{total} — {detail} (click to cancel)",
+      "smart_plan": "{count} mails in the mailbox",
+      "smart_filter": "plan narrowed to {candidates} candidates (keywords: {keywords}; senders: {senders})",
+      "smart_batch": "batch {batch}/{batches}, {matched} matched",
+      "smart_batch_unreadable": "batch {batch} unreadable, skipped"
     },
     "update": {
       "applied_title": "Applied updates",

@@ -33,6 +33,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -70,18 +71,65 @@ def _docker_exe() -> str | None:
     return None
 
 
-def _find_docker_compose() -> str | None:
-    """A runnable ``docker compose`` (v2 plugin) or ``docker-compose``."""
+def _docker_daemon_up(docker: str) -> bool:
+    """The CLI alone is not enough: with Docker Desktop installed but not
+    started, every compose command fails with a pipe error — and the
+    auto-install silently waits forever. `docker info` answers only when
+    the daemon is up."""
+    result = subprocess.run([docker, "info"], capture_output=True, text=True, timeout=60)
+    return result.returncode == 0
+
+
+def _find_docker_compose(*, require_daemon: bool = True) -> str | None:
+    """A usable docker: CLI + (when require_daemon) a RUNNING daemon.
+
+    The daemon check matters: Docker Desktop installs fine but stays
+    down until launched, and `docker compose pull/up` against a stopped
+    daemon fails instantly with a pipe error — which reads to the user
+    as 'progress stuck at 0%'."""
     docker = _docker_exe()
     if docker:
         result = subprocess.run(
             [docker, "compose", "version"], capture_output=True, text=True, timeout=30
         )
-        if result.returncode == 0:
+        if result.returncode == 0 and (not require_daemon or _docker_daemon_up(docker)):
             return docker
-    if shutil.which("docker-compose"):
-        return "docker-compose"
+    legacy = shutil.which("docker-compose")
+    # Docker Desktop ships a docker-compose shim too: same daemon
+    # requirement, so it must not bypass the daemon check
+    if legacy and (not require_daemon or _docker_daemon_up(legacy)):
+        return legacy
     return None
+
+
+def _start_docker_desktop(progress: Any) -> bool:
+    """Launch Docker Desktop and wait for the daemon (up to ~2.5 min).
+    Returns True when the daemon came up. ``progress`` is the installer's
+    (percent, message, stage) callback."""
+    exe = Path("C:/Program Files/Docker/Docker/Docker Desktop.exe")
+    if not exe.exists():
+        return False
+    progress(3.0, "starting Docker Desktop (the daemon is not running)…", "installing")
+    try:
+        subprocess.Popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return False
+    docker = _docker_exe()
+    if docker is None:
+        return False
+    deadline = time.monotonic() + 150
+    step = 0
+    while time.monotonic() < deadline:
+        step += 1
+        progress(
+            min(3.0 + step * 2.0, 9.0),
+            f"waiting for the docker daemon ({int(deadline - time.monotonic())}s left)…",
+            "installing",
+        )
+        if _docker_daemon_up(docker):
+            return True
+        time.sleep(3.0)
+    return False
 
 
 def _sudo_run(command: list[str], sudo_password: str) -> tuple[int, str]:
@@ -428,18 +476,35 @@ class WechatPadProProvisioner:
         compose = _find_docker_compose()
         progress = options.get("_progress")
         if compose is None:
-            # docker missing: provision it now. On Windows winget needs no
-            # password; on Linux apt runs under sudo -S — the password is
-            # requested through the ``_ask_sudo_password`` callback the
-            # host (TUI guide) injects into options, asked only at the
-            # moment of need, never stored or logged.
+            # either docker is missing entirely, or the CLI is present but
+            # the daemon is down (Docker Desktop not started) — both must
+            # be fixed before any pull can work
             ask = options.get("_ask_sudo_password")
 
             def _install_progress(pct: float, message: str, stage: str) -> None:
                 if progress is not None:
                     progress.update(pct, message, stage)
 
-            compose = await asyncio.to_thread(install_docker_dependencies, ask, _install_progress)
+            def _provision_docker() -> str:
+                docker = _docker_exe()
+                if docker is not None and not _docker_daemon_up(docker):
+                    # daemon down: starting Docker Desktop is enough
+                    if platform.system() == "Windows" and _start_docker_desktop(_install_progress):
+                        return _find_docker_compose() or ""
+                    if progress is not None:
+                        progress.update(
+                            2.0,
+                            "docker daemon is not running — start Docker "
+                            "Desktop / the docker service, then retry",
+                            "installing",
+                        )
+                    raise RuntimeError(
+                        "docker daemon is not running (start Docker Desktop "
+                        "or the docker service, then retry the setup)"
+                    )
+                return install_docker_dependencies(ask, _install_progress)
+
+            compose = await asyncio.to_thread(_provision_docker)
         target = _instance_dir(instance_id)
         target.mkdir(parents=True, exist_ok=True)
         compose_file = target / "compose.yml"
@@ -516,6 +581,7 @@ class WechatPadProProvisioner:
         update the label so the bar never looks stuck."""
         process = await asyncio.create_subprocess_exec(
             compose,
+            "compose",
             "-f",
             str(compose_file),
             "pull",
@@ -524,11 +590,17 @@ class WechatPadProProvisioner:
         )
         image_totals: dict[str, float] = {}
         image_current: dict[str, float] = {}
+        error_tail = ""
 
         def _emit(line: str) -> None:
-            if progress is None or not line:
+            if not line:
                 return
+            nonlocal error_tail
             parsed = self._parse_pull_line(line)
+            if parsed is None and not any(
+                k in line for k in ("Pulling", "Downloading", "Extracting", "Waiting", "Pulled")
+            ):
+                error_tail = (error_tail + "\n" + line)[-600:]
             if parsed is None:
                 if any(k in line for k in ("Pulling", "Downloading", "Extracting", "Waiting")):
                     progress.update(progress.percent, f"pulling: {line[:70]}", "downloading")
@@ -566,8 +638,11 @@ class WechatPadProProvisioner:
             _emit(buf.decode("utf-8", errors="replace").strip())
         code = await process.wait()
         if code != 0:
+            # surface compose's own text: parse-only silences the real
+            # error otherwise
             raise RuntimeError(
-                "wechatpadpro: image pull failed (docker compose pull exited non-zero)"
+                f"wechatpadpro: image pull failed (docker compose pull "
+                f"exited {code}): {error_tail.strip()[:400]}"
             )
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
@@ -596,13 +671,18 @@ class WechatPadProProvisioner:
         progress = options.get("_progress")
         if progress is not None:
             progress.update(96.0, "starting containers (docker compose up)", "starting")
-        await asyncio.to_thread(
+        up = await asyncio.to_thread(
             subprocess.run,
-            [compose, "-f", str(compose_file), "up", "-d"],
+            [compose, "compose", "-f", str(compose_file), "up", "-d"],
             capture_output=True,
             text=True,
             timeout=600,
         )
+        if up.returncode != 0:
+            raise RuntimeError(
+                f"wechatpadpro {instance_id}: docker compose up failed: "
+                f"{(up.stderr or up.stdout).strip()[:400]}"
+            )
         deadline = asyncio.get_running_loop().time() + _READY_TIMEOUT
         while asyncio.get_running_loop().time() < deadline:
             if await self._wait_http(endpoint, wait_seconds=3.0):
@@ -638,7 +718,7 @@ class WechatPadProProvisioner:
             return
         await asyncio.to_thread(
             subprocess.run,
-            [compose, "-f", str(compose_file), "stop"],
+            [compose, "compose", "-f", str(compose_file), "stop"],
             capture_output=True,
             text=True,
             timeout=300,
