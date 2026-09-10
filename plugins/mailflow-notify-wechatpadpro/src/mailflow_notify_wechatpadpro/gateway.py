@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import platform
+import re
 import secrets
 import shutil
 import subprocess
@@ -478,77 +479,96 @@ class WechatPadProProvisioner:
             progress.update(10.0, "pulling wechatpadpro/mysql/redis images", "downloading")
         await self._pull_with_progress(compose, compose_file, progress)
 
-    async def _pull_with_progress(self, compose: str, compose_file: Path, progress: Any) -> None:
-        """`docker compose pull` with live progress.
+    @staticmethod
+    def _parse_pull_line(line: str) -> tuple[str, float, float] | None:
+        """Extract (image, current_bytes, total_bytes) from a compose pull
+        progress line; None when the line carries no byte counter."""
+        match = re.search(r"\((\S+)\)[^\d]*([\d.]+)\s*([kKmMgG]i?B)/([\d.]+)\s*([kKmMgG]i?B)", line)
+        if match is None:
+            match = re.search(
+                r"(?:^|\s)(\S+)\s+([\d.]+)\s*([kKmMgG]i?B)/([\d.]+)\s*([kKmMgG]i?B)", line
+            )
+        if match is None:
+            return None
 
-        The pull streams JSON lines (compose v2.18+) with per-image byte
-        counters; when the flag is unsupported we fall back to plain pull
-        and pulse the bar between phases so the user still sees motion."""
+        def _bytes(value: str, unit: str) -> float:
+            factor = {
+                "kB": 1e3,
+                "KB": 1e3,
+                "MB": 1e6,
+                "GB": 1e9,
+                "kiB": 1024.0,
+                "MiB": 1024.0**2,
+                "GiB": 1024.0**3,
+            }
+            return float(value) * factor.get(unit, 1.0)
+
+        total = _bytes(match.group(4), match.group(5))
+        if total <= 0:
+            return None
+        return match.group(1), _bytes(match.group(2), match.group(3)), total
+
+    async def _pull_with_progress(self, compose: str, compose_file: Path, progress: Any) -> None:
+        """`docker compose pull` with live per-image byte progress.
+
+        Compose's human output embeds counters ('325.4MB/890.1MB'); sum
+        them across images onto the 10..95 band. Phase-only lines still
+        update the label so the bar never looks stuck."""
         process = await asyncio.create_subprocess_exec(
             compose,
             "-f",
             str(compose_file),
             "pull",
-            "--json-stream",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        streamed = False
-        buf: bytes = b""
+        image_totals: dict[str, float] = {}
+        image_current: dict[str, float] = {}
 
-        def _emit(json_line: str) -> None:
-            # {"id":"mysql","progress":"325.4/890.1","progressDetail":{"current":n,"total":m}}
-            try:
-                data: dict[str, Any] = json.loads(json_line)
-            except Exception:
+        def _emit(line: str) -> None:
+            if progress is None or not line:
                 return
-            image = str(data.get("id") or "")
-            detail: dict[str, Any] = (
-                data["progressDetail"] if isinstance(data.get("progressDetail"), dict) else {}
-            )
-            current = float(detail.get("current") or 0)
-            total = float(detail.get("total") or 0)
-            status = str(data.get("status") or "")
-            if progress is None:
+            parsed = self._parse_pull_line(line)
+            if parsed is None:
+                if any(k in line for k in ("Pulling", "Downloading", "Extracting", "Waiting")):
+                    progress.update(progress.percent, f"pulling: {line[:70]}", "downloading")
                 return
-            if total > 0:
-                pct = min(10.0 + 85.0 * (current / total), 95.0)
-                mb = current / (1024 * 1024)
-                mbt = total / (1024 * 1024)
-                progress.update(pct, f"pulling {image}: {mb:.0f}/{mbt:.0f} MB", "downloading")
-            elif status:
-                progress.update(progress.percent, f"pulling {image}: {status}", "downloading")
+            image, current, total = parsed
+            image_totals[image] = total
+            image_current[image] = current
+            grand_current = sum(image_current.values())
+            grand_total = sum(image_totals.values())
+            if grand_total > 0:
+                pct = min(10.0 + 85.0 * (grand_current / grand_total), 95.0)
+                progress.update(
+                    pct,
+                    f"pulling {image}: {grand_current / 1e6:.0f}/{grand_total / 1e6:.0f} MB",
+                    "downloading",
+                )
 
         stdout = process.stdout
         assert stdout is not None
+        buf = b""
         while True:
             block: bytes = await stdout.read(4096)
             if not block:
                 break
-            streamed = True
             buf += block
-            while b"\n" in buf:
-                cut = buf.index(b"\n")
+            while True:
+                cuts = [i for i in (buf.find(b"\n"), buf.find(b"\r")) if i != -1]
+                if not cuts:
+                    break
+                cut = min(cuts)
                 line_bytes: bytes = buf[:cut]
                 buf = buf[cut + 1 :]
                 _emit(line_bytes.decode("utf-8", errors="replace").strip())
         if buf.strip():
             _emit(buf.decode("utf-8", errors="replace").strip())
         code = await process.wait()
-        if code == 0:
-            return
-        if streamed and code != 0 and progress is not None:
-            # json-stream refused on old compose: plain pull, pulsing bar
-            progress.update(10.0, "pulling images (legacy compose)", "downloading")
-        result = await asyncio.to_thread(
-            subprocess.run,
-            [compose, "-f", str(compose_file), "pull"],
-            capture_output=True,
-            text=True,
-            timeout=900,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"wechatpadpro: image pull failed: {result.stderr.strip()[:400]}")
+        if code != 0:
+            raise RuntimeError(
+                "wechatpadpro: image pull failed (docker compose pull exited non-zero)"
+            )
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
         target = _instance_dir(instance_id)
