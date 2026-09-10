@@ -141,10 +141,13 @@ def _start_linux_docker_service(ask: Any, progress: Any) -> bool:
         progress(3.0, f"starting the docker service (sudo systemctl start {unit})…", "installing")
         code, output = _sudo_run(["systemctl", "start", unit], str(ask()))
         if code == 0:
+            # enabled = survives the next VM reboot without a re-setup
+            with contextlib.suppress(Exception):
+                _sudo_run(["systemctl", "enable", unit], str(ask()))
             docker = _docker_exe()
             if docker is None:
                 return False
-            deadline = time.monotonic() + 60
+            deadline = time.monotonic() + 90
             while time.monotonic() < deadline:
                 progress(
                     6.0,
@@ -155,7 +158,8 @@ def _start_linux_docker_service(ask: Any, progress: Any) -> bool:
                     return True
                 time.sleep(2.0)
             return False
-        if "not found" in output or "does not exist" in output:
+        lowered = output.lower()
+        if "not found" in lowered or "does not exist" in lowered:
             continue
         # a wrong password surfaces as sudo failure: one retry via the next
         # ask() call happens naturally on the loop's second unit attempt
@@ -326,16 +330,29 @@ def install_docker_dependencies(ask_sudo_password: Any = None, progress: Any = N
                 sudo_password = None  # force re-prompt
                 code, output = _sudo_run(step, _password())
             if code != 0 and "docker-compose-v2" in step:
-                # docker-compose-v2 may not exist on older suites; fall
-                # back to the standalone docker-compose-plugin name
-                code, output = _sudo_run(
-                    ["apt-get", "install", "-y", "docker-compose-plugin"],
-                    _password(),
-                )
+                # the compose package name differs per distro/suite: plain
+                # Debian has neither docker-compose-v2 nor -plugin — only
+                # the classic docker-compose package
+                for fallback in ("docker-compose-plugin", "docker-compose"):
+                    code, output = _sudo_run(
+                        ["apt-get", "install", "-y", fallback],
+                        _password(),
+                    )
+                    if code == 0:
+                        break
             if code != 0:
                 raise RuntimeError(f"apt install failed: {output.strip()[:400]}")
-    # docker group for non-root use; passwordless docker needs a re-login,
-    # so keep sudo for the compose up path when the user is not in the group
+    # fresh apt installs do NOT auto-start the daemon on minimal VMs
+    # (typical PVE/Debian): start it ourselves — the sudo password is
+    # already cached from the apt steps
+    docker = _docker_exe()
+    if (docker is None or not _docker_daemon_up(docker)) and not _start_linux_docker_service(
+        ask_sudo_password, progress
+    ):
+        raise RuntimeError(
+            "docker packages installed but the daemon did not start "
+            "(check `journalctl -u docker` on the VM)"
+        )
     compose = _find_docker_compose()
     if compose is None:
         raise RuntimeError(
