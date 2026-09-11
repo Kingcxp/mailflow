@@ -131,15 +131,43 @@ def _wait_daemon(docker: str, *, seconds: int, progress: Any) -> bool:
     return False
 
 
+def _journal_tail(unit: str, ask: Any) -> str:
+    """Last lines of the unit's journal — the ONLY way to tell the user
+    WHY a daemon failed to start (PVE LXC: nesting disabled; disk full;
+    apparmor...). Best-effort: never raises."""
+    try:
+        code, output = _sudo_run(["journalctl", "-u", unit, "-n", "12", "--no-pager"], str(ask()))
+        return output.strip()[-600:] if code == 0 else ""
+    except Exception:
+        return ""
+
+
+# last failure diagnostics; the provision flow reads it right after the
+# start attempt to build the user-facing error
+_last_linux_failure: dict[str, str] = {"detail": ""}
+
+
 def _start_linux_docker_service(ask: Any, progress: Any) -> bool:
     """Start the docker service via sudo systemctl (password asked through
     the guide's prompt). Returns True when the daemon came up."""
     if ask is None:
         progress(2.0, "docker service is stopped and no sudo prompt is available", "installing")
         return False
+    sudo_retries_left = 1  # one wrong-password re-prompt, not per-unit
     for unit in ("docker", "docker.service"):
         progress(3.0, f"starting the docker service (sudo systemctl start {unit})…", "installing")
         code, output = _sudo_run(["systemctl", "start", unit], str(ask()))
+        while (
+            code != 0
+            and sudo_retries_left > 0
+            and (
+                "incorrect password" in output.lower() or "authentication failure" in output.lower()
+            )
+        ):
+            # wrong password: ask once more (a service failure must not
+            # burn the retry — it would just re-fail and confuse)
+            sudo_retries_left -= 1
+            code, output = _sudo_run(["systemctl", "start", unit], str(ask()))
         if code == 0:
             # enabled = survives the next VM reboot without a re-setup
             with contextlib.suppress(Exception):
@@ -157,13 +185,19 @@ def _start_linux_docker_service(ask: Any, progress: Any) -> bool:
                 if _docker_daemon_up(docker):
                     return True
                 time.sleep(2.0)
+            # systemctl start 'succeeded' but the daemon died: the journal
+            # explains (nesting disabled on PVE LXC, apparmor, disk full…)
+            _last_linux_failure["detail"] = _journal_tail(unit, ask)
             return False
         lowered = output.lower()
         if "not found" in lowered or "does not exist" in lowered:
             continue
-        # a wrong password surfaces as sudo failure: one retry via the next
-        # ask() call happens naturally on the loop's second unit attempt
-        progress(3.0, f"systemctl start {unit} failed: {output.strip()[:120]}", "installing")
+        _last_linux_failure["detail"] = (
+            f"systemctl start {unit}: {output.strip()[:300]}\n{_journal_tail(unit, ask)}"
+        )
+        progress(
+            3.0, f"systemctl start {unit} failed — see the error for the journal tail", "installing"
+        )
     return False
 
 
@@ -349,9 +383,10 @@ def install_docker_dependencies(ask_sudo_password: Any = None, progress: Any = N
     if (docker is None or not _docker_daemon_up(docker)) and not _start_linux_docker_service(
         ask_sudo_password, progress
     ):
+        detail = _last_linux_failure.get("detail", "")
         raise RuntimeError(
-            "docker packages installed but the daemon did not start "
-            "(check `journalctl -u docker` on the VM)"
+            "docker packages installed but the daemon did not start"
+            + (f":\n{detail}" if detail else " (check journalctl -u docker on the VM)")
         )
     compose = _find_docker_compose()
     if compose is None:
