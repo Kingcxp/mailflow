@@ -986,10 +986,22 @@ list; when in doubt, include the mail."""
                 mails=[r.record_id for r in batch_matched],
             )
 
-        # all batches in flight at once: one LLM round-trip total instead
-        # of len(batches) serial 90s calls
+        # bounded parallelism: the FIRST batch runs alone (its latency
+        # absorbs model warm-up; a second simultaneous call on a
+        # single-model endpoint queued behind it and timed out), then the
+        # remaining batches run 2 at a time — unbounded concurrency tripped
+        # per-minute quotas (HTTP 429 killed whole batches) and cold
+        # timeouts
+        gate = asyncio.Semaphore(2)
+
+        async def _gated(batch: list[MailRecord], number: int) -> None:
+            async with gate:
+                await _score(batch, number)
+
+        if batches:
+            await _score(batches[0], 1)  # solo: warms + spaces the queue
         await asyncio.gather(
-            *(_score(batch, number) for number, batch in enumerate(batches, start=1)),
+            *(_gated(batch, number) for number, batch in enumerate(batches[1:], start=2)),
             return_exceptions=False,
         )
         matched.sort(key=lambda record: record.mail.received_at, reverse=True)

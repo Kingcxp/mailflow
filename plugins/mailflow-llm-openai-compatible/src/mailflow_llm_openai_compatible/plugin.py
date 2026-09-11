@@ -102,6 +102,8 @@ class OpenAIBackend:
                 body["model"] = options["model"]
             if "temperature" in options:
                 body["temperature"] = options["temperature"]
+            if "max_tokens" in options:
+                body["max_tokens"] = options["max_tokens"]
         return body
 
     async def chat(
@@ -138,11 +140,15 @@ class OpenAIBackend:
                 last_error = exc
                 if attempt >= max_retries or not _retryable(exc):
                     break
-                backoff = (
-                    retry_after
-                    if retry_after is not None
-                    else min(2**attempt, _MAX_BACKOFF_SECONDS)
-                )
+                if retry_after is not None:
+                    backoff = retry_after
+                elif isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+                    # no Retry-After header: the quota window is typically
+                    # ~60s — wait the full cap instead of 1s/2s (which
+                    # lands every retry INSIDE the same window and fails)
+                    backoff = _MAX_BACKOFF_SECONDS
+                else:
+                    backoff = min(2**attempt, _MAX_BACKOFF_SECONDS)
                 logger.info(
                     "%s attempt %d/%d failed (%s); retrying in %.1fs",
                     self.backend_id,
@@ -239,6 +245,8 @@ class ResponsesBackend(OpenAIBackend):
                 body["model"] = options["model"]
             if "temperature" in options:
                 body["temperature"] = options["temperature"]
+            if "max_tokens" in options:
+                body["max_tokens"] = options["max_tokens"]
         return body
 
     def _parse(self, payload: dict[str, Any]) -> LLMCompletion:
