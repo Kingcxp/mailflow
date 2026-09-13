@@ -746,7 +746,14 @@
       "smart_search_working": "正在搜索邮箱…（点击按钮取消）",
       "smart_warmup": "正在唤醒 LLM（本次会话首次调用）…",
       "smart_warmup_done": "LLM 已就绪",
-      "smart_start": "正在并行扫描 {count} 封邮件（{batches} 批）…"
+      "smart_start": "正在并行扫描 {count} 封邮件（{batches} 批）…",
+      "remote_login_title": "MailFlow 远程连接",
+      "remote_server_url": "服务器地址",
+      "remote_username": "用户名",
+      "remote_password": "密码",
+      "remote_save_password": "记住密码并自动登录",
+      "remote_connect": "连接",
+      "btn_quit": "退出"
     },
     "update": {
       "applied_title": "已应用的更新",

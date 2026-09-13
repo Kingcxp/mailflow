@@ -746,7 +746,14 @@
       "smart_search_working": "Searching your mailbox… (click the button to cancel)",
       "smart_warmup": "waking the LLM up (first call of the session)…",
       "smart_warmup_done": "LLM ready",
-      "smart_start": "scanning {count} mails in {batches} parallel batches…"
+      "smart_start": "scanning {count} mails in {batches} parallel batches…",
+      "remote_login_title": "MailFlow remote",
+      "remote_server_url": "Server URL",
+      "remote_username": "Username",
+      "remote_password": "Password",
+      "remote_save_password": "save password + auto-login",
+      "remote_connect": "Connect",
+      "btn_quit": "Quit"
     },
     "update": {
       "applied_title": "Applied updates",

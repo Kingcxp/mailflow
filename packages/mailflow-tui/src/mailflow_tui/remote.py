@@ -65,29 +65,67 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
 
     BINDINGS: ClassVar[list[Any]] = []
 
+    DEFAULT_CSS = """
+    LoginScreen {
+        align: center middle;
+    }
+    #login-dialog {
+        width: 56;
+        height: auto;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #login-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #login-hint {
+        color: $text-muted;
+        margin-top: 0;
+    }
+    #login-status {
+        height: 1;
+        margin-top: 1;
+    }
+    .field-label {
+        color: $text-muted;
+    }
+    #login-url, #login-user, #login-pass {
+        margin-bottom: 1;
+    }
+    """
+
     def __init__(self, session: dict[str, Any]) -> None:
         super().__init__()
         self._session = session
+        from mailflow.i18n import I18n
+
+        self._i18n = I18n()
+
+    def _t(self, key: str, **params: Any) -> str:
+        return self._i18n.t(key, **params)
 
     def compose(self) -> Any:
-        yield Label("MailFlow remote", id="login-title")
+        # centered bordered panel like every other standalone dialog
         with Vertical(id="login-dialog"):
-            yield Label("Server URL", classes="field-label")
+            yield Label(self._t("tui.remote_login_title"), id="login-title")
+            yield Label(self._t("tui.remote_server_url"), classes="field-label")
             yield Input(
                 value=str(self._session.get("url", "")),
                 placeholder="http://host:8800",
                 id="login-url",
             )
-            yield Label("Username", classes="field-label")
+            yield Label(self._t("tui.remote_username"), classes="field-label")
             yield Input(value=str(self._session.get("username", "")), id="login-user")
-            yield Label("Password", classes="field-label")
+            yield Label(self._t("tui.remote_password"), classes="field-label")
             yield Input(password=True, id="login-pass")
             yield Switch(value=bool(self._session.get("autologin")), id="login-save-password")
-            yield Static("save password + auto-login", id="login-hint")
+            yield Static(self._t("tui.remote_save_password"), id="login-hint")
             with Horizontal(classes="dialog-actions"):
-                yield Button("Connect", id="login-connect", variant="success")
-                yield Button("Quit", id="login-quit", variant="error")
-        yield Static("", id="login-status")
+                yield Button(self._t("tui.remote_connect"), id="login-connect", variant="success")
+                yield Button(self._t("tui.btn_quit"), id="login-quit", variant="error")
+            yield Static("", id="login-status")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "login-quit":

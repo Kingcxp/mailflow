@@ -40,20 +40,23 @@ class TodoCreateModal(ModalScreen[bool]):
         return self._service.t(key, **params)
 
     def compose(self) -> ComposeResult:
-        yield Static(self._t("tui.todo_add_title"), id="todo-create-title")
-        with Vertical(id="todo-create-form"):
-            yield Static(self._t("tui.todo_summary_label"), classes="todo-label")
-            yield Input(id="todo-summary", placeholder=self._t("tui.todo_summary_required"))
-            yield Static(self._t("tui.todo_type_label"), classes="todo-label")
-            yield Select(_ACTION_TYPES, value="errand", id="todo-type", allow_blank=False)
-            yield Static(self._t("tui.todo_due_label"), classes="todo-label")
-            yield Input(id="todo-due", placeholder="2026-09-10 14:00")
-            yield Static(self._t("tui.todo_notes_label"), classes="todo-label")
-            yield Input(id="todo-notes")
-            yield Static("", id="todo-create-error")
-        with Horizontal(id="todo-create-buttons"):
-            yield Button(self._t("tui.btn_save"), id="todo-save", variant="primary")
-            yield Button(self._t("tui.btn_cancel"), id="todo-cancel", variant="default")
+        # one centered bordered panel (same chrome as reply/entry dialogs):
+        # ModalScreen centers its single child
+        with Vertical(id="todo-create-dialog"):
+            yield Static(self._t("tui.todo_add_title"), id="todo-create-title")
+            with Vertical(id="todo-create-form"):
+                yield Static(self._t("tui.todo_summary_label"), classes="todo-label")
+                yield Input(id="todo-summary", placeholder=self._t("tui.todo_summary_required"))
+                yield Static(self._t("tui.todo_type_label"), classes="todo-label")
+                yield Select(_ACTION_TYPES, value="errand", id="todo-type", allow_blank=False)
+                yield Static(self._t("tui.todo_due_label"), classes="todo-label")
+                yield Input(id="todo-due", placeholder="2026-09-10 14:00")
+                yield Static(self._t("tui.todo_notes_label"), classes="todo-label")
+                yield Input(id="todo-notes")
+                yield Static("", id="todo-create-error")
+            with Horizontal(id="todo-create-buttons"):
+                yield Button(self._t("tui.btn_save"), id="todo-save", variant="primary")
+                yield Button(self._t("tui.btn_cancel"), id="todo-cancel", variant="default")
 
     async def on_mount(self) -> None:
         self.query_one("#todo-summary", Input).focus()  # pyright: ignore[reportUnknownMemberType]

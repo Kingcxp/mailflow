@@ -160,13 +160,23 @@ ActionModal {
     margin-right: 1;
 }
 
-/* Todo create modal */
+/* Todo create modal: centered bordered panel (reply/entry-dialog chrome) */
+TodoCreateModal {
+    align: center middle;
+}
+#todo-create-dialog {
+    width: 64;
+    height: auto;
+    max-height: 90%;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
 #todo-create-title {
     text-style: bold;
     margin-bottom: 1;
 }
 #todo-create-form {
-    width: 60;
     height: auto;
     padding: 0 1;
 }
@@ -262,6 +272,37 @@ ActionModal {
 }
 
 /* Log export modal */
+BotExportScreen {
+    align: center middle;
+}
+
+/* Bot export wizard: centered bordered panel (same chrome as the other
+   standalone dialogs — it had NO styles at all) */
+#export-dialog {
+    width: 76;
+    height: auto;
+    max-height: 90%;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+#export-dialog .scaffold-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+#export-dialog #export-tree {
+    height: 1fr;
+    border: round $primary;
+    margin-bottom: 1;
+}
+#export-dialog #export-actions {
+    height: auto;
+    margin-top: 1;
+}
+#export-dialog #export-actions Button {
+    margin-right: 1;
+}
+
 #log-export-dialog {
     width: 90%;
     max-width: 120;
