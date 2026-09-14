@@ -28,43 +28,24 @@ tears them down with the screen — nothing keeps ticking after it closes.
 ## Tabs
 
 - **Mail**: search `Input` with placeholder plus a **Smart find** button;
-  urgency-colored `DataTable`
-  (■ + value in the contract color) that fills the pane height; the scrollable
-  detail pane follows the highlighted row (single click or arrow keys — no
-  double-click needed) and shows summary, reason, action items, the
-  **original body**
-  (HTML rendered as text, binary attachment payloads detected and replaced
-  by an explanatory note, bodies truncated at 4000 chars), attachment
-  metadata (name/type/size) and failed processor notes. The bottom control
-  row holds the three selects (manual urgency — a localized
+  urgency-colored `DataTable` (■ + a localized urgency label in the contract
+  color) that fills the pane height; the scrollable detail pane follows the
+  highlighted row (single click or arrow keys — no double-click needed) and
+  shows summary, reason, action items, the **original body** (HTML rendered as
+  text, binary attachment payloads detected and replaced by an explanatory
+  note, bodies truncated at 4000 chars), attachment metadata (name/type/size)
+  and failed processor notes. All stored timestamps are projected into
+  `general.timezone`, including action windows. The bottom controls use a
+  full-width filter row (manual urgency — a localized
   `ad/info/important/urgent/follow-automatic` dropdown that mirrors the
-  selected mail — plus urgency filter and sort) and a two-row button
-  container (refresh/trash/Ask & Correct then reply/re-analyze/re-analyze-
-  failed)
-  with equal-width buttons. An empty view shows a hint (no mail yet vs. no
-  match for the search/filter). Reply opens the confirmation-gated modal.
-  **Smart find** (`service.smart_search`): a tiny warmup call absorbs the
-  local LLM's cold-start (first search of a session used to time out),
-  then the WHOLE mailbox is scanned in one pass — mails are batched
-  (newest first) and all batches are scored IN PARALLEL, so the search
-  costs one LLM round-trip regardless of mailbox size. There is no
-  pre-filtering stage: a keyword "plan" was tried and removed (it cost a
-  full round-trip and did not actually narrow anything). While the search
-  runs a spinner + live status show in the hint line, and matches stream
-  into the table as each batch lands; the button turns into **Cancel
-  search** — cancelling (or a failure) restores the normal view. Chat
-  platforms get the same engine via `mail search <need>`.
-  detail pane shows summary, reason, action items, the **original body**
-  (HTML rendered as text, binary attachment payloads detected and replaced
-  by an explanatory note, bodies truncated at 4000 chars), attachment
-  metadata (name/type/size) and failed processor notes. The bottom control
-  row holds the three selects (manual urgency — a localized
-  `ad/info/important/urgent/follow-automatic` dropdown that mirrors the
-  selected mail — plus urgency filter and sort) and a two-row button
-  container (refresh/trash/Ask & Correct then reply/re-analyze/re-analyze-
-  failed)
-  with equal-width buttons. An empty view shows a hint (no mail yet vs. no
-  match for the search/filter). Reply opens the confirmation-gated modal.
+  selected mail — plus urgency filter and sort) followed by a two-row button
+  container (refresh/trash/Ask & Correct then reply/re-analyze/re-analyze-failed)
+  with equal-width buttons. An empty view shows a hint (no mail yet vs. no match for
+  the search/filter) and clears the detail pane; any results-only render also
+  refreshes detail for its selected result. Reply opens the confirmation-gated
+  modal. **Smart find** delegates matching to `service.smart_search`; its
+  progress and cancellation state are shown in the hint line, and chat platforms
+  use the same engine via `mail search <need>`.
 - **Mailboxes** (`settings.py: AccountsPane`): accounts table with
   Add / Edit / Delete (forms, not TOML editing; **double-click or Enter on a
   row opens the edit form**, same for the LLM and notifier tables) plus the
@@ -86,14 +67,14 @@ tears them down with the screen — nothing keeps ticking after it closes.
   rolling correction guidelines that every future LLM analysis receives
   (`feedback.guidelines`, most recent 20 kept), matching the old Reject
   behaviour.
-- **Actions**: time / type / content / notes / source-mail columns; row
-  selection opens a detail modal that fills the screen — a scrollable box
-  with the action plus the **source mail** (subject, sender, date, analysis
-  summary/reason and the original body, HTML-as-text) and a close button
-  pinned outside the scroll area. **Delete** removes the selected entry:
-  user-created todos are deleted for real, mail-derived ones are dismissed
-  by their stable identity (mail id + due time + type) so re-analyzing the
-  source mail keeps them hidden.
+- **Actions**: localized time / type / content / notes / source-mail columns;
+  every stored time is displayed in `general.timezone`. Row selection opens a
+  detail modal that fills the screen — a scrollable box with the action plus
+  the **source mail** (subject, sender, date, analysis summary/reason and the
+  original body, HTML-as-text) and a close button pinned outside the scroll
+  area. **Delete** removes the selected entry: user-created todos are deleted
+  for real, mail-derived ones are dismissed by their stable identity (mail id +
+  due time + type) so re-analyzing the source mail keeps them hidden.
 - **LLMs** (`settings.py: LLMPane`): the ordered fallback chain. Add / Edit /
   Delete plus Move up / Move down; the first row is the default and each row
   falls back to the ones below it, so `default` and `fallback` are never typed
@@ -132,18 +113,20 @@ tears them down with the screen — nothing keeps ticking after it closes.
   subfolder checkbox + input, and a Generate button running
   `mailflow.bot_export.export_bot_plugin` in a worker.
 - **Notifications** (`notifications.py: NotificationsPane`): manages *every*
-  configured notifier — chat-platform gateways (NapCat/onebot, OpenWeChat)
-  and plain delivery channels (console, telegram,
-  webhook, ntfy, smtp, ...). The table shows name / provider / enabled /
-  urgency threshold / targets / live status. In-place actions toggle the
-  selected notifier enabled and edit its delivery urgency; Add routes
-  gateway-backed providers through the guided setup (`GatewayGuideModal`):
-  auto-install/download, start, then drive the **QR login inside the TUI**,
-  and persist the resulting notifier config. On mount the pane auto-connects
-  every enabled notifier in a bounded worker and refreshes every 30s;
-  failures render inline as `offline: <reason>`, never blocking startup.
-  Deleting a gateway-backed row shuts the supervised process down first so
-  no orphan QQ/NapCat instances are left running.
+  configured notifier — chat-platform gateways (NapCat/onebot, OpenWeChat,
+  WeChatPadPro) and plain delivery channels (console, telegram, webhook, ntfy,
+  smtp, ...). The table shows name / provider / enabled / urgency threshold /
+  targets / live status. In-place actions toggle the selected notifier enabled
+  and edit its delivery urgency; Add routes gateway-backed providers through
+  the guided setup (`GatewayGuideModal`): auto-install/download or provision a
+  per-instance Compose stack, start it, display real deployment progress, then
+  drive **QR login inside the TUI**. A successful WeChatPadPro guide saves its
+  actual endpoint as the notifier's `base_url`; a failed or cancelled guide
+  saves no notifier. On mount the pane auto-connects every enabled notifier in
+  a bounded worker and refreshes every 30s; failures render inline as
+  `offline: <reason>`, never blocking startup. Deleting a gateway-backed row
+  shuts the supervised process or Compose stack down first, so no orphaned
+  platform instance remains running.
 - **Settings**: the VS Code-style editor described below.
 - **Logs**: a filterable viewer with a **bounded ring buffer (2000 lines)**,
   a level `Select` (WARNING+ERROR is the default, expandable to INFO/DEBUG),
@@ -212,9 +195,17 @@ shortcut, never the only way out.
 
 ## i18n
 
-All labels come from `service.t(...)`; a language change re-renders the
-screens through the `language.changed` event. Panes that are already composed
-are relabeled in a worker guarded by a lock.
+All user-facing labels come from `service.t(...)`, including stored urgency and
+action-type values, localized setting defaults, validation feedback and empty
+states. A language change re-renders screens through the `language.changed`
+event. Panes that are already composed are relabeled in a worker guarded by a
+lock.
+
+Before a remote service is connected, its login form uses the locally saved
+language pack from the last successful session. After authentication,
+`RemoteServiceAdapter` adopts `/snapshot.language` before the main app mounts
+and follows relayed `language.changed` events, so the remote UI cannot remain
+in a stale local language.
 
 ## Live updates
 
@@ -225,13 +216,14 @@ finishes processing.
 ## Verification
 
 Headless tests drive the app with Textual's `run_test` pilot: compose, mail
-table population, search filtering, urgency mutation through the Select,
-language persistence, prepare/confirm gating of the reply modal, the settings
-cards (save / invalid value / restore default), the LLM chain reordering, the
-mailbox history browser (analyze a picked mail, skip a known one), the
-repository dialog's Back button, the Notifications pane (lists all notifiers,
-toggles enabled, edits urgency), and that a processed-mail event refreshes the
-panes without a manual refresh.
+table population, timezone-projected action timestamps, search filtering,
+urgency mutation through the Select, language persistence and localized select
+options, prepare/confirm gating of the reply modal, the settings cards (save /
+invalid value / restore default), the LLM chain reordering, the mailbox history
+browser (analyze a picked mail, skip a known one), the repository dialog's Back
+button, the Notifications pane (lists all notifiers, toggles enabled, edits
+urgency), and that a processed-mail event refreshes the panes without a manual
+refresh.
 
 ## Opening web links (browser_mode)
 

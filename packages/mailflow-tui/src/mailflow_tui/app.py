@@ -11,7 +11,7 @@ import re
 import time
 from collections import deque
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, ClassVar, cast
 
 from mailflow.domain import ActionItem, MailRecord, ReplyDraft, Urgency
@@ -19,7 +19,7 @@ from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import BindingsMap
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.coordinate import Coordinate
 from textual.markup import escape
@@ -42,6 +42,7 @@ from textual.widgets import (
 
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
+from mailflow_tui.labels import urgency_label
 from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
@@ -54,7 +55,31 @@ _BLANK = ""
 def _localize(service: MailFlowService, value: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
     from zoneinfo import ZoneInfo
 
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
     return value.astimezone(ZoneInfo(service.config.general.timezone)).strftime(fmt)
+
+
+_ACTION_TYPE_KEYS: dict[str, str] = {
+    "errand": "tui.action_type_errand",
+    "exam": "tui.action_type_exam",
+    "meeting": "tui.action_type_meeting",
+    "other": "tui.action_type_other",
+}
+
+
+def _action_type_label(service: MailFlowService, action_type: str) -> str:
+    """Translate built-in action types without rewriting free-form data."""
+    key = _ACTION_TYPE_KEYS.get(action_type)
+    return service.t(key) if key else action_type
+
+
+def _action_time_range(service: MailFlowService, item: ActionItem) -> str:
+    """Show an action's UTC storage times in the configured local timezone."""
+    start = _localize(service, item.due_at)
+    if item.due_end is None or item.due_end == item.due_at:
+        return start
+    return f"{start} ~ {_localize(service, item.due_end)}"
 
 
 def _remove_column(table: DataTable[Any], key: str) -> None:
@@ -105,21 +130,20 @@ class ReplyModal(ModalScreen[Any]):
     toolbar wraps the selection in bold/italic and aligns paragraphs.
     """
 
-    BINDINGS: ClassVar[list[Any]] = [
-        Binding("escape", "dismiss", "Close"),
-    ]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(self, service: MailFlowService, record: MailRecord) -> None:
         super().__init__()
         self._service = service
         self._record = record
         self._draft: ReplyDraft | None = None
+        self._bindings.bind("escape", "dismiss", self._t("tui.btn_close"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
 
     def compose(self) -> ComposeResult:
-        yield Static(self._service.t("tui.reply.label", default="Reply"), id="reply-title")
+        yield Static(self._t("tui.reply_title"), id="reply-title")
         with Vertical(id="reply-dialog"):
             yield Label(
                 f"{self._t('tui.reply_to_label')}: {escape(self._record.mail.sender.display)}"
@@ -315,19 +339,26 @@ class ReplyModal(ModalScreen[Any]):
 
 
 class ActionModal(ModalScreen[Any]):
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(self, service: MailFlowService, item: ActionItem) -> None:
         super().__init__()
         self._service = service
         self._item = item
+        self._bindings.bind("escape", "dismiss", self._service.t("tui.btn_close"))
 
     def compose(self) -> ComposeResult:
         item = self._item
         yield Static(self._service.t("tui.action_detail"), id="action-title")
         with ScrollableContainer(id="action-detail-scroll"):
-            yield Label(f"{self._service.t('tui.action_time')}: {escape(item.time_range)}\n")
-            yield Label(f"{self._service.t('tui.action_type')}: {escape(item.action_type)}\n")
+            yield Label(
+                f"{self._service.t('tui.action_time')}: "
+                f"{escape(_action_time_range(self._service, item))}\n"
+            )
+            yield Label(
+                f"{self._service.t('tui.action_type')}: "
+                f"{escape(_action_type_label(self._service, item.action_type))}\n"
+            )
             yield Label(f"{self._service.t('tui.action_content')}:\n{escape(item.summary)}\n")
             yield Label(f"{self._service.t('tui.action_notes')}: {escape(item.notes or '-')}\n")
             yield Label(f"{self._service.t('tui.action_source')}: {escape(item.mail_id)}")
@@ -362,7 +393,7 @@ class ActionModal(ModalScreen[Any]):
             f"[bold]{self._service.t('tui.column_sender')}:[/bold] "
             f"{escape(mail.sender.display or mail.sender.address)}\n",
             f"[bold]{self._service.t('tui.column_date')}:[/bold] "
-            f"{mail.date.strftime('%Y-%m-%d %H:%M')}\n",
+            f"{_localize(self._service, mail.date)}\n",
         ]
         analysis_summary = record.analysis.summary if record.analysis else ""
         if analysis_summary:
@@ -378,7 +409,7 @@ class ActionModal(ModalScreen[Any]):
             )
         lines.append(
             f"[bold]{self._service.t('tui.detail_body')}:[/bold]\n"
-            f"{escape(body[:800] or '(no body)')}"
+            f"{escape(body[:800] or self._service.t('tui.mail_no_body'))}"
         )
         node.update("\n".join(lines))
 
@@ -421,21 +452,20 @@ class MailPane(Vertical):
                 yield Static("", id="mail-body")
                 yield Static("", id="mail-attachments")
                 yield Static("", id="mail-notes")
-        with Horizontal(id="mail-controls"):
-            yield Select(self._urgency_options(), id="urgency-select", allow_blank=False)
-            yield Select(
-                [("all", "all")] + [(u.value, u.value) for u in Urgency],
-                id="mail-urgency-filter",
-                allow_blank=False,
-            )
-            yield Select(
-                [
-                    (self._service.t("tui.sort_time"), "time"),
-                    (self._service.t("tui.sort_urgency"), "urgency"),
-                ],
-                id="mail-sort",
-                allow_blank=False,
-            )
+        with Vertical(id="mail-controls"):
+            with Horizontal(id="mail-filter-controls"):
+                yield Select(self._urgency_options(), id="urgency-select", allow_blank=False)
+                yield Select(
+                    self._urgency_filter_options(), id="mail-urgency-filter", allow_blank=False
+                )
+                yield Select(
+                    [
+                        (self._service.t("tui.sort_time"), "time"),
+                        (self._service.t("tui.sort_urgency"), "urgency"),
+                    ],
+                    id="mail-sort",
+                    allow_blank=False,
+                )
             with Vertical(id="mail-actions-buttons"):
                 with Horizontal(id="mail-actions-row1"):
                     yield Button(
@@ -453,7 +483,9 @@ class MailPane(Vertical):
                         self._service.t("tui.btn_reply"), id="btn-reply", variant="success"
                     )
                     yield Button(
-                        self._service.t("tui.btn_reparse"), id="btn-reparse", variant="primary"
+                        self._service.t("tui.btn_reparse"),
+                        id="btn-reparse",
+                        variant="primary",
                     )
                     yield Button(
                         self._service.t("tui.btn_reparse_failed"),
@@ -488,6 +520,11 @@ class MailPane(Vertical):
             (t("tui.urgency_opt_info"), "info"),
             (t("tui.urgency_opt_important"), "important"),
             (t("tui.urgency_opt_urgent"), "urgent"),
+        ]
+
+    def _urgency_filter_options(self) -> list[tuple[str, str]]:
+        return [(self._service.t("tui.filter_all_urgencies"), "all")] + [
+            (urgency_label(self._service, urgency), urgency.value) for urgency in Urgency
         ]
 
     def _ensure_columns(self) -> None:
@@ -544,7 +581,7 @@ class MailPane(Vertical):
         for position, record in enumerate(records, start=1):
             urgency = record.effective_urgency
             table.add_row(
-                RichText(f"■ {urgency.value}", style=urgency.color),
+                RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
                 escape(record.mail.subject or self._service.t("tui.mail_no_subject")),
                 escape(record.mail.sender.address),
                 _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
@@ -563,6 +600,7 @@ class MailPane(Vertical):
         visible_ids = {record.record_id for record in records}
         if self._selected_id not in visible_ids:
             self._selected_id = records[0].record_id if records else None
+        await self._show_selected()
 
     async def _preview_matches(self, match_ids: set[str]) -> None:
         """Fetch preview records missing from the cache from storage and
@@ -587,7 +625,7 @@ class MailPane(Vertical):
                 continue
             urgency = record.effective_urgency
             table.add_row(
-                RichText(f"■ {urgency.value}", style=urgency.color),
+                RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
                 escape(
                     " ".join((record.summary or record.mail.subject or "").split())
                     or self._service.t("tui.mail_no_subject")
@@ -650,7 +688,7 @@ class MailPane(Vertical):
         for position, record in enumerate(records, start=1):
             urgency = record.effective_urgency
             table.add_row(
-                RichText(f"■ {urgency.value}", style=urgency.color),
+                RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
                 escape(record.mail.subject or self._service.t("tui.mail_no_subject")),
                 escape(record.mail.sender.address),
                 _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
@@ -702,9 +740,7 @@ class MailPane(Vertical):
     def _refresh_view_options(self) -> None:
         """Re-translate the sort/filter dropdowns after a language switch."""
         service = self._service
-        _apply_options(
-            self, "#mail-urgency-filter", [("all", "all")] + [(u.value, u.value) for u in Urgency]
-        )
+        _apply_options(self, "#mail-urgency-filter", self._urgency_filter_options())
         _apply_options(
             self,
             "#mail-sort",
@@ -896,12 +932,26 @@ class MailPane(Vertical):
             await self._service.set_mail_urgency(self._selected_id, urgency)
             await self.refresh_mail()
 
+    def _clear_mail_detail(self) -> None:
+        """Remove detail from a record no longer visible in the table."""
+        for selector in (
+            "#mail-summary",
+            "#mail-reason",
+            "#mail-actions",
+            "#mail-body",
+            "#mail-attachments",
+            "#mail-notes",
+        ):
+            self._set_static(selector, "")
+
     async def _show_selected(self) -> None:
         """Render the detail column for the selected mail."""
         if self._selected_id is None:
+            self._clear_mail_detail()
             return
         record = await self._service.get_mail(self._selected_id)
         if record is None:
+            self._clear_mail_detail()
             return
         service = self._service
         self._set_static(
@@ -919,7 +969,10 @@ class MailPane(Vertical):
         if record.action_items:
             lines = [
                 "  "
-                + escape(f"{item.time_range} ({item.action_type}) {item.summary}")
+                + escape(
+                    f"{_action_time_range(service, item)} "
+                    f"({_action_type_label(service, item.action_type)}) {item.summary}"
+                )
                 + (f" — {escape(item.notes)}" if item.notes else "")
                 for item in record.action_items
             ]
@@ -941,7 +994,8 @@ class MailPane(Vertical):
             body = body[:4000] + "…"
         self._set_static(
             "#mail-body",
-            f"[bold]{service.t('tui.detail_body')}:[/bold]\n{escape(body or '(no body)')}",
+            f"[bold]{service.t('tui.detail_body')}:[/bold]\n"
+            f"{escape(body or service.t('tui.mail_no_body'))}",
         )
         attachment_lines = [
             f"  {escape(a.filename)} ({a.content_type}, {a.size} B)"
@@ -979,7 +1033,7 @@ class MailPane(Vertical):
         self._set_static(
             "#mail-notes",
             f"{reply_flag}{feedback}{failure_text}\n{service.t('tui.urgency_label')}: "
-            f"{record.effective_urgency.value} "
+            f"{urgency_label(service, record.effective_urgency)} "
             f"({service.t('tui.detail_manual_marker') if record.manual_urgency is not None else service.t('tui.detail_auto_marker')})",
         )
 
@@ -1052,12 +1106,10 @@ class MailPane(Vertical):
             return
         if button_id == "btn-reply":
             if getattr(self._service, "remote", False):
-                from mailflow_server.client import RemoteUnsupported
-
-                try:
-                    raise RemoteUnsupported("reply drafts require a local service")
-                except RemoteUnsupported as exc:
-                    self._set_static("#mail-notes", f"[yellow]{exc}[/yellow]")
+                self._set_static(
+                    "#mail-notes",
+                    f"[yellow]{self._service.t('tui.reply_local_only')}[/yellow]",
+                )
                 return
             record = await self._service.get_mail(self._selected_id)
             if record is not None:
@@ -1219,7 +1271,11 @@ class ActionsPane(Vertical):
         _apply_options(
             self,
             "#actions-type-filter",
-            [(self._service.t("tui.filter_all_types"), "all")] + [(t, t) for t in types],
+            [(self._service.t("tui.filter_all_types"), "all")]
+            + [
+                (_action_type_label(self._service, action_type), action_type)
+                for action_type in types
+            ],
         )
         current = self._select_value("#actions-type-filter")
         if current not in {"all", *types}:
@@ -1234,8 +1290,8 @@ class ActionsPane(Vertical):
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
         for item in items:
             table.add_row(
-                escape(item.time_range),
-                escape(item.action_type),
+                escape(_action_time_range(self._service, item)),
+                escape(_action_type_label(self._service, item.action_type)),
                 escape(item.summary),
                 escape(item.notes or "-"),
                 escape(item.mail_id),
@@ -1888,13 +1944,14 @@ class MarketDetailScreen(ModalScreen[Any]):
     """VS Code-style full-screen plugin detail: metadata, markdown readme
     and install/uninstall/enable/disable actions."""
 
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(self, service: MailFlowService, plugin: MarketPlugin) -> None:
         super().__init__()
         self._service = service
         self._plugin = plugin
         self._content_loaded = False
+        self._bindings.bind("escape", "dismiss", self._service.t("tui.btn_close"))
 
     def compose(self) -> ComposeResult:
         # skeleton first: the dialog opens instantly, the readme renders in
@@ -2435,23 +2492,7 @@ class MailFlowApp(App[None]):
     """Eight-tab administration UI."""
 
     CSS_PATH = "app.tcss"
-    BINDINGS: ClassVar[list[Any]] = [
-        Binding("ctrl+q", "quit", "Quit"),
-        # tab switching: ctrl+number jumps straight to a tab (labels are
-        # localized, ids are stable; missing tabs — remote mode hides some —
-        # are skipped in the action)
-        # quoted ids: Textual parses action args with ast.literal_eval, so a
-        # bare ``tab-mail`` would be evaluated as ``tab - mail`` and fail
-        Binding("ctrl+1", "goto_tab('tab-mail')", "Mail", show=False),
-        Binding("ctrl+2", "goto_tab('tab-actions')", "Actions", show=False),
-        Binding("ctrl+3", "goto_tab('tab-mailboxes')", "Mailboxes", show=False),
-        Binding("ctrl+4", "goto_tab('tab-llms')", "LLMs", show=False),
-        Binding("ctrl+5", "goto_tab('tab-runtime')", "Runtime", show=False),
-        Binding("ctrl+6", "goto_tab('tab-market')", "Market", show=False),
-        Binding("ctrl+7", "goto_tab('tab-notifications')", "Notifications", show=False),
-        Binding("ctrl+8", "goto_tab('tab-settings')", "Settings", show=False),
-        Binding("ctrl+9", "goto_tab('tab-logs')", "Logs", show=False),
-    ]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def action_goto_tab(self, tab_id: str) -> None:
         """Switch to a tab by its stable id; silently ignore hidden tabs
@@ -2484,6 +2525,27 @@ class MailFlowApp(App[None]):
         # the Runtime tab reads from here, so both tabs show the exact
         # same detail (same readme, same translations).
         self._plugin_entries: dict[str, MarketPlugin] = {}
+
+        self._reset_shortcuts()
+
+    def _reset_shortcuts(self, *, refresh: bool = False) -> None:
+        """Bind visible footer text from the active language pack."""
+        self._bindings = BindingsMap()
+        self._bindings.bind("ctrl+q", "quit", self._service.t("tui.btn_quit"))
+        for key, tab_id in (
+            ("ctrl+1", "tab-mail"),
+            ("ctrl+2", "tab-actions"),
+            ("ctrl+3", "tab-mailboxes"),
+            ("ctrl+4", "tab-llms"),
+            ("ctrl+5", "tab-runtime"),
+            ("ctrl+6", "tab-market"),
+            ("ctrl+7", "tab-notifications"),
+            ("ctrl+8", "tab-settings"),
+            ("ctrl+9", "tab-logs"),
+        ):
+            self._bindings.bind(key, f"goto_tab('{tab_id}')", show=False)
+        if refresh:
+            self.refresh_bindings()
 
     def set_plugin_entries(self, entries: list[tuple[Repository, MarketPlugin]]) -> None:
         """Record the market entries (called by MarketPane after a fetch)."""
@@ -2627,6 +2689,7 @@ class MailFlowApp(App[None]):
         whole UI — buttons, placeholders, table headers, static titles —
         switches to the new language at once."""
         self.title = self._service.t("tui.title")
+        self._reset_shortcuts(refresh=True)
         tabs = self.query_one(TabbedContent)
         for pane_id, key in self._tab_label_keys().items():
             try:

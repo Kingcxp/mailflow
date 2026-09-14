@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DirectoryTree, Input, Static
@@ -26,12 +25,13 @@ class LogExportScreen(ModalScreen[str | None]):
 
     # buffered lines are injected by the LogsPane (list[str] in queue format)
 
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(self, service: Any, lines: list[str]) -> None:
         super().__init__()
         self._service = service
         self._lines = lines
+        self._bindings.bind("escape", "cancel", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
         return str(self._service.t(key, **params))

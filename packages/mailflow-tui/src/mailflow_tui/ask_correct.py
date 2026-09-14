@@ -21,11 +21,12 @@ from typing import Any, ClassVar
 from mailflow.domain import MailRecord
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Input, Static
+
+from mailflow_tui.labels import urgency_label
 
 # Brand accent used for the title bar (matches the app's $accent).
 _ACCENT = "#7EA7F8"
@@ -35,13 +36,15 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
     """Conversational analysis window: left chat, right mail info, bottom
     input. Closing discards the chat (persisted corrections remain)."""
 
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "close", "Close")]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(self, service: MailFlowService, record: MailRecord) -> None:
         super().__init__()
         self._service = service
         self._record = record
         self._history: list[dict[str, str]] = []
+        self._request_in_flight = False
+        self._bindings.bind("escape", "close", self._t("tui.btn_close"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -79,12 +82,12 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         """Right pane: current analysis + original body (body never edited)."""
         record = self._record
         urgency = record.effective_urgency
-        # the four contract colors are part of the public Urgency enum and
-        # reused everywhere (mail table, CLI) — the value gets the same
-        # color here so the panel is not a flat wall of text
+        # The four contract colors are reused everywhere; the localized label
+        # receives the same color while its stored enum value stays unchanged.
+        label = urgency_label(self._service, urgency)
         self.query_one("#ask-correct-urgency", Static).update(  # pyright: ignore[reportUnknownMemberType]
             f"[bold]{self._t('tui.column_urgency')}:[/bold] "
-            f"[bold {urgency.color}]■ {escape(urgency.value)}[/bold {urgency.color}]"
+            f"[bold {urgency.color}]■ {escape(label)}[/bold {urgency.color}]"
         )
         summary = record.summary or ""
         self.query_one("#ask-correct-summary", Static).update(  # pyright: ignore[reportUnknownMemberType]
@@ -130,7 +133,19 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         elif event.button.id == "ask-correct-close":
             self.action_close()
 
+    def _set_request_state(self, in_flight: bool) -> None:
+        """Keep one question in flight so the chat history stays ordered."""
+        if not self.is_mounted:
+            return
+        input_box = self.query_one("#ask-correct-input", Input)
+        send = self.query_one("#ask-correct-send", Button)
+        input_box.disabled = in_flight
+        send.disabled = in_flight
+        send.label = self._t("tui.ask_correct_working" if in_flight else "tui.ask_correct_send")
+
     async def _send(self) -> None:
+        if self._request_in_flight:
+            return
         input_box = self.query_one("#ask-correct-input", Input)
         text = input_box.value.strip()
         if not text:
@@ -138,14 +153,26 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         input_box.value = ""
         self._history.append({"role": "user", "content": text})
         self._render_chat()
-        result = await self._service.chat_about_mail(self._record.record_id, self._history)
+        self._request_in_flight = True
+        self._set_request_state(True)
+        try:
+            result = await self._service.chat_about_mail(self._record.record_id, self._history)
+        except Exception:
+            self._history.append(
+                {"role": "assistant", "content": self._t("tui.ask_correct_request_failed")}
+            )
+            self._render_chat()
+            return
+        finally:
+            self._request_in_flight = False
+            self._set_request_state(False)
         reply = str(result.get("reply") or "")
         corrections: dict[str, Any] = result.get("corrections") or {}
         if corrections:
-            changed = self._service.t("tui.ask_correct_applied")
-            self._history.append(
-                {"role": "assistant", "content": f"{reply}\n\n[green]{changed}[/green]"}
+            content = "\n\n".join(
+                part for part in (reply, self._t("tui.ask_correct_applied")) if part
             )
+            self._history.append({"role": "assistant", "content": content})
             fresh = await self._service.get_mail(self._record.record_id)
             if fresh is not None:
                 self._record = fresh

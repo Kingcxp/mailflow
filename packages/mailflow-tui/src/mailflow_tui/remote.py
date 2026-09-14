@@ -12,6 +12,7 @@ import queue as queue_module
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
+import httpx
 from httpx import AsyncClient
 from mailflow_server.client import RemoteClient, RemoteUnsupported
 from textual.containers import Horizontal, Vertical
@@ -101,7 +102,7 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         self._session = session
         from mailflow.i18n import I18n
 
-        self._i18n = I18n()
+        self._i18n = I18n(language=str(session.get("language") or "en"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._i18n.t(key, **params)
@@ -113,7 +114,7 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
             yield Label(self._t("tui.remote_server_url"), classes="field-label")
             yield Input(
                 value=str(self._session.get("url", "")),
-                placeholder="http://host:8800",
+                placeholder=self._t("tui.remote_url_placeholder"),
                 id="login-url",
             )
             yield Label(self._t("tui.remote_username"), classes="field-label")
@@ -139,22 +140,35 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         save = bool(self.query_one("#login-save-password", Switch).value)
         status = self.query_one("#login-status", Static)
         if not url or not user or not password:
-            status.update("[red]all fields are required[/red]")
+            status.update(f"[red]{self._t('tui.remote_fields_required')}[/red]")
             return
-        async with AsyncClient(base_url=url, timeout=10.0) as probe:
-            try:
+        status.update(f"[dim]{self._t('tui.remote_connecting')}[/dim]")
+        try:
+            async with AsyncClient(base_url=url, timeout=10.0) as probe:
                 response = await probe.get("/snapshot", headers=basic_header(user, password))
-            except Exception as exc:
-                status.update(f"[red]{type(exc).__name__}: cannot reach {url}[/red]")
-                return
+        except (httpx.HTTPError, ValueError) as exc:
+            status.update(
+                f"[red]{self._t('tui.remote_unreachable', url=url, error=type(exc).__name__)}[/red]"
+            )
+            return
         if response.status_code == 401:
-            status.update("[red]wrong credentials[/red]")
+            status.update(f"[red]{self._t('tui.remote_credentials_invalid')}[/red]")
             clear_password()
             return
         if response.status_code >= 400:
-            status.update(f"[red]HTTP {response.status_code}[/red]")
+            status.update(
+                f"[red]{self._t('tui.remote_http_error', status=response.status_code)}[/red]"
+            )
             return
         session: dict[str, Any] = {"url": url, "username": user, "autologin": bool(save)}
+        try:
+            payload: Any = response.json()
+        except ValueError:
+            payload = {}
+        if isinstance(payload, dict):
+            language = cast("dict[str, Any]", payload).get("language")
+            if language:
+                session["language"] = str(language)
         if save:
             session["saved_password"] = password
         save_session(session)
@@ -180,6 +194,18 @@ class RemoteServiceAdapter:
         self.config = _StaticConfig(snapshot)
         self.events = _EventProxy(client)
 
+        self._apply_language(str(snapshot.get("language") or ""))
+        self.client.on("language.changed", self._on_language_changed)
+
+    def _apply_language(self, language: str) -> None:
+        """Keep the client-side pack aligned with the remote service."""
+        if language and language in self.i18n.available_codes():
+            self.i18n.set_language(language)
+            self._snapshot["language"] = language
+
+    def _on_language_changed(self, event: str, **payload: Any) -> None:
+        self._apply_language(str(payload.get("language") or ""))
+
     def t(self, key: str, **params: Any) -> str:
         result: str = self.i18n.t(key, **params)
         return result
@@ -191,6 +217,7 @@ class RemoteServiceAdapter:
     # -- reads -----------------------------------------------------------------
     async def snapshot(self) -> dict[str, Any]:
         self._snapshot = await self.client.snapshot()
+        self._apply_language(str(self._snapshot.get("language") or ""))
         return self._snapshot
 
     def snapshot_sync(self) -> dict[str, Any]:

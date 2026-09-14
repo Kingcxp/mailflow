@@ -10,7 +10,6 @@ from typing import Any, ClassVar
 from mailflow.plugin_market import MarketPlugin, detect_plugin_folders
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DirectoryTree, Static
@@ -19,13 +18,12 @@ from textual.widgets import Button, DirectoryTree, Static
 class InstallScreen(ModalScreen[list[str] | None]):
     """Directory-tree wizard that installs local plugins (single or batch)."""
 
-    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
-        ("escape", "dismiss_modal", "cancel")
-    ]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
+        self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)

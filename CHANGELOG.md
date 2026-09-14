@@ -7,6 +7,16 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **TUI chrome follows the selected language** — modal Escape hints, persisted
+  urgency and action-type labels, configuration booleans/defaults, remote-login
+  feedback, empty states, and time displays now use the active language and
+  configured timezone. Remote clients initialize from and follow the server's
+  language setting.
+- **Mail controls and AI chat are responsive under real use** — filters occupy
+  a full-width row above equal-width two-row actions, standalone forms are
+  centered bordered panels, and Ask & Correct accepts only one question at a
+  time so the visible conversation cannot be reordered by concurrent replies.
+
 - **Full chat command surface in the mailflow namespace** — every
   MailFlow command now lives under `<prefix>mailflow …` so bots
   coexisting in one group never collide; a bare legacy command

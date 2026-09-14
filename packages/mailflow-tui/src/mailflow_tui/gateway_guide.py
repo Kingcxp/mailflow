@@ -19,7 +19,6 @@ from typing import Any, ClassVar
 from mailflow.service import MailFlowService
 from textual import on
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
@@ -131,7 +130,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     }
     """
 
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss", "Close")]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(
         self,
@@ -148,6 +147,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._result: dict[str, Any] | None = None
         self._progress_bucket = -1
         self._last_progress_message = ""
+        self._bindings.bind("escape", "dismiss", self._t("tui.btn_close"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -187,17 +187,17 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                         placeholder="",
                         id="sudo-prompt-input",
                     )
-                    yield Button("OK", id="sudo-prompt-ok", variant="primary")
+                    yield Button(self._t("tui.btn_ok"), id="sudo-prompt-ok", variant="primary")
             yield Static("", id="guide-status")
             with Horizontal(id="guide-actions"):
                 yield Button(
-                    self._t("tui.btn_done", default="Done"),
+                    self._t("tui.btn_done"),
                     id="guide-done",
                     variant="success",
                     disabled=True,
                 )
                 yield Button(
-                    self._t("tui.bots_guide_logged_in_btn", default="I'm logged in"),
+                    self._t("tui.bots_guide_logged_in_btn"),
                     id="guide-logged-in",
                     variant="primary",
                     disabled=True,
@@ -312,7 +312,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             # 1. detect
             self._log("INFO", self._t("tui.bots_guide_detecting"))
             detected = await service.gateway_detect(provider)
-            self._log("INFO", detected or self._t("tui.bots_guide_detected"))
+            detected_message = detected or self._t("tui.bots_guide_not_detected")
+            self._log("INFO", self._t("tui.bots_guide_detected", status=detected_message))
             await asyncio.sleep(0.2)
             # 2. provision (install + start); while the provisioner works,
             # poll the shared InstallProgress (injected into its options)
@@ -339,8 +340,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             }
             await self._qr_loop(service, provider)
         except Exception as exc:
-            self._log("ERROR", str(exc))
-            self._set_status(str(exc), "red")
+            message = self._t("tui.bots_guide_failed", error=str(exc))
+            self._log("ERROR", message)
+            self._set_status(message, "red")
             return
 
     async def _provision_with_progress(self, service: MailFlowService, provider: str) -> Any:
@@ -536,7 +538,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         endpoint = (self._result or {}).get("endpoint", "")
         if not endpoint:
             return
-        self._log("INFO", "Verifying gateway endpoint...")
+        self._log("INFO", self._t("tui.bots_guide_endpoint_checking", endpoint=endpoint))
         import httpx
 
         deadline = time.monotonic() + 30
@@ -545,12 +547,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 async with httpx.AsyncClient(timeout=3.0) as client:
                     resp = await client.get(endpoint)
                 if resp.status_code < 500:
-                    self._log("INFO", f"Gateway endpoint {endpoint} reachable")
+                    self._log("INFO", self._t("tui.bots_guide_endpoint_ready", endpoint=endpoint))
                     return
             except Exception:
                 pass
             await asyncio.sleep(2.0)
-        self._log("WARN", f"Gateway endpoint {endpoint} not reachable yet")
+        self._log("WARN", self._t("tui.bots_guide_endpoint_pending", endpoint=endpoint))
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "guide-done":

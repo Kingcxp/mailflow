@@ -261,8 +261,35 @@ async def test_language_change_propagates_to_other_tabs(tmp_path: Path) -> None:
             assert refresh_after != refresh_before
             assert refresh_after == "刷新"
 
+            urgency_filter = cast(Select[Any], app.query_one("#mail-urgency-filter", Select))
+            urgency_select = cast(Select[Any], app.query_one("#urgency-select", Select))
+            filter_labels = {str(option[0]) for option in urgency_filter._options}  # pyright: ignore[reportPrivateUsage]
+            select_labels = {str(option[0]) for option in urgency_select._options}  # pyright: ignore[reportPrivateUsage]
+            assert "全部紧急度" in filter_labels
+            assert "跟随自动判定" in select_labels
+
             mail_tab_title = str(tabs.get_tab("tab-mail").label)  # pyright: ignore[reportUnknownMemberType]
             assert mail_tab_title == "邮件"
+    finally:
+        await service.stop()
+
+
+async def test_modal_escape_bindings_follow_active_language(tmp_path: Path) -> None:
+    """Every modal's visible Escape hint follows ``general.language``."""
+    from mailflow_tui.export import BotExportScreen
+    from mailflow_tui.install import InstallScreen
+    from mailflow_tui.repos import ReposScreen
+    from mailflow_tui.scaffold import PluginScaffoldScreen
+
+    service = await start_service_quiet(tmp_path)
+    try:
+        await service.set_setting("general.language", "zh-CN")
+        descriptions = [
+            screen(service)._bindings.get_bindings_for_key("escape")[0].description  # pyright: ignore[reportPrivateUsage]
+            for screen in (BotExportScreen, InstallScreen, ReposScreen, PluginScaffoldScreen)
+        ]
+
+        assert descriptions == ["取消"] * 4
     finally:
         await service.stop()
 
@@ -338,7 +365,7 @@ async def test_ask_correct_modal_opens_and_sends(tmp_path: Path) -> None:
             assert isinstance(app.screen, AskCorrectModal)
 
             # right pane shows the current urgency, header carries the reminder
-            assert "urgent" in str(app.screen.query_one("#ask-correct-urgency").render())
+            assert "urgent" in str(app.screen.query_one("#ask-correct-urgency").render()).lower()
             title = str(app.screen.query_one("#ask-correct-title").render())
             assert "temporary" in title.lower() or "临时" in title
 

@@ -22,8 +22,9 @@ import asyncio
 import contextlib
 import re
 from collections import deque
-from datetime import datetime
-from typing import Any, ClassVar
+from datetime import UTC, datetime
+from typing import Any, ClassVar, cast
+from zoneinfo import ZoneInfo
 
 from mailflow.config import LLMConfig
 from mailflow.domain import ComponentKind, MailMessage
@@ -39,7 +40,6 @@ from mailflow.settings import (
 )
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
@@ -57,6 +57,8 @@ from textual.widgets import (
     TextArea,
 )
 
+from mailflow_tui.labels import urgency_label
+
 _SECTION_LABELS = {
     "general": "tui.settings_section_general",
     "logging": "tui.settings_section_logging",
@@ -68,6 +70,13 @@ _SECTION_LABELS = {
 _MULTILINE_EDITORS = (EditorKind.STRING_LIST, EditorKind.MAPPING)
 
 _INDEXED = re.compile(r"\[\d+\]")
+
+
+def _local_time(service: MailFlowService, value: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Project persisted UTC values into the user's configured timezone."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(ZoneInfo(service.config.general.timezone)).strftime(fmt)
 
 
 def _slug(key: str) -> str:
@@ -107,19 +116,19 @@ def _select_text(select: Any) -> str:
     return str(value)
 
 
-def default_text(spec: OptionSpec) -> str:
-    """Human-readable rendering of an option's schema default."""
+def default_text(service: MailFlowService, spec: OptionSpec) -> str:
+    """Human-readable, localized rendering of an option's schema default."""
     default: Any = spec.default
     if isinstance(default, bool):
-        return "true" if default else "false"
+        return service.t("common.yes" if default else "common.no")
     if default is None or default == "" or default == [] or default == {}:
         return "-"
     if isinstance(default, list):
-        # pyright: ignore[reportUnknownVariableType] — element types are
-        # irrelevant; only the entry count is rendered
-        return escape(f"{len(default)} entries")  # pyright: ignore[reportUnknownArgumentType]
+        entries = cast("list[Any]", default)
+        return service.t("tui.settings_default_entries", count=len(entries))
     if isinstance(default, dict):
-        return escape(f"{len(default)} keys")  # pyright: ignore[reportUnknownArgumentType]
+        keys = cast("dict[str, Any]", default)
+        return service.t("tui.settings_default_keys", count=len(keys))
     text = str(default)
     # model defaults repr as ClassName(...): summarize instead of dumping,
     # the brackets would otherwise be parsed as markup and crash rendering
@@ -151,13 +160,14 @@ def _unwrap_listish(text: str) -> str:
 class ListEditScreen(ModalScreen[str | None]):
     """Edit a list or mapping value as text: one entry per line."""
 
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss_modal", "Back")]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(self, service: MailFlowService, spec: OptionSpec, description: str = "") -> None:
         super().__init__()
         self._service = service
         self._spec = spec
         self._description = description
+        self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_back"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -330,7 +340,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
     available under an "advanced" separator.
     """
 
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss_modal", "Back")]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(
         self,
@@ -342,6 +352,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
     ) -> None:
         super().__init__()
         self._service = service
+        self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_back"))
         self._group = group
         self._values = dict(values or {})
         self._editing = values is not None
@@ -668,6 +679,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 yield ListEditor(
                     current_lines,
                     placeholder=str(extra.default or self._t("tui.list_editor_placeholder")),
+                    add_label=self._t("tui.list_add"),
+                    remove_label=self._t("tui.list_remove"),
                     id=widget_id,
                 )
             elif extra.kind == "boolean":
@@ -770,7 +783,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 if items:
                     collected["options"][extra.field_id] = items
                 elif extra.required:
-                    raise SettingsError(extra.field_id, f"{extra.label} is required")
+                    raise SettingsError(
+                        extra.field_id,
+                        self._t("tui.field_required", field=extra.label),
+                    )
                 continue
             if isinstance(node, Switch):
                 target = collected["options"] if extra.into_options else collected
@@ -779,7 +795,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             text = raw.strip()
             if not text:
                 if extra.required:
-                    raise SettingsError(extra.field_id, f"{extra.label} is required")
+                    raise SettingsError(
+                        extra.field_id,
+                        self._t("tui.field_required", field=extra.label),
+                    )
                 continue
             numeric_fields = ("interval_seconds", "limit", "max_tokens", "thinking_budget")
             target = collected["options"] if extra.into_options else collected
@@ -793,16 +812,16 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     value_num = text
                 target[extra.field_id] = value_num
             except ValueError as exc:
-                raise SettingsError(extra.field_id, f"{extra.label} must be a number") from exc
+                raise SettingsError(
+                    extra.field_id,
+                    self._t("tui.field_must_be_number", field=extra.label),
+                ) from exc
         if (
             provider == "google-vertex"
             and not collected["options"].get("service_account_file")
             and not collected.get("api_key")
         ):
-            raise SettingsError(
-                "credential",
-                "google-vertex needs api_key (access token) or service_account_file",
-            )
+            raise SettingsError("credential", self._t("tui.google_vertex_credentials"))
         if not collected["options"]:
             collected.pop("options")
         return collected
@@ -886,7 +905,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         password = str(opts.get("password") or "")
         use_ssl = bool(opts.get("imap_ssl", True))
         if not host or not user or not password:
-            raise SettingsError("credentials", "host / username / password are required")
+            raise SettingsError("credentials", self._t("tui.account_credentials_required"))
         status.update(self._t("tui.account_testing", host=host))
         import imaplib
 
@@ -944,6 +963,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             async with httpx.AsyncClient(timeout=8.0) as client:
                 if provider == "onebot":
                     response = await client.post(f"{url}/get_login_info", json={})
+                elif provider == "wechatpadpro":
+                    response = await client.get(url)
                 else:
                     response = await client.get(f"{url}/health")
                 return str(response.status_code)
@@ -1061,7 +1082,7 @@ class OptionCard(Vertical):
         if self._description:
             yield Static(self._description, classes="option-desc")
         yield Static(
-            self._t("tui.settings_default_hint", value=default_text(spec)),
+            self._t("tui.settings_default_hint", value=default_text(self._service, spec)),
             classes="option-default",
         )
         with Horizontal(classes="option-row"):
@@ -1361,12 +1382,13 @@ class _NotifyFeed:
             return
         urgency = str(getattr(record, "effective_urgency", "info"))
         style = self._STYLES.get(urgency, "white")
-        stamp = getattr(record, "received_at", None)
-        when = stamp.strftime("%m-%d %H:%M") if stamp is not None else ""
-        subject = str(getattr(getattr(record, "mail", None), "subject", "") or "")
+        mail = getattr(record, "mail", None)
+        stamp = getattr(mail, "received_at", None)
+        when = _local_time(self._service, stamp, "%m-%d %H:%M") if stamp is not None else ""
+        subject = str(getattr(mail, "subject", "") or "")
         line = Text.assemble(
             (when + "  ", "dim"),
-            (urgency.upper(), style),
+            (urgency_label(self._service, urgency), style),
             ("  ", ""),
             (subject[:60], "bold"),
         )
@@ -1712,10 +1734,10 @@ class AccountsPane(Vertical):
             try:
                 subject = escape(mail.subject or self._t("tui.mail_no_subject"))
                 sender = escape(mail.sender.address)
-                date_text = mail.date.strftime("%Y-%m-%d %H:%M")
+                date_text = _local_time(self._service, mail.date)
             except Exception:
                 # one poison mail must never take the app down
-                subject, sender, date_text = "(parse error)", "-", "-"
+                subject, sender, date_text = self._t("tui.history_parse_error"), "-", "-"
             state = (
                 self._t("tui.history_marked_known")
                 if record_id in self._known

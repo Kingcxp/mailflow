@@ -26,6 +26,7 @@ from textual.markup import escape
 from textual.widgets import Button, DataTable, Select, Static
 
 from mailflow_tui.gateway_guide import GatewayGuideModal
+from mailflow_tui.labels import urgency_label
 
 _URGENCY_ORDER = (Urgency.AD, Urgency.INFO, Urgency.IMPORTANT, Urgency.URGENT)
 
@@ -106,6 +107,11 @@ class NotificationsPane(Vertical):
         self._timer: Any = None
         self._syncing_urgency = False
 
+    def _urgency_options(self) -> list[tuple[str, str]]:
+        return [
+            (urgency_label(self._service, urgency), urgency.value) for urgency in _URGENCY_ORDER
+        ]
+
     def compose(self) -> ComposeResult:
         yield Static(self._service.t("tui.notifications_title"), id="notifications-title")
         yield Static(escape(self._service.t("tui.notifications_help")), id="notifications-help")
@@ -121,11 +127,7 @@ class NotificationsPane(Vertical):
             yield Button(
                 self._service.t("tui.notifications_toggle"), id="notif-toggle", variant="primary"
             )
-            yield Select(
-                [(u.value, u.value) for u in _URGENCY_ORDER],
-                id="notif-urgency",
-                allow_blank=False,
-            )
+            yield Select(self._urgency_options(), id="notif-urgency", allow_blank=False)
             yield Button(
                 self._service.t("tui.notifications_check"), id="notif-check", variant="primary"
             )
@@ -167,7 +169,7 @@ class NotificationsPane(Vertical):
         if table.ordered_columns:  # pyright: ignore[reportUnknownMemberType]
             return
         table.add_column(self._service.t("plugin.header_name"), key="name")
-        table.add_column(self._service.t("tui.market_provider", default="provider"), key="provider")
+        table.add_column(self._service.t("tui.market_provider"), key="provider")
         table.add_column(self._service.t("tui.notifications_enabled"), key="enabled")
         table.add_column(self._service.t("tui.notifications_urgency"), key="urgency")
         table.add_column(self._service.t("tui.bots_targets"), key="targets")
@@ -190,7 +192,7 @@ class NotificationsPane(Vertical):
                     if entry["enabled"]
                     else self._service.t("tui.notifications_off")
                 ),
-                str(entry["urgency"]),
+                urgency_label(self._service, str(entry["urgency"])),
                 escape(targets),
                 statuses.get(notifier_id, "-"),
                 key=notifier_id,
@@ -247,9 +249,7 @@ class NotificationsPane(Vertical):
         if urgency is None:
             return
         current = urgency.value
-        urgency.set_options(  # pyright: ignore[reportUnknownMemberType]
-            [(u.value, u.value) for u in _URGENCY_ORDER]
-        )
+        urgency.set_options(self._urgency_options())  # pyright: ignore[reportUnknownMemberType]
         urgency.value = current  # pyright: ignore[reportUnknownMemberType]
 
     def _sync_selection_controls(self) -> None:

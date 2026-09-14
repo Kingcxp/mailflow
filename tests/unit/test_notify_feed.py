@@ -4,6 +4,7 @@ mail using the record's effective urgency and mail subject."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from mailflow.domain import MailAnalysis, MailMessage, MailRecord, Urgency
@@ -43,8 +44,20 @@ def _record(urgency: Urgency) -> MailRecord:
     )
 
 
+class _Service:
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(general=SimpleNamespace(timezone="UTC"))
+
+    def t(self, key: str) -> str:
+        return key.rsplit("_", maxsplit=1)[-1].upper()
+
+
+def _service() -> Any:
+    return _Service()
+
+
 async def test_feed_renders_effective_urgency_and_subject() -> None:
-    feed = _NotifyFeed(service=Any, pane=_Pane())  # type: ignore[arg-type]
+    feed = _NotifyFeed(service=_service(), pane=_Pane())
     await feed._on_processed(record=_record(Urgency.URGENT))  # pyright: ignore[reportPrivateUsage]
 
     entries = feed.snapshot()
@@ -56,6 +69,6 @@ async def test_feed_renders_effective_urgency_and_subject() -> None:
 
 
 async def test_feed_ignores_missing_record() -> None:
-    feed = _NotifyFeed(service=Any, pane=_Pane())  # type: ignore[arg-type]
+    feed = _NotifyFeed(service=_service(), pane=_Pane())
     await feed._on_processed()  # pyright: ignore[reportPrivateUsage]
     assert feed.snapshot() == []

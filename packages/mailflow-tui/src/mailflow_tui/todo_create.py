@@ -14,27 +14,27 @@ from zoneinfo import ZoneInfo
 
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Select, Static
 
 _ACTION_TYPES: tuple[tuple[str, str], ...] = (
-    ("errand", "errand"),
-    ("exam", "exam"),
-    ("meeting", "meeting"),
-    ("other", "other"),
+    ("tui.action_type_errand", "errand"),
+    ("tui.action_type_exam", "exam"),
+    ("tui.action_type_meeting", "meeting"),
+    ("tui.action_type_other", "other"),
 )
 
 
 class TodoCreateModal(ModalScreen[bool]):
     """Modal form: summary, type, due-at, notes → create_custom_action."""
 
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
+        self._bindings.bind("escape", "cancel", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -48,9 +48,14 @@ class TodoCreateModal(ModalScreen[bool]):
                 yield Static(self._t("tui.todo_summary_label"), classes="todo-label")
                 yield Input(id="todo-summary", placeholder=self._t("tui.todo_summary_required"))
                 yield Static(self._t("tui.todo_type_label"), classes="todo-label")
-                yield Select(_ACTION_TYPES, value="errand", id="todo-type", allow_blank=False)
+                yield Select(
+                    [(self._t(key), value) for key, value in _ACTION_TYPES],
+                    value="errand",
+                    id="todo-type",
+                    allow_blank=False,
+                )
                 yield Static(self._t("tui.todo_due_label"), classes="todo-label")
-                yield Input(id="todo-due", placeholder="2026-09-10 14:00")
+                yield Input(id="todo-due", placeholder=self._t("tui.todo_due_placeholder"))
                 yield Static(self._t("tui.todo_notes_label"), classes="todo-label")
                 yield Input(id="todo-notes")
                 yield Static("", id="todo-create-error")
@@ -92,7 +97,7 @@ class TodoCreateModal(ModalScreen[bool]):
         try:
             await self._service.add_action(summary, due_at, action_type=action_type, notes=notes)
         except Exception as exc:
-            error.update(f"[red]{exc}[/red]")
+            error.update(f"[red]{self._t('tui.todo_create_failed', error=str(exc))}[/red]")
             return
         self.dismiss(True)
 

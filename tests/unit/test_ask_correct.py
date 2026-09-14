@@ -211,6 +211,29 @@ async def test_chat_about_mail_no_llm_configured() -> None:
 
     assert "No LLM is configured" in result["reply"]
     assert result["corrections"] == {}
+    service.i18n.set_language("zh-CN")
+    localized = await service.chat_about_mail(
+        "ask-1", [{"role": "user", "content": "Any question"}]
+    )
+    assert "尚未配置" in localized["reply"]
+
+
+@pytest.mark.asyncio
+async def test_chat_about_mail_hides_backend_failure_text() -> None:
+    """Transport errors must not leak into a user-visible chat response."""
+
+    class FailingRouter:
+        async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMCompletion:
+            raise RuntimeError("upstream rejected credential secret-value")
+
+    service = _service(_config_with_llm())
+    service.router = cast(Any, FailingRouter())
+    await service.storage.save_mail(_make_record())
+
+    result = await service.chat_about_mail("ask-1", [{"role": "user", "content": "Why?"}])
+
+    assert result["reply"] == service.t("tui.ask_correct_request_failed")
+    assert "secret-value" not in result["reply"]
 
 
 @pytest.mark.asyncio

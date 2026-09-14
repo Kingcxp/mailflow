@@ -123,7 +123,7 @@ class TUIPlugin:
 def build_config(db_path: Path) -> MailFlowConfig:
     return MailFlowConfig.model_validate(
         {
-            "general": {"timezone": "UTC", "workers": 2},
+            "general": {"timezone": "Asia/Shanghai", "workers": 2},
             "storage": {"provider": "sqlite", "path": str(db_path)},
             "plugins": {"repositories": []},
             "accounts": [
@@ -237,12 +237,32 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
                     break
                 await pilot.pause(0.05)
             await pilot.pause()
-            from mailflow_tui.app import MailPane
+            from mailflow_tui.app import ActionsPane, MailPane
 
             await app.query_one(MailPane).refresh_mail()
 
             table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
             assert table.row_count == 3
+            actions_pane = app.query_one(ActionsPane)
+            await actions_pane.refresh_actions()
+            actions_table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
+            assert actions_table.row_count == 1
+            assert "2026-06-11 01:00" in str(actions_table.get_row_at(0)[0])
+            # A results-only render (Smart find's final step) must replace
+            # the detail too, and an empty result must not leave a stale
+            # previously selected mail beside the empty table.
+            pane = app.query_one(MailPane)
+            old_record = await service.get_mail("m-info")
+            result_record = await service.get_mail("m-id")
+            assert old_record is not None and result_record is not None
+            pane._selected_id = old_record.record_id  # pyright: ignore[reportPrivateUsage]
+            await pane._show_selected()  # pyright: ignore[reportPrivateUsage]
+            assert "Lecture on Friday" in str(app.query_one("#mail-summary", Static).render())
+            await pane._render_records([result_record])  # pyright: ignore[reportPrivateUsage]
+            assert "Pick up student ID" in str(app.query_one("#mail-summary", Static).render())
+            await pane._render_records([])  # pyright: ignore[reportPrivateUsage]
+            assert str(app.query_one("#mail-summary", Static).render()) == ""
+            await pane.refresh_mail()
             # search filters the table
             search = app.query_one("#mail-search", Input)
             search.value = "promotion"
@@ -261,13 +281,17 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             assert table.row_count == 3
             # select the urgent mail row: its urgency cell carries the contract color
             urgent_index = next(
-                (i for i in range(table.row_count) if "urgent" in str(table.get_row_at(i)[0])),
+                (
+                    i
+                    for i in range(table.row_count)
+                    if "urgent" in str(table.get_row_at(i)[0]).lower()
+                ),
                 -1,
             )
             assert urgent_index >= 0, "no urgent row rendered"
             urgent_cell_text = str(table.get_row_at(urgent_index)[0])
             assert "■" in urgent_cell_text
-            assert "urgent" in urgent_cell_text
+            assert "urgent" in urgent_cell_text.lower()
 
             # select the urgent mail, then the urgency dropdown drives the mutation
             pane = app.query_one(MailPane)

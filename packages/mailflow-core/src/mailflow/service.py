@@ -787,9 +787,9 @@ be one of ad|info|important|urgent. The original mail body is never edited.
         """
         record = await self.storage.get_mail(record_id)
         if record is None:
-            return {"reply": "Mail not found.", "corrections": {}}
+            return {"reply": self.t("tui.ask_correct_mail_missing"), "corrections": {}}
         if not self.config.llms:
-            return {"reply": "No LLM is configured; add one in Settings → LLMs.", "corrections": {}}
+            return {"reply": self.t("tui.ask_correct_no_llm"), "corrections": {}}
         llm_ids = [llm.llm_id for llm in self.config.llms]
         from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
 
@@ -824,8 +824,8 @@ be one of ad|info|important|urgent. The original mail body is never edited.
                 fallback=llm_ids[1:],
                 options={"temperature": 0.4},
             )
-        except Exception as exc:
-            return {"reply": f"LLM request failed: {exc}", "corrections": {}}
+        except Exception:
+            return {"reply": self.t("tui.ask_correct_request_failed"), "corrections": {}}
         reply = completion.text
         corrections: dict[str, Any] = {}
         import re as _re

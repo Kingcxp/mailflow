@@ -76,9 +76,9 @@ class ListEditor(Widget):
     .list-editor-row Button {
         height: 1;
         min-height: 1;
-        width: 3;
-        min-width: 3;
-        padding: 0;
+        width: 8;
+        min-width: 8;
+        padding: 0 1;
         margin: 0 0 0 1;
         border: none;
         content-align: center middle;
@@ -93,19 +93,29 @@ class ListEditor(Widget):
     }
     """
 
-    def __init__(self, items: list[str], placeholder: str = "", id: str | None = None) -> None:
+    def __init__(
+        self,
+        items: list[str],
+        *,
+        placeholder: str = "",
+        add_label: str,
+        remove_label: str,
+        id: str | None = None,
+    ) -> None:
         super().__init__(id=id)
         # an empty list still shows one empty input row so the user can type
         # straight away; "" items are dropped from value()
         self.items = [item for item in items if item]
         self._placeholder = placeholder
+        self._add_label = add_label
+        self._remove_label = remove_label
 
     def _row(self, index: int, item: str) -> Horizontal:
         return Horizontal(
             CenteredInput(
                 value=item, id=f"list-editor-input-{index}", placeholder=self._placeholder
             ),
-            Button("x", id=f"list-editor-del-{index}", variant="error"),
+            Button(self._remove_label, id=f"list-editor-del-{index}", variant="error"),
             classes="list-editor-row",
         )
 
@@ -114,7 +124,7 @@ class ListEditor(Widget):
             rows = self.items if self.items else [""]
             for index, item in enumerate(rows):
                 yield self._row(index, item)
-        yield Button("+", id="list-editor-add", variant="success")
+        yield Button(self._add_label, id="list-editor-add", variant="success")
 
     async def _render_rows(self) -> None:
         container = self.query_one("#list-editor-rows", Vertical)

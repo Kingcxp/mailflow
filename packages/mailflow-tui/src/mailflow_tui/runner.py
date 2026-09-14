@@ -19,7 +19,7 @@ import logging
 import queue as queue_module
 import secrets
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from mailflow.commands import CommandRouter
 from mailflow.config import MailFlowConfig, load_config
@@ -160,6 +160,7 @@ async def _run_remote() -> None:
     from mailflow_tui.remote import (
         LoginScreen,
         RemoteServiceAdapter,
+        basic_header,
         clear_password,
         load_session,
         pump_async_to_thread,
@@ -172,33 +173,44 @@ async def _run_remote() -> None:
             with Vertical():
                 yield LoginScreen(load_session())
 
-    async def _validate(url: str, user: str, password: str) -> dict[str, Any] | None:
+    async def _validate(url: str, user: str, password: str) -> tuple[dict[str, Any] | None, bool]:
+        """Return the snapshot and whether authentication specifically failed."""
         import httpx
 
-        from mailflow_tui.remote import basic_header
-
-        async with httpx.AsyncClient(base_url=url, timeout=10.0) as probe:
-            response = await probe.get("/snapshot", headers=basic_header(user, password))
+        try:
+            async with httpx.AsyncClient(base_url=url, timeout=10.0) as probe:
+                response = await probe.get("/snapshot", headers=basic_header(user, password))
+        except (httpx.HTTPError, ValueError):
+            return None, False
+        if response.status_code == 401:
+            return None, True
         if response.status_code != 200:
-            return None
-        payload: dict[str, Any] = response.json()
-        return payload
+            return None, False
+        try:
+            payload: Any = response.json()
+        except ValueError:
+            return None, False
+        return (
+            (cast("dict[str, Any]", payload), False) if isinstance(payload, dict) else (None, False)
+        )
 
     snapshot: dict[str, Any] | None = None
     creds: dict[str, str] | None = None
     session = load_session()
     if session.get("autologin") and session.get("saved_password"):
-        snapshot = await _validate(
+        snapshot, credentials_rejected = await _validate(
             str(session["url"]), str(session["username"]), str(session["saved_password"])
         )
-        if snapshot is None:
+        if snapshot is None and credentials_rejected:
             clear_password()
     if snapshot is None:
         bootstrap = _Bootstrap()
         creds = await bootstrap.run_async()
         if creds is None:
             return
-        snapshot = await _validate(creds["url"], creds["username"], creds["password"])
+        snapshot, _credentials_rejected = await _validate(
+            creds["url"], creds["username"], creds["password"]
+        )
         if snapshot is None:
             return
 
@@ -209,7 +221,7 @@ async def _run_remote() -> None:
         "password": str(session["saved_password"]),
     }
     client = RemoteClient(final_creds["url"], final_creds["username"], final_creds["password"])
-    i18n = I18n()
+    i18n = I18n(language=str(snapshot.get("language") or "en"))
     adapter = RemoteServiceAdapter(client, cast_snapshot(snapshot), i18n)
     log_queue: queue_module.Queue[Any] = queue_module.Queue()
     pump = asyncio.create_task(pump_async_to_thread(client.log_queue, log_queue))

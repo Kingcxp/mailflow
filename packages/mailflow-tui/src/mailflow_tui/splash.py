@@ -22,7 +22,6 @@ from typing import Any, ClassVar
 
 from rich.text import Text as RichText
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Static
 
@@ -101,7 +100,7 @@ def _wave_text(frame: int) -> RichText:
 class SplashScreen(Screen[None]):
     """Full-screen boot animation; dismisses itself and returns to the app."""
 
-    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "skip", "Skip")]
+    BINDINGS: ClassVar[list[Any]] = []
 
     DEFAULT_CSS = """
     SplashScreen {
@@ -155,6 +154,7 @@ class SplashScreen(Screen[None]):
         self._status_step = 0
         self._status_ticks = 0
         self._timer: Any = None
+        self._bindings.bind("escape", "skip", self._t("tui.btn_skip"))
 
     def compose(self) -> ComposeResult:
         yield Static("", id="splash-logo")
