@@ -175,6 +175,14 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **WeChatPadPro guided deployment now produces a working notifier** — Docker
+  Compose v2 and classic `docker-compose` use their valid command forms,
+  a dormant Docker Desktop is started by the guide, and new instances select
+  unreserved API/webhook ports. Linux Engine gains the host-gateway mapping
+  needed for the in-process webhook bridge. The saved notifier now uses its
+  reachable `base_url` and loads the QR-minted credential from private
+  per-instance state rather than persisting it in editable config; fragmented
+  webhook HTTP bodies are read to their declared length before dispatch.
 - **Rate-limited mail analysis no longer yields blank failures** — an expired
   processor deadline now persists `processor timed out after N seconds`;
   deterministic advertising detection stops the pipeline at `ad`, so obvious

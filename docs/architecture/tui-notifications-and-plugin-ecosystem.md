@@ -78,8 +78,9 @@ minimum urgency, target count, live connection status). This includes:
 - **Check all** — concurrent bounded probes (already implemented with
   `asyncio.Semaphore(4)`).
 - **Deploy** — for gateway-backed providers, opens the guided setup
-  (`GatewayGuideModal`) to auto-install/start NapCat/OpenWeChat and
-  drive the QR login; the resulting notifier entry is saved as today.
+  (`GatewayGuideModal`) to auto-install/start NapCat or OpenWeChat, or create
+  a per-instance WeChatPadPro Docker Compose stack, then drive QR login. The
+  guide writes the corresponding reachable notifier endpoint only on success.
 
 ### Live status & auto-connect
 

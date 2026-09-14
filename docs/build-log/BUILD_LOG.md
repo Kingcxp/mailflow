@@ -222,3 +222,11 @@ trust it, and make that property enforceable instead of aspirational.
 | Change | Verification |
 | ------ | ------------ |
 | IMAP ingestion emits a stable best-effort `MailMessage` for an otherwise unparseable RFC-822 payload; `parse_error` becomes a persisted, sanitized `source-parser` failure note instead of silently losing the message or blocking later UIDs. | `make check`: Ruff clean; 178 files formatted; mypy 94 source files clean; pyright 0 errors; pytest 494 passed (1 third-party deprecation warning); docs gate cross-checked 37 documents. |
+
+## WeChatPadPro automatic-deployment round
+
+| Change | Verification |
+| ------ | ------------ |
+| Guided WeChatPadPro deployment accepts Compose v2 and classic v1, starts a dormant Docker Desktop, installs Docker Engine and a compatible Compose package separately on apt hosts, allocates unreserved API/webhook ports, and maps the Linux container to MailFlow's host webhook bridge. | `tests/unit/test_wechatpadpro_provisioner.py`: Compose-v1 command form, fresh and dormant Docker Desktop startup, port collision, host mapping, and complete webhook body handling. |
+| A guided notifier saves `base_url` and loads its QR-minted credential from private per-instance metadata instead of copying it into editable notifier config. | Unit notifier send assertion verifies the managed key is used for `/Msg/SendTxt`; 8 focused tests passed. |
+| Full quality gate after the change. | `make check`: Ruff clean; 179 files formatted; mypy 94 source files clean; pyright 0 errors; pytest 502 passed (1 third-party deprecation warning); docs gate cross-checked 37 documents. |

@@ -6,15 +6,16 @@ login inside the TUI, and bridge incoming webhook messages to the local
 Install model:
 - WeChatPadPro ships as a docker image that needs MySQL and Redis. The
   provisioner writes a per-instance compose project under
-  ``<data>/gateways/wechatpadpro-<instance>/`` (compose.yml + .env with a
-  generated ADMIN_KEY), then runs ``docker compose up -d``.
+  ``<data>/gateways/wechatpadpro-<instance>/`` (`compose.yml` plus
+  `instance.json` with generated secrets and collision-free ports), then runs
+  either ``docker compose`` (v2) or ``docker-compose`` (v1).
 - Login: ``POST /admin/GenAuthKey`` (admin key) → auth key;
   ``POST /login/GetLoginQrCodeNewX`` → QR PNG + uuid;
   ``GET /login/CheckLoginStatus`` → login state polling.
-- Incoming messages arrive as webhook POSTs (the provisioner registers
-  the webhook endpoint with the gateway) and are forwarded to
-  ``MAILFLOW_BOT_URL`` (``mailflow.bot_server``), the same chat-command
-  path the napcat bridge uses.
+- Incoming messages arrive as webhook POSTs. The compose project explicitly
+  maps ``host.docker.internal`` to Docker's host gateway, so Linux Engine as
+  well as Docker Desktop can reach the local bridge that forwards them to
+  ``mailflow.bot_server``.
 
 The Pad protocol is a third-party protocol: WeChat risk control can warn
 or ban the account — the same class of risk the openwechat (web/UOS)
@@ -32,6 +33,7 @@ import platform
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -56,6 +58,24 @@ def _data_root() -> Path:
 def _instance_dir(instance_id: str) -> Path:
     safe = "".join(c if c.isalnum() or c in "-_." else "-" for c in str(instance_id)).strip("-")
     return _data_root() / f"wechatpadpro-{safe}"
+
+
+def managed_notifier_auth_key(instance_id: str) -> str:
+    """Read an auto-provisioned instance's minted notifier credential.
+
+    The credential stays in the instance state instead of being copied into
+    the user-editable notifier configuration. Missing or malformed state is
+    normal for an externally hosted/manual notifier and deliberately returns
+    an empty key without logging its contents.
+    """
+    try:
+        metadata = json.loads((_instance_dir(instance_id) / "instance.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(metadata, dict):
+        return ""
+    values = cast(dict[str, Any], metadata)
+    return str(values.get("auth_api_key") or "")
 
 
 _DOCKER_DESKTOP_CLI = Path("C:/Program Files/Docker/Docker/resources/bin/docker.exe")
@@ -89,26 +109,55 @@ def _docker_daemon_up(docker: str, *, attempts: int = 2) -> bool:
     return False
 
 
-def _find_docker_compose(*, require_daemon: bool = True) -> str | None:
-    """A usable docker: CLI + (when require_daemon) a RUNNING daemon.
+def _compose_arguments(compose: str, *arguments: str) -> list[str]:
+    """Build a command for Compose v2 (``docker compose``) or v1.
 
-    The daemon check matters: Docker Desktop installs fine but stays
-    down until launched, and `docker compose pull/up` against a stopped
-    daemon fails instantly with a pipe error — which reads to the user
-    as 'progress stuck at 0%'."""
+    ``docker-compose`` is a complete command, not a Docker subcommand. Using
+    ``docker-compose compose ...`` made the auto-deploy path fail on older
+    Debian installations even after the dependency installer succeeded.
+    """
+    name = Path(compose).name.casefold()
+    if name in {"docker-compose", "docker-compose.exe"}:
+        return [compose, *arguments]
+    return [compose, "compose", *arguments]
+
+
+def _find_docker_compose(*, require_daemon: bool = True) -> str | None:
+    """Return a usable Compose v2 Docker command or classic v1 client.
+
+    The v2 client is checked with ``docker info`` because Docker Desktop may
+    have installed its CLI without starting the daemon. A legacy
+    ``docker-compose`` client cannot run ``info``; when no Docker CLI is
+    discoverable its own version command is the strongest available probe.
+    """
     docker = _docker_exe()
     if docker:
-        result = subprocess.run(
-            [docker, "compose", "version"], capture_output=True, text=True, timeout=30
-        )
-        if result.returncode == 0 and (not require_daemon or _docker_daemon_up(docker)):
+        try:
+            result = subprocess.run(
+                [docker, "compose", "version"], capture_output=True, text=True, timeout=30
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if (
+            result is not None
+            and result.returncode == 0
+            and (not require_daemon or _docker_daemon_up(docker))
+        ):
             return docker
     legacy = shutil.which("docker-compose")
-    # Docker Desktop ships a docker-compose shim too: same daemon
-    # requirement, so it must not bypass the daemon check
-    if legacy and (not require_daemon or _docker_daemon_up(legacy)):
-        return legacy
-    return None
+    if not legacy:
+        return None
+    try:
+        legacy_version = subprocess.run(
+            [legacy, "version"], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if legacy_version.returncode != 0:
+        return None
+    if require_daemon and docker is not None and not _docker_daemon_up(docker):
+        return None
+    return legacy
 
 
 def _wait_daemon(docker: str, *, seconds: int, progress: Any) -> bool:
@@ -293,95 +342,99 @@ def install_docker_dependencies(ask_sudo_password: Any = None, progress: Any = N
             sudo_password = str(ask_sudo_password())
         return sudo_password
 
-    if _find_docker_compose() is not None:
-        return _find_docker_compose() or ""
+    compose = _find_docker_compose()
+    if compose is not None:
+        return compose
+
+    def _report(percent: float, message: str, stage: str) -> None:
+        if progress is not None:
+            progress(percent, message, stage)
+
+    def _run_apt(step: list[str]) -> tuple[int, str]:
+        nonlocal sudo_password
+        code, output = _sudo_run(step, _password())
+        if code != 0 and ("incorrect password" in output.lower() or "try again" in output.lower()):
+            sudo_password = None
+            code, output = _sudo_run(step, _password())
+        return code, output
 
     system = platform.system()
     if system == "Windows":
-        if shutil.which("winget"):
-            if progress is not None:
-                progress(
-                    5.0, "installing Docker Desktop via winget (~500 MB download)", "downloading"
-                )
-            result = subprocess.run(
-                [
-                    "winget",
-                    "install",
-                    "--id",
-                    "Docker.DockerDesktop",
-                    "--accept-source-agreements",
-                    "--accept-package-agreements",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=3600,
+        if not shutil.which("winget"):
+            raise RuntimeError(
+                "Docker is missing and winget is unavailable — install Docker "
+                "Desktop from https://www.docker.com/products/docker-desktop/"
             )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"Docker Desktop winget install failed: {result.stderr.strip()[:400]}"
-                )
-            compose = _find_docker_compose()
-            if compose is None:
-                raise RuntimeError(
-                    "Docker Desktop installed but not usable yet — start "
-                    "Docker Desktop once, then retry the setup"
-                )
-            return compose
-        raise RuntimeError(
-            "Docker is missing and winget is unavailable — install Docker "
-            "Desktop from https://www.docker.com/products/docker-desktop/"
+        _report(5.0, "installing Docker Desktop via winget (~500 MB download)", "downloading")
+        result = subprocess.run(
+            [
+                "winget",
+                "install",
+                "--id",
+                "Docker.DockerDesktop",
+                "--accept-source-agreements",
+                "--accept-package-agreements",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3600,
         )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Docker Desktop winget install failed: {result.stderr.strip()[:400]}"
+            )
+        # A fresh Desktop installation has not started its daemon yet. Launch
+        # it here rather than sending the user through an avoidable retry.
+        docker = _docker_exe()
+        if (docker is None or not _docker_daemon_up(docker)) and not _start_docker_desktop(_report):
+            raise RuntimeError(
+                "Docker Desktop installed but its daemon did not start; "
+                "complete any EULA/update dialog and retry the setup"
+            )
+        compose = _find_docker_compose()
+        if compose is None:
+            raise RuntimeError(
+                "Docker Desktop started but `docker compose` is unavailable; "
+                "restart Docker Desktop and retry the setup"
+            )
+        return compose
 
-    # Linux: apt-only supported path
+    # Linux: apt-only supported path. Install Docker Engine separately from
+    # Compose; `apt install docker.io docker-compose-v2` is atomic, so a
+    # missing v2 package used to leave *both* packages absent before trying a
+    # fallback Compose package.
     if not _apt_available():
         raise RuntimeError(
             "docker is missing and this distro has no apt-get — install "
             "docker.io and docker-compose-plugin with the system package "
             "manager, then retry"
         )
-    steps = [
-        ["apt-get", "update"],
-        [
-            "apt-get",
-            "install",
-            "-y",
-            "docker.io",
-            "docker-compose-v2",
-        ],
-    ]
-    total = len(steps)
-    for index, step in enumerate(steps, start=1):
-        if progress is not None:
-            progress(
-                5.0 + 40.0 * index / total,
-                f"apt: {step[0]} {' '.join(step[1:])}",
-                "installing",
-            )
-        code, output = _sudo_run(step, _password())
+    for index, step in enumerate(
+        (["apt-get", "update"], ["apt-get", "install", "-y", "docker.io"]), start=1
+    ):
+        _report(5.0 + 20.0 * index, f"apt: {step[0]} {' '.join(step[1:])}", "installing")
+        code, output = _run_apt(step)
         if code != 0:
-            # a wrong password surfaces as an apt failure: ask again once
-            if "incorrect password" in output or "try again" in output.lower():
-                sudo_password = None  # force re-prompt
-                code, output = _sudo_run(step, _password())
-            if code != 0 and "docker-compose-v2" in step:
-                # the compose package name differs per distro/suite: plain
-                # Debian has neither docker-compose-v2 nor -plugin — only
-                # the classic docker-compose package
-                for fallback in ("docker-compose-plugin", "docker-compose"):
-                    code, output = _sudo_run(
-                        ["apt-get", "install", "-y", fallback],
-                        _password(),
-                    )
-                    if code == 0:
-                        break
-            if code != 0:
-                raise RuntimeError(f"apt install failed: {output.strip()[:400]}")
-    # fresh apt installs do NOT auto-start the daemon on minimal VMs
-    # (typical PVE/Debian): start it ourselves — the sudo password is
-    # already cached from the apt steps
+            raise RuntimeError(f"apt install failed: {output.strip()[:400]}")
+    compose_output = ""
+    for index, package in enumerate(
+        ("docker-compose-v2", "docker-compose-plugin", "docker-compose"), start=1
+    ):
+        step = ["apt-get", "install", "-y", package]
+        _report(50.0 + 10.0 * index, f"apt: {' '.join(step)}", "installing")
+        code, output = _run_apt(step)
+        if code == 0:
+            break
+        compose_output = output
+    else:
+        raise RuntimeError(f"could not install Docker Compose: {compose_output.strip()[:400]}")
+    # Fresh apt installs do NOT auto-start the daemon on minimal VMs
+    # (typical PVE/Debian): start it ourselves using the already-cached
+    # password, rather than prompting again.
+    _last_linux_failure["detail"] = ""
     docker = _docker_exe()
     if (docker is None or not _docker_daemon_up(docker)) and not _start_linux_docker_service(
-        ask_sudo_password, progress
+        _password, _report
     ):
         detail = _last_linux_failure.get("detail", "")
         raise RuntimeError(
@@ -403,6 +456,59 @@ def _port_for(instance_id: str, base: int) -> int:
     return base + int(digest[:4], 16) % 900
 
 
+def _known_instance_ports() -> set[int]:
+    """Ports reserved by another persisted WeChatPadPro instance."""
+    ports: set[int] = set()
+    root = _data_root()
+    if not root.exists():
+        return ports
+    for metadata in root.glob("wechatpadpro-*/instance.json"):
+        try:
+            values = cast_dict(json.loads(metadata.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+        for name in ("api_port", "webhook_port"):
+            try:
+                port = int(values.get(name, 0))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= port <= 65535:
+                ports.add(port)
+    return ports
+
+
+def _port_is_available(port: int) -> bool:
+    """Whether the host can currently bind a loopback listener on ``port``."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        try:
+            listener.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _allocate_port(instance_id: str, base: int, reserved: set[int]) -> int:
+    """Pick a stable preferred port, then probe the remaining 900-port band."""
+    preferred = _port_for(instance_id, base)
+    for offset in range(900):
+        port = base + ((preferred - base + offset) % 900)
+        if port not in reserved and _port_is_available(port):
+            return port
+    raise RuntimeError(f"no free port in the {base}-{base + 899} range")
+
+
+def _configured_port(values: dict[str, Any] | None, name: str, fallback: int) -> int:
+    """Read a persisted allocation while keeping older instance metadata valid."""
+    if values is not None:
+        try:
+            port = int(values.get(name, 0))
+        except (TypeError, ValueError):
+            port = 0
+        if 1 <= port <= 65535:
+            return port
+    return fallback
+
+
 _COMPOSE_TEMPLATE = """\
 services:
   wechatpadpro:
@@ -411,6 +517,11 @@ services:
     restart: unless-stopped
     ports:
       - "{api_port}:1238"
+    # Docker Desktop provides this name itself; Linux Engine needs the
+    # explicit host-gateway mapping so the container can reach MailFlow's
+    # loopback webhook bridge after an automatic deployment.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - DB_HOST=mysql
       - REDIS_HOST=redis
@@ -497,16 +608,25 @@ class _WebhookBridge:
             self._server = None
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        status = 200
         try:
-            request_line = await reader.readline()
+            request_line = await asyncio.wait_for(reader.readline(), timeout=15.0)
             parts = request_line.decode("utf-8", "replace").strip().split()
-            # consume headers
+            content_length = 0
             while True:
-                line = await reader.readline()
+                line = await asyncio.wait_for(reader.readline(), timeout=15.0)
                 if line in (b"\r\n", b"\n", b""):
                     break
-            body = await reader.read(1 << 20)
-            status = 200
+                name, separator, value = line.decode("utf-8", "replace").partition(":")
+                if separator and name.casefold() == "content-length":
+                    content_length = int(value.strip())
+            if content_length < 0 or content_length > 1 << 20:
+                raise ValueError("invalid webhook content length")
+            body = (
+                await asyncio.wait_for(reader.readexactly(content_length), timeout=15.0)
+                if content_length
+                else b""
+            )
             if parts and parts[0] == "POST":
                 try:
                     payload = json.loads(body.decode("utf-8", "replace") or "{}")
@@ -518,10 +638,15 @@ class _WebhookBridge:
                         exc,
                     )
                     status = 400
-            await self._ack(writer, status)
+        except (TimeoutError, asyncio.IncompleteReadError, ValueError) as exc:
+            logger.warning("wechatpadpro %s webhook request rejected: %s", self.instance_id, exc)
+            status = 400
         except Exception as exc:
             logger.warning("wechatpadpro %s webhook read failed: %s", self.instance_id, exc)
+            status = 500
         finally:
+            with contextlib.suppress(Exception):
+                await self._ack(writer, status)
             with contextlib.suppress(Exception):
                 writer.close()
 
@@ -584,13 +709,15 @@ class WechatPadProProvisioner:
     def _endpoint(self, instance_id: str) -> str:
         return f"http://127.0.0.1:{self._api_port(instance_id)}"
 
-    @staticmethod
-    def _api_port(instance_id: str) -> int:
-        return _port_for(instance_id, _API_PORT_BASE)
+    def _api_port(self, instance_id: str) -> int:
+        return _configured_port(
+            self._meta(instance_id), "api_port", _port_for(instance_id, _API_PORT_BASE)
+        )
 
-    @staticmethod
-    def _webhook_port(instance_id: str) -> int:
-        return _port_for(instance_id, _WEBHOOK_PORT_BASE)
+    def _webhook_port(self, instance_id: str) -> int:
+        return _configured_port(
+            self._meta(instance_id), "webhook_port", _port_for(instance_id, _WEBHOOK_PORT_BASE)
+        )
 
     def _webhook_url(self, instance_id: str) -> str:
         return f"http://host.docker.internal:{self._webhook_port(instance_id)}/webhook"
@@ -654,15 +781,20 @@ class WechatPadProProvisioner:
         webhook_secret = secrets.token_hex(16)
         mysql_root = secrets.token_hex(8)
         bot_url = str(options.get("bot_url") or "")
-        # persist state we need across restarts
+        reserved_ports = _known_instance_ports()
+        api_port = _allocate_port(instance_id, _API_PORT_BASE, reserved_ports)
+        reserved_ports.add(api_port)
+        webhook_port = _allocate_port(instance_id, _WEBHOOK_PORT_BASE, reserved_ports)
+        # persist state we need across restarts, including the collision-free
+        # allocations used by status(), QR polling and the webhook bridge.
         (target / "instance.json").write_text(
             json.dumps(
                 {
                     "admin_key": admin_key,
                     "webhook_secret": webhook_secret,
                     "bot_url": bot_url,
-                    "api_port": self._api_port(instance_id),
-                    "webhook_port": self._webhook_port(instance_id),
+                    "api_port": api_port,
+                    "webhook_port": webhook_port,
                 },
                 indent=2,
             ),
@@ -670,7 +802,7 @@ class WechatPadProProvisioner:
         )
         compose_body = _COMPOSE_TEMPLATE.format(
             safe=safe,
-            api_port=self._api_port(instance_id),
+            api_port=api_port,
             admin_key=admin_key,
             webhook_url=self._webhook_url(instance_id),
             webhook_secret=webhook_secret,
@@ -718,11 +850,7 @@ class WechatPadProProvisioner:
         them across images onto the 10..95 band. Phase-only lines still
         update the label so the bar never looks stuck."""
         process = await asyncio.create_subprocess_exec(
-            compose,
-            "compose",
-            "-f",
-            str(compose_file),
-            "pull",
+            *_compose_arguments(compose, "-f", str(compose_file), "pull"),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -811,7 +939,7 @@ class WechatPadProProvisioner:
             progress.update(96.0, "starting containers (docker compose up)", "starting")
         up = await asyncio.to_thread(
             subprocess.run,
-            [compose, "compose", "-f", str(compose_file), "up", "-d"],
+            _compose_arguments(compose, "-f", str(compose_file), "up", "-d"),
             capture_output=True,
             text=True,
             timeout=600,
@@ -856,7 +984,7 @@ class WechatPadProProvisioner:
             return
         await asyncio.to_thread(
             subprocess.run,
-            [compose, "compose", "-f", str(compose_file), "stop"],
+            _compose_arguments(compose, "-f", str(compose_file), "stop"),
             capture_output=True,
             text=True,
             timeout=300,

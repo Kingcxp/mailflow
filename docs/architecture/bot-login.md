@@ -1,7 +1,7 @@
 # Bot platform login (auto-provisioned gateways)
 > **Superseded.** This page described the gateway auto-provisioning flow
-> (form-driven install + QR login for NapCat / OpenWeChat) before
-> the Notifications tab existed. That flow is now a feature of the
+> (form-driven install + QR login for NapCat, OpenWeChat and WeChatPadPro)
+> before the Notifications tab existed. That flow is now a feature of the
 > Notifications tab, managed by `NotificationsPane` in
 > `mailflow_tui/notifications.py`; the approved architecture plan is
 > [tui-notifications-and-plugin-ecosystem.md](tui-notifications-and-plugin-ecosystem.md),
@@ -10,26 +10,20 @@
 > historical reference.
 
 How MailFlow sets up IM chat bot platforms (QQ via OneBot/NapCat, WeChat via
-openwechat web protocol) with as little manual work as possible: the user picks
-a platform in a form, and MailFlow installs, starts and configures the
-gateway — including driving the QR login inside the TUI.
+the OpenWeChat web protocol or WeChatPadPro Pad protocol) with as little manual
+work as possible: the user picks a platform in a form, and MailFlow installs,
+starts and configures the gateway — including driving the QR login inside the
+TUI.
 
-Status: implemented (round 1 + fixes). NapCat (via the `napcat` provisioner
-in mailflow-notify-onebot) and WeChat (via the `openwechat` provisioner in
-mailflow-notify-openwechat) are auto-installed, launched and supervised by the
-GatewayManager. openwechat (via the `openwechat` provisioner in
-mailflow-notify-openwechat) is a third gateway: a Go bridge built on
-install that logs into WeChat with a plain QR scan — no platform token.
-The Bots tab's Add button opens the standard notifier form: the provider
-dropdown lists `napcat` (auto-deploy, labeled "QQ (OneBot / NapCat)") as
-a separate choice from the manual `onebot` notifier id, so self-hosted
-users keep the endpoint form. Choosing a gateway-backed provider and
-pressing Next opens the guided setup — a bordered dialog with a live
-timestamped/level-tagged log pane (scrollable) and the QR login inside
-the frame, buttons outside. NapCat's
-version is resolved from the latest GitHub release at install time (no
-more pinned, possibly-404 URLs); download errors carry the URL and HTTP
-status.
+Status: implemented. NapCat (via the `napcat` provisioner in
+`mailflow-notify-onebot`), OpenWeChat (via the `openwechat` provisioner in
+`mailflow-notify-openwechat`) and WeChatPadPro (via the `wechatpadpro`
+provisioner in `mailflow-notify-wechatpadpro`) are auto-installed, launched
+and supervised by `GatewayManager`. The Notifications tab's Add button opens
+the standard notifier form. Choosing a gateway-backed provider and pressing
+Next opens the guided setup — a bordered dialog with a live timestamped,
+level-tagged log pane, a real deployment progress bar, and QR login inside the
+frame. The guide saves the endpoint only after explicit completion.
 
 ## Goals
 
@@ -41,14 +35,21 @@ status.
      provisioner requires a Go toolchain (reports the exact apt command
      when missing), builds the bridge, and the bridge serves the QR as a
      PNG plus a hot-reload session (no re-scan on restart).
-   - wechatpadpro gateway: docker compose stack (WeChatPadPro + MySQL +
-     Redis) with a generated ADMIN_KEY per instance. Login keys are
-     minted from the admin API, the QR renders in the TUI
-     (`GetLoginQrCodeNewX` + `CheckLoginStatus` polling), incoming
-     messages arrive over a webhook bridge into the same chat-command
-     endpoint, and replies go out through `/Msg/SendTxt`. The Pad
-     protocol is third-party: WeChat risk control can warn or ban the
-     account (same class of risk as the web protocol).
+   - wechatpadpro gateway: one Docker Compose stack per instance
+     (WeChatPadPro + MySQL + Redis) with generated admin/webhook secrets.
+     The installer supports Compose v2 (`docker compose`) and classic v1
+     (`docker-compose`), starts a newly installed Docker Desktop daemon on
+     Windows, and installs Docker Engine separately from the Compose package
+     on apt-based Linux hosts. Each instance persists a collision-free API and
+     bridge port; its Compose project maps `host.docker.internal` to the host
+     gateway so the Linux container can reach MailFlow's local webhook bridge.
+     Login keys are minted from the admin API; the QR renders in the TUI
+     (`GetLoginQrCodeNewX` + `CheckLoginStatus` polling). The saved notifier
+     uses its actual endpoint as `options.base_url`; the minted key remains in
+     the per-instance state and the adapter reads it there, rather than copying
+     a credential into the editable notifier configuration. Replies go out
+     through `/Msg/SendTxt`. The Pad protocol is third-party: WeChat risk control can
+     warn or ban the account (same class of risk as the web protocol).
 2. **Second instance**: when the platform is already installed, "Add"
      starts *another* independent instance (own data dir, own HTTP port)
      instead of reusing the first — one account per instance by default,
@@ -62,17 +63,18 @@ status.
 ## Architecture
 
 ```
-TUI Bots tab (form: basics → Next → provider guide)
-        │  mailflow.gateway (new core module, host-agnostic)
+TUI Notifications tab (form: basics → Next → provider guide)
+        │  mailflow.gateway (core lifecycle owner, host-agnostic)
         ▼
-GatewayProvisioner registry (new component kind or notifier extension)
-        ├── onebot  → NapCat provisioner (download/install/start/QR)
-        └── openwechat → OpenWeChat bridge provisioner (go build/start/QR)
+GatewayProvisioner registry (plugin-owned implementations)
+        ├── napcat       → NapCat provisioner (download/install/start/QR)
+        ├── openwechat   → OpenWeChat bridge provisioner (Go build/start/QR)
+        └── wechatpadpro → Compose provisioner (Docker stack/start/QR)
         ▼
-managed child processes (subprocess, owned by the runtime)
-        │  state persisted in storage preferences (installed, port, pid dir)
+managed processes or Compose stacks
+        │  state persisted in storage preferences; instance payload under data/
         ▼
-existing notifiers (mailflow-notify-onebot / mailflow-notify-openwechat)
+existing notifier adapters (onebot / openwechat / wechatpadpro)
 ```
 
 - `mailflow.gateway` is a new core module: a `GatewayProvisioner` protocol
@@ -99,15 +101,21 @@ Add form (basics) → Next → provider guide
          `xvfb-run ./…AppImage --no-sandbox`
        - openwechat: `go build` the bridge under
          <data>/gateways/openwechat-<instance>/ → launch the binary
-  3. start: provisioner.start(instance) → managed child process
-       - per-instance state dir + HTTP port (3001, 3002, ... or a fixed
-         base port + instance offset; stored in preferences)
+       - wechatpadpro: provision Docker when needed, write a per-instance
+         Compose project (app + MySQL + Redis) under
+         <data>/gateways/wechatpadpro-<instance>/ and pull its images with
+         live byte progress. Compose v1 and v2 use their respective valid
+         command forms; allocated API/webhook ports are persisted in
+         `instance.json`.
+  3. start: provisioner.start(instance) → managed child process or Compose stack
+       - per-instance state dir + HTTP port; gateway errors are persisted for
+         the Notifications status column
        - stdout/stderr routed to the MailFlow log (never printed raw to
          the TUI)
   4. QR: provisioner.qr_url()/qr_image() → TUI renders it (existing
      `_ascii_qr` machinery) and polls until the session is online
-  5. save: notifier config entry (http_url/gateway_url, token, targets)
-     with the actual endpoint; user fills targets afterwards
+  5. save: notifier config entry (`http_url`, `gateway_url`, or WPP's
+     `base_url`) with the actual endpoint; user fills targets afterwards
 ```
 
 Crash handling: the runtime's gateway supervisor restarts a dead child with
@@ -121,12 +129,10 @@ local listener NapCat's `httpClients` push message events to) lives in the
 MailFlow process, not in the gateway child. While a gateway reports
 `running` the supervisor calls the provisioner's `ensure_bridge` hook on
 every poll cycle, so the bridge is recreated after a restart even though
-`start()` is never called again — chat commands keep answering. The
-OpenWeChat bridges forward incoming text messages to the same
-local `mailflow.bot_server` endpoint (via `MAILFLOW_BOT_URL`) and send the
-reply back, so both gateway platforms have a working chat-command path;
-the OpenWeChat bridge gained this forwarding (previously it only offered
-`/health`, `/qr` and `/send`).
+`start()` is never called again — chat commands keep answering. OpenWeChat
+bridges and WeChatPadPro's Docker-to-host webhook bridge forward incoming
+text messages to the same local `mailflow.bot_server` endpoint; their
+notifier adapters send replies through their platform APIs.
 
 NapCat's OneBot config is per-account: once a QQ number is logged in,
 `onebot11_<uin>.json` takes precedence over the default `onebot11.json`.

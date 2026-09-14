@@ -70,6 +70,17 @@ class _NotifierProbe:
                     if response.status_code == 200
                     else http_status(response.status_code)
                 )
+            if provider == "wechatpadpro":
+                url = str(options.get("base_url", "")).rstrip("/")
+                if not url:
+                    return str(t("tui.bots_not_configured"))
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    response = await client.get(url)
+                return str(
+                    t("tui.bots_online")
+                    if response.status_code < 500
+                    else http_status(response.status_code)
+                )
             if provider == "console":
                 return str(t("tui.bots_online"))
         except Exception as exc:
@@ -493,6 +504,8 @@ class NotificationsPane(Vertical):
         options: dict[str, Any] = {}
         if provider == "napcat":
             options["http_url"] = endpoint
+        elif provider == "wechatpadpro":
+            options["base_url"] = endpoint
         else:
             options["gateway_url"] = endpoint
         form_opts = dict(form_values.get("options") or {}) if form_values else {}

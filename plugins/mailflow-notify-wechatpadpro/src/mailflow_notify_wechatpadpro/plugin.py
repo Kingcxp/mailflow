@@ -6,9 +6,12 @@ hosted WeChatPadPro instance).
 
 Options:
 - ``base_url``   — gateway API root (e.g. ``http://127.0.0.1:8100``)
-- ``auth_key``   — per-device auth key (授权码); when empty the notifier
-  asks the gateway to mint one from its ``admin_key`` option
-- ``admin_key``  — gateway ADMIN_KEY (used only to mint an auth key)
+- ``auth_key``   — per-device auth key (授权码) for an externally hosted
+  gateway; when empty the notifier can mint one from ``admin_key``.
+- ``admin_key``  — external gateway ADMIN_KEY used only to mint an auth key.
+- ``gateway``    — ``wechatpadpro`` marks a MailFlow-managed instance. Its
+  minted auth key stays in the per-instance state and is loaded automatically;
+  it is never copied into the user-editable notifier configuration.
 - ``targets``    — list of ``user:<wxid>`` / ``group:<chatroom_id>``
   entries; a bare ``wxid`` is treated as ``user:``
 
@@ -29,6 +32,8 @@ from mailflow.domain import ComponentKind, MailRecord
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
+from .gateway import managed_notifier_auth_key
+
 logger = logging.getLogger("mailflow.notify.wechatpadpro")
 
 
@@ -39,6 +44,8 @@ class WechatPadProNotifier:
         self._url = str(config.options.get("base_url", "")).rstrip("/")
         self._auth_key = str(config.options.get("auth_key", ""))
         self._admin_key = str(config.options.get("admin_key", ""))
+        if not self._auth_key and config.options.get("gateway") == "wechatpadpro":
+            self._auth_key = managed_notifier_auth_key(config.notifier_id)
         raw_targets: list[Any] = list(config.options.get("targets") or [])
         self._targets: list[tuple[str, str]] = []
         for entry in raw_targets:
