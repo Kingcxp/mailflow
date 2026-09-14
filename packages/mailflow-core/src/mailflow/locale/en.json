@@ -12,7 +12,7 @@
       "status_starting": "starting",
       "status_stopped": "stopped",
       "title": "Accounts ({count})",
-      "usage": "account <list>"
+      "usage": "account <list [--page <n>]>"
     },
     "action": {
       "add_usage": "usage: action add \"<summary>\" --due \"YYYY-MM-DD HH:MM\" [--type <type>] [--notes \"...\"]",
@@ -35,7 +35,7 @@
       "type_exam": "exam",
       "type_meeting": "meeting",
       "type_other": "other",
-      "usage": "action <list|show <item_id>|add <summary> --due <YYYY-MM-DD HH:MM> [--type <type>] [--notes <notes>]|delete <item_id>>"
+      "usage": "action <list [--page <n>]|show <item_id>|add <summary> --due <YYYY-MM-DD HH:MM> [--type <type>] [--notes <notes>]|delete <item_id>>"
     },
     "adapter": {
       "header_id": "ADAPTER",
@@ -76,6 +76,7 @@
         "unknown": "Unknown language '{language}'. Available: {list}",
         "usage": "lang <get|set <code>>"
       },
+      "parse_error": "Could not parse command: {reason}",
       "unknown": "Unknown command: {command}",
       "usage": "Usage: {usage}"
     },
@@ -167,8 +168,9 @@
         },
         "general.hourly_summary": "Every hour the LLM summarizes all mail received in that hour into a briefing pushed through the notifiers that opted in (options.hourly_summary = true); silent when the hour had no mail"
       },
+      "collection": "{count} entries",
       "description": "DESCRIPTION",
-      "legend": "* marks secret fields, redacted from output. Entries with [] are list items (first configured entry shown); edit lists in the TOML file.",
+      "legend": "* marks secret fields; their values are redacted. Entries with [] are list items; edit lists in the TOML file.",
       "option": "OPTION",
       "required": "REQ",
       "restart_note": "persisted; most options apply on next start",
@@ -195,7 +197,7 @@
       "header_model": "MODEL",
       "header_name": "NAME",
       "title": "LLMs ({count})",
-      "usage": "llm <list|bindings>"
+      "usage": "llm <list [--page <n>]|bindings [--page <n>]>"
     },
     "mail": {
       "btn_wipe": "Wipe & redo",
@@ -284,16 +286,16 @@
       "market_status": "Status",
       "market_title": "Plugin market ({count})",
       "market_updated": "Last updated",
-      "market_usage": "plugin market <list [category]|show <id>>",
+      "market_usage": "plugin market <list [category] [--page <n>]|show <id>>",
       "not_found": "Plugin {plugin_id} not found",
       "not_installed": "not installed",
       "not_installed_yet": "not installed",
       "repo_added": "Repository {name} added (persisted to the config file)",
       "repo_removed": "Repository {name} removed",
       "repo_title": "Plugin repositories ({count})",
-      "repo_usage": "plugin repo <list|add <name> <url>|remove <name>>",
+      "repo_usage": "plugin repo <list [--page <n>]|add <name> <url>|remove <name>>",
       "restart_note": "restart to load it",
-      "search_usage": "plugin search <query> [category]",
+      "search_usage": "plugin search <query> [category] [--page <n>]",
       "template": {
         "llm_backend": "Chat-completions transport for a model provider",
         "mail_source": "Streams normalized messages into the pipeline",
@@ -305,7 +307,7 @@
       "uninstall_usage": "plugin uninstall <plugin_id>",
       "uninstalled_ok": "Uninstalled {plugin_id}",
       "unknown_plugin": "Plugin {plugin_id} is not loaded or installed",
-      "usage": "plugin <list|show <plugin_id>|repo <list|add <name> <url>|remove <name>>|market <list [category]|show <id>|search <query> [category]>|install|uninstall|enable|disable <id>>"
+      "usage": "plugin <list [--page <n>]|show <plugin_id>|repo <list [--page <n>]|add <name> <url>|remove <name>>|market <list [category] [--page <n>]|show <id>|search <query> [category] [--page <n>]>|install|uninstall|enable|disable <id>>"
     },
     "reply": {
       "cancelled": "Draft {draft_id} cancelled",
@@ -819,6 +821,7 @@
       "reason_important_sender": "sender is on the important-senders list"
     },
     "chat": {
+      "page": "Part {current}/{total}",
       "namespace_hint": "No command named \"{command}\". MailFlow commands all start with {prefix}mailflow — send \"{prefix}mailflow help\" for the full list.",
       "needs_context": "Please use this command inside a group chat or a direct message.",
       "not_admin": "This command requires administrator rights. Contact the bot administrator.",
@@ -833,6 +836,7 @@
       "hourly_off": "Hourly mail briefing disabled for this chat.",
       "hourly_status_on": "Hourly mail briefing is ON for this chat.",
       "hourly_status_off": "Hourly mail briefing is OFF for this chat.",
+      "command_error": "Command not completed",
       "error_reply": "The command failed with an internal error. Check the MailFlow logs for details.",
       "example_mail": "【MailFlow · New important mail】\n[{urgency}] {subject}\nFrom: {sender}\n{summary}",
       "example_ad": "【MailFlow · Ordinary mail】\n[{urgency}] {subject}\nFrom: {sender}\nOrdinary mail is delivered as well and is not filtered out; send feedback if a category is incorrect.",
@@ -843,9 +847,9 @@
       "example_ad_subject": "Weekly newsletter",
       "example_action": "Submit assignment 2",
       "manual_intro": "【MailFlow · Help】\nAll commands start with {prefix}mailflow, abbreviated to {prefix} below.\n{cmd_help} show this help\n{cmd_example} view notification samples\n{cmd_status} show bot status\nCommands are grouped into five categories: mail, reply, schedule, subscription and system.",
-      "manual_mail": "【MailFlow · Mail】\n{cmd_list}\n  list recent mail; add --query <keyword> to filter by subject or body\n{cmd_show}\n  show a mail's summary, sender and attachments\n{cmd_urgency}\n  set the level manually: info ordinary / important significant / critical urgent\n{cmd_delete}\n  move a mail to the trash; it can be restored at any time\n{cmd_feedback}\n  reject a mail and state the reason, e.g. {ex_feedback}\n  similar mail will be classified correctly afterwards",
-      "manual_reply": "【MailFlow · Reply】\nA reply is sent in three steps; the final step requires a confirmation code to prevent accidental sends:\n{cmd_create}  step 1: create the draft\n{cmd_prepare}  step 2: issue a 6-digit code, valid for 10 minutes\n{cmd_confirm}  step 3: send the code back to dispatch the mail\n{cmd_cancel}  cancel the reply\nExample:\n{ex_flow}",
-      "manual_action": "【MailFlow · Schedule】\n{cmd_add}\n  create an entry; reminders are sent automatically before the due time\n  e.g. {ex_add}\n{cmd_list}  list all entries by due date\n{cmd_done}  mark an entry as completed\nDeadlines, meetings and payments found in mail are recorded into the schedule automatically",
+      "manual_mail": "【MailFlow · Mail】\n{cmd_list}\n  list recent mail; add --query <keyword> to filter by subject or body\n{cmd_show}\n  show a mail's summary, sender and attachments\n{cmd_urgency}\n  set a manual level: ad / info / important / urgent; auto restores the automatic result\n{cmd_delete}\n  move a mail to the trash; it can be restored at any time\n{cmd_feedback}\n  reject a mail and state the reason, e.g. {ex_feedback}\n  similar mail will be classified correctly afterwards",
+      "manual_reply": "【MailFlow · Reply】\nA reply is sent in three steps; the final step requires a confirmation code to prevent accidental sends:\n{cmd_create}  step 1: create the draft\n{cmd_prepare}  step 2: issue a confirmation token, valid for 10 minutes\n{cmd_confirm}  step 3: send the token back to dispatch the mail\n{cmd_cancel}  cancel the reply\nExample:\n{ex_flow}",
+      "manual_action": "【MailFlow · Schedule】\n{cmd_add}\n  create an entry; reminders are sent automatically before the due time\n  e.g. {ex_add}\n{cmd_list}  list all entries by due date\n{cmd_done}  delete a manually created entry\nMail-derived entries follow their source mail and cannot be deleted separately",
       "manual_bot": "【MailFlow · Subscription】\n{cmd_sub}  receive new-mail pushes in the current chat\n{cmd_unsub}  cancel pushes to the current chat\n{cmd_status}  show push status and subscriber count\n{cmd_example}  view notification samples\nThese operations require administrator rights",
       "manual_system": "【MailFlow · System】\n{cmd_lang}  switch the interface language (English / Chinese)\n{cmd_runtime}  show the status of mail polling and analysis\n{cmd_trash}  browse the trash; mails can be restored from it\nMail accounts, AI models and plugins are managed in the TUI",
       "example_intro": "【MailFlow · Notification samples】\nThe style of each notification type. Send \"{prefix}mailflow subscribe\" to start receiving.",
@@ -869,7 +873,6 @@
       "push": "【Schedule reminder】\"{summary}\" is due ({due})",
       "digest_push": "【Daily schedule】{today} today / {total} upcoming:",
       "digest_item": "{index}. {summary} ({due})"
-    },
-    "truncated_marker": "…(truncated)"
+    }
   }
 }

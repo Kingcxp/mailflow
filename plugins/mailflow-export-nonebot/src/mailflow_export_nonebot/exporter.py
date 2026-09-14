@@ -66,25 +66,6 @@ driver = get_driver()
 _service: Any = None
 _router: Any = None
 
-_PAGE_CHARS = 3500
-_PAGE_ROWS = 10
-
-
-def _chunk(text: str, limit: int = _PAGE_CHARS) -> list[str]:
-    """Split a reply into messages that stay under ``limit`` characters,
-    preferring line boundaries (each row is one chat-friendly line)."""
-    lines = text.splitlines() or [""]
-    chunks: list[str] = []
-    current = ""
-    for line in lines:
-        if current and len(current) + len(line) + 1 > limit:
-            chunks.append(current)
-            current = line
-        else:
-            current = f"{current}\\n{line}" if current else line
-    if current:
-        chunks.append(current)
-    return chunks
 
 
 @driver.on_startup
@@ -130,8 +111,10 @@ async def _handle_mailflow(event: Any) -> None:
     else:
         return
     response = await _router.execute(line)
-    for chunk in _chunk(response.text):
-        await _mailflow_matcher.send(chunk)
+    reply = response.text if response.ok else _service.t("chat.command_error") + chr(10) + response.text
+    pages = _service.chat_reply_chunks(reply)
+    for page in pages if isinstance(pages, list) else [pages]:
+        await _mailflow_matcher.send(page)
 
 
 async def _send_digest(event: str, **payload: Any) -> None:

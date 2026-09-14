@@ -14,10 +14,10 @@ import io
 import logging
 import re
 import shlex
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sized
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
 from mailflow import __version__
@@ -100,13 +100,13 @@ def _page_number(flags: dict[str, str]) -> int:
         return 1
 
 
-def _paginate(items: list[Any], page: int) -> tuple[list[Any], int]:
-    """Return (page slice, total pages) for 1-based ``page``."""
+def _paginate(items: list[Any], page: int) -> tuple[list[Any], int, int]:
+    """Return the slice, page count, and clamped 1-based page number."""
     total = len(items)
     pages = max(1, -(-total // _PAGE_SIZE))
     page = min(max(1, page), pages)
     start = (page - 1) * _PAGE_SIZE
-    return items[start : start + _PAGE_SIZE], pages
+    return items[start : start + _PAGE_SIZE], pages, page
 
 
 _SPAN_OPEN = re.compile(r"<span\b[^>]*?\bstyle\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))[^>]*>")
@@ -280,7 +280,7 @@ class CommandRouter:
         try:
             parts = shlex.split(line)
         except ValueError as exc:
-            return self._err(f"parse error: {exc}")
+            return self._err(self._t("command.parse_error", reason=str(exc)))
         if not parts:
             return CommandResponse.plain("")
         command, *args = parts
@@ -312,7 +312,7 @@ class CommandRouter:
         positionals, flags = _split_flags(args)
         if not positionals:
             page = _page_number(flags)
-            topics, pages = _paginate(list(_TOPICS), page)
+            topics, pages, page = _paginate(list(_TOPICS), page)
             spans: list[StyleSpan] = [
                 StyleSpan(text=self._t("command.help.title"), style=_STYLE_TITLE),
                 StyleSpan(text="\n" + self._t("command.help.intro"), style=_STYLE_MUTED),
@@ -322,8 +322,8 @@ class CommandRouter:
                 ),
             ]
             for topic in topics:
-                spans.append(StyleSpan(text=f"  {topic:<10}", style=_STYLE_USAGE))
-                spans.append(StyleSpan(text=f"{self._topic_line(topic)}\n", style=_STYLE_MUTED))
+                spans.append(StyleSpan(text=f"\n• {topic}", style=_STYLE_USAGE))
+                spans.append(StyleSpan(text=f"\n  {self._topic_line(topic)}", style=_STYLE_MUTED))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         topic = positionals[0]
         if topic not in self._handlers:
@@ -401,7 +401,7 @@ class CommandRouter:
             # search the body too — users remember phrases from the mail
             # text, not just the subject line
             records = [record for record in records if self._matches_query(record, query)]
-        page_records, pages = _paginate(records, page)
+        page_records, pages, page = _paginate(records, page)
         spans: list[StyleSpan] = [
             StyleSpan(
                 text=self._t("mail.list_title", count=len(records)) + f" — {page}/{pages}",
@@ -735,10 +735,13 @@ class CommandRouter:
         return self._err(self._t("action.usage"))
 
     async def _action_list(self, args: list[str] | None = None) -> CommandResponse:
-        _, flags = _split_flags(args or [])
+        positionals, flags = _split_flags(args or [])
         page = _page_number(flags)
+        if positionals:
+            with contextlib.suppress(ValueError):
+                page = int(positionals[0])
         items = await self.service.list_actions()
-        page_items, pages = _paginate(items, page)
+        page_items, pages, page = _paginate(items, page)
         spans: list[StyleSpan] = [
             StyleSpan(
                 text=self._t("action.title", count=len(items)) + f" — {page}/{pages}",
@@ -858,17 +861,24 @@ class CommandRouter:
 
     async def _cmd_plugin_repo(self, args: list[str]) -> CommandResponse:
         if not args or args[0] == "list":
-            repos = self.service.config.plugins.repositories
+            positionals, flags = _split_flags(args[1:])
+            page = _page_number(flags)
+            if positionals:
+                with contextlib.suppress(ValueError):
+                    page = int(positionals[0])
+            repos, pages, page = _paginate(list(self.service.config.plugins.repositories), page)
             spans = [
-                StyleSpan(text=self._t("plugin.repo_title", count=len(repos)), style=_STYLE_TITLE),
                 StyleSpan(
-                    text=f"\n{self._t('plugin.header_name'):<24} {'URL'}\n",
-                    style=_STYLE_HEADER,
+                    text=self._t(
+                        "plugin.repo_title", count=len(self.service.config.plugins.repositories)
+                    )
+                    + f" — {page}/{pages}",
+                    style=_STYLE_TITLE,
                 ),
             ]
             for repo in repos:
-                spans.append(StyleSpan(text=f"{repo.name:<24} "))
-                spans.append(StyleSpan(text=f"{repo.url}\n", style=_STYLE_MUTED))
+                spans.append(StyleSpan(text=f"\n\n• {repo.name}", style=_STYLE_USAGE))
+                spans.append(StyleSpan(text=f"\n  {repo.url}", style=_STYLE_MUTED))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         if args[0] == "add" and len(args) == 3:
             try:
@@ -887,26 +897,34 @@ class CommandRouter:
     async def _cmd_plugin_market(self, args: list[str]) -> CommandResponse:
         market = self.service.market
         if not args or args[0] == "list":
-            category = args[1] if len(args) > 1 else ""
+            positionals, flags = _split_flags(args[1:])
+            category = positionals[0] if positionals else ""
+            page = _page_number(flags)
             entries = await asyncio.to_thread(market.list_plugins)
             if category:
-                entries = [e for e in entries if category in e[1].categories]
+                entries = [entry for entry in entries if category in entry[1].categories]
+            page_entries, pages, page = _paginate(entries, page)
             spans: list[StyleSpan] = [
                 StyleSpan(
-                    text=self._t("plugin.market_title", count=len(entries)), style=_STYLE_TITLE
+                    text=self._t("plugin.market_title", count=len(entries)) + f" — {page}/{pages}",
+                    style=_STYLE_TITLE,
                 ),
             ]
-            for index, (_repo, plugin) in enumerate(entries, start=1):
+            start_index = (page - 1) * _PAGE_SIZE + 1
+            for index, (_repo, plugin) in enumerate(page_entries, start=start_index):
                 installed = (
-                    " [installed]" if market.is_installed(plugin.id, package=plugin.package) else ""
+                    f" [{self._t('plugin.installed')}]"
+                    if market.is_installed(plugin.id, package=plugin.package)
+                    else ""
                 )
-                categories = ",".join(plugin.categories)
-                description = plugin.description_for(self.service.i18n.language)
-                spans.append(StyleSpan(text=f"\n#{index} {plugin.id} "))
-                spans.append(StyleSpan(text=f"v{plugin.version}{installed}", style=_STYLE_MUTED))
-                spans.append(
-                    StyleSpan(text=f"\n     [{categories}] {description[:56]}", style=_STYLE_MUTED)
+                categories = ", ".join(plugin.categories) or "-"
+                description = (
+                    " ".join(plugin.description_for(self.service.i18n.language).split()) or "-"
                 )
+                spans.append(StyleSpan(text=f"\n\n#{index} {plugin.id}", style=_STYLE_USAGE))
+                spans.append(StyleSpan(text=f" v{plugin.version}{installed}", style=_STYLE_MUTED))
+                spans.append(StyleSpan(text=f"\n  [{categories}]", style=_STYLE_ACCENT))
+                spans.append(StyleSpan(text=f"\n  {description}", style=_STYLE_MUTED))
             if not entries:
                 spans.append(
                     StyleSpan(text=f"\n{self._t('plugin.market_empty')}", style=_STYLE_MUTED)
@@ -949,34 +967,37 @@ class CommandRouter:
         return self._err(self._t("plugin.market_usage"))
 
     async def _cmd_plugin_search(self, args: list[str]) -> CommandResponse:
-        if not args:
+        positionals, flags = _split_flags(args)
+        if not positionals:
             return self._err(self._t("plugin.search_usage"))
-        query = args[0]
-        category = args[1] if len(args) > 1 else ""
+        query = positionals[0]
+        category = positionals[1] if len(positionals) > 1 else ""
+        page = _page_number(flags)
         entries = await asyncio.to_thread(
             self.service.market.search, query, category, self.service.i18n.language
         )
+        page_entries, pages, page = _paginate(entries, page)
         spans: list[StyleSpan] = [
             StyleSpan(
-                text=self._t("plugin.market_title", count=len(entries)) + f" — {query!r}",
+                text=self._t("plugin.market_title", count=len(entries))
+                + f" — {query!r} · {page}/{pages}",
                 style=_STYLE_TITLE,
             ),
-            StyleSpan(
-                text=f"\n{'PLUGIN':<34} {'VERSION':<10} {'CATEGORIES':<26} {'DESCRIPTION'}\n",
-                style=_STYLE_HEADER,
-            ),
         ]
-        for _repo, plugin in entries:
+        for _repo, plugin in page_entries:
             installed = (
-                " [installed]"
+                f" [{self._t('plugin.installed')}]"
                 if self.service.market.is_installed(plugin.id, package=plugin.package)
                 else ""
             )
-            description = plugin.description_for(self.service.i18n.language)
-            spans.append(StyleSpan(text=f"{plugin.id:<34} "))
-            spans.append(StyleSpan(text=f"{plugin.version:<10} ", style=_STYLE_MUTED))
-            spans.append(StyleSpan(text=f"{','.join(plugin.categories):<26} ", style=_STYLE_ACCENT))
-            spans.append(StyleSpan(text=f"{description[:40]}{installed}\n"))
+            categories = ", ".join(plugin.categories) or "-"
+            description = (
+                " ".join(plugin.description_for(self.service.i18n.language).split()) or "-"
+            )
+            spans.append(StyleSpan(text=f"\n\n• {plugin.id}", style=_STYLE_USAGE))
+            spans.append(StyleSpan(text=f" v{plugin.version}{installed}", style=_STYLE_MUTED))
+            spans.append(StyleSpan(text=f"\n  [{categories}]", style=_STYLE_ACCENT))
+            spans.append(StyleSpan(text=f"\n  {description}", style=_STYLE_MUTED))
         if not entries:
             spans.append(StyleSpan(text=f"\n{self._t('plugin.market_empty')}", style=_STYLE_MUTED))
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
@@ -1115,9 +1136,12 @@ class CommandRouter:
             return await self._cmd_plugin_disable(args[1:])
         snapshot = self.service.snapshot()
         if not args or args[0] == "list":
-            _, flags = _split_flags(args[1:])
+            positionals, flags = _split_flags(args[1:])
             page = _page_number(flags)
-            plugins, pages = _paginate(snapshot.plugins, page)
+            if positionals:
+                with contextlib.suppress(ValueError):
+                    page = int(positionals[0])
+            plugins, pages, page = _paginate(snapshot.plugins, page)
             spans = [
                 StyleSpan(
                     text=self._t("plugin.title", count=len(snapshot.plugins))
@@ -1129,10 +1153,9 @@ class CommandRouter:
                 spans.append(StyleSpan(text=f"\n{self._t('tui.empty')}", style=_STYLE_MUTED))
                 return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
             for plugin in plugins:
-                kinds = ",".join(k.value for k in plugin.kinds)
-                spans.append(StyleSpan(text=f"  {plugin.plugin_id} ({plugin.version})"))
+                kinds = ", ".join(kind.value for kind in plugin.kinds)
+                spans.append(StyleSpan(text=f"\n\n• {plugin.plugin_id} ({plugin.version})"))
                 spans.append(StyleSpan(text=f"\n  {plugin.name} · {kinds}", style=_STYLE_MUTED))
-                spans.append(StyleSpan(text="\n"))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         if args[0] == "show" and len(args) == 2:
             plugin_info = snapshot.plugin(args[1])
@@ -1150,54 +1173,78 @@ class CommandRouter:
         return self._err(self._t("plugin.usage"))
 
     async def _cmd_adapter(self, args: list[str]) -> CommandResponse:
+        list_args = args[1:] if args and args[0] == "list" else args
+        positionals, flags = _split_flags(list_args)
+        page = _page_number(flags)
+        if positionals:
+            with contextlib.suppress(ValueError):
+                page = int(positionals[0])
         components = [
-            c for c in self.service.registry.snapshots() if c.kind == ComponentKind.MAIL_SOURCE
+            component
+            for component in self.service.registry.snapshots()
+            if component.kind == ComponentKind.MAIL_SOURCE
         ]
-        spans = [
-            StyleSpan(text=self._t("adapter.title", count=len(components)), style=_STYLE_TITLE),
+        page_components, pages, page = _paginate(components, page)
+        spans: list[StyleSpan] = [
             StyleSpan(
-                text=f"\n{self._t('adapter.header_id'):<32} {self._t('adapter.header_plugin')}\n",
-                style=_STYLE_HEADER,
+                text=self._t("adapter.title", count=len(components)) + f" — {page}/{pages}",
+                style=_STYLE_TITLE,
             ),
         ]
-        for component in components:
-            spans.append(StyleSpan(text=f"{component.component_id:<32} "))
-            spans.append(StyleSpan(text=f"{component.plugin_id}\n", style=_STYLE_MUTED))
+        for component in page_components:
+            spans.append(StyleSpan(text=f"\n\n• {component.component_id}", style=_STYLE_USAGE))
+            spans.append(StyleSpan(text=f"\n  {component.plugin_id}", style=_STYLE_MUTED))
+        if not components:
+            spans.append(StyleSpan(text=f"\n{self._t('tui.empty')}", style=_STYLE_MUTED))
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
     async def _cmd_account(self, args: list[str]) -> CommandResponse:
+        list_args = args[1:] if args and args[0] == "list" else args
+        positionals, flags = _split_flags(list_args)
+        page = _page_number(flags)
+        if positionals:
+            with contextlib.suppress(ValueError):
+                page = int(positionals[0])
         snapshot = self.service.snapshot()
+        accounts, pages, page = _paginate(snapshot.accounts, page)
         spans = [
             StyleSpan(
-                text=self._t("account.title", count=len(snapshot.accounts)), style=_STYLE_TITLE
+                text=self._t("account.title", count=len(snapshot.accounts)) + f" — {page}/{pages}",
+                style=_STYLE_TITLE,
             ),
         ]
-        for account in snapshot.accounts:
+        for account in accounts:
             status_key = f"account.status_{account.status}"
             status_text = (
                 self._t(status_key)
                 if status_key in self.service.i18n.keys(self.service.i18n.language)
                 else account.status
             )
-            # one "id — status" line plus a muted detail line: fixed-width
-            # columns collide on CJK display widths, and chat transports
-            # rewrap them into unreadable rows
             color = _STYLE_ERROR if account.status == "error" else _STYLE_OK
-            spans.append(StyleSpan(text=f"\n● {account.account_id} "))
-            spans.append(StyleSpan(text=f"{status_text}\n", style=color))
+            spans.append(StyleSpan(text=f"\n\n● {account.account_id} "))
+            spans.append(StyleSpan(text=status_text, style=color))
             spans.append(
-                StyleSpan(text=f"     {account.email} · {account.provider}", style=_STYLE_MUTED)
+                StyleSpan(text=f"\n  {account.email} · {account.provider}", style=_STYLE_MUTED)
             )
+        if not snapshot.accounts:
+            spans.append(StyleSpan(text=f"\n{self._t('tui.empty')}", style=_STYLE_MUTED))
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
     async def _cmd_llm(self, args: list[str]) -> CommandResponse:
         snapshot = self.service.snapshot()
         if args and args[0] == "bindings":
+            positionals, flags = _split_flags(args[1:])
+            page = _page_number(flags)
+            if positionals:
+                with contextlib.suppress(ValueError):
+                    page = int(positionals[0])
+            bindings, pages, page = _paginate(snapshot.processors, page)
             spans = [
-                StyleSpan(text=self._t("llm.bindings_title"), style=_STYLE_TITLE),
-                StyleSpan(text="\n"),
+                StyleSpan(
+                    text=self._t("llm.bindings_title") + f" — {page}/{pages}", style=_STYLE_TITLE
+                ),
             ]
-            for binding in snapshot.processors:
+            for binding in bindings:
                 if binding.llm_id:
                     fallback = ", ".join(binding.fallback_llm_ids) or "-"
                     text = self._t(
@@ -1208,23 +1255,36 @@ class CommandRouter:
                     )
                 else:
                     text = self._t("llm.binding_none", processor=binding.processor_id)
-                spans.append(StyleSpan(text=f"  {text}\n"))
+                spans.append(StyleSpan(text=f"\n\n• {text}", style=_STYLE_MUTED))
+            if not snapshot.processors:
+                spans.append(StyleSpan(text=f"\n{self._t('tui.empty')}", style=_STYLE_MUTED))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        list_args = args[1:] if args and args[0] == "list" else args
+        positionals, flags = _split_flags(list_args)
+        page = _page_number(flags)
+        if positionals:
+            with contextlib.suppress(ValueError):
+                page = int(positionals[0])
+        llms, pages, page = _paginate(snapshot.llms, page)
         spans = [
-            StyleSpan(text=self._t("llm.title", count=len(snapshot.llms)), style=_STYLE_TITLE),
+            StyleSpan(
+                text=self._t("llm.title", count=len(snapshot.llms)) + f" — {page}/{pages}",
+                style=_STYLE_TITLE,
+            ),
         ]
-        for llm in snapshot.llms:
+        for llm in llms:
             default_mark = self._t("common.yes") if llm.default else ""
             display = llm.name or llm.llm_id
-            spans.append(StyleSpan(text=f"\n● {display}"))
+            spans.append(StyleSpan(text=f"\n\n● {display}"))
             if default_mark:
                 spans.append(StyleSpan(text=f" ({default_mark})", style=_STYLE_ACCENT))
             spans.append(
                 StyleSpan(
-                    text=f"\n     {llm.llm_id} · {llm.backend} · {llm.model}",
-                    style=_STYLE_MUTED,
+                    text=f"\n  {llm.llm_id} · {llm.backend} · {llm.model}", style=_STYLE_MUTED
                 )
             )
+        if not snapshot.llms:
+            spans.append(StyleSpan(text=f"\n{self._t('tui.empty')}", style=_STYLE_MUTED))
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
     # -- reply --------------------------------------------------------------------------------------
@@ -1233,14 +1293,20 @@ class CommandRouter:
         if not args:
             return self._err(self._t("reply.usage"))
         sub, rest = args[0], args[1:]
-        if sub == "create" and rest:
-            draft = await self.service.create_reply(rest[0])
+        if sub == "create" and len(rest) == 1:
+            record = await self._find_mail(rest[0])
+            if record is None:
+                return self._err(self._t("mail.not_found", mail_id=rest[0]))
+            draft = await self.service.create_reply(record.record_id)
             return self._ok(self._t("reply.created", draft_id=draft.draft_id, mail_id=rest[0]))
         if sub == "compose" and len(rest) == 2:
             language = rest[1].lower()
             if language not in LETTER_LANGUAGES:
                 return self._err(self._t("reply.template_unknown", language=rest[1]))
-            draft = await self.service.create_letter_draft(rest[0], language)
+            record = await self._find_mail(rest[0])
+            if record is None:
+                return self._err(self._t("mail.not_found", mail_id=rest[0]))
+            draft = await self.service.create_letter_draft(record.record_id, language)
             return self._ok(
                 self._t(
                     "reply.composed",
@@ -1427,7 +1493,7 @@ class CommandRouter:
             if positionals:
                 with contextlib.suppress(ValueError):
                     page = int(positionals[0])
-            page_items, pages = _paginate(items, page)
+            page_items, pages, page = _paginate(items, page)
             spans = [
                 StyleSpan(
                     text=self._t("mail.trash_title", count=len(items)) + f" — {page}/{pages}",
@@ -1489,54 +1555,51 @@ class CommandRouter:
 
     async def _cmd_config(self, args: list[str]) -> CommandResponse:
         if not args or args[0] == "list":
-            group = args[1] if len(args) > 1 else ""
+            positionals, _ = _split_flags(args[1:])
+            group = positionals[0] if positionals else ""
             options = self.service.list_config_options()
             if group:
-                options = [o for o in options if o.group == group]
+                options = [option for option in options if option.group == group]
             spans: list[StyleSpan] = [
-                StyleSpan(text=self._t("config.title", count=len(options)), style=_STYLE_TITLE),
                 StyleSpan(
-                    text=f"\n{'OPTION':<32} {'TYPE':<18} {'REQ':<5} {'VALUE':<22} {'DESCRIPTION'}\n",
-                    style=_STYLE_HEADER,
+                    text=self._t("config.title", count=len(options)),
+                    style=_STYLE_TITLE,
                 ),
             ]
             for option in options:
                 key = option.key + ("*" if option.is_secret() else "")
                 value = option.value
-                if value is None:
+                if option.is_secret():
+                    value_text = "***"
+                elif value is None:
                     value_text = "-"
                 elif isinstance(value, bool):
-                    value_text = "true" if value else "false"
+                    value_text = str(value).lower()
                 elif isinstance(value, (str, int, float)):
-                    value_text = str(value)[:20]
+                    value_text = str(value)
                 elif isinstance(value, (list, dict)):
-                    value_text = f"{len(value)} items"  # pyright: ignore[reportUnknownArgumentType]
+                    value_text = self._t("config.collection", count=len(cast(Sized, value)))
                 else:
-                    value_text = "..."  # nested model
-                required = self._t("common.yes") if option.required else ""
-                spans.append(StyleSpan(text=f"{key:<32} "))
-                spans.append(StyleSpan(text=f"{option.type_name:<18} ", style=_STYLE_MUTED))
-                spans.append(
-                    StyleSpan(
-                        text=f"{required:<5} ", style=_STYLE_ACCENT if option.required else ""
-                    )
-                )
-                spans.append(StyleSpan(text=f"{value_text:<22} "))
-                spans.append(StyleSpan(text=f"{option.description}\n"))
-            spans.append(
-                StyleSpan(
-                    text=f"\n{self._t('config.legend')}",
-                    style=_STYLE_MUTED,
-                )
-            )
+                    value_text = "…"
+                metadata = [
+                    f"{self._t('config.type')}: {option.type_name}",
+                    f"{self._t('config.value')}: {value_text}",
+                ]
+                if option.required:
+                    metadata.append(f"{self._t('config.required')}: {self._t('common.yes')}")
+                spans.append(StyleSpan(text=f"\n\n• {key}", style=_STYLE_USAGE))
+                spans.append(StyleSpan(text=f"\n  {' · '.join(metadata)}", style=_STYLE_MUTED))
+                spans.append(StyleSpan(text=f"\n  {option.description}"))
+            spans.append(StyleSpan(text=f"\n\n{self._t('config.legend')}", style=_STYLE_MUTED))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         if args[0] == "get" and len(args) == 2:
             try:
                 option = self.service.get_config_option(args[1])
             except KeyError as exc:
                 return self._err(str(exc))
-            secret_marker = " (secret)" if option.is_secret() else ""
-            return self._ok(f"{option.key}{secret_marker} = {option.value}")
+            marker = "*" if option.is_secret() else ""
+            value = "***" if option.is_secret() else option.value
+            return self._ok(f"{option.key}{marker} = {value}")
         if args[0] == "set" and len(args) == 3:
             try:
                 option = await self.service.set_config_value(args[1], args[2])
@@ -1559,15 +1622,16 @@ class CommandRouter:
         spans = [
             StyleSpan(text=self._t("runtime.title"), style=_STYLE_TITLE),
             StyleSpan(
-                text=f"\n{self._t('runtime.version', version=snapshot.version)} | "
-                f"{self._t('runtime.started', when=self._fmt_time(snapshot.started_at))}",
+                text=f"\n{self._t('runtime.version', version=snapshot.version)}",
                 style=_STYLE_MUTED,
             ),
             StyleSpan(
-                text=f"\n{self._t('runtime.language', language=snapshot.language)} | "
-                f"{self._t('runtime.timezone', timezone=snapshot.timezone)} | "
-                f"{self._t('runtime.storage', provider=snapshot.storage or '-')}"
+                text=f"\n{self._t('runtime.started', when=self._fmt_time(snapshot.started_at))}",
+                style=_STYLE_MUTED,
             ),
+            StyleSpan(text=f"\n{self._t('runtime.language', language=snapshot.language)}"),
+            StyleSpan(text=f"\n{self._t('runtime.timezone', timezone=snapshot.timezone)}"),
+            StyleSpan(text=f"\n{self._t('runtime.storage', provider=snapshot.storage or '-')}"),
         ]
         for section, rows in (
             ("plugin", [(p.plugin_id, p.name) for p in snapshot.plugins]),

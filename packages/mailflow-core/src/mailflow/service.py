@@ -91,6 +91,77 @@ _REPLY_TOKEN_TTL = timedelta(minutes=10)
 _LIVE_GROUPS = frozenset({"accounts", "llms", "processors", "notifiers"})
 """Config groups whose changes hot-apply to the running runtime."""
 
+_CHAT_REPLY_MAX_UTF8_BYTES = 1_600
+_CHAT_REPLY_MAX_UTF16_UNITS = 1_600
+
+
+def _text_size(text: str) -> tuple[int, int]:
+    """Return UTF-8 bytes and UTF-16 code units without allocating encodings."""
+    utf8_bytes = 0
+    utf16_units = 0
+    for char in text:
+        codepoint = ord(char)
+        utf8_bytes += (
+            1 if codepoint <= 0x7F else 2 if codepoint <= 0x7FF else 3 if codepoint <= 0xFFFF else 4
+        )
+        utf16_units += 1 if codepoint <= 0xFFFF else 2
+    return utf8_bytes, utf16_units
+
+
+def _split_chat_text(
+    text: str,
+    *,
+    max_utf8_bytes: int = _CHAT_REPLY_MAX_UTF8_BYTES,
+    max_utf16_units: int = _CHAT_REPLY_MAX_UTF16_UNITS,
+) -> list[str]:
+    """Split text at a whitespace boundary without dropping any content.
+
+    Chat APIs disagree about whether their ceiling is bytes, code points, or
+    UTF-16 units.  Staying under both conservative ceilings makes the bridge
+    response portable; an oversized response is delivered as ordered pages,
+    never silently clipped by a provider.
+    """
+    if not text:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    length = len(text)
+    while start < length:
+        end = start
+        last_boundary = start
+        utf8_bytes = 0
+        utf16_units = 0
+        while end < length:
+            codepoint = ord(text[end])
+            byte_cost = (
+                1
+                if codepoint <= 0x7F
+                else 2
+                if codepoint <= 0x7FF
+                else 3
+                if codepoint <= 0xFFFF
+                else 4
+            )
+            unit_cost = 1 if codepoint <= 0xFFFF else 2
+            if utf8_bytes + byte_cost > max_utf8_bytes or utf16_units + unit_cost > max_utf16_units:
+                break
+            utf8_bytes += byte_cost
+            utf16_units += unit_cost
+            end += 1
+            if text[end - 1].isspace():
+                last_boundary = end
+        if end == length:
+            chunks.append(text[start:end])
+            break
+        # Prefer a complete word/line, but a long unbroken URL or token still
+        # has to move forward rather than being truncated or looping forever.
+        if end == start:
+            end += 1
+        split_at = last_boundary if last_boundary > start else end
+        chunks.append(text[start:split_at])
+        start = split_at
+    return chunks
+
 
 def _extract_json_typed(
     text: str, expect: type[list[Any]] | type[dict[str, Any]]
@@ -1605,6 +1676,50 @@ Return [] only after evaluating every candidate in this batch."""
         """Configured command prefix for chat-platform messages."""
         return self.config.general.command_prefix
 
+    def chat_reply_chunks(self, reply: str | list[str] | None) -> str | list[str] | None:
+        """Fit a command reply into portable chat-message pages.
+
+        Existing sectioned replies (the chat manual and notification samples)
+        retain their semantic sections. A single long reply gains a localized
+        page indicator so an ordered sequence remains intelligible in a busy
+        group chat.
+        """
+        if reply is None:
+            return None
+        if isinstance(reply, list):
+            chunks: list[str] = []
+            for section in reply:
+                chunks.extend(_split_chat_text(section))
+            return chunks
+        chunks = _split_chat_text(reply)
+        if len(chunks) <= 1:
+            return reply
+        # The page label counts towards the provider limit. Re-split until
+        # adding it cannot create another body page (at most a few passes as
+        # the total's decimal width grows).
+        while True:
+            total = len(chunks)
+            fitted: list[str] = []
+            for index, chunk in enumerate(chunks, start=1):
+                label = self.t("chat.page", current=index, total=total)
+                label_bytes, label_units = _text_size(label + "\n")
+                fitted.extend(
+                    _split_chat_text(
+                        chunk,
+                        max_utf8_bytes=_CHAT_REPLY_MAX_UTF8_BYTES - label_bytes,
+                        max_utf16_units=_CHAT_REPLY_MAX_UTF16_UNITS - label_units,
+                    )
+                )
+            if len(fitted) == total:
+                chunks = fitted
+                break
+            chunks = fitted
+        total = len(chunks)
+        return [
+            f"{self.t('chat.page', current=index, total=total)}\n{chunk}"
+            for index, chunk in enumerate(chunks, start=1)
+        ]
+
     async def command_dispatch(
         self,
         text: str,
@@ -1766,8 +1881,8 @@ Return [] only after evaluating every candidate in this batch."""
         if self.commands is None:
             return self.t("chat.router_missing")
         response = await self.commands.execute(args)
-        rendered: Any = response.render()
-        return str(rendered)
+        rendered = str(response.render())
+        return rendered if response.ok else f"{self.t('chat.command_error')}\n{rendered}"
 
     def _chat_help(self, prefix: str) -> list[str]:
         """The chat user manual: one forward-node-sized section per topic,
@@ -1776,7 +1891,6 @@ Return [] only after evaluating every candidate in this batch."""
         bubbles wrap long prose badly, so every command is a usage line
         plus one short explanation."""
         p = f"{prefix}mailflow"
-        m = self.t("chat.arg_mail")
         d = self.t("chat.arg_draft")
         item = self.t("chat.arg_item")
         reason = self.t("chat.arg_reason")
@@ -1792,23 +1906,23 @@ Return [] only after evaluating every candidate in this batch."""
                 "chat.manual_mail",
                 prefix=prefix,
                 cmd_list=f"{p} mail list",
-                cmd_show=f"{p} mail show <{m}>",
-                cmd_urgency=f"{p} mail urgency <{m}> <info|important|critical>",
-                cmd_delete=f"{p} mail delete <{m}>",
-                cmd_feedback=f"{p} feedback <{m}> <{reason}>",
-                ex_show=f"{p} mail show a1b2c3",
-                ex_urgency=f"{p} mail urgency a1b2c3 critical",
-                ex_feedback=f"{p} feedback a1b2c3 …",
+                cmd_show=f"{p} mail show <#>",
+                cmd_urgency=f"{p} mail urgency <#> <ad|info|important|urgent|auto>",
+                cmd_delete=f"{p} mail delete <#>",
+                cmd_feedback=f"{p} feedback <#> <{reason}>",
+                ex_show=f"{p} mail show #1",
+                ex_urgency=f"{p} mail urgency #1 urgent",
+                ex_feedback=f"{p} feedback #1 …",
             ),
             self.t(
                 "chat.manual_reply",
                 prefix=prefix,
-                cmd_create=f"{p} reply create <{m}>",
+                cmd_create=f"{p} reply create <#>",
                 cmd_prepare=f"{p} reply prepare <{d}>",
                 cmd_confirm=f"{p} reply confirm <{d}> <token>",
                 cmd_cancel=f"{p} reply cancel <{d}>",
                 ex_flow=(
-                    f"{p} reply create a1b2c3\n"
+                    f"{p} reply create #1\n"
                     f"{p} reply prepare d4e5f6\n"
                     f"{p} reply confirm d4e5f6 123456"
                 ),
@@ -1818,7 +1932,7 @@ Return [] only after evaluating every candidate in this batch."""
                 prefix=prefix,
                 cmd_add=f'{p} action add <{self.t("chat.arg_summary")}> --due "{self.t("chat.arg_due")}" [--type …] [--notes …]',
                 cmd_list=f"{p} action list",
-                cmd_done=f"{p} action done <{item}>",
+                cmd_done=f"{p} action delete <{item}>",
                 ex_add=f'{p} action add … --due "2026-09-12 23:59"',
             ),
             self.t(

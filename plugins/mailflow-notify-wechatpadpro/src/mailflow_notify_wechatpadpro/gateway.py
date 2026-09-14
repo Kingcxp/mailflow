@@ -36,6 +36,7 @@ import shutil
 import socket
 import subprocess
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -584,18 +585,31 @@ volumes:
 
 
 class _WebhookBridge:
-    """In-process HTTP listener the WeChatPadPro gateway POSTs message
-    events to; each text message is forwarded to ``bot_url``
-    (``mailflow.bot_server``) and the reply is ACKed (the gateway does
-    not send it back — replies go out through the notifier's /Msg/SendTxt).
+    """Forward incoming WeChat messages and return command replies.
+
+    The gateway only sends webhook events; unlike OneBot, it has no quick
+    response payload. The bridge therefore ACKs the webhook first, dispatches
+    in a tracked background task, and delivers each BotServer reply page with
+    ``/Msg/SendTxt``.
     """
 
-    def __init__(self, instance_id: str, port: int, bot_url: str, secret: str) -> None:
+    def __init__(
+        self,
+        instance_id: str,
+        port: int,
+        bot_url: str,
+        secret: str,
+        gateway_url: str = "",
+        key_supplier: Callable[[], Awaitable[str]] | None = None,
+    ) -> None:
         self.instance_id = instance_id
         self.port = port
         self.bot_url = bot_url
         self.secret = secret
+        self._gateway_url = gateway_url.rstrip("/")
+        self._key_supplier = key_supplier
         self._server: asyncio.AbstractServer | None = None
+        self._pending_forwards: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle, "127.0.0.1", self.port)
@@ -606,9 +620,23 @@ class _WebhookBridge:
             with contextlib.suppress(Exception):
                 await self._server.wait_closed()
             self._server = None
+        pending = list(self._pending_forwards)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._pending_forwards.clear()
+
+    def _queue_forward(self, payload: dict[str, Any]) -> None:
+        task = asyncio.create_task(
+            self._forward(payload), name=f"wechatpadpro-forward-{self.instance_id}"
+        )
+        self._pending_forwards.add(task)
+        task.add_done_callback(self._pending_forwards.discard)
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         status = 200
+        forward_payload: dict[str, Any] | None = None
         try:
             request_line = await asyncio.wait_for(reader.readline(), timeout=15.0)
             parts = request_line.decode("utf-8", "replace").strip().split()
@@ -627,18 +655,11 @@ class _WebhookBridge:
                 if content_length
                 else b""
             )
-            if parts and parts[0] == "POST":
-                try:
-                    payload = json.loads(body.decode("utf-8", "replace") or "{}")
-                    await self._forward(payload)
-                except Exception as exc:
-                    logger.warning(
-                        "wechatpadpro %s webhook payload failed: %s",
-                        self.instance_id,
-                        exc,
-                    )
-                    status = 400
-        except (TimeoutError, asyncio.IncompleteReadError, ValueError) as exc:
+            if not parts or parts[0] != "POST":
+                status = 404
+            else:
+                forward_payload = cast_dict(json.loads(body.decode("utf-8", "replace") or "{}"))
+        except (TimeoutError, asyncio.IncompleteReadError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("wechatpadpro %s webhook request rejected: %s", self.instance_id, exc)
             status = 400
         except Exception as exc:
@@ -647,6 +668,8 @@ class _WebhookBridge:
         finally:
             with contextlib.suppress(Exception):
                 await self._ack(writer, status)
+            if forward_payload is not None:
+                self._queue_forward(forward_payload)
             with contextlib.suppress(Exception):
                 writer.close()
 
@@ -657,15 +680,15 @@ class _WebhookBridge:
         from_user = str(data.get("FromUserName") or "")
         content = str(data.get("Content") or "")
         push_type: Any = data.get("MsgType")
-        # group messages arrive as "wxid:\ncontent" — strip the sender prefix
+        # Group messages arrive as "wxid:\ncontent" — strip the sender prefix.
         if ":@" in from_user or (from_user.endswith("@chatroom") and ":\n" in content):
             _, _, content = content.partition(":\n")
         if not content or push_type not in (None, 1, "1"):
             return
         chat_type = "group" if from_user.endswith("@chatroom") else "private"
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             try:
-                await client.post(
+                response = await client.post(
                     self.bot_url,
                     json={
                         "text": content,
@@ -676,12 +699,78 @@ class _WebhookBridge:
                         "instance_id": self.instance_id,
                     },
                 )
+                if response.status_code >= 400:
+                    logger.warning(
+                        "wechatpadpro %s bot_server rejected a command: HTTP %d",
+                        self.instance_id,
+                        response.status_code,
+                    )
+                    return
+                response_payload = cast_dict(response.json())
             except Exception as exc:
                 logger.warning(
                     "wechatpadpro %s dispatch to bot_server failed: %s",
                     self.instance_id,
                     exc,
                 )
+                return
+            raw_reply = response_payload.get("reply")
+            replies: list[Any] = (
+                cast(list[Any], raw_reply) if isinstance(raw_reply, list) else [raw_reply]
+            )
+            pages: list[str] = [
+                reply for reply in replies if isinstance(reply, str) and reply.strip()
+            ]
+            if not pages:
+                return
+            key = await self._reply_key()
+            if not key:
+                return
+            logger.info(
+                "wechatpadpro %s: replying to %s (%d page(s))",
+                self.instance_id,
+                from_user,
+                len(pages),
+            )
+            for page in pages:
+                await self._send_reply(client, from_user, page, key)
+
+    async def _reply_key(self) -> str:
+        if not self._gateway_url or self._key_supplier is None:
+            logger.warning(
+                "wechatpadpro %s cannot reply: gateway sender is unavailable", self.instance_id
+            )
+            return ""
+        try:
+            key = await self._key_supplier()
+        except Exception as exc:
+            logger.warning("wechatpadpro %s cannot load reply auth key: %s", self.instance_id, exc)
+            return ""
+        if not key:
+            logger.warning(
+                "wechatpadpro %s cannot reply: auth key is unavailable", self.instance_id
+            )
+        return key
+
+    async def _send_reply(
+        self, client: httpx.AsyncClient, to_wxid: str, text: str, key: str
+    ) -> None:
+        try:
+            response = await client.post(
+                f"{self._gateway_url}/Msg/SendTxt",
+                params={"key": key},
+                json={"Wxid": "", "ToWxid": to_wxid, "Content": text, "Type": 0},
+            )
+            response_payload = cast_dict(response.json())
+            if response.status_code >= 400 or response_payload.get("Code") not in (0, "0", None):
+                logger.warning(
+                    "wechatpadpro %s reply to %s rejected: HTTP %d",
+                    self.instance_id,
+                    to_wxid,
+                    response.status_code,
+                )
+        except Exception as exc:
+            logger.warning("wechatpadpro %s reply to %s failed: %s", self.instance_id, to_wxid, exc)
 
     async def _ack(self, writer: asyncio.StreamWriter, status: int) -> None:
         body = b'{"code": "200", "message": "success"}'
@@ -1091,7 +1180,7 @@ class WechatPadProProvisioner:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
                 f"{endpoint}/admin/GenAuthKey1",
-                params={"key": meta["admin_key"]},
+                params={"key": str(meta.get("admin_key") or "")},
                 json={"Count": 1, "Days": 3650},
             )
             payload = cast_dict(response.json())
@@ -1105,6 +1194,11 @@ class WechatPadProProvisioner:
         if key:
             self._save_meta(instance_id, {**meta, "auth_api_key": key})
         return key
+
+    async def _bridge_auth_key(self, instance_id: str) -> str:
+        """Load the current managed key at send time, including post-QR login."""
+        meta = self._meta(instance_id)
+        return await self._auth_key(instance_id, meta) if meta is not None else ""
 
     async def _ensure_bridge(self, instance_id: str, options: dict[str, Any]) -> None:
         existing = self._bridges.get(instance_id)
@@ -1127,6 +1221,8 @@ class WechatPadProProvisioner:
             self._webhook_port(instance_id),
             bot_url,
             str(meta.get("webhook_secret") or ""),
+            self._endpoint(instance_id),
+            lambda: self._bridge_auth_key(instance_id),
         )
         await bridge.start()
         self._bridges[instance_id] = bridge

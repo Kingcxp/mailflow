@@ -116,10 +116,146 @@ async def test_webhook_bridge_waits_for_entire_declared_body(
     reader.feed_data(body[9:])
     reader.feed_eof()
     await task
+    await asyncio.sleep(0)
 
     assert forwarded == [{"Data": {"Content": "mailflow help", "MsgType": 1}}]
     assert bytes(writer.payload).startswith(b"HTTP/1.1 200")
     assert writer.closed
+
+
+@pytest.mark.asyncio
+async def test_webhook_bridge_acks_before_slow_command_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow command must not make WeChat retry its already accepted webhook."""
+    bridge = gateway._WebhookBridge("wechat-1", 0, "http://bot", "secret")  # pyright: ignore[reportPrivateUsage]
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def capture(_: dict[str, Any]) -> None:
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(bridge, "_forward", capture)
+    body = b'{"Data":{"Content":"mailflow help","MsgType":1}}'
+    reader = asyncio.StreamReader()
+    writer = _RecordingWriter()
+    reader.feed_data(
+        b"POST /webhook HTTP/1.1\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+    )
+    reader.feed_eof()
+
+    await cast(Any, bridge)._handle(reader, writer)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    assert bytes(writer.payload).startswith(b"HTTP/1.1 200")
+    assert writer.closed
+
+    release.set()
+    await bridge.stop()
+
+
+class _BridgeResponse:
+    def __init__(self, payload: dict[str, Any], status_code: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status_code
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+class _BridgeClient:
+    calls: ClassVar[list[tuple[str, dict[str, Any]]]] = []
+
+    def __init__(self, **_: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> _BridgeClient:
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        pass
+
+    async def post(self, url: str, **kwargs: Any) -> _BridgeResponse:
+        self.calls.append((url, kwargs))
+        if url == "http://bot":
+            return _BridgeResponse({"reply": ["first page", "second page"]})
+        return _BridgeResponse({"Code": 0})
+
+
+@pytest.mark.asyncio
+async def test_webhook_bridge_sends_every_bot_reply_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A WeChat webhook must return every BotServer page to its source chat."""
+    _BridgeClient.calls.clear()
+    key_calls = 0
+
+    async def key_supplier() -> str:
+        nonlocal key_calls
+        key_calls += 1
+        return "managed-auth-key"
+
+    bridge = gateway._WebhookBridge(  # pyright: ignore[reportPrivateUsage]
+        "wechat-1",
+        0,
+        "http://bot",
+        "secret",
+        "http://gateway",
+        key_supplier,
+    )
+    monkeypatch.setattr(gateway.httpx, "AsyncClient", _BridgeClient)
+
+    await bridge._forward(  # pyright: ignore[reportPrivateUsage]
+        {
+            "Data": {
+                "FromUserName": "room@chatroom",
+                "SenderUserName": "wxid-member",
+                "Content": "wxid-member:\n/mailflow status",
+                "MsgType": 1,
+            }
+        }
+    )
+
+    assert _BridgeClient.calls[0] == (
+        "http://bot",
+        {
+            "json": {
+                "text": "/mailflow status",
+                "sender": "wxid-member",
+                "chat_id": "room@chatroom",
+                "chat_type": "group",
+                "provider": "wechatpadpro",
+                "instance_id": "wechat-1",
+            }
+        },
+    )
+    assert _BridgeClient.calls[1:] == [
+        (
+            "http://gateway/Msg/SendTxt",
+            {
+                "params": {"key": "managed-auth-key"},
+                "json": {
+                    "Wxid": "",
+                    "ToWxid": "room@chatroom",
+                    "Content": "first page",
+                    "Type": 0,
+                },
+            },
+        ),
+        (
+            "http://gateway/Msg/SendTxt",
+            {
+                "params": {"key": "managed-auth-key"},
+                "json": {
+                    "Wxid": "",
+                    "ToWxid": "room@chatroom",
+                    "Content": "second page",
+                    "Type": 0,
+                },
+            },
+        ),
+    ]
+    assert key_calls == 1
 
 
 class _NotifierResponse:

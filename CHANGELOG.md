@@ -32,17 +32,19 @@ All notable changes are recorded here; the format follows
   `feedback <id> <reason>` — the same reject/teach flow as the TUI) and
   full reply workflow with token confirmation (`reply create → prepare →
   confirm <token>`, persisted-SENT semantics prevent double sends).
-  `help` returns section-grouped chunks (mail / reply / schedule / bot /
-  system); `mailflow example` renders one sample notification per type
-  (important mail, ad, reminder, daily digest) — the OneBot bridge
-  delivers the chunks as one merged-forward message, other platforms as
-  paced segments.
-- **Nothing is silently dropped** — notifier `minimum_urgency` now
-  defaults to `info`, so ad-level mail is delivered too (raise it in the
-  bot form to filter noise). Reminder and daily-digest log lines follow
-  `general.language`, and oversized chat replies are cut with a
-  localized `…(truncated)` marker instead of being silently clipped by
-  the platform.
+  `help` returns section-grouped chunks (mail / reply / schedule /
+  subscription / system); `mailflow example` renders one sample notification
+  per type (important mail, ad, reminder, daily digest). OneBot uses a
+  merged-forward message with a paced plain-message fallback; other bridges
+  deliver the same ordered pages natively.
+- **Chat replies survive platform caps without losing content** — every
+  command result is split before delivery below both 1,600 UTF-8 bytes and
+  1,600 UTF-16 units. Long replies carry localized ordered page labels, while
+  help/example sections retain their semantic grouping; unbroken URLs and
+  tokens progress safely rather than being clipped. OneBot, WeChatPadPro, and
+  generated NoneBot/AstrBot bridges send every returned page; WeChatPadPro
+  acknowledges a webhook before slow dispatch and reuses one managed reply
+  credential for the complete page sequence.
 
 - **Actions tab fills the pane** — the todo table used a fixed 70% height
   and the button row split the remaining space 50/50 (Textual's Horizontal

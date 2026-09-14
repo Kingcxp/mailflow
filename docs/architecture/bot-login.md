@@ -199,7 +199,7 @@ permission-denied reply.
 /mailflow mail show <#n|id>          - one mail with summary/feedback
 /mailflow mail urgency <#n|id> <level> - override urgency (info/important/critical)
 /mailflow feedback <id> <reason>     - teach the classifier (reject mail)
-/mailflow reply create <mail_id>     - draft a reply
+/mailflow reply create <#n|mail_id>   - draft a reply
 /mailflow reply prepare <draft_id>   - get the confirm token
 /mailflow reply confirm <id> <token> - send (token-gated, no double-send)
 /mailflow reply cancel <draft_id>    - drop the draft
@@ -216,11 +216,18 @@ the reply teaches the corrected form instead. `help`, `example` and
 `status` need no admin; subscriptions require the chat context and an
 admin; all other commands delegate to the same router the TUI/CLI use.
 
-`help` and `example` return a list of message chunks. The OneBot bridge
-sends them as one merged-forward message (node list); platforms without
-forward support fall back to plain segments paced a few seconds apart.
-Oversized chunks are cut with a localized `…(truncated)` marker instead of
-being silently clipped by the platform.
+`help` and `example` begin as semantically grouped message sections. Before a
+bridge or exported bot sends a command result, `MailFlowService.chat_reply_chunks`
+fits every page below both a 1,600-byte UTF-8 ceiling and a 1,600-unit UTF-16
+ceiling. Long ordinary replies receive a localized `Part n/total` header; a
+long help/example section is split at a whitespace boundary. An unbroken URL
+or token advances by code point rather than being clipped. No chat transport
+may replace a tail with a truncation marker: all pages are sent in order.
+
+OneBot sends multi-page replies as a merged-forward message and falls back to
+paced plain messages if the platform rejects forwards. WeChatPadPro and the
+generated NoneBot/AstrBot adapters send every page sequentially; the
+WeChatPadPro bridge obtains its gateway reply key once per page sequence.
 
 Subscribing adds the chat (group id / contact id) to the notifier's
 targets and persists it (`gateway.sub.<provider>.<instance>` in the

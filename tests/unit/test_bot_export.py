@@ -174,6 +174,7 @@ class TestNonebotExporter:
         assert "driver.on_shutdown" in init
         assert "start_service(config, plugin_manager=create_plugin_manager(config))" in init
         assert "config.toml" in init
+        compile(init, "generated_nonebot_plugin.py", "exec")
 
     def test_embedded_config_round_trips(self, tmp_path: Path) -> None:
         export_nonebot(_context(tmp_path))
@@ -198,6 +199,7 @@ class TestAstrbotExporter:
         assert "class Main(Star)" in main
         assert "async def initialize" in main
         assert "async def terminate" in main
+        compile(main, "generated_astrbot_plugin.py", "exec")
 
     def test_metadata_and_requirements(self, tmp_path: Path) -> None:
         export_astrbot(_context(tmp_path))

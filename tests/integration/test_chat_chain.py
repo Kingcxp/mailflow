@@ -217,6 +217,44 @@ async def test_full_chat_command_chain_replies() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bot_server_pages_long_unicode_reply_without_truncation() -> None:
+    """A reply over any common chat limit stays complete and portable."""
+    service = _service()
+    original = "字" * 1_200 + "🙂" * 600
+
+    async def long_reply(*_: Any, **__: Any) -> str:
+        return original
+
+    cast(Any, service).command_dispatch = long_reply
+    from mailflow.bot_server import BotServer
+
+    bot_server = BotServer(service)
+    await bot_server.start()
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                bot_server.url,
+                json={"text": "#mailflow status", "chat_id": "test", "provider": "napcat"},
+            )
+        payload = cast(dict[str, Any], response.json())
+        raw_pages = payload["reply"]
+        assert isinstance(raw_pages, list)
+        pages = cast(list[str], raw_pages)
+        assert len(pages) > 1
+        strings = pages
+        assert "".join(page.partition("\n")[2] for page in strings) == original
+        for page in strings:
+            # 1,600 bounds both UTF-8 byte-based APIs and UTF-16 APIs.
+            assert len(page.encode("utf-8")) <= 1_600
+            assert len(page.encode("utf-16-le")) // 2 <= 1_600
+            assert "truncated" not in page.casefold()
+    finally:
+        await bot_server.stop()
+
+
+@pytest.mark.asyncio
 async def test_bridge_handles_large_body_and_keepalive() -> None:
     """Regression for the reported 'bridge receives nothing' failure: a
     large group-message event (emoji-rich array-format bodies run tens of

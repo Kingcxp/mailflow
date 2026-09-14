@@ -12,7 +12,7 @@
       "status_starting": "启动中",
       "status_stopped": "已停止",
       "title": "账户（{count}）",
-      "usage": "account <list>"
+      "usage": "account <list [--page <页码>]>"
     },
     "action": {
       "add_usage": "用法：action add \"<摘要>\" --due \"YYYY-MM-DD HH:MM\" [--type <类型>] [--notes \"...\"]",
@@ -35,7 +35,7 @@
       "type_exam": "考试",
       "type_meeting": "会议",
       "type_other": "其他",
-      "usage": "action <list|show <item_id>|add <摘要> --due <YYYY-MM-DD HH:MM> [--type <类型>] [--notes <备注>]|delete <item_id>>"
+      "usage": "action <list [--page <页码>]|show <事项id>|add <摘要> --due <YYYY-MM-DD HH:MM> [--type <类型>] [--notes <备注>]|delete <事项id>>"
     },
     "adapter": {
       "header_id": "适配器",
@@ -76,6 +76,7 @@
         "unknown": "未知语言 '{language}'。可用：{list}",
         "usage": "lang <get|set <代码>>"
       },
+      "parse_error": "无法解析命令：{reason}",
       "unknown": "未知命令：{command}",
       "usage": "用法：{usage}"
     },
@@ -167,8 +168,9 @@
         },
         "general.hourly_summary": "每小时由 LLM 将该小时内收到的所有邮件汇总为简报，并推送给启用了此项的 notifier（options.hourly_summary = true）；该小时没有邮件则不发送"
       },
+      "collection": "{count} 项",
       "description": "说明",
-      "legend": "* 表示机密字段，输出中已隐藏。带 [] 的是列表项（显示第一项）；列表请在 TOML 文件中编辑。",
+      "legend": "* 表示机密字段，其值已隐藏。带 [] 的是列表项；列表请在 TOML 文件中编辑。",
       "option": "选项",
       "required": "必需",
       "restart_note": "已保存；多数选项下次启动生效",
@@ -195,7 +197,7 @@
       "header_model": "模型",
       "header_name": "显示名",
       "title": "LLM（{count}）",
-      "usage": "llm <list|bindings>"
+      "usage": "llm <list [--page <页码>]|bindings [--page <页码>]>"
     },
     "mail": {
       "btn_wipe": "清空重析",
@@ -284,16 +286,16 @@
       "market_status": "状态",
       "market_title": "插件市场（{count}）",
       "market_updated": "最后更新",
-      "market_usage": "plugin market <list [分类]|show <id>>",
+      "market_usage": "plugin market <list [分类] [--page <页码>]|show <id>>",
       "not_found": "未找到插件 {plugin_id}",
       "not_installed": "未安装",
       "not_installed_yet": "未安装",
       "repo_added": "已添加仓库 {name}（已写入配置文件）",
       "repo_removed": "已移除仓库 {name}",
       "repo_title": "插件仓库（{count}）",
-      "repo_usage": "plugin repo <list|add <名称> <url>|remove <名称>>",
+      "repo_usage": "plugin repo <list [--page <页码>]|add <名称> <url>|remove <名称>>",
       "restart_note": "重启后生效",
-      "search_usage": "plugin search <关键词> [分类]",
+      "search_usage": "plugin search <关键词> [分类] [--page <页码>]",
       "template": {
         "llm_backend": "接入一个模型的对话补全服务",
         "mail_source": "向流水线提供标准化邮件",
@@ -305,7 +307,7 @@
       "uninstall_usage": "plugin uninstall <插件id>",
       "uninstalled_ok": "已卸载 {plugin_id}",
       "unknown_plugin": "插件 {plugin_id} 未加载或未安装",
-      "usage": "plugin <list|show <插件id>|repo <list|add <名称> <url>|remove <名称>>|market <list [分类]|show <id>|search <关键词> [分类]>|install|uninstall|enable|disable <id>>"
+      "usage": "plugin <list [--page <页码>]|show <插件id>|repo <list [--page <页码>]|add <名称> <url>|remove <名称>>|market <list [分类] [--page <页码>]|show <id>|search <关键词> [分类] [--page <页码>]>|install|uninstall|enable|disable <id>>"
     },
     "reply": {
       "cancelled": "草稿 {draft_id} 已取消",
@@ -819,6 +821,7 @@
       "reason_important_sender": "发件人在重要发件人名单中"
     },
     "chat": {
+      "page": "第 {current}/{total} 部分",
       "namespace_hint": "没有「{command}」这个命令。MailFlow 的命令均以 {prefix}mailflow 开头，发送「{prefix}mailflow help」查看全部命令。",
       "needs_context": "请在群聊或私聊会话中使用该命令。",
       "not_admin": "该命令需要管理员权限，请联系机器人管理员。",
@@ -833,6 +836,7 @@
       "hourly_off": "已关闭本聊天的每小时邮件简报。",
       "hourly_status_on": "本聊天的每小时邮件简报：已开启。",
       "hourly_status_off": "本聊天的每小时邮件简报：已关闭。",
+      "command_error": "命令未完成",
       "error_reply": "命令执行出错（内部错误），请查看 MailFlow 日志。",
       "example_mail": "【MailFlow · 新的重要邮件】\n[{urgency}] {subject}\n来自：{sender}\n{summary}",
       "example_ad": "【MailFlow · 普通邮件】\n[{urgency}] {subject}\n来自：{sender}\n普通邮件同样推送，不会被过滤；如分类有误，可发送 feedback 纠正。",
@@ -843,9 +847,9 @@
       "example_ad_subject": "每周新闻简报",
       "example_action": "提交作业 2",
       "manual_intro": "【MailFlow · 帮助】\n所有命令均以 {prefix}mailflow 开头，下文以 {prefix} 代替。\n{cmd_help} 显示本帮助\n{cmd_example} 查看各类通知示例\n{cmd_status} 查看机器人状态\n命令分为五类：邮件、回复、日程、订阅、系统。",
-      "manual_mail": "【MailFlow · 邮件】\n{cmd_list}\n  列出最近的邮件；可加 --query <关键字> 按关键词过滤（匹配主题、正文）\n{cmd_show}\n  查看指定邮件的摘要、发件人与附件\n{cmd_urgency}\n  手动调整邮件级别：info 普通 / important 重要 / critical 紧急\n{cmd_delete}\n  将邮件移入回收站，可随时恢复\n{cmd_feedback}\n  对分类结果不满意时，打回并注明原因，例如：{ex_feedback}\n  系统将据此修正同类邮件的分类",
-      "manual_reply": "【MailFlow · 回复邮件】\n回复分三步执行，最后一步需要确认码，以防止误发送：\n{cmd_create}  第一步：生成回复草稿\n{cmd_prepare}  第二步：生成 6 位确认码，有效期 10 分钟\n{cmd_confirm}  第三步：发送确认码以寄出邮件\n{cmd_cancel}  取消本次回复\n示例：\n{ex_flow}",
-      "manual_action": "【MailFlow · 日程】\n{cmd_add}\n  新建日程，到期前自动提醒\n  例：{ex_add}\n{cmd_list}  按截止时间列出全部日程\n{cmd_done}  将日程标记为已完成\n邮件中的截止日期、会议与缴费事项将自动记入日程，无需手动录入",
+      "manual_mail": "【MailFlow · 邮件】\n{cmd_list}\n  列出最近的邮件；可加 --query <关键字> 按关键词过滤（匹配主题、正文）\n{cmd_show}\n  查看指定邮件的摘要、发件人与附件\n{cmd_urgency}\n  手动调整级别：ad / info / important / urgent；auto 恢复自动判断结果\n{cmd_delete}\n  将邮件移入回收站，可随时恢复\n{cmd_feedback}\n  对分类结果不满意时，打回并注明原因，例如：{ex_feedback}\n  系统将据此修正同类邮件的分类",
+      "manual_reply": "【MailFlow · 回复邮件】\n回复分三步执行，最后一步需要确认令牌，以防止误发送：\n{cmd_create}  第一步：生成回复草稿\n{cmd_prepare}  第二步：生成确认令牌，有效期 10 分钟\n{cmd_confirm}  第三步：发送令牌以寄出邮件\n{cmd_cancel}  取消本次回复\n示例：\n{ex_flow}",
+      "manual_action": "【MailFlow · 日程】\n{cmd_add}\n  新建日程，到期前自动提醒\n  例：{ex_add}\n{cmd_list}  按截止时间列出全部日程\n{cmd_done}  删除手动创建的日程\n邮件自动生成的日程需随源邮件处理，不能单独删除",
       "manual_bot": "【MailFlow · 订阅】\n{cmd_sub}  在当前聊天接收新邮件推送\n{cmd_unsub}  取消当前聊天的推送\n{cmd_status}  查看推送状态与订阅数量\n{cmd_example}  查看各类通知示例\n以上操作需要管理员权限",
       "manual_system": "【MailFlow · 系统】\n{cmd_lang}  切换界面语言（中文 / English）\n{cmd_runtime}  查看邮件收取与分析服务的运行状态\n{cmd_trash}  查看回收站，可从中恢复邮件\n邮箱账户、AI 模型与插件请在 TUI 界面中管理",
       "example_intro": "【MailFlow · 通知示例】\n以下为各类通知的样式。发送「{prefix}mailflow subscribe」开始接收推送。",
@@ -869,7 +873,6 @@
       "push": "【日程提醒】「{summary}」即将到期（{due}）",
       "digest_push": "【每日日程】今日 {today} 项 / 近期共 {total} 项：",
       "digest_item": "{index}. {summary}（{due}）"
-    },
-    "truncated_marker": "…（已截断）"
+    }
   }
 }

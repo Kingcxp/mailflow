@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 _HOST = "127.0.0.1"
 _PORT = 18789
+_MAX_REQUEST_BYTES = 1 << 20
 
 
 class BotServer:
@@ -64,22 +65,64 @@ class BotServer:
     def url(self) -> str:
         return f"http://{_HOST}:{getattr(self, '_port', _PORT)}/bot/message"
 
+    @staticmethod
+    async def _read_chunked(reader: asyncio.StreamReader) -> bytes:
+        """Read one bounded HTTP chunked body exactly."""
+        body = bytearray()
+        while True:
+            size_line = await reader.readline()
+            try:
+                size = int(size_line.split(b";", 1)[0].strip(), 16)
+            except ValueError as exc:
+                raise ValueError("invalid chunked request body") from exc
+            if size < 0 or len(body) + size > _MAX_REQUEST_BYTES:
+                raise ValueError("request body is too large")
+            if size == 0:
+                while await reader.readline() not in (b"\r\n", b"\n", b""):
+                    pass
+                return bytes(body)
+            body.extend(await reader.readexactly(size))
+            if await reader.readexactly(2) != b"\r\n":
+                raise ValueError("invalid chunked request terminator")
+
+    @classmethod
+    async def _read_request_body(cls, reader: asyncio.StreamReader) -> bytes:
+        """Parse framing headers so a keep-alive client cannot be truncated."""
+        content_length: int | None = None
+        chunked = False
+        while True:
+            line = await reader.readline()
+            if line in (b"\r\n", b"\n", b""):
+                break
+            name, separator, value = line.decode("latin-1").partition(":")
+            if not separator:
+                raise ValueError("malformed request header")
+            if name.strip().casefold() == "content-length":
+                try:
+                    content_length = int(value.strip())
+                except ValueError as exc:
+                    raise ValueError("invalid Content-Length") from exc
+            elif name.strip().casefold() == "transfer-encoding" and "chunked" in value.casefold():
+                chunked = True
+        if chunked:
+            return await cls._read_chunked(reader)
+        if content_length is None:
+            raise ValueError("missing request body length")
+        if content_length < 0 or content_length > _MAX_REQUEST_BYTES:
+            raise ValueError("request body is too large")
+        return await reader.readexactly(content_length)
+
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         try:
-            request_line = await reader.readline()
+            request_line = await asyncio.wait_for(reader.readline(), timeout=15.0)
             parts = request_line.decode("utf-8", "replace").strip().split()
             if len(parts) < 2 or parts[0] != "POST":
                 await self._respond(writer, 404, {"reply": ""})
                 return
             path = parts[1]
-            # consume headers
-            while True:
-                line = await reader.readline()
-                if line in (b"\r\n", b"\n", b""):
-                    break
-            body = await reader.read(65536)
+            body = await asyncio.wait_for(self._read_request_body(reader), timeout=20.0)
             payload = json.loads(body.decode("utf-8", "replace") or "{}")
             text = str(payload.get("text") or "")
             if path == "/bot/message":
@@ -87,7 +130,7 @@ class BotServer:
                 chat_id = str(payload.get("chat_id") or "")
                 # INFO on every chat hop: the chain (platform -> bridge ->
                 # here -> command) is otherwise invisible, and a missing
-                # log line pinpoints where it broke
+                # log line pinpoints where it broke.
                 logger.info(
                     "chat[%s] %s:%s: %.80r",
                     instance,
@@ -104,35 +147,22 @@ class BotServer:
                     instance_id=instance,
                 )
                 if reply:
-                    # !r then slice: ".80r" is an invalid format spec
-                    # (ValueError: Unknown format code 'r') — it crashed
-                    # the reply log line and turned every successful
-                    # single-string reply into a 500 AFTER the command
-                    # had already succeeded
                     preview = (
                         f"{len(reply)} chunks" if isinstance(reply, list) else repr(reply)[:80]
                     )
                     logger.info("chat[%s] reply to %s: %s", instance, chat_id, preview)
-                # a chunk list passes through as a JSON array — the onebot
-                # bridge renders it as one merged-forward message
-                # chat platforms cap single-message length; mark the cut
-                # instead of letting the platform silently clip the tail
-                marker = self._service.t("truncated_marker")
-                limit = 4000
-                if isinstance(reply, list):
-                    payload_reply: Any = [
-                        chunk if len(chunk) <= limit else chunk[:limit] + marker for chunk in reply
-                    ]
-                else:
-                    payload_reply = (
-                        reply if not reply or len(reply) <= limit else reply[:limit] + marker
-                    )
+                # Gateway bridges send every returned page in order. Do not
+                # truncate here: platform-specific clipping silently loses
+                # confirmation tokens and command details.
+                payload_reply: Any = self._service.chat_reply_chunks(reply)
                 await self._respond(writer, 200, {"reply": payload_reply})
             else:
                 await self._respond(writer, 404, {"reply": ""})
+        except (TimeoutError, ValueError, json.JSONDecodeError, asyncio.IncompleteReadError) as exc:
+            logger.warning("bot endpoint rejected malformed request: %s", exc)
+            with contextlib.suppress(Exception):
+                await self._respond(writer, 400, {"reply": ""})
         except Exception:
-            # DEBUG swallowed live 500s with zero trace — an endpoint that
-            # fails is a bug worth seeing at WARNING with the traceback
             logger.warning("bot endpoint request failed", exc_info=True)
             with contextlib.suppress(Exception):
                 await self._respond(writer, 500, {"reply": ""})
@@ -143,7 +173,12 @@ class BotServer:
     @staticmethod
     async def _respond(writer: asyncio.StreamWriter, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode("utf-8")
-        reason = {200: "OK", 404: "Not Found", 500: "Internal Server Error"}.get(status, "OK")
+        reason = {
+            200: "OK",
+            400: "Bad Request",
+            404: "Not Found",
+            500: "Internal Server Error",
+        }.get(status, "OK")
         writer.write(
             f"HTTP/1.1 {status} {reason}\r\n"
             f"Content-Type: application/json\r\n"

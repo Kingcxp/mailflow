@@ -584,6 +584,15 @@ class TestCommandRouter:
         response = await commands.execute(f"reply confirm {draft_id} wrong")
         assert not response.ok
 
+    async def test_reply_create_accepts_mail_list_number(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        created = await commands.execute("reply create #1")
+        assert created.ok
+        draft_id = created.text.split()[1]
+        assert storage.drafts[draft_id].mail_id == "m1"
+
     async def test_reply_compose_letter_templates(
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:
