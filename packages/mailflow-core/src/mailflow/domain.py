@@ -243,6 +243,20 @@ class MailRecord(BaseModel):
         return self.analysis.action_items
 
 
+class SmartSearchResult(BaseModel):
+    """LLM mail-finder outcome, including whether every mail was checked."""
+
+    records: list[MailRecord] = Field(default_factory=lambda: [])
+    total_mails: int = 0
+    failed_mails: int = 0
+    failed_batches: int = 0
+
+    @property
+    def is_complete(self) -> bool:
+        """True only when no candidate batch was unavailable or malformed."""
+        return self.failed_mails == 0
+
+
 class TrashRecord(BaseModel):
     """Recoverable copy of a mail held in the trash store."""
 
@@ -439,6 +453,7 @@ __all__ = [
     "ReplyDraft",
     "ReplyState",
     "RuntimeSnapshot",
+    "SmartSearchResult",
     "StyleSpan",
     "TrashRecord",
     "Urgency",

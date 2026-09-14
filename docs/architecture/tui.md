@@ -43,9 +43,14 @@ tears them down with the screen — nothing keeps ticking after it closes.
   with equal-width buttons. An empty view shows a hint (no mail yet vs. no match for
   the search/filter) and clears the detail pane; any results-only render also
   refreshes detail for its selected result. Reply opens the confirmation-gated
-  modal. **Smart find** delegates matching to `service.smart_search`; its
-  progress and cancellation state are shown in the hint line, and chat platforms
-  use the same engine via `mail search <need>`.
+  modal. **Smart find** delegates matching and relevance ranking to
+  `service.smart_search`. Its hint line reflects real warm-up and completed
+  batches without being overwritten by the spinner; a malformed or unavailable
+  batch remains visibly incomplete rather than masquerading as an empty result.
+  The running button stays clickable; cancellation clears the free-form query and
+  restores the complete mailbox. Candidate refs (not raw mail ids) make model
+  selections robust. Chat platforms use the same engine via `mail search <need>`
+  and retain global `#` handles.
 - **Mailboxes** (`settings.py: AccountsPane`): accounts table with
   Add / Edit / Delete (forms, not TOML editing; **double-click or Enter on a
   row opens the edit form**, same for the LLM and notifier tables) plus the

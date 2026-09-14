@@ -450,8 +450,7 @@ class CommandRouter:
         return addr[:34]
 
     async def _mail_smart_search(self, args: list[str]) -> CommandResponse:
-        """``mail search <free-form need>`` — the LLM finds mails matching
-        the INTENT (the same engine as the TUI's smart find)."""
+        """``mail search <free-form need>`` — intent-ranked mail matches."""
         query = " ".join(args).strip()
         if not query:
             return self._err(self._t("mail.search_usage"))
@@ -459,13 +458,24 @@ class CommandRouter:
             return self._err(self._t("mail.search_no_llm"))
 
         def _progress(stage: str, done: int, total: int, detail: Any) -> None:
-            # chat transports only see the final listing; the stages still
-            # run so a long search behaves identically to the TUI
+            # Chat transports receive the completed listing only; still pass a
+            # callback so the service follows the same execution path as TUI.
             pass
 
-        matched = await self.service.smart_search(query, progress=_progress)
+        result = await self.service.smart_search(query, progress=_progress)
+        matched = result.records
         if not matched:
+            if result.failed_mails:
+                return self._err(self._t("mail.search_incomplete", failed=result.failed_mails))
             return self._ok(self._t("mail.search_none"))
+        numbered_records = await self.service.list_mails()
+        numbers = {
+            record.record_id: position
+            for position, record in enumerate(
+                sorted(numbered_records, key=lambda record: record.mail.received_at, reverse=True),
+                start=1,
+            )
+        }
         spans: list[StyleSpan] = [
             StyleSpan(
                 text=self._t("mail.search_title", count=len(matched)),
@@ -474,9 +484,10 @@ class CommandRouter:
         ]
         for offset, record in enumerate(matched[:_PAGE_SIZE], start=1):
             headline = (record.summary or record.mail.subject or "(no subject)").splitlines()
+            number = numbers.get(record.record_id, offset)
             spans.append(StyleSpan(text="\n\n", style=""))
             spans.extend(self._urgency_span(record.effective_urgency))
-            spans.append(StyleSpan(text=f" #{offset} "))
+            spans.append(StyleSpan(text=f" #{number} "))
             spans.append(StyleSpan(text=headline[0][:120]))
             spans.append(
                 StyleSpan(
@@ -493,10 +504,12 @@ class CommandRouter:
                 )
             )
         else:
+            spans.append(StyleSpan(text=f"\n\n{self._t('mail.list_hint')}", style=_STYLE_MUTED))
+        if result.failed_mails:
             spans.append(
                 StyleSpan(
-                    text=f"\n\n{self._t('mail.list_hint')}",
-                    style=_STYLE_MUTED,
+                    text=f"\n{self._t('mail.search_partial', failed=result.failed_mails)}",
+                    style=_STYLE_ERROR,
                 )
             )
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))

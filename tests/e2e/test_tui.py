@@ -433,6 +433,112 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_smart_search_keeps_real_progress_and_relevance_order(tmp_path: Path) -> None:
+    """Spinner frames must retain batch status until ranked results arrive."""
+    import asyncio
+    import queue
+
+    from mailflow.contracts import LLMCompletion
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.app import MailPane
+
+    class DelayedSearchRouter:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls = 0
+
+        async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMCompletion:
+            user = messages[-1]["content"]
+            if user.startswith("Reply with"):
+                return LLMCompletion(text="ok", model="smart")
+            self.calls += 1
+            self.started.set()
+            await self.release.wait()
+
+            def candidate_for(subject: str) -> str:
+                before_subject = user.split(f"subject={subject}", maxsplit=1)[0]
+                return before_subject.rsplit("candidate=", maxsplit=1)[1].splitlines()[0]
+
+            return LLMCompletion(
+                text=(
+                    "["
+                    f'{{"id":"{candidate_for("Optional Friday lecture")}","relevance":30}},'
+                    f'{{"id":"{candidate_for("Pick up your student ID card")}","relevance":95}}'
+                    "]"
+                ),
+                model="smart",
+            )
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+    router = DelayedSearchRouter()
+    service.router = cast(Any, router)
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test() as pilot:
+            for _ in range(100):
+                if await service.count_mails() == 3:
+                    break
+                await pilot.pause(0.05)
+            pane = app.query_one(MailPane)
+            search = app.query_one("#mail-search", Input)
+            search.value = "the student ID invitation"
+            button = app.query_one("#smart-search", Button)
+            table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
+            button.press()
+            for _ in range(40):
+                if router.started.is_set():
+                    break
+                await asyncio.sleep(0.05)
+            assert router.started.is_set(), "smart-search batch did not start"
+            await asyncio.sleep(0.2)
+            hint = app.query_one("#mail-empty-hint", Static)
+            assert "Smart search  0/3" in str(hint.render())
+            assert "scanning 3 mails" in str(hint.render())
+            button.press()
+            for _ in range(40):
+                if str(search.value) == "" and int(table.row_count) == 3:
+                    break
+                await asyncio.sleep(0.05)
+            assert not pane._smart_searching  # pyright: ignore[reportPrivateUsage]
+            assert search.value == ""
+            assert table.row_count == 3
+
+            search.value = "the student ID invitation"
+            await asyncio.sleep(0.05)
+            button.press()
+            for _ in range(40):
+                if router.calls == 2:
+                    break
+                await asyncio.sleep(0.05)
+            assert router.calls == 2
+            await asyncio.sleep(0.2)
+            assert "Smart search  0/3" in str(hint.render())
+            router.release.set()
+            for _ in range(40):
+                if int(table.row_count) == 2 and str(button.label) == "Smart find…":
+                    break
+                await asyncio.sleep(0.05)
+            assert int(table.row_count) == 2
+            assert "Pick up your student ID card" in str(table.get_row_at(0)[1])
+            assert pane._smart_result is not None  # pyright: ignore[reportPrivateUsage]
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
 async def test_plugin_scaffold_wizard(tmp_path: Path) -> None:
     """The market wizard scaffolds a loadable plugin into a picked folder."""
     from mailflow.plugin_market import PluginMarket

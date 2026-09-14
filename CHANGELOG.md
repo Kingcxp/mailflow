@@ -16,6 +16,12 @@ All notable changes are recorded here; the format follows
   a full-width row above equal-width two-row actions, standalone forms are
   centered bordered panels, and Ask & Correct accepts only one question at a
   time so the visible conversation cannot be reordered by concurrent replies.
+- **Smart mail search stays truthful under network latency** — the finder shows
+  actual warmup and per-batch progress, ranks selected mail by relevance rather
+  than internal id, and marks unavailable batches as incomplete instead of
+  claiming no matches. Its button remains responsive while the model runs:
+  Cancel stops the request and restores the full mailbox.
+
 
 - **Full chat command surface in the mailflow namespace** — every
   MailFlow command now lives under `<prefix>mailflow …` so bots
@@ -185,6 +191,13 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **Smart mail search now reports trustworthy ranked results** — each LLM batch
+  receives short opaque candidate refs instead of brittle raw message ids, returns
+  a relevance score, and the TUI preserves that rank. Live progress reflects the
+  actual warm-up and completed batches rather than being overwritten by the
+  spinner. Malformed or unavailable batches remain an explicit incomplete result
+  in both the TUI and chat commands; chat `#` handles still resolve against the
+  ordinary global mailbox order.
 - **WeChatPadPro guided deployment now produces a working notifier** — Docker
   Compose v2 and classic `docker-compose` use their valid command forms,
   a dormant Docker Desktop is started by the guide, and new instances select

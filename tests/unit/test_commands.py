@@ -373,6 +373,31 @@ class TestCommandRouter:
         assert not response.ok
         assert "LLM" in response.text
 
+    async def test_mail_smart_search_reports_unavailable_batches(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        """A failed model batch must not be presented as no matching mail."""
+        commands, _ = router
+        from mailflow.config import LLMConfig
+
+        commands.service.config.llms = [LLMConfig(llm_id="llm-1")]
+
+        class FailingRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                if messages[-1]["content"].startswith("Reply with"):
+
+                    class Warmup:
+                        text = "ok"
+
+                    return Warmup()
+                raise TimeoutError("endpoint timed out")
+
+        commands.service.router = cast(LLMRouter, FailingRouter())
+        response = await commands.execute("mail search the student ID mail")
+
+        assert not response.ok
+        assert "could not check" in response.text
+
     async def test_mail_show_accepts_list_number(
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:

@@ -14,7 +14,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, ClassVar, cast
 
-from mailflow.domain import ActionItem, MailRecord, ReplyDraft, Urgency
+from mailflow.domain import ActionItem, MailRecord, ReplyDraft, SmartSearchResult, Urgency
 from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
 from rich.text import Text as RichText
@@ -432,7 +432,9 @@ class MailPane(Vertical):
         # results; cancel restores the previous view. The snapshot is the
         # full record list taken when the search started.
         self._smart_searching = False
-        self._smart_search_task: asyncio.Task[list[MailRecord]] | None = None
+        self._smart_search_task: asyncio.Task[SmartSearchResult] | None = None
+        self._smart_spinner_task: asyncio.Task[None] | None = None
+        self._smart_result: SmartSearchResult | None = None
 
     def compose(self) -> ComposeResult:
         # the urgency Select auto-selects "auto" while mounting and fires
@@ -559,25 +561,35 @@ class MailPane(Vertical):
 
     async def refresh_mail(self) -> None:
         if getattr(self, "_smart_searching", False):
-            # an active smart search owns the table: a re-read here would
-            # replace the results-only view with the full mailbox mid-search
-            # (and clobber the cancel-restore snapshot)
+            # An active smart search owns the table: a re-read here would
+            # replace results or previews with the full mailbox mid-search.
             return
         async with self._refresh_lock:
+            if getattr(self, "_smart_searching", False):
+                return
+            if self._smart_result is not None:
+                await self._render_smart_result(self._smart_result)
+                return
             await self._refresh_mail_unlocked()
 
     async def _render_records(
-        self, records: list[MailRecord], *, empty_hint_key: str = "tui.mail_empty"
+        self,
+        records: list[MailRecord],
+        *,
+        empty_hint_key: str = "tui.mail_empty",
+        status_hint: str = "",
     ) -> None:
-        """Render ``records`` into the mail table as-is (no re-read, no
-        filtering): the results view after a smart search."""
+        """Render records in their supplied order without re-reading storage.
+
+        Smart-search results arrive ranked by the service; ordinary mailbox
+        rendering has its own explicit sort path in ``_refresh_mail_unlocked``.
+        """
         table = self._mail_table()
         if table is None:
             return
         table.clear()
         self._ensure_columns()
         self._refresh_view_options()
-        records = sorted(records, key=lambda record: record.mail.received_at, reverse=True)
         for position, record in enumerate(records, start=1):
             urgency = record.effective_urgency
             table.add_row(
@@ -591,7 +603,10 @@ class MailPane(Vertical):
                 await asyncio.sleep(0)
         hint = self.query_one_optional("#mail-empty-hint", Static)
         if hint is not None:
-            if not records:
+            if status_hint:
+                hint.update(status_hint)
+                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+            elif not records:
                 hint.update(self._service.t(empty_hint_key))
                 hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
             else:
@@ -601,6 +616,19 @@ class MailPane(Vertical):
         if self._selected_id not in visible_ids:
             self._selected_id = records[0].record_id if records else None
         await self._show_selected()
+
+    async def _render_smart_result(self, result: SmartSearchResult) -> None:
+        """Render ranked matches and retain an explicit incomplete warning."""
+        self._records = result.records
+        status_hint = ""
+        if result.failed_mails:
+            key = "tui.smart_search_partial" if result.records else "tui.smart_search_incomplete"
+            status_hint = f"[yellow]{self._service.t(key, failed=result.failed_mails)}[/yellow]"
+        await self._render_records(
+            result.records,
+            empty_hint_key="tui.mail_no_match",
+            status_hint=status_hint,
+        )
 
     async def _preview_matches(self, match_ids: set[str]) -> None:
         """Fetch preview records missing from the cache from storage and
@@ -763,6 +791,7 @@ class MailPane(Vertical):
 
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "mail-search":
+            self._clear_smart_result()
             await self.refresh_mail()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -798,118 +827,142 @@ class MailPane(Vertical):
             # impossible to miss; back to primary when idle
             button.variant = "error" if key == "tui.smart_search_cancel" else "primary"
 
+    def _clear_smart_result(self) -> None:
+        """Return to the ordinary mailbox view after an explicit user action."""
+        if self._smart_result is not None:
+            self._smart_result = None
+            # Do not apply a literal text filter to the ranked subset while a
+            # background cache reread is pending; load the full mailbox first.
+            self._records = []
+
+    async def _stop_smart_spinner(self) -> None:
+        task = self._smart_spinner_task
+        self._smart_spinner_task = None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
     async def _toggle_smart_search(self) -> None:
         search = self.query_one_optional("#mail-search", Input)
         query = search.value.strip() if search is not None else ""
         if self._smart_searching:
-            # cancel: stop the task and restore the normal view — re-read
-            # from storage rather than the pre-search snapshot so mail that
-            # arrived during the search is not lost
-            if self._smart_search_task is not None and not self._smart_search_task.done():
-                self._smart_search_task.cancel()
+            # Cancellation restores the full mailbox rather than a stale
+            # pre-search cache, so mail arriving during the search remains visible.
             self._smart_searching = False
+            task = self._smart_search_task
             self._smart_search_task = None
+            if task is not None and not task.done():
+                task.cancel()
+            await self._stop_smart_spinner()
+            self._clear_smart_result()
+            if search is not None:
+                search.value = ""
             self._set_smart_label("tui.smart_search")
             await self.refresh_mail()
             return
         if not query:
             return
         self._smart_searching = True
+        self._clear_smart_result()
         self._set_smart_label("tui.smart_search_cancel")
         hint = self.query_one_optional("#mail-empty-hint", Static)
         table = self._mail_table()
-        # the spinning indicator: the user must SEE that work is happening
         SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-        spinner_state = {"frame": 0, "running": True}
+        spinner_state: dict[str, Any] = {
+            "frame": 0,
+            "running": True,
+            "message": self._service.t("tui.smart_search_working"),
+        }
 
         async def _spin() -> None:
-            while spinner_state["running"]:
-                frame = SPINNER[spinner_state["frame"] % len(SPINNER)]
-                spinner_state["frame"] += 1
+            while bool(spinner_state["running"]):
+                frame = SPINNER[int(spinner_state["frame"]) % len(SPINNER)]
+                spinner_state["frame"] = int(spinner_state["frame"]) + 1
                 if hint is not None and self._smart_searching:
-                    label = self._service.t("tui.smart_search_working")
-                    hint.update(f"{frame} {label}")
+                    hint.update(f"{frame} {spinner_state['message']}")
                     hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
                 await asyncio.sleep(0.12)
 
-        # snapshot for the live preview: id -> record, from the current
-        # cache; anything missing falls back to storage in _preview_matches
-        record_map: dict[str, MailRecord] = {r.record_id: r for r in self._records}
+        record_map: dict[str, MailRecord] = {record.record_id: record for record in self._records}
         self._smart_spinner_task = asyncio.create_task(_spin())
 
         def _show_progress(
             stage: str, done: int, total: int, detail: str | tuple[str, dict[str, Any]]
         ) -> None:
-            # detail is a (locale_key, params) pair or a preformatted string
-            if hint is not None and self._smart_searching:
-                detail_key = ""
-                detail_params: dict[str, Any] = {}
-                if isinstance(detail, tuple):
-                    detail_key, detail_params = detail
-                    detail_text = self._service.t(f"tui.{detail_key}", **detail_params)
-                else:
-                    detail_text = detail
-                message = self._service.t(
-                    "tui.smart_search_progress",
-                    stage=stage,
-                    done=done,
-                    total=total,
-                    detail=detail_text,
-                )
-                hint.update(message)
-                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
-                # live candidate preview: as each batch completes, show the
-                # matches SO FAR in the table (smart_batch carries ids).
-                # Resolve via storage — self._records can be empty/stale on
-                # the first search after launch.
-                if detail_key == "smart_batch" and table is not None:
-                    match_ids = set(detail_params.get("mails") or [])
-                    known = [record_map[i] for i in match_ids if i in record_map]
-                    if known:
-                        self.run_worker(
-                            self._append_records(known),
-                            exclusive=False,
-                            group="smart-preview",
-                        )
-                    missing = match_ids - set(record_map)
-                    if missing:
-                        self.run_worker(
-                            self._preview_matches(missing),
-                            exclusive=False,
-                            group="smart-preview",
-                        )
+            if hint is None or not self._smart_searching:
+                return
+            detail_key = ""
+            detail_params: dict[str, Any] = {}
+            if isinstance(detail, tuple):
+                detail_key, detail_params = detail
+                detail_text = self._service.t(f"tui.{detail_key}", **detail_params)
+            else:
+                detail_text = detail
+            message = self._service.t(
+                "tui.smart_search_progress",
+                stage=self._service.t(f"tui.smart_stage_{stage}"),
+                done=done,
+                total=total,
+                detail=detail_text,
+            )
+            spinner_state["message"] = message
+            hint.update(message)
+            hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+            if detail_key == "smart_batch" and table is not None:
+                match_ids = set(detail_params.get("mails") or [])
+                known = [
+                    record_map[record_id] for record_id in match_ids if record_id in record_map
+                ]
+                if known:
+                    self.run_worker(
+                        self._append_records(known),
+                        exclusive=False,
+                        group="smart-preview",
+                    )
+                missing = match_ids - set(record_map)
+                if missing:
+                    self.run_worker(
+                        self._preview_matches(missing),
+                        exclusive=False,
+                        group="smart-preview",
+                    )
 
-        _show_progress("warmup", 0, 1, ("smart_warmup", {}))
         if table is not None:
             table.clear()
 
-        async def _run() -> list[MailRecord]:
+        async def _run() -> SmartSearchResult:
             return await self._service.smart_search(query, progress=_show_progress)
 
-        self._smart_search_task = asyncio.create_task(_run())
+        task = asyncio.create_task(_run())
+        self._smart_search_task = task
         try:
-            results = await self._smart_search_task
+            result = await task
         except asyncio.CancelledError:
-            spinner_state["running"] = False
-            return  # cancel path restores the view itself
-        except Exception as exc:
-            spinner_state["running"] = False
-            if self._smart_searching:
-                self._smart_searching = False
-                self._set_smart_label("tui.smart_search")
-                if hint is not None:
-                    hint.update(
-                        f"[red]{self._service.t('tui.smart_search_failed', error=str(exc))}[/red]"
-                    )
-                    hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
-                await self.refresh_mail()
+            return  # the cancellation path above restored the ordinary view
+        except Exception:
+            if self._smart_search_task is not task:
+                return
+            self._smart_search_task = None
+            self._smart_searching = False
+            await self._stop_smart_spinner()
+            self._clear_smart_result()
+            self._set_smart_label("tui.smart_search")
+            await self.refresh_mail()
+            if hint is not None:
+                hint.update(f"[red]{self._service.t('tui.smart_search_failed')}[/red]")
+                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
             return
-        spinner_state["running"] = False
-        self._smart_searching = False
+        if self._smart_search_task is not task:
+            return
         self._smart_search_task = None
+        self._smart_searching = False
+        await self._stop_smart_spinner()
         self._set_smart_label("tui.smart_search")
-        self._records = results
-        await self._render_records(results, empty_hint_key="tui.mail_no_match")
+        self._smart_result = result
+        async with self._refresh_lock:
+            await self._render_smart_result(result)
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id in ("mail-urgency-filter", "mail-sort"):
@@ -1057,14 +1110,19 @@ class MailPane(Vertical):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "smart-search":
-            await self._toggle_smart_search()
+            # The search itself awaits network I/O. Keep the message handler
+            # free so a second press can cancel it and progress updates can
+            # be rendered while the model is working.
+            self.run_worker(self._toggle_smart_search(), exclusive=False, group="smart-search")
             return
         if button_id == "btn-refresh":
+            self._clear_smart_result()
             await self.refresh_mail()
             return
         if self._selected_id is None:
             return
         if button_id == "btn-trash":
+            self._clear_smart_result()
             await self._service.delete_mail(self._selected_id)
             self._selected_id = None
             await self.refresh_mail()

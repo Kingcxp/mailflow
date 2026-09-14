@@ -345,8 +345,7 @@ class TestMailboxHistory:
 
 
 class TestSmartSearch:
-    """The LLM-driven mail finder: JSON extraction robustness is the
-    contract — a fenced/prose-wrapped reply once voided every result."""
+    """The LLM finder must return ranked, trustworthy, usable results."""
 
     def _service(self, router: Any) -> MailFlowService:
         config = MailFlowConfig()
@@ -365,170 +364,191 @@ class TestSmartSearch:
             i18n=I18n(),
         )
 
-    async def test_fenced_reply_is_parsed(self) -> None:
-        """The original bug: ```json fences made json.loads fail, the plan
-        was dropped and every batch came back empty for trivial queries."""
+    @staticmethod
+    def _reply(text: str) -> Any:
+        class Reply:
+            def __init__(self, value: str) -> None:
+                self.text = value
 
+        return Reply(text)
+
+    async def test_fenced_scored_reply_is_parsed(self) -> None:
         class FencedRouter:
             def __init__(self) -> None:
                 self.calls = 0
 
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
-                payload = (
-                    '```json\n{"keywords": ["fee"], "senders": ["bursar"], '
-                    '"after": null, "before": null}\n```'
-                    if self.calls == 1
-                    else '```json\n["m1"]\n```'
-                )
-
-                class C:
-                    text = payload
-
-                return C()
+                if messages[-1]["content"].startswith("Reply with"):
+                    return TestSmartSearch._reply("ok")
+                return TestSmartSearch._reply('```json\n[{"id": "m1", "relevance": 88}]\n```')
 
         service = self._service(FencedRouter())
         storage = cast(Any, service.storage)
-        from mailflow.domain import MailRecord
-
-        for mid in ("m1", "m2"):
-            mail = make_mail(mid, minute=10)
+        for message_id, minute in (("m1", 20), ("m2", 10)):
+            mail = make_mail(message_id, minute=minute)
             await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        stages: list[tuple[str, int, int, str]] = []
+        stages: list[tuple[str, int, int, Any]] = []
 
-        def _progress(stage: str, done: int, total: int, detail: str = "") -> None:
+        def _progress(stage: str, done: int, total: int, detail: Any) -> None:
             stages.append((stage, done, total, detail))
 
-        matched = await service.smart_search("the fee notice", progress=_progress)
-        assert [r.record_id for r in matched] == ["m1"]
-        # progress surfaced: warmup, then match batches (the keyword plan
-        # stage was removed — it cost a full LLM round-trip and never
-        # actually narrowed anything)
-        assert stages[0][0] == "warmup"
-        assert stages[-1][0] == "match"
-        assert {s for s, *_ in stages} == {"warmup", "match"}
+        result = await service.smart_search("the fee notice", progress=_progress)
 
-    async def test_prose_wrapped_ids_are_parsed(self) -> None:
+        assert [record.record_id for record in result.records] == ["m1"]
+        assert result.is_complete
+        assert result.total_mails == 2
+        assert stages[0][:3] == ("warmup", 0, 1)
+        assert stages[-1][:3] == ("match", 2, 2)
+
+    async def test_prose_wrapped_legacy_candidate_refs_are_parsed(self) -> None:
         class ProseRouter:
-            def __init__(self) -> None:
-                self.calls = 0
-
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                self.calls += 1
-                payload = (
-                    "{}"
-                    if self.calls == 1
-                    else 'Here are the matching mails:\n["m2"]\nHope that helps.'
-                )
-
-                class C:
-                    text = payload
-
-                return C()
+                if messages[-1]["content"].startswith("Reply with"):
+                    return TestSmartSearch._reply("ok")
+                return TestSmartSearch._reply('Matching candidate:\n["m1"]\nDone.')
 
         service = self._service(ProseRouter())
         storage = cast(Any, service.storage)
-        from mailflow.domain import MailRecord
-
-        for mid in ("m1", "m2"):
-            mail = make_mail(mid, minute=10)
+        for message_id, minute in (("m1", 10), ("m2", 20)):
+            mail = make_mail(message_id, minute=minute)
             await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        matched = await service.smart_search("anything about m2")
-        assert [r.record_id for r in matched] == ["m2"]
 
-    async def test_mixed_case_ids_are_matched_verbatim(self) -> None:
-        """The seminar bug: record ids embed uppercase segments
-        (JavaMail.root@, Outlook GUIDs) and the loop lowercased the LLM's
-        echoed ids — `R in r` never matched, voiding every real hit."""
+        result = await service.smart_search("anything about m2")
 
-        class CaseRouter:
+        # Candidate m1 is the newest mail in this batch, not a raw record id.
+        assert [record.record_id for record in result.records] == ["m2"]
+
+    async def test_candidate_refs_are_case_insensitive_and_hide_record_ids(self) -> None:
+        opaque_record_id = "MixedCase-Opaque-Record-ID@example.test"
+
+        class AliasRouter:
             def __init__(self) -> None:
-                self.calls = 0
-
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                self.calls += 1
-                reply = "{}" if self.calls == 1 else '```json\n["MixedCase123"]\n```'
-
-                class C:
-                    text = reply
-
-                return C()
-
-        service = self._service(CaseRouter())
-        storage = cast(Any, service.storage)
-        from mailflow.domain import MailRecord
-
-        mail = make_mail("MixedCase123", minute=10)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        matched = await service.smart_search("the thing")
-        assert [r.record_id for r in matched] == [mail.normalized_message_id()]
-
-    async def test_multilingual_plan_keywords_rank_batch(self) -> None:
-        """The seminar bug: an English-only plan ('seminar') does not rank
-        Chinese mails ('研讨会') — the batch relevance pass must still see
-        every mail, and a bilingual plan must rank the true match first."""
-
-        class BilingualPlanRouter:
-            def __init__(self) -> None:
-                self.batch_calls = 0
+                self.listing = ""
 
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 user = messages[-1]["content"]
-                if "Subject m" not in user:
-                    return (
-                        '```json\n{"keywords": ["seminar", "webinar", "研讨会", "讲座"], '
-                        '"senders": [], "after": null, "before": null}\n```'
-                    )
-                self.batch_calls += 1
-                # the seminar mail must be IN the batch listing (nothing
-                # hard-excluded) — the keyword in the listing is what makes
-                # this reply correct
-                assert "研讨会" in user
+                if user.startswith("Reply with"):
+                    return TestSmartSearch._reply("ok")
+                self.listing = user
+                return TestSmartSearch._reply('[{"id": "M1", "relevance": 93}]')
 
-                class C:
-                    text = '```json\n["m1"]\n```'
-
-                return C()
-
-        service = self._service(BilingualPlanRouter())
+        router = AliasRouter()
+        service = self._service(router)
         storage = cast(Any, service.storage)
-        from mailflow.domain import MailRecord
+        mail = make_mail("source-message", minute=10).model_copy(
+            update={"subject": "Campus event invitation"}
+        )
+        await storage.save_mail(MailRecord(record_id=opaque_record_id, mail=mail))
 
-        mail = make_mail("m1", minute=10)
-        mail = mail.model_copy(update={"subject": "线上研讨会通知"})
-        record = MailRecord(record_id=mail.normalized_message_id(), mail=mail)
-        await storage.save_mail(record)
-        other = make_mail("m2", minute=20)
-        await storage.save_mail(MailRecord(record_id=other.normalized_message_id(), mail=other))
-        matched = await service.smart_search("我需要参加线上研讨会")
-        assert [r.record_id for r in matched] == ["m1"]
+        result = await service.smart_search("the event invitation")
 
-    async def test_unparseable_batch_is_retried_then_skipped(self) -> None:
-        class BadRouter:
-            def __init__(self) -> None:
-                self.batch_calls = 0
+        assert [record.record_id for record in result.records] == [opaque_record_id]
+        assert opaque_record_id not in router.listing
 
+    async def test_multilingual_candidate_is_evaluated_without_prefiltering(self) -> None:
+        class BilingualRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                if self.batch_calls == 0:
-                    self.batch_calls += 1
+                user = messages[-1]["content"]
+                if user.startswith("Reply with"):
+                    return TestSmartSearch._reply("ok")
+                assert "线上研讨会通知" in user
+                return TestSmartSearch._reply('[{"id": "m1", "relevance": 100}]')
 
-                    class Plan:
-                        text = '{"keywords": []}'
+        service = self._service(BilingualRouter())
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=20).model_copy(update={"subject": "线上研讨会通知"})
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        other = make_mail("m2", minute=10)
+        await storage.save_mail(MailRecord(record_id=other.normalized_message_id(), mail=other))
 
-                    return Plan()
-                self.batch_calls += 1
+        result = await service.smart_search("我需要参加线上研讨会")
 
-                class Garbage:
-                    text = "I could not find anything, sorry!"
+        assert [record.record_id for record in result.records] == ["m1"]
 
-                return Garbage()
+    async def test_scored_matches_rank_across_batches(self) -> None:
+        """A highly relevant older result must precede a newer weak match."""
+
+        class RankingRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                user = messages[-1]["content"]
+                if user.startswith("Reply with"):
+                    return TestSmartSearch._reply("ok")
+                if "Subject m15" in user:
+                    return TestSmartSearch._reply('[{"id": "m1", "relevance": 60}]')
+                return TestSmartSearch._reply('[{"id": "m1", "relevance": 95}]')
+
+        service = self._service(RankingRouter())
+        storage = cast(Any, service.storage)
+        for index in range(16):
+            mail = make_mail(f"m{index}", minute=index)
+            await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+
+        result = await service.smart_search("event details")
+
+        assert [record.record_id for record in result.records] == ["m0", "m15"]
+        assert result.is_complete
+
+    async def test_malformed_batch_is_retried_then_reported_incomplete(self) -> None:
+        class BadRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                if messages[-1]["content"].startswith("Reply with"):
+                    return TestSmartSearch._reply("ok")
+                return TestSmartSearch._reply("I could not find anything, sorry!")
 
         service = self._service(BadRouter())
         storage = cast(Any, service.storage)
-        from mailflow.domain import MailRecord
-
-        for mid in ("m1", "m2"):
-            mail = make_mail(mid, minute=10)
+        for message_id in ("m1", "m2"):
+            mail = make_mail(message_id, minute=10)
             await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        matched = await service.smart_search("receipts")
-        assert matched == []  # retried, still garbage, batch skipped cleanly
+        stages: list[tuple[str, int, int, Any]] = []
+
+        def _progress(stage: str, done: int, total: int, detail: Any) -> None:
+            stages.append((stage, done, total, detail))
+
+        result = await service.smart_search("receipts", progress=_progress)
+
+        assert result.records == []
+        assert result.failed_mails == 2
+        assert result.failed_batches == 1
+        assert not result.is_complete
+        assert stages[-1][3][0] == "smart_batch_unreadable"
+
+    async def test_failed_batch_preserves_completed_matches(self) -> None:
+        class PartiallyFailingRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                user = messages[-1]["content"]
+                if user.startswith("Reply with"):
+                    return TestSmartSearch._reply("ok")
+                if "Subject m15" in user:
+                    return TestSmartSearch._reply('[{"id": "m1", "relevance": 90}]')
+                raise TimeoutError("configured endpoint timed out")
+
+        service = self._service(PartiallyFailingRouter())
+        storage = cast(Any, service.storage)
+        for index in range(16):
+            mail = make_mail(f"m{index}", minute=index)
+            await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        stages: list[tuple[str, int, int, Any]] = []
+
+        def _progress(stage: str, done: int, total: int, detail: Any) -> None:
+            stages.append((stage, done, total, detail))
+
+        result = await service.smart_search("event details", progress=_progress)
+
+        assert [record.record_id for record in result.records] == ["m15"]
+        assert result.failed_mails == 1
+        assert result.failed_batches == 1
+        assert not result.is_complete
+        assert any(detail[0] == "smart_batch_failed" for *_rest, detail in stages)
+
+    async def test_empty_mailbox_does_not_call_the_llm(self) -> None:
+        class NoCallRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                raise AssertionError("an empty mailbox does not need an LLM")
+
+        result = await self._service(NoCallRouter()).smart_search("anything")
+
+        assert result.records == []
+        assert result.total_mails == 0
+        assert result.is_complete
