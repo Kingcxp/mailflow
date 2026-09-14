@@ -136,6 +136,10 @@ class MailMessage(BaseModel):
     in_reply_to: str | None = None
     provider: str = ""  # source plugin id that produced this message
     provider_message_id: str = ""  # provider-specific stable id
+    # Sources set this only when they emit a best-effort fallback after an
+    # otherwise unparseable transport message. The pipeline records it as a
+    # visible failed source note while preserving the message record.
+    parse_error: str = ""
 
     def normalized_message_id(self) -> str:
         """Stable identity, account-independent so forwarded copies of the

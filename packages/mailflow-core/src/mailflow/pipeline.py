@@ -138,6 +138,19 @@ class PipelineEngine:
         notes: list[ProcessorNote] = []
         llm_used = ""
         llm_backend = ""
+        source_error = mail.parse_error.strip()
+        if source_error:
+            noted_at = now or utcnow()
+            notes.append(
+                ProcessorNote(
+                    processor_id="source-parser",
+                    plugin_id=mail.provider or "mailflow-core",
+                    status="failed",
+                    message=f"source parse fallback: {self._sanitize(source_error)}",
+                    started_at=noted_at,
+                    finished_at=noted_at,
+                )
+            )
         stop_requested = False
 
         for binding in self._bindings:

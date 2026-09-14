@@ -216,3 +216,9 @@ trust it, and make that property enforceable instead of aspirational.
 | ------ | ------------ |
 | Rate-limited mail diagnosis: no MIME parse failures were found; historical failures were `llm-importance` deadlines. `RulesProcessor` now stops an advertisement at `ad`, avoiding unnecessary LLM requests, and an `asyncio.wait_for` expiry persists its configured deadline rather than `failed: ` | Regression tests first reproduced both defects, then `tests/unit/test_pipeline.py`, `tests/unit/test_llm_processor.py` and `tests/unit/test_failed_mails.py` passed; IMAP regression selection passed 11 tests (23 deselected) |
 | Full quality gate | `make check`: Ruff clean; 176 formatted files; mypy 93 source files clean; pyright 0 errors; pytest 490 passed (1 third-party deprecation warning); docs gate cross-checked 37 documents |
+
+## Malformed MIME retention round
+
+| Change | Verification |
+| ------ | ------------ |
+| IMAP ingestion emits a stable best-effort `MailMessage` for an otherwise unparseable RFC-822 payload; `parse_error` becomes a persisted, sanitized `source-parser` failure note instead of silently losing the message or blocking later UIDs. | `make check`: Ruff clean; 178 files formatted; mypy 94 source files clean; pyright 0 errors; pytest 494 passed (1 third-party deprecation warning); docs gate cross-checked 37 documents. |

@@ -1003,3 +1003,21 @@ class TestIMAPImageAttachments:
         mail = parse_mime(raw, "acct-1")
         assert "%PDF" not in mail.body_text
         assert "invoice body" in mail.body_text
+
+
+class TestIMAPParseFallback:
+    def test_unparseable_mime_returns_a_recordable_mail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mailflow_mail_imap import plugin as imap_plugin
+
+        def broken_parser(_: bytes) -> Any:
+            raise RuntimeError("malformed header")
+
+        monkeypatch.setattr(imap_plugin, "message_from_bytes", broken_parser)
+        mail = imap_plugin.parse_mime(b"not a valid mail", "acct-1")
+
+        assert mail.parse_error == "RuntimeError"
+        assert mail.message_id.startswith("unparseable-")
+        assert mail.subject == "(unparseable mail)"
+        assert mail.body_text == ""

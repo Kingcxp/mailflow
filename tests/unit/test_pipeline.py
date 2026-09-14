@@ -355,6 +355,17 @@ class TestPipeline:
         assert notes[0].status == "failed"
         assert notes[0].message == "failed: processor timed out after 0.05 seconds"
 
+    async def test_source_parse_fallback_is_visible_and_persistable(self) -> None:
+        mail = make_mail(subject="unparseable mail")
+        mail.parse_error = "HeaderParseError"
+
+        analysis, notes, _, _ = await PipelineEngine([]).process(mail, "acct-1")
+
+        assert analysis.summary == "unparseable mail"
+        assert notes[0].processor_id == "source-parser"
+        assert notes[0].status == "failed"
+        assert notes[0].message == "source parse fallback: HeaderParseError"
+
     async def test_fallback_summary_guarantee(self) -> None:
         """No processor produces a summary -> subject-based fallback, recorded."""
         noop = RecordingProcessor("noop", ProcessorResult())

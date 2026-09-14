@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import html as html_lib
 import imaplib
 import logging
@@ -159,7 +160,25 @@ def _html_to_text(html: str) -> str:
     return text.strip()
 
 
-def parse_mime(raw: bytes, account_id: str, provider: str = "imap") -> MailMessage:
+def _unparseable_mail(raw: bytes, account_id: str, provider: str, error: Exception) -> MailMessage:
+    """Retain a malformed RFC-822 payload instead of blocking later UIDs."""
+    now = datetime.now(UTC)
+    digest = hashlib.sha256(raw).hexdigest()[:24]
+    return MailMessage(
+        message_id=f"unparseable-{digest}",
+        account_id=account_id,
+        subject="(unparseable mail)",
+        sender=MailAddress(address=""),
+        recipients=[],
+        cc=[],
+        date=now,
+        received_at=now,
+        provider=provider,
+        parse_error=type(error).__name__,
+    )
+
+
+def _parse_mime(raw: bytes, account_id: str, provider: str) -> MailMessage:
     """Convert one raw RFC-822 message into a normalized MailMessage."""
     message = message_from_bytes(raw)
     subject = _decode(message.get("Subject")) or "(no subject)"
@@ -189,6 +208,16 @@ def parse_mime(raw: bytes, account_id: str, provider: str = "imap") -> MailMessa
         attachments=attachments,
         provider=provider,
     )
+
+
+def parse_mime(raw: bytes, account_id: str, provider: str = "imap") -> MailMessage:
+    """Normalize raw RFC-822 data, retaining unexpected parser failures."""
+    try:
+        return _parse_mime(raw, account_id, provider)
+    except Exception as exc:
+        # Never log raw RFC-822 data: headers and bodies can contain secrets.
+        logger.warning("MIME parse fallback for account %r: %s", account_id, type(exc).__name__)
+        return _unparseable_mail(raw, account_id, provider, exc)
 
 
 def _settings_for(account: MailAccountConfig) -> dict[str, Any]:

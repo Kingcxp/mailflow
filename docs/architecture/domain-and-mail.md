@@ -70,6 +70,13 @@ mail was already stored.
 Browsing must not disturb the live stream: the built-in IMAP source pages over
 UIDs for history without touching the incremental poll water-mark.
 
+If an IMAP MIME payload unexpectedly defeats the standard parser, the source
+emits a deterministic fallback `MailMessage` rather than blocking that UID and
+every newer message. The fallback carries `parse_error` (the exception type,
+never raw mail data); the pipeline persists it with a visible failed
+`source-parser` note and its normal fallback summary. Malformed transport input
+therefore cannot disappear silently.
+
 ## MailAnalysis
 
 The structured interpretation produced by the processor chain: `summary`,
