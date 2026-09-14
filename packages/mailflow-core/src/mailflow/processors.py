@@ -21,7 +21,13 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field, ValidationError
 
 from mailflow.config import ProcessorConfig
-from mailflow.contracts import LLMEnhancer, LLMRouter, ProcessingContext, ProcessorResult
+from mailflow.contracts import (
+    LLMEnhancer,
+    LLMRouter,
+    ProcessingContext,
+    ProcessorDecision,
+    ProcessorResult,
+)
 from mailflow.domain import (
     ActionItem,
     MailAnalysis,
@@ -78,12 +84,13 @@ class RulesProcessor:
         haystack = f"{mail.subject}\n{_plain_body(mail)}".lower()
         if self._is_advertisement(haystack):
             return ProcessorResult(
+                decision=ProcessorDecision.STOP,
                 analysis=MailAnalysis(
                     summary="Advertisement detected by rules",
                     urgency=Urgency.AD,
                     reason="matches advertising keywords",
                     backend="",
-                )
+                ),
             )
         if self._is_important_sender(mail.sender.address):
             return ProcessorResult(

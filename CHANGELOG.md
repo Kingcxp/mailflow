@@ -175,6 +175,11 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **Rate-limited mail analysis no longer yields blank failures** — an expired
+  processor deadline now persists `processor timed out after N seconds`;
+  deterministic advertising detection stops the pipeline at `ad`, so obvious
+  junk does not consume an LLM request. The fallback-summary guarantee still
+  preserves every failed mail for later re-analysis.
 - **Gateway setup crash** — `Unable to serialize unknown type:
   <class 'function'>`: the sudo-prompt callback injected by the setup
   guide leaked into the persisted instance options. Per-call transport

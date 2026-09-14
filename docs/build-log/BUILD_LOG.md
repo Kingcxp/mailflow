@@ -209,3 +209,10 @@ trust it, and make that property enforceable instead of aspirational.
 | Invariants 32–35 added (locale key uniqueness, `config.desc` coverage, docs name real things); quality.md documents the gate; agent/README.md explains what it can and cannot catch | `make check` |
 | Configs: `development.toml`/`example.toml` comments updated — `imap` is built in with presets (they still told users to look for a mail adapter in the marketplace), plus the LLM tab's order-is-the-chain rule | `mailflow config-check` on both |
 | make check | 318 tests + lint + format + mypy + pyright + docs gate green |
+
+## Mail processing failure-isolation round
+
+| Change | Verification |
+| ------ | ------------ |
+| Rate-limited mail diagnosis: no MIME parse failures were found; historical failures were `llm-importance` deadlines. `RulesProcessor` now stops an advertisement at `ad`, avoiding unnecessary LLM requests, and an `asyncio.wait_for` expiry persists its configured deadline rather than `failed: ` | Regression tests first reproduced both defects, then `tests/unit/test_pipeline.py`, `tests/unit/test_llm_processor.py` and `tests/unit/test_failed_mails.py` passed; IMAP regression selection passed 11 tests (23 deselected) |
+| Full quality gate | `make check`: Ruff clean; 176 formatted files; mypy 93 source files clean; pyright 0 errors; pytest 490 passed (1 third-party deprecation warning); docs gate cross-checked 37 documents |

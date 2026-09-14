@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from mailflow.config import LLMConfig
+from mailflow.config import LLMConfig, ProcessorConfig
 from mailflow.contracts import (
     LLMCompletion,
     MailMessage,
@@ -20,6 +20,7 @@ from mailflow.domain import MailAddress, MailAnalysis, Urgency
 from mailflow.events import EventBus
 from mailflow.llm import LLMRouteError, LLMRouterImpl
 from mailflow.pipeline import PipelineEngine, ProcessorBinding, merge_analysis
+from mailflow.processors import RulesProcessor
 
 ADDRESS = MailAddress(name="Sender", address="sender@example.com")
 
@@ -309,6 +310,36 @@ class TestPipeline:
         assert analysis.summary == "Hello"  # fallback summary still guaranteed
         assert notes[0].status == "failed"
 
+    async def test_advertisement_stops_before_later_processors(self) -> None:
+        rules = RulesProcessor(
+            ProcessorConfig(
+                processor_id="rules",
+                provider="rules",
+                options={"advertising_keywords": ["promotion"]},
+            )
+        )
+        classifier = RecordingProcessor(
+            "llm-importance",
+            ProcessorResult(
+                analysis=MailAnalysis(summary="model classification", urgency=Urgency.IMPORTANT)
+            ),
+        )
+        engine = PipelineEngine(
+            [
+                self._binding(rules, "rules", priority=10),
+                self._binding(classifier, "llm-importance", priority=20),
+            ]
+        )
+
+        analysis, notes, _, _ = await engine.process(
+            make_mail(subject="Limited promotion"), "acct-1"
+        )
+
+        assert classifier.calls == 0
+        assert analysis.summary == "Advertisement detected by rules"
+        assert analysis.urgency is Urgency.AD
+        assert [note.processor_id for note in notes] == ["rules"]
+
     async def test_timeout_marks_failed_and_continues(self) -> None:
         class Slow:
             processor_id = "slow"
@@ -322,7 +353,7 @@ class TestPipeline:
         engine = PipelineEngine([self._binding(Slow(), "slow", timeout_seconds=0.05, retries=0)])
         _, notes, _, _ = await engine.process(make_mail(), "acct-1")
         assert notes[0].status == "failed"
-        assert "timeout" in notes[0].message or "failed" in notes[0].message
+        assert notes[0].message == "failed: processor timed out after 0.05 seconds"
 
     async def test_fallback_summary_guarantee(self) -> None:
         """No processor produces a summary -> subject-based fallback, recorded."""

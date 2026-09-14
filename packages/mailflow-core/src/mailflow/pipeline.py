@@ -105,17 +105,22 @@ class PipelineEngine:
                     binding.processor.process(mail, context),
                     timeout=binding.timeout_seconds,
                 )
+            except TimeoutError as exc:
+                last_error = TimeoutError(
+                    str(exc) or f"processor timed out after {binding.timeout_seconds:g} seconds"
+                )
             except Exception as exc:
                 last_error = exc
-                if attempt >= binding.retries:
-                    break
-                logger.debug(
-                    "processor %r attempt %d/%d failed: %s",
-                    binding.processor_id,
-                    attempt + 1,
-                    binding.retries + 1,
-                    exc,
-                )
+            assert last_error is not None
+            if attempt >= binding.retries:
+                break
+            logger.debug(
+                "processor %r attempt %d/%d failed: %s",
+                binding.processor_id,
+                attempt + 1,
+                binding.retries + 1,
+                last_error,
+            )
         assert last_error is not None
         raise last_error
 

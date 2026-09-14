@@ -69,8 +69,8 @@ URL is reduced to `transport error` before it can reach a persisted note.
 a plugin) holds both defaults:
 
 - `rules` — deterministic pre-filter: advertising keywords (word-boundary
-  matches) and an important-senders allowlist, so obvious junk never reaches
-  the model.
+  matches) stop the chain with an `ad` result, so obvious junk never reaches
+  the model; an important-senders allowlist marks known senders important.
 - `llm-importance` — prompts with the exact four-level semantics, injects the
   mail content, current time, timezone and the rolling feedback guidelines,
   and parses a structured JSON answer (summary, urgency, reason,
