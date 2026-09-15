@@ -526,10 +526,10 @@ async def test_smart_search_keeps_real_progress_and_relevance_order(tmp_path: Pa
             assert "Smart search  0/3" in str(hint.render())
             router.release.set()
             for _ in range(40):
-                if int(table.row_count) == 2 and str(button.label) == "Smart find…":
+                if int(table.row_count) == 1 and str(button.label) == "Smart find…":
                     break
                 await asyncio.sleep(0.05)
-            assert int(table.row_count) == 2
+            assert int(table.row_count) == 1
             assert "Pick up your student ID card" in str(table.get_row_at(0)[1])
             assert pane._smart_result is not None  # pyright: ignore[reportPrivateUsage]
             app.exit()

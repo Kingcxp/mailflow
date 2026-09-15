@@ -146,10 +146,13 @@ successful content analysis.
 
 `SmartSearchResult` is the provider-neutral result of an intent search. Its
 `records` are ordered by model-provided relevance (then receipt time), not by
-message id. `total_mails`, `failed_mails`, and `failed_batches` expose whether
-the result is complete: a caller must show an explicit incomplete state rather
-than treating unavailable or malformed batches as no matches. Candidate aliases
-exist only inside one LLM batch; raw record ids are never exposed to the model.
+message id. Scored candidates below 40 are model-declared non-matches and are
+not returned or streamed into the TUI; legacy unscored candidate arrays remain
+accepted for compatibility. `total_mails`, `failed_mails`, and `failed_batches`
+expose whether the result is complete: a caller must show an explicit incomplete
+state rather than treating unavailable or malformed batches as no matches.
+Candidate aliases exist only inside one LLM batch; raw record ids are never
+exposed to the model.
 
 ## TrashRecord
 

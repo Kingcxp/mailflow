@@ -503,6 +503,27 @@ class TestSmartSearch:
         assert [record.record_id for record in result.records] == ["m0", "m15"]
         assert result.is_complete
 
+    async def test_low_scored_candidates_are_not_returned(self) -> None:
+        """Scores below the published floor are model non-matches, not results."""
+
+        class PrecisionRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                if messages[-1]["content"].startswith("Reply with"):
+                    return TestSmartSearch._reply("ok")
+                return TestSmartSearch._reply(
+                    '[{"id": "m1", "relevance": 30}, {"id": "m2", "relevance": 40}]'
+                )
+
+        service = self._service(PrecisionRouter())
+        storage = cast(Any, service.storage)
+        for message_id, minute in (("m1", 20), ("m2", 10)):
+            mail = make_mail(message_id, minute=minute)
+            await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+
+        result = await service.smart_search("the student ID invitation")
+
+        assert [record.record_id for record in result.records] == ["m2"]
+
     async def test_malformed_batch_is_retried_then_reported_incomplete(self) -> None:
         class BadRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:

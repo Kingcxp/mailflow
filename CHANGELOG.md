@@ -215,6 +215,7 @@ All notable changes are recorded here; the format follows
   spinner. Malformed or unavailable batches remain an explicit incomplete result
   in both the TUI and chat commands; chat `#` handles still resolve against the
   ordinary global mailbox order.
+- **Smart search excludes model-declared non-matches** — candidate scores below 40 no longer appear in live previews or final results, while useful weak matches (40–59) and legacy unscored model replies remain supported. This prevents a direct hit from being buried beneath a low-confidence keyword overlap.
 - **WeChatPadPro guided deployment now produces a working notifier** — Docker
   Compose v2 and classic `docker-compose` use their valid command forms,
   a dormant Docker Desktop is started by the guide, and new instances select

@@ -277,3 +277,10 @@ trust it, and make that property enforceable instead of aspirational.
 | Retrying or re-logging-in a gateway cancels and joins its previous supervisor, preserves its current bridge options, and carries one non-persisted progress channel through install and start. Cancellation or failure now stops partial gateways and persists a truthful stopped/error state; a failed Compose stop reaches the caller rather than claiming success. | `uv run pytest tests/unit/test_gateway.py tests/unit/test_wechatpadpro_provisioner.py -q`: 29 passed. |
 | WeChatPadPro Compose resource names include a bounded instance-id digest, preventing different valid notifier ids with equivalent legacy slugs from sharing containers, networks, or volumes. The guide treats Escape as Cancel and cleans the active deployment. | Focused regression cases cover resource collision isolation, failed cleanup propagation, and Escape cancellation. |
 | Full quality gate after the change. | `make format && make check`: Ruff clean; 180 files formatted; mypy 95 source files clean; pyright 0 errors/0 warnings; pytest 530 passed (1 existing third-party deprecation warning); docs gate cross-checked 37 documents. |
+
+## Smart search precision round
+
+| Change | Verification |
+| ------ | ------------ |
+| The smart-search prompt and service now treat scored candidates below 40 as non-matches. The same floor applies before streaming batch previews, so irrelevant low-confidence rows never flicker into the TUI; 40–59 remains available for useful weak matches and legacy unscored arrays remain compatible. | `uv run ruff format packages/mailflow-core/src/mailflow/service.py tests/unit/test_service.py tests/e2e/test_tui.py && uv run pytest tests/unit/test_service.py::TestSmartSearch tests/unit/test_commands.py::TestCommandRouter tests/e2e/test_tui.py::test_smart_search_keeps_real_progress_and_relevance_order -q`: 43 passed. |
+| Full quality gate after the change. | `make check`: Ruff clean; 180 files formatted; mypy 95 source files clean; pyright 0 errors/0 warnings; pytest 531 passed (1 existing third-party deprecation warning); docs gate cross-checked 37 documents. |
