@@ -14,6 +14,8 @@ from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Static, TextArea
 
+from mailflow_tui.labels import error_detail
+
 
 class SeminarReviewModal(ModalScreen[bool]):
     """Present each proposal as an editable form before schedule import."""
@@ -149,7 +151,9 @@ class SeminarReviewModal(ModalScreen[bool]):
                 description=self.query_one("#seminar-description", TextArea).text.strip(),
             )
         except Exception as exc:
-            self._show_error(self._t("tui.seminar_import_failed", error=str(exc)))
+            self._show_error(
+                self._t("tui.seminar_import_failed", error=error_detail(self._service, exc))
+            )
             return
         self._changed = True
         self.notify(self._t("tui.seminar_imported"), timeout=4)
@@ -159,7 +163,9 @@ class SeminarReviewModal(ModalScreen[bool]):
         try:
             rejected = await self._service.reject_seminar(self._candidate.candidate_id)
         except Exception as exc:
-            self._show_error(self._t("tui.seminar_reject_failed", error=str(exc)))
+            self._show_error(
+                self._t("tui.seminar_reject_failed", error=error_detail(self._service, exc))
+            )
             return
         if not rejected:
             self._show_error(self._t("seminar.candidate_not_found"))

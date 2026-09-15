@@ -14,6 +14,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DirectoryTree, Input, Select, Static
 
+from mailflow_tui.labels import error_message
+
 
 class PluginScaffoldScreen(ModalScreen[Path | None]):
     """Directory-tree wizard that scaffolds a plugin into the chosen folder."""
@@ -97,13 +99,13 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
             self.query_one("#scaffold-generate", Button).disabled = True
             self.run_worker(self._scaffold(target, plugin_id, category), exit_on_error=False)
         except ValueError as exc:
-            self._notify_error(str(exc))
+            self._notify_error(error_message(self._service, exc))
 
     async def _scaffold(self, target: Path, plugin_id: str, category: str) -> None:
         try:
             created = await asyncio.to_thread(scaffold_plugin, target, plugin_id, category)
         except (ValueError, OSError) as exc:
-            self._notify_error(str(exc))
+            self._notify_error(error_message(self._service, exc))
             generate_btn = self.query_one_optional("#scaffold-generate", Button)
             if generate_btn is not None:
                 generate_btn.disabled = False

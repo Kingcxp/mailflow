@@ -20,6 +20,7 @@ from mailflow.service import MailFlowService
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
     Button,
@@ -28,6 +29,8 @@ from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
     RichLog,
     Static,
 )
+
+from mailflow_tui.labels import error_detail
 
 _LEVEL_COLORS = {
     "DEBUG": "dim",
@@ -347,7 +350,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             }
             await self._qr_loop(service, provider)
         except Exception as exc:
-            message = self._t("tui.bots_guide_failed", error=str(exc))
+            message = self._t(
+                "tui.bots_guide_failed", error=escape(error_detail(self._service, exc))
+            )
             self._log("ERROR", message)
             self._set_status(message, "red")
             return
@@ -598,7 +603,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             await self._service.gateway_shutdown(self._provider, self._instance_id)
             self._log("INFO", self._t("tui.bots_guide_stopped"))
         except Exception as exc:
-            self._log("ERROR", self._t("tui.bots_guide_stop_failed", error=str(exc)))
+            self._log(
+                "ERROR",
+                self._t(
+                    "tui.bots_guide_stop_failed",
+                    error=escape(error_detail(self._service, exc)),
+                ),
+            )
         self.dismiss(None)
 
     def action_dismiss_modal(self) -> None:

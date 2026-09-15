@@ -26,7 +26,7 @@ from textual.markup import escape
 from textual.widgets import Button, DataTable, Select, Static
 
 from mailflow_tui.gateway_guide import GatewayGuideModal
-from mailflow_tui.labels import urgency_label
+from mailflow_tui.labels import error_detail, error_message, urgency_label
 
 _URGENCY_ORDER = (Urgency.AD, Urgency.INFO, Urgency.IMPORTANT, Urgency.URGENT)
 
@@ -232,6 +232,12 @@ class NotificationsPane(Vertical):
     def refresh_data(self) -> None:
         self._render_rows()
 
+    def _show_error(self, error: BaseException | str) -> None:
+        """Keep backend failure details localized, escaped, and credential-safe."""
+        self.query_one("#notifications-status", Static).update(
+            f"[red]{escape(error_message(self._service, error))}[/red]"
+        )
+
     def on_data_table_row_highlighted(self, event: Any) -> None:
         self._selected_id = str(event.row_key.value)
         self._sync_selection_controls()
@@ -332,7 +338,7 @@ class NotificationsPane(Vertical):
         try:
             await self._service.update_config_entry("notifiers", index, values)
         except Exception as exc:
-            self.query_one("#notifications-status", Static).update(f"[red]{exc}[/red]")
+            self._show_error(exc)
             return
         self._render_rows()
 
@@ -349,7 +355,7 @@ class NotificationsPane(Vertical):
         try:
             await self._service.update_config_entry("notifiers", index, values)
         except Exception as exc:
-            self.query_one("#notifications-status", Static).update(f"[red]{exc}[/red]")
+            self._show_error(exc)
             return
         self._render_rows()
         self._sync_selection_controls()
@@ -432,7 +438,7 @@ class NotificationsPane(Vertical):
         try:
             await self._service.update_config_entry("notifiers", index, values)
         except Exception as exc:
-            self.query_one("#notifications-status", Static).update(f"[red]{exc}[/red]")
+            self._show_error(exc)
             return
         self.refresh_data()
         self.query_one("#notifications-status", Static).update(
@@ -526,7 +532,7 @@ class NotificationsPane(Vertical):
             else:
                 await self._service.add_config_entry("notifiers", values)
         except Exception as exc:
-            self.query_one("#notifications-status", Static).update(f"[red]{exc}[/red]")
+            self._show_error(exc)
             return
         self.refresh_data()
         self.query_one("#notifications-status", Static).update(
@@ -537,7 +543,7 @@ class NotificationsPane(Vertical):
         try:
             await self._service.add_config_entry("notifiers", values)
         except Exception as exc:
-            self.query_one("#notifications-status", Static).update(f"[red]{exc}[/red]")
+            self._show_error(exc)
             return
         self.refresh_data()
         self.query_one("#notifications-status", Static).update(
@@ -561,9 +567,12 @@ class NotificationsPane(Vertical):
             try:
                 await self._service.gateway_shutdown(gateway, entry.notifier_id)
             except Exception as exc:
-                self.query_one("#notifications-status", Static).update(
-                    f"[red]{self._service.t('tui.bots_stop_failed', instance=entry.notifier_id, error=str(exc))}[/red]"
+                message = self._service.t(
+                    "tui.bots_stop_failed",
+                    instance=entry.notifier_id,
+                    error=escape(error_detail(self._service, exc)),
                 )
+                self.query_one("#notifications-status", Static).update(f"[red]{message}[/red]")
                 return
         await self._service.remove_config_entry("notifiers", index)
         self._selected_id = None
@@ -614,9 +623,9 @@ class NotificationsPane(Vertical):
         for instance in instances:
             status = str(getattr(instance, "status", ""))
             if status == "error":
-                error = str(getattr(instance, "error", "") or "")
+                error = error_detail(self._service, getattr(instance, "error", "") or "")
                 gateway_by_id[str(instance.instance_id)] = (
-                    f"[red]{self._service.t('tui.bots_need_reconfig')}[/red] ({error})"
+                    f"[red]{self._service.t('tui.bots_need_reconfig')}[/red] ({escape(error)})"
                 )
         if not gateway_by_id:
             return

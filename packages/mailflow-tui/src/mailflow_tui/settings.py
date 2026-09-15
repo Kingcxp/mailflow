@@ -57,7 +57,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from mailflow_tui.labels import urgency_label
+from mailflow_tui.labels import error_detail, error_message, urgency_label
 
 _SECTION_LABELS = {
     "general": "tui.settings_section_general",
@@ -861,7 +861,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             factory = self._service.registry.llm_factory(provider)
             backend = factory(config)
         except Exception as exc:
-            status.update(f"[red]{escape(str(exc))}[/red]")
+            status.update(f"[red]{escape(error_message(self._service, exc))}[/red]")
             return
         status.update(self._t("tui.llm_testing_connect", provider=config.provider))
         started = datetime.now()
@@ -874,10 +874,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             status.update(f"[red]{self._t('tui.llm_test_timeout')}[/red]")
             return
         except Exception as exc:
-            message = str(exc)
-            if config.api_key and config.api_key in message:
-                message = message.replace(config.api_key, "***")
-            status.update(f"[red]{escape(message[:300])}[/red]")
+            status.update(
+                f"[red]{escape(error_message(self._service, exc, max_chars=300, extra_secrets=(config.api_key, *config.headers.values())))}[/red]"
+            )
             return
         elapsed = (datetime.now() - started).total_seconds()
         # raw model output is intentionally not shown — latency, the model
@@ -925,7 +924,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             status.update(f"[red]{self._t('tui.account_test_timeout')}[/red]")
             return
         except Exception as exc:
-            detail = escape(str(exc)[:200])
+            detail = escape(error_detail(self._service, exc, max_chars=200))
             status.update(f"[red]{self._t('tui.account_test_failed', reason=detail)}[/red]")
             return
         elapsed = (datetime.now() - started).total_seconds()
@@ -972,9 +971,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         try:
             code = await asyncio.wait_for(_probe(), timeout=10.0)
         except Exception as exc:
-            status.update(
-                f"[red]{self._t('tui.notifier_test_failed', error=escape(str(exc)[:120]))}[/red]"
-            )
+            detail = escape(error_detail(self._service, exc, max_chars=120))
+            status.update(f"[red]{self._t('tui.notifier_test_failed', error=detail)}[/red]")
             return
         if not code.startswith("2") and code != "200":
             status.update(f"[red]{self._t('tui.notifier_test_http', code=code)}[/red]")
@@ -1324,8 +1322,9 @@ class SettingsPane(Vertical):
             self.notify(message, severity="error", timeout=8)
             return
         except ValueError as exc:
-            self._set_status(f"[red]{escape(str(exc))}[/red]")
-            self.notify(str(exc), severity="error", timeout=8)
+            message = error_message(self._service, exc)
+            self._set_status(f"[red]{escape(message)}[/red]")
+            self.notify(message, severity="error", timeout=8)
             return
         self._set_status(f"[green]{self._t('tui.settings_saved', option=key)}[/green]")
         await self.reload()
@@ -1338,7 +1337,7 @@ class SettingsPane(Vertical):
             self._set_status(f"[red]{escape(message)}[/red]")
             return
         except ValueError as exc:
-            self._set_status(f"[red]{escape(str(exc))}[/red]")
+            self._set_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
             return
         self._set_status(f"[green]{self._t('tui.settings_reset_done', option=key)}[/green]")
         await self.reload()
@@ -1606,8 +1605,9 @@ class LLMPane(Vertical):
             self.notify(message, severity="error", timeout=8)
             return
         except ValueError as exc:
-            self._set_status(f"[red]{escape(str(exc))}[/red]")
-            self.notify(str(exc), severity="error", timeout=8)
+            message = error_message(self._service, exc)
+            self._set_status(f"[red]{escape(message)}[/red]")
+            self.notify(message, severity="error", timeout=8)
             return
         if message_key:
             self._set_status(
@@ -1855,8 +1855,9 @@ class AccountsPane(Vertical):
             self.notify(message, severity="error", timeout=8)
             return
         except ValueError as exc:
-            self._set_status(f"[red]{escape(str(exc))}[/red]")
-            self.notify(str(exc), severity="error", timeout=8)
+            message = error_message(self._service, exc)
+            self._set_status(f"[red]{escape(message)}[/red]")
+            self.notify(message, severity="error", timeout=8)
             return
         if message_key:
             self._set_status(
@@ -1878,10 +1879,10 @@ class AccountsPane(Vertical):
             self._set_status(f"[yellow]{self._t('tui.history_unsupported')}[/yellow]")
             return
         except KeyError as exc:
-            self._set_status(f"[red]{escape(str(exc))}[/red]")
+            self._set_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
             return
         except Exception as exc:  # provider/transport failures stay in the pane
-            self._set_status(f"[red]{escape(str(exc))}[/red]")
+            self._set_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
             return
         known: set[str] = set(self._known)
         fresh: list[MailMessage] = []
@@ -1943,7 +1944,7 @@ class AccountsPane(Vertical):
             except Exception as exc:
                 # one bad mail must not abort the batch: keep it picked so
                 # the user can retry after fixing the cause
-                failed.append(f"{mail.subject[:40]}: {exc}")
+                failed.append(f"{mail.subject[:40]}: {error_detail(self._service, exc)}")
                 return
             message_id = mail.normalized_message_id()
             self._known.add(message_id)

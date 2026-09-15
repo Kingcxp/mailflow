@@ -1176,7 +1176,9 @@ async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_notifications_pane_lists_all_notifiers_and_toggles(tmp_path: Path) -> None:
+async def test_notifications_pane_lists_all_notifiers_and_toggles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The Notifications tab shows every notifier (not just IM providers),
     toggles the selected one enabled/disabled in place, and edits urgency."""
     from mailflow_tui.notifications import NotificationsPane
@@ -1240,6 +1242,20 @@ async def test_notifications_pane_lists_all_notifiers_and_toggles(tmp_path: Path
             await pilot.pause(0.2)
             qq = next(n for n in service.config.notifiers if n.notifier_id == "qq-1")
             assert qq.minimum_urgency is Urgency.URGENT
+            # Backend details are safely displayed in the active language:
+            # do not expose a notifier credential or interpret its markup.
+            qq.options["access_token"] = "notify-token-secret"
+            await service.set_language("zh-CN")
+
+            async def reject_update(*args: Any, **kwargs: Any) -> None:
+                raise ValueError("save [markup] failed: notify-token-secret")
+
+            monkeypatch.setattr(service, "update_config_entry", reject_update)
+            await pane._toggle_selected()  # pyright: ignore[reportPrivateUsage]
+            status = str(pane.query_one("#notifications-status", Static).render())
+            assert "错误" in status
+            assert "notify-token-secret" not in status
+            assert "***" in status
             app.exit()
             await pilot.pause()
     finally:

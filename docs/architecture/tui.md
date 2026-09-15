@@ -222,6 +222,12 @@ action-type values, localized setting defaults, validation feedback and empty
 states. A language change re-renders screens through the `language.changed`
 event. Panes that are already composed are relabeled in a worker guarded by a
 lock.
+Generic backend failures use the active-language `common.error` framing. Their
+diagnostic detail is escaped before Rich rendering and redacts configured
+credentials (including secret notifier options and LLM headers); external
+transport text itself remains diagnostic data rather than a second UI language.
+Language remounting re-checks each tab container after asynchronous removal, so
+closing the app during a language switch cannot raise a mount failure.
 
 Before a remote service is connected, its login form uses the locally saved
 language pack from the last successful session. After authentication,

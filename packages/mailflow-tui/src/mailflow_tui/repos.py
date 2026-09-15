@@ -12,6 +12,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Static
 
+from mailflow_tui.labels import error_message
+
 
 class ReposScreen(ModalScreen[bool | None]):
     """Manage remote plugin repositories (add / remove connections)."""
@@ -113,7 +115,7 @@ class ReposScreen(ModalScreen[bool | None]):
             if editing is not None:
                 with contextlib.suppress(Exception):
                     await self._service.plugin_repo_add(editing, original_url)
-            self.notify(str(exc), severity="error", timeout=6)
+            self.notify(error_message(self._service, exc), severity="error", timeout=6)
             return
         self._reset_edit_state()
         self._reload()
@@ -130,7 +132,7 @@ class ReposScreen(ModalScreen[bool | None]):
         try:
             await self._service.plugin_repo_remove(name)
         except KeyError as exc:
-            self.notify(str(exc), severity="error", timeout=6)
+            self.notify(error_message(self._service, exc), severity="error", timeout=6)
             return
         self._reload()
         self.notify(self._t("plugin.repo_removed", name=name), timeout=5)

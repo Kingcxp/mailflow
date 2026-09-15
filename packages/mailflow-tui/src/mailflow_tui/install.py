@@ -14,6 +14,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DirectoryTree, Static
 
+from mailflow_tui.labels import error_detail, error_message
+
 
 class InstallScreen(ModalScreen[list[str] | None]):
     """Directory-tree wizard that installs local plugins (single or batch)."""
@@ -87,7 +89,7 @@ class InstallScreen(ModalScreen[list[str] | None]):
                         )
                     )
                 except Exception as exc:
-                    failed.append(f"{plugin_id}: {exc}")
+                    failed.append(f"{plugin_id}: {error_detail(self._service, exc)}")
                     continue
                 await self._service.record_plugin_source(plugin_id, str(folder))
                 installed.append(plugin_id)
@@ -106,7 +108,7 @@ class InstallScreen(ModalScreen[list[str] | None]):
                 )
             self.dismiss(installed or None)
         except Exception as exc:
-            self.notify(str(exc), severity="error", timeout=8)
+            self.notify(error_message(self._service, exc), severity="error", timeout=8)
             self.dismiss(None)
 
     @staticmethod

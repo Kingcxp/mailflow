@@ -14,8 +14,11 @@ from typing import Any, ClassVar
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, DirectoryTree, Input, Static
+
+from mailflow_tui.labels import error_detail
 
 
 class LogExportScreen(ModalScreen[str | None]):
@@ -81,6 +84,7 @@ class LogExportScreen(ModalScreen[str | None]):
                 "\n".join(self._lines) + ("\n" if self._lines else ""), encoding="utf-8"
             )
         except OSError as exc:
-            error.update(f"[red]{self._t('tui.log_export_failed', error=str(exc))}[/red]")
+            detail = escape(error_detail(self._service, exc))
+            error.update(f"[red]{self._t('tui.log_export_failed', error=detail)}[/red]")
             return
         self.dismiss(str(target))

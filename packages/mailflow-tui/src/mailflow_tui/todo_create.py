@@ -10,8 +10,11 @@ from mailflow.domain import ActionItem
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Select, Static
+
+from mailflow_tui.labels import error_detail
 
 _ACTION_TYPES: tuple[tuple[str, str], ...] = (
     ("tui.action_type_errand", "errand"),
@@ -103,7 +106,8 @@ class TodoCreateModal(ModalScreen[bool]):
                 )
         except Exception as exc:
             key = "tui.todo_create_failed" if self._item is None else "tui.todo_edit_failed"
-            error.update(f"[red]{self._t(key, error=str(exc))}[/red]")
+            detail = escape(error_detail(self._service, exc))
+            error.update(f"[red]{self._t(key, error=detail)}[/red]")
             return
         self.dismiss(True)
 

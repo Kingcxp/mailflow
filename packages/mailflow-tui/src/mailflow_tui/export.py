@@ -16,6 +16,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DirectoryTree, Input, Select, Static
 
+from mailflow_tui.labels import error_detail
+
 
 class BotExportScreen(ModalScreen[Path | None]):
     """Directory-tree wizard that exports MailFlow as a chatbot framework plugin."""
@@ -113,7 +115,11 @@ class BotExportScreen(ModalScreen[Path | None]):
                 language=service.i18n.language,
             )
         except Exception as exc:
-            self.notify(self._t("tui.export_failed", message=str(exc)), severity="error", timeout=6)
+            self.notify(
+                self._t("tui.export_failed", message=error_detail(self._service, exc)),
+                severity="error",
+                timeout=6,
+            )
             return
         self.notify(
             self._t("tui.export_created", count=len(result.created), path=str(target)),

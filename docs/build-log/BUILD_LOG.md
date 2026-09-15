@@ -284,3 +284,11 @@ trust it, and make that property enforceable instead of aspirational.
 | ------ | ------------ |
 | The smart-search prompt and service now treat scored candidates below 40 as non-matches. The same floor applies before streaming batch previews, so irrelevant low-confidence rows never flicker into the TUI; 40–59 remains available for useful weak matches and legacy unscored arrays remain compatible. | `uv run ruff format packages/mailflow-core/src/mailflow/service.py tests/unit/test_service.py tests/e2e/test_tui.py && uv run pytest tests/unit/test_service.py::TestSmartSearch tests/unit/test_commands.py::TestCommandRouter tests/e2e/test_tui.py::test_smart_search_keeps_real_progress_and_relevance_order -q`: 43 passed. |
 | Full quality gate after the change. | `make check`: Ruff clean; 180 files formatted; mypy 95 source files clean; pyright 0 errors/0 warnings; pytest 531 passed (1 existing third-party deprecation warning); docs gate cross-checked 37 documents. |
+
+## TUI error presentation and remount safety round
+
+| Change | Verification |
+| ------ | ------------ |
+| Generic TUI backend failures now use localized `common.error` framing; configured passwords, tokens, LLM keys, and header values are redacted before rendering, and Rich markup in diagnostics is escaped. Every TUI path that had rendered a raw exception string now uses the shared presentation helper. | `uv run pytest tests/unit/test_tui_labels.py tests/unit/test_i18n.py tests/unit/test_locale_completeness.py tests/unit/test_notify_feed.py tests/e2e/test_tui.py tests/e2e/test_settings_forms.py tests/e2e/test_remote_tui.py -q`: 52 passed. A fresh 140×50 Textual `run_test` smoke rendered `错误：save [test] failed: ***` in Notifications; its temporary database and SVG were removed. |
+| A concurrent language switch and app shutdown no longer lets a queued pane remount mount into a detached `TabPane`. | The Notifications regression switches to zh-CN, renders the credential-redacted failure, then closes immediately; it failed before the attachment-lifecycle guard and passes now. |
+| Full quality gate after the change. | `make check`: Ruff clean; 181 files formatted; mypy 95 source files clean; pyright 0 errors/0 warnings; pytest 532 passed (1 existing third-party deprecation warning); docs gate cross-checked 37 documents. |

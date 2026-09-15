@@ -32,6 +32,7 @@ from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.coordinate import Coordinate
 from textual.markup import escape
 from textual.screen import ModalScreen
+from textual.widget import MountError
 from textual.widgets import (
     Button,
     DataTable,
@@ -50,7 +51,7 @@ from textual.widgets import (
 
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
-from mailflow_tui.labels import urgency_label
+from mailflow_tui.labels import error_detail, error_message, urgency_label
 from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
@@ -300,7 +301,7 @@ class ReplyModal(ModalScreen[Any]):
                 )
                 self._set_status(self._t("tui.reply_saved"))
             except ValueError as exc:
-                self._set_status(str(exc))
+                self._set_status(escape(error_message(self._service, exc)))
             return
         if button_id == "reply-prepare":
             # prepare calls the LLM (seconds to minutes with retries):
@@ -330,7 +331,7 @@ class ReplyModal(ModalScreen[Any]):
         try:
             self._draft = await self._service.prepare_reply(draft_id)
         except ValueError as exc:
-            self._set_status(str(exc))
+            self._set_status(escape(error_message(self._service, exc)))
             return
         self._set_status(self._t("tui.reply_prepared", token=self._draft.token or ""))
         self.query_one("#reply-confirm", Button).disabled = False
@@ -342,7 +343,7 @@ class ReplyModal(ModalScreen[Any]):
         try:
             await self._service.confirm_reply(draft.draft_id, token)
         except PermissionError as exc:
-            self._set_status(str(exc))
+            self._set_status(escape(error_message(self._service, exc)))
             self.query_one("#reply-confirm", Button).disabled = False
             return
         self._set_status(self._t("tui.reply_sent"))
@@ -1248,7 +1249,7 @@ class MailPane(Vertical):
                 await self._service.process_mail(mail, force=True)
                 done += 1
             except Exception as exc:
-                failed.append(f"{mail.subject[:40]}: {exc}")
+                failed.append(f"{mail.subject[:40]}: {error_detail(self._service, exc)}")
         await self.refresh_mail()
         if failed:
             detail = "; ".join(failed[:3])
@@ -1831,7 +1832,7 @@ class RuntimePane(Vertical):
             else:
                 return
         except Exception as exc:  # uv failures surface here too
-            status.update(f"[red]{exc}[/red]")
+            status.update(f"[red]{escape(error_message(self._service, exc))}[/red]")
             return
         status.update(message)
         await self.refresh_runtime()
@@ -2351,7 +2352,7 @@ class MarketDetailScreen(ModalScreen[Any]):
             else:
                 return
         except (KeyError, ValueError, RuntimeError) as exc:
-            self._set_status(str(exc))
+            self._set_status(escape(error_message(self._service, exc)))
             return
         self._set_status(
             self._service.t(message_key, plugin_id=plugin.id)
@@ -2505,7 +2506,7 @@ class MarketPane(Vertical):
             entries = await asyncio.to_thread(market.list_plugins)
         except Exception as exc:
             self._loading = False
-            self._set_status(str(exc))
+            self._set_status(escape(error_message(self._service, exc)))
             return
         # locally installed plugins (bundled + local folders) are market
         # entries too: they get a detail view with the plugin's own
@@ -2720,7 +2721,7 @@ class MarketPane(Vertical):
             else:
                 return
         except (KeyError, ValueError, RuntimeError) as exc:
-            status_node.update(str(exc))
+            status_node.update(escape(error_message(self._service, exc)))
             return
         self._installed.pop(plugin.id, None)  # install state changed
         self._render_entries()
@@ -2963,10 +2964,16 @@ class MailFlowApp(App[None]):
             if not panes:
                 continue  # lazy: composes with current language on activation
             container = panes.first()
-            if not container.is_mounted or not container.children:
+            if not container.is_attached or not container.children:
                 continue
             await container.remove_children()
-            await container.mount(factory(self._service))
+            if not container.is_attached:
+                continue
+            try:
+                await container.mount(factory(self._service))
+            except MountError:
+                if container.is_attached:
+                    raise
         # panes that survive remounting still need their statics retranslated
         for pane in self.query(LogsPane):
             pane.relabel()
