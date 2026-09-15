@@ -433,7 +433,7 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_smart_search_keeps_real_progress_and_relevance_order(tmp_path: Path) -> None:
+async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Path) -> None:
     """Spinner frames must retain batch status until ranked results arrive."""
     import asyncio
     import queue
@@ -449,7 +449,10 @@ async def test_smart_search_keeps_real_progress_and_relevance_order(tmp_path: Pa
             self.calls = 0
 
         async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMCompletion:
+            system = messages[0]["content"]
             user = messages[-1]["content"]
+            if system.startswith("You route one free-form"):
+                return LLMCompletion(text='{"intent":"search"}', model="smart")
             if user.startswith("Reply with"):
                 return LLMCompletion(text="ok", model="smart")
             self.calls += 1
@@ -493,24 +496,24 @@ async def test_smart_search_keeps_real_progress_and_relevance_order(tmp_path: Pa
             pane = app.query_one(MailPane)
             search = app.query_one("#mail-search", Input)
             search.value = "the student ID invitation"
-            button = app.query_one("#smart-search", Button)
+            button = app.query_one("#smart-action", Button)
             table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
             button.press()
             for _ in range(40):
                 if router.started.is_set():
                     break
                 await asyncio.sleep(0.05)
-            assert router.started.is_set(), "smart-search batch did not start"
+            assert router.started.is_set(), "smart action batch did not start"
             await asyncio.sleep(0.2)
             hint = app.query_one("#mail-empty-hint", Static)
-            assert "Smart search  0/3" in str(hint.render())
+            assert "Smart action  0/3" in str(hint.render())
             assert "scanning 3 mails" in str(hint.render())
             button.press()
             for _ in range(40):
                 if str(search.value) == "" and int(table.row_count) == 3:
                     break
                 await asyncio.sleep(0.05)
-            assert not pane._smart_searching  # pyright: ignore[reportPrivateUsage]
+            assert not pane._smart_action_running  # pyright: ignore[reportPrivateUsage]
             assert search.value == ""
             assert table.row_count == 3
 
@@ -523,15 +526,127 @@ async def test_smart_search_keeps_real_progress_and_relevance_order(tmp_path: Pa
                 await asyncio.sleep(0.05)
             assert router.calls == 2
             await asyncio.sleep(0.2)
-            assert "Smart search  0/3" in str(hint.render())
+            assert "Smart action  0/3" in str(hint.render())
             router.release.set()
             for _ in range(40):
-                if int(table.row_count) == 1 and str(button.label) == "Smart find…":
+                if int(table.row_count) == 1 and str(button.label) == "Smart action…":
                     break
                 await asyncio.sleep(0.05)
             assert int(table.row_count) == 1
             assert "Pick up your student ID card" in str(table.get_row_at(0)[1])
-            assert pane._smart_result is not None  # pyright: ignore[reportPrivateUsage]
+            assert pane._smart_action_result is not None  # pyright: ignore[reportPrivateUsage]
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> None:
+    """One instruction on the Mail tab filters or acts: asking for the
+    schedule adds the matched seminar mail as a real schedule entry."""
+    import queue
+
+    from mailflow.contracts import LLMCompletion
+    from mailflow.domain import ActionOrigin
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.app import MailPane
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+
+    class ActingRouter:
+        """Routes each phase by its system prompt like a real endpoint.
+
+        Candidate refs are opaque and per-call: each phase numbers the mails
+        it was given, so the extraction reply uses the extraction listing's
+        own ref rather than the matching phase's.
+        """
+
+        @staticmethod
+        def _candidate_for(user: str, subject: str) -> str:
+            before_subject = user.split(f"subject={subject}", maxsplit=1)[0]
+            return before_subject.rsplit("candidate=", maxsplit=1)[1].splitlines()[0]
+
+        @staticmethod
+        def _ref_of(user: str) -> str:
+            return next(
+                line.split("=", 1)[1] for line in user.splitlines() if line.startswith("id=")
+            )
+
+        async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMCompletion:
+            system = messages[0]["content"]
+            user = messages[-1]["content"]
+            if system.startswith("You route one free-form"):
+                return LLMCompletion(text='{"intent":"schedule_seminar"}', model="smart")
+            if system.startswith("You are MailFlow's smart mail finder and"):
+                candidate = self._candidate_for(user, "Optional Friday lecture")
+                return LLMCompletion(text=f'[{{"id":"{candidate}","relevance":96}}]', model="smart")
+            if system.startswith("You identify optional academic seminars"):
+                return LLMCompletion(
+                    text=(
+                        f'[{{"id":"{self._ref_of(user)}","title":"Research colloquium",'
+                        '"starts_at":"2099-10-15T14:00:00+08:00",'
+                        '"ends_at":"2099-10-15T15:30:00+08:00",'
+                        '"timezone":"Asia/Shanghai","location":"Room 201",'
+                        '"confidence":93,"evidence":"15 October, Room 201"}]'
+                    ),
+                    model="smart",
+                )
+            return LLMCompletion(text="ok", model="smart")
+
+    service.router = cast(Any, ActingRouter())
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(160, 50)) as pilot:
+            for _ in range(100):
+                if await service.count_mails() == 3:
+                    break
+                await pilot.pause(0.05)
+            pane = app.query_one(MailPane)
+            search = app.query_one("#mail-search", Input)
+            search.value = "把研讨会邮件加入我的日程"
+            app.query_one("#smart-action", Button).press()
+            for _ in range(80):
+                if pane._smart_action_result is not None:  # pyright: ignore[reportPrivateUsage]
+                    break
+                await pilot.pause(0.05)
+            result = pane._smart_action_result  # pyright: ignore[reportPrivateUsage]
+            assert result is not None
+
+            scheduled = await service.storage.list_custom_actions()
+            assert [item.summary for item in scheduled] == ["Research colloquium"]
+            assert scheduled[0].origin is ActionOrigin.SEMINAR
+            # the entry keeps its source-mail backlink and the event window
+            assert scheduled[0].mail_id == result.records[0].record_id
+            assert scheduled[0].action_type == "seminar"
+            assert scheduled[0].location == "Room 201"
+            # the matched mail is what the table shows for this instruction
+            table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
+            assert table.row_count == 1
+            assert "Optional Friday lecture" in str(table.get_row_at(0)[1])
+
+            hint = app.query_one("#mail-empty-hint", Static)
+            assert "Added 1 entry(ies) to the schedule." in str(hint.render())
+
+            # nothing is left for review, so the Actions tab shows no
+            # review control (discovery is not advertised as a feature)
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-actions"  # pyright: ignore[reportUnknownMemberType]
+            for _ in range(60):
+                if not app.query_one("#actions-review-seminars", Button).display:
+                    break
+                await pilot.pause(0.05)
+            assert not app.query_one("#actions-review-seminars", Button).display
             app.exit()
             await pilot.pause()
     finally:

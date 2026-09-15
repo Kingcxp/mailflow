@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -14,7 +15,9 @@ from mailflow.domain import (
     MailAddress,
     MailRecord,
     ReplyState,
+    SeminarCandidate,
     SeminarStatus,
+    SmartActionIntent,
     TrashRecord,
     Urgency,
 )
@@ -785,3 +788,149 @@ class TestSeminarDiscovery:
         assert result.candidates == []
         saved = await service.list_seminar_candidates(include_resolved=True)
         assert saved[0].status is SeminarStatus.REJECTED
+
+
+class TestSmartAction:
+    """One instruction routes to filtering or to the matching operation."""
+
+    @staticmethod
+    def _reply(text: str) -> Any:
+        class Reply:
+            def __init__(self, value: str) -> None:
+                self.text = value
+
+        return Reply(text)
+
+    @staticmethod
+    def make_service(router: Any) -> MailFlowService:
+        config = MailFlowConfig()
+        config.llms = [LLMConfig(llm_id="llm-1")]
+        return MailFlowService(
+            config=config,
+            registry=ComponentRegistry(),
+            plugin_manager=cast(Any, None),
+            storage=cast(Any, MemoryStorage()),
+            sources={},
+            router=cast(LLMRouter, router),
+            pipeline=PipelineEngine([]),
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            i18n=I18n(),
+        )
+
+    class _RoutingRouter:
+        """Answers each phase by its system prompt, like a real endpoint."""
+
+        def __init__(self, intent: str, event_json: str) -> None:
+            self.intent = intent
+            self.event_json = event_json
+            self.phases: list[str] = []
+
+        async def chat(self, messages: Any, **kwargs: Any) -> Any:
+            system = str(messages[0]["content"])
+            if system.startswith("You route one free-form"):
+                self.phases.append("intent")
+                return TestSmartAction._reply(f'{{"intent":"{self.intent}"}}')
+            if "smart mail finder" in system:
+                self.phases.append("match")
+                return TestSmartAction._reply('[{"id":"m1","relevance":91}]')
+            if system.startswith("You identify optional academic seminars"):
+                self.phases.append("extract")
+                return TestSmartAction._reply(self.event_json)
+            self.phases.append("warmup")
+            return TestSmartAction._reply("ok")
+
+    async def test_search_intent_returns_ranked_matches_only(self) -> None:
+        router = self._RoutingRouter("search", "[]")
+        service = self.make_service(router)
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+
+        result = await service.smart_action("list the registration mails")
+
+        assert result.intent is SmartActionIntent.SEARCH
+        assert [record.record_id for record in result.records] == [mail.normalized_message_id()]
+        assert result.scheduled == [] and result.needs_review == []
+        assert "extract" not in router.phases
+        assert await storage.list_custom_actions() == []
+
+    async def test_schedule_intent_adds_a_timed_event_to_the_schedule(self) -> None:
+        event = (
+            '[{"id":"m1","title":"Research colloquium",'
+            '"starts_at":"2030-10-15T14:00:00+08:00",'
+            '"timezone":"Asia/Shanghai","location":"Room 201",'
+            '"confidence":93,"evidence":"15 October, Room 201"}]'
+        )
+        router = self._RoutingRouter("schedule_seminar", event)
+        service = self.make_service(router)
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+
+        result = await service.smart_action("add the seminars to my schedule")
+
+        assert result.intent is SmartActionIntent.SCHEDULE_SEMINAR
+        assert [item.summary for item in result.scheduled] == ["Research colloquium"]
+        assert result.needs_review == []
+        # the entry is a normal, deletable schedule item linked to its mail
+        saved = await storage.list_custom_actions()
+        assert len(saved) == 1
+        assert saved[0].origin is ActionOrigin.SEMINAR
+        assert saved[0].mail_id == mail.normalized_message_id()
+        assert saved[0].due_at == datetime(2030, 10, 15, 6, tzinfo=UTC)
+
+    async def test_schedule_intent_leaves_untimed_events_for_review(self) -> None:
+        class UntimedRouter(TestSmartAction._RoutingRouter):
+            def __init__(self) -> None:
+                super().__init__(
+                    "schedule_seminar",
+                    '[{"id":"m1","title":"Open day","confidence":80}]',
+                )
+
+        service = self.make_service(UntimedRouter())
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+
+        result = await service.smart_action("put the open days into my calendar")
+
+        assert result.scheduled == []
+        assert [candidate.title for candidate in result.needs_review] == ["Open day"]
+        assert await storage.list_custom_actions() == []
+
+    async def test_schedule_intent_ignores_proposals_from_other_mail(self) -> None:
+        event = (
+            '[{"id":"m1","title":"Matched seminar",'
+            '"starts_at":"2030-10-15T14:00:00+08:00","timezone":"Asia/Shanghai"}]'
+        )
+        router = self._RoutingRouter("schedule_seminar", event)
+        service = self.make_service(router)
+        storage = cast(Any, service.storage)
+        target = make_mail("matched", minute=10)
+        await storage.save_mail(MailRecord(record_id=target.normalized_message_id(), mail=target))
+        # an earlier scan's proposal for mail outside this instruction's set
+        unrelated = SeminarCandidate(
+            candidate_id="seminar-other",
+            mail_id="earlier-scan@example.test",
+            title="Unrelated seminar",
+            starts_at=datetime(2030, 9, 1, 4, tzinfo=UTC),
+            timezone="UTC",
+        )
+        await storage.set_preference(
+            "seminars.candidates",
+            json.dumps([unrelated.model_dump(mode="json")]),
+        )
+
+        result = await service.smart_action("schedule the seminars")
+
+        assert [item.summary for item in result.scheduled] == ["Matched seminar"]
+        saved = await storage.list_custom_actions()
+        assert [item.summary for item in saved] == ["Matched seminar"]
+
+    async def test_instruction_without_llm_reports_the_missing_model(self) -> None:
+        service = self.make_service(TestSmartAction._RoutingRouter("search", "[]"))
+        service.config.llms = []
+        with pytest.raises(RuntimeError):
+            await service.smart_action("find the exam mails")

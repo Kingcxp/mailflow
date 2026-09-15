@@ -107,11 +107,11 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         self.query_one("#ask-correct-analysis-status", Static).update(  # pyright: ignore[reportUnknownMemberType]
             f"[red]{escape(status)}[/red]" if status else ""
         )
-        summary = (
-            self._t("tui.detail_analysis_unavailable")
-            if record.analysis_is_fallback
-            else record.summary or ""
-        )
+        summary = (record.summary or "").strip()
+        if not summary:
+            summary = self._t("tui.detail_analysis_unavailable")
+        elif record.analysis_is_fallback:
+            summary = f"{summary} ({self._t('tui.detail_summary_fallback')})"
         reason = record.analysis.reason if record.analysis else ""
         if not reason and record.analysis_is_fallback:
             reason = self._t("tui.detail_reason_unavailable")

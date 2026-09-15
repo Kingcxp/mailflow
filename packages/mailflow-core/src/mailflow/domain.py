@@ -329,6 +329,36 @@ class SmartSearchResult(BaseModel):
         return self.failed_mails == 0
 
 
+class SmartActionIntent(StrEnum):
+    """What one natural-language instruction asked MailFlow to do."""
+
+    SEARCH = "search"
+    SCHEDULE_SEMINAR = "schedule_seminar"
+
+
+class SmartActionResult(BaseModel):
+    """Outcome of one free-form instruction over stored mail.
+
+    ``records`` are the mails the model matched (ranked for a search, the
+    acted-on set for an operation). ``scheduled`` are the schedule entries an
+    operation created; ``needs_review`` are proposals the operation could not
+    schedule on its own (no usable future time), left for explicit review.
+    """
+
+    intent: SmartActionIntent = SmartActionIntent.SEARCH
+    records: list[MailRecord] = Field(default_factory=lambda: [])
+    total_mails: int = 0
+    failed_mails: int = 0
+    failed_batches: int = 0
+    scheduled: list[ActionItem] = Field(default_factory=lambda: [])
+    needs_review: list[SeminarCandidate] = Field(default_factory=lambda: [])
+
+    @property
+    def is_complete(self) -> bool:
+        """True only when no candidate batch was unavailable or malformed."""
+        return self.failed_mails == 0
+
+
 class SeminarDiscoveryResult(BaseModel):
     """Seminar scan outcome, including batches the model could not inspect."""
 
@@ -543,6 +573,8 @@ __all__ = [
     "SeminarCandidate",
     "SeminarDiscoveryResult",
     "SeminarStatus",
+    "SmartActionIntent",
+    "SmartActionResult",
     "SmartSearchResult",
     "StyleSpan",
     "TrashRecord",

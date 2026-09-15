@@ -355,6 +355,22 @@ class TestPipeline:
         assert notes[0].status == "failed"
         assert notes[0].message == "failed: processor timed out after 0.05 seconds"
 
+    async def test_message_less_failure_still_names_the_cause(self) -> None:
+        class Quiet(RuntimeError):
+            """A backend that fails without a message (str() is empty)."""
+
+        class Bare:
+            processor_id = "bare"
+
+            async def process(self, mail: Any, context: Any) -> Any:
+                raise Quiet()
+
+        engine = PipelineEngine([self._binding(Bare(), "bare")])
+        _analysis, notes, _llm, _backend = await engine.process(make_mail(), "acct-1")
+
+        assert notes[0].status == "failed"
+        assert notes[0].message == "failed: Quiet"
+
     async def test_source_parse_fallback_is_visible_and_persistable(self) -> None:
         mail = make_mail(subject="unparseable mail")
         mail.parse_error = "HeaderParseError"

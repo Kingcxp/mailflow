@@ -79,7 +79,7 @@ class LLMRouterImpl:
                 completion = await backend.chat(messages, temperature=temperature, options=options)
             except Exception as exc:
                 logger.warning("llm %r (backend %r) failed: %s", llm_id, config.provider, exc)
-                errors.append(f"{llm_id}: {self._redact(str(exc))}")
+                errors.append(f"{llm_id}: {self._redact(str(exc)) or type(exc).__name__}")
                 continue
             completion.llm_id = llm_id
             completion.backend = config.provider

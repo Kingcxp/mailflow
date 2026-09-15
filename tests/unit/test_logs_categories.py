@@ -34,3 +34,17 @@ def test_storage_and_unknown() -> None:
     assert _category("mailflow.storage.sqlite") == "storage"
     assert _category("mailflow.updates") == "system"
     assert _category("other.framework") == "system"
+
+
+def test_every_category_is_translated_in_both_packs() -> None:
+    """The pane labels each category through ``tui.logs_cat_<name>``: a
+    category without an entry renders its raw key in the log tag."""
+    from mailflow.i18n import I18n
+
+    categories = set(LogsPane._SOURCE_CATEGORIES.values()) | {"system"}  # pyright: ignore[reportPrivateUsage]
+    assert categories
+    for code in ("en", "zh-CN"):
+        pack = I18n(code)
+        for category in categories:
+            key = f"tui.logs_cat_{category}"
+            assert pack.t(key) != key, f"{code} is missing {key}"

@@ -86,11 +86,14 @@ The structured interpretation produced by the processor chain: `summary`,
 When no processor supplies a non-empty summary, the pipeline stores the source
 subject only as a display fallback and marks `summary_is_fallback=True`.
 `MailRecord` keeps recognizing the corresponding legacy pipeline note for
-records written before that field existed. A host MUST present this as an
-unavailable summary — and show a localized failed/partial status when a
-processor note failed — not as an LLM-generated summary. A real non-empty
-urgency reason remains visible; an absent reason is explicitly unavailable.
-The original mail body remains visible.
+records written before that field existed. A host shows that stored content —
+the mail's real summary or, for a fallback, the source subject **labelled** as
+not generated — plus a localized failed/partial status naming the processor
+cause when a note failed. A real non-empty urgency reason remains visible; an
+absent reason is explicitly unavailable. The original mail body remains
+visible. A failed processor note always carries a cause: an exception whose
+message is empty is recorded by its type name, so a persisted note can never
+read `failed: ` with nothing after it.
 
 ## ActionItem
 
@@ -153,6 +156,30 @@ expose whether the result is complete: a caller must show an explicit incomplete
 state rather than treating unavailable or malformed batches as no matches.
 Candidate aliases exist only inside one LLM batch; raw record ids are never
 exposed to the model.
+
+## SmartActionIntent and SmartActionResult
+
+`service.smart_action(instruction)` is the single natural-language entry point
+behind the TUI's **Smart action** control. The model classifies the instruction
+into a `SmartActionIntent`:
+
+- `search` — the user wants mails found or filtered. `records` carry the ranked
+  matches of `smart_search`.
+- `schedule_seminar` — the user wants MailFlow to act on mails announcing an
+  attendable event. The mails are matched first (so only mails the user's
+  instruction actually concerns are used), then `discover_seminars` extracts
+  the event and the proposals with a usable future start are written through
+  `import_seminar`.
+
+`SmartActionResult` reports the intent, the matched `records`, the same
+`total_mails`/`failed_mails`/`failed_batches` completeness counters, the
+`scheduled` entries it created, and `needs_review` — proposals it deliberately
+did not guess about (no start time, or a start in the past). `needs_review`
+reaches the user as an explicit review form; nothing is scheduled silently and
+every scheduled entry is an ordinary, deletable `ActionItem` carrying its
+source-mail backlink. Asking for the operation is the user's confirmation, so
+the operation itself needs no second prompt; an unreadable intent answer means
+`search` (filtering is always safe, writing never is).
 
 ## TrashRecord
 

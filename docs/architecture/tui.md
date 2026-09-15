@@ -27,35 +27,42 @@ tears them down with the screen — nothing keeps ticking after it closes.
 
 ## Tabs
 
-- **Mail**: search `Input` with placeholder plus a **Smart find** button;
-  urgency-colored `DataTable` (■ + a localized urgency label in the contract
-  color) that fills the pane height; the scrollable detail pane follows the
-  highlighted row (single click or arrow keys — no double-click needed) and
-  shows summary, reason, action items, the **original body** (HTML rendered as
-  text, binary attachment payloads detected and replaced by an explanatory
-  note, bodies truncated at 4000 chars), attachment metadata (name/type/size),
-  and a localized analysis status. A source-subject fallback is explicitly
-  unavailable analysis, never presented as a generated summary; real reasons
-  remain visible and absent reasons are explicit. All stored timestamps are
-  projected into `general.timezone`, including action windows. The bottom controls use a
-  full-width filter row (manual urgency — a localized
+- **Mail**: one free-form `Input` plus a **Smart action** button; the same box
+  filters as you type (subject/sender/summary/body) and is the instruction the
+  button sends. **Smart action** calls `service.smart_action`: the model
+  classifies the instruction, so "find/filter …" returns the ranked matching
+  mails while "add … to my schedule" both matches the mail announcing the
+  event and schedules it (`SmartActionIntent`). The urgency-colored
+  `DataTable` (■ + a localized urgency label in the contract color) fills the
+  pane height; the scrollable detail pane follows the highlighted row (single
+  click or arrow keys — no double-click needed) and shows summary, reason,
+  action items, the **original body** (HTML rendered as text, binary
+  attachment payloads detected and replaced by an explanatory note, bodies
+  truncated at 4000 chars), attachment metadata (name/type/size), and a
+  localized analysis status. The stored summary and reason are always shown —
+  the mail's actual content — and a storage fallback is labelled as not
+  generated instead of being hidden, while failed processors list the real
+  cause. All stored timestamps are projected into `general.timezone`,
+  including action windows. The bottom controls are one row: three dropdowns
+  (manual urgency — a localized
   `ad/info/important/urgent/follow-automatic` dropdown that mirrors the
   selected mail — plus urgency filter and sort) followed by a two-row button
-  container (refresh/trash/Ask & Correct then reply/re-analyze/re-analyze-failed)
-  with equal-width buttons. **Re-analyze failed** requires no selected row; it
-  works through every failed record and keeps its live progress/final outcome in
-  a dedicated status widget, so the `mailflow.mail.processed` refresh cannot
-  erase feedback. An empty view shows a hint (no mail yet vs. no match for the
-  search/filter) and clears the detail pane; any results-only render also
-  refreshes detail for its selected result. Reply opens the confirmation-gated
-  modal. **Smart find** delegates matching and relevance ranking to
-  `service.smart_search`. Its hint line reflects real warm-up and completed
-  batches without being overwritten by the spinner; a malformed or unavailable
-  batch remains visibly incomplete rather than masquerading as an empty result.
-  The running button stays clickable; cancellation clears the free-form query and
-  restores the complete mailbox. Candidate refs (not raw mail ids) make model
-  selections robust. Chat platforms use the same engine via `mail search <need>`
-  and retain global `#` handles.
+  container (refresh/trash/Ask & Correct then
+  reply/re-analyze/re-analyze-failed) with equal-width buttons. **Re-analyze
+  failed** requires no selected row; it works through every failed record and
+  keeps its live progress/final outcome in a dedicated status widget, so the
+  `mailflow.mail.processed` refresh cannot erase feedback. An empty view shows
+  a hint (no mail yet vs. no match for the search/filter) and clears the detail
+  pane; any results-only render also refreshes detail for its selected result.
+  Reply opens the confirmation-gated modal. **Smart action**'s hint line
+  reflects real warm-up and completed batches without being overwritten by the
+  spinner; a malformed or unavailable batch remains visibly incomplete rather
+  than masquerading as an empty result. The running button stays clickable as
+  Cancel; cancellation clears the free-form query and restores the complete
+  mailbox. Candidate refs (not raw mail ids) make model selections robust, and
+  each phase numbers the mails it was given, so a ref is never reused across
+  phases. Chat platforms use the same engine via `mail search <need>` and
+  retain global `#` handles.
 - **Mailboxes** (`settings.py: AccountsPane`): accounts table with
   Add / Edit / Delete (forms, not TOML editing; **double-click or Enter on a
   row opens the edit form**, same for the LLM and notifier tables) plus the
@@ -69,7 +76,9 @@ tears them down with the screen — nothing keeps ticking after it closes.
 - **Mail detail**: an **Ask & Correct** button opens a live LLM chat over
   the selected mail — left chat history, right panel with the current
   urgency / summary / reason and the original body, bottom input sent by
-  Enter or the Send button. User and assistant messages are rendered as
+  Enter or the Send button; the input and both buttons share one bordered row
+  (equal height, no floating button above the input's first line). User and
+  assistant messages are rendered as
   Markdown (the original mail remains escaped plain text). Each request runs
   in a cancellable Textual worker, so the modal remains responsive while the
   model is thinking; the send control is disabled until that response lands.
@@ -81,22 +90,24 @@ tears them down with the screen — nothing keeps ticking after it closes.
   future LLM analysis receives (`feedback.guidelines`, most recent 20 kept),
   matching the old Reject behaviour.
 - **Actions**: localized time / type / content / notes / source-mail columns;
-  every stored time is displayed in `general.timezone`. **Find seminars** scans
-  stored mail through `service.discover_seminars`; its button stays clickable as
-  Cancel and the hint reports each completed batch and incomplete batches rather
-  than treating background startup as completion. Candidates open in a centered,
-  scrollable review form with editable title, time window, timezone, location,
-  URL, and description plus confidence/evidence. **Import to schedule** is an
-  explicit confirmation — discovery alone adds nothing — and expired candidates
-  require a future corrected start time; Reject keeps a proposal hidden on later
-  scans. Imported seminars preserve their source-mail link and use stable ids to
-  prevent duplicate imports. Row selection opens a detail modal that fills the
-  screen — a scrollable box with the action plus the **source mail** (subject,
-  sender, date, analysis summary/reason and the original body, HTML-as-text) and
-  a close button pinned outside the scroll area. **Delete** removes selected
-  custom todos and imported seminars for real; mail-analysis items are dismissed
-  by their stable identity (mail id + due time + type) so re-analyzing the source
-  mail keeps them hidden.
+  every stored time is displayed in `general.timezone`. **Add todo** creates a
+  user-owned item; **Edit** opens the same form pre-filled for the row under
+  the cursor (custom todos and imported seminar entries; mail-analysis items
+  are source-owned and report that instead). Row selection still opens a
+  detail modal that fills the screen — a scrollable box with the action plus
+  the **source mail** (subject, sender, date, analysis summary/reason and the
+  original body, HTML-as-text) and a close button pinned outside the scroll
+  area. **Delete** removes selected custom todos and imported seminars for
+  real; mail-analysis items are dismissed by their stable identity (mail id +
+  due time + type) so re-analyzing the source mail keeps them hidden.
+  Discovered seminar proposals are **not** advertised here as a feature: the
+  review control appears (labelled with the pending count) only while
+  proposals await confirmation, and opens the centered, scrollable review form
+  with editable title, time window, timezone, location, URL, and description
+  plus confidence/evidence. **Import to schedule** is an explicit
+  confirmation, expired candidates require a future corrected start time, and
+  Reject keeps a proposal hidden on later scans. Imported seminars preserve
+  their source-mail link and use stable ids to prevent duplicate imports.
 - **LLMs** (`settings.py: LLMPane`): the ordered fallback chain. Add / Edit /
   Delete plus Move up / Move down; the first row is the default and each row
   falls back to the ones below it, so `default` and `fallback` are never typed
@@ -153,6 +164,9 @@ tears them down with the screen — nothing keeps ticking after it closes.
 - **Logs**: a filterable viewer with a **bounded ring buffer (2000 lines)**,
   a level `Select` (WARNING+ERROR is the default, expandable to INFO/DEBUG),
   a source-group `Select` populated from the seen loggers, and a search box.
+  Sources render as localized categories (`tui.logs_cat_*`: chat bot, mail,
+  LLM, parsing, notify, storage, system) — every category the pane can derive
+  has an entry in both packs, so a tag can never show a raw key.
   Rendering is **incremental**: each drain appends only newly pulled lines to
   the `RichLog` (capped via `max_lines`) instead of rebuilding the whole
   buffer every second — a full re-render happens only when a filter changes
@@ -250,7 +264,10 @@ options, prepare/confirm gating of the reply modal, the settings cards (save /
 invalid value / restore default), the LLM chain reordering, the mailbox history
 browser (analyze a picked mail, skip a known one), the repository dialog's Back
 button, the Notifications pane (lists all notifiers, toggles enabled, edits
-urgency), and that a processed-mail event refreshes the panes without a manual
+urgency), the todo create/edit round trip through the Actions table, the smart
+action (real progress, ranked matches, a scheduled seminar entry with its
+source-mail link and event window, and no review control when nothing is
+pending), and that a processed-mail event refreshes the panes without a manual
 refresh.
 
 ## Opening web links (browser_mode)

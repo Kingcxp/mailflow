@@ -397,7 +397,7 @@ async def test_ask_correct_modal_opens_and_sends(tmp_path: Path) -> None:
 
 
 async def test_failed_analysis_is_disclosed_without_a_fake_summary(tmp_path: Path) -> None:
-    """A subject fallback must never look like a successful mail analysis."""
+    """A subject fallback is shown as content but labelled as not generated."""
     from datetime import UTC
     from datetime import datetime as _dt
 
@@ -447,10 +447,15 @@ async def test_failed_analysis_is_disclosed_without_a_fake_summary(tmp_path: Pat
                 "analysis failed"
                 in str(app.query_one("#mail-analysis-status", Static).render()).lower()
             )
+            # the failure reason of the processor is a real cause, never the
+            # empty "failed: " a message-less exception used to leave behind
             assert (
-                "no generated analysis"
-                in str(app.query_one("#mail-summary", Static).render()).lower()
+                "http 500" in str(app.query_one("#mail-analysis-status", Static).render()).lower()
             )
+            # the stored content stays visible, labelled as not generated
+            summary = str(app.query_one("#mail-summary", Static).render()).lower()
+            assert "source subject, not a summary" in summary
+            assert "not generated" in summary
             assert (
                 "no generated reason" in str(app.query_one("#mail-reason", Static).render()).lower()
             )
@@ -481,10 +486,6 @@ async def test_failed_analysis_is_disclosed_without_a_fake_summary(tmp_path: Pat
                 in str(
                     app.screen.query_one("#ask-correct-analysis-status", Static).render()
                 ).lower()
-            )
-            assert (
-                "no generated analysis"
-                in str(app.screen.query_one("#ask-correct-summary", Static).render()).lower()
             )
             assert (
                 "real urgency reason"
@@ -727,11 +728,47 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             )
             assert "给导师发进度报告" in rows
 
-            # delete it: custom todos are removed for real
+            # edit it from the table selection: the Edit button opens the same
+            # form pre-filled and the change is persisted
             idx = next(
                 i
                 for i in range(table.row_count)
                 if "给导师发进度报告" in str(table.get_row_at(i)[2])
+            )
+            table.move_cursor(row=idx, animate=False)  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.05)
+            app.query_one("#actions-edit", Button).press()
+            await pilot.pause(0.3)
+            from mailflow_tui.todo_create import TodoEditModal
+
+            assert isinstance(app.screen, TodoEditModal)
+            edit_summary = app.screen.query_one("#todo-summary", Input)
+            assert str(edit_summary.value) == "给导师发进度报告"  # pre-filled
+            edit_summary.value = "给导师发周报"
+            app.screen.query_one("#todo-due", Input).value = "2099-02-03 10:30"
+            app.screen.query_one("#todo-save", Button).press()
+            await _wait_until(
+                pilot,
+                lambda: not isinstance(app.screen, (TodoEditModal,)),
+            )
+            edited = await service.storage.list_custom_actions()
+            assert [item.summary for item in edited] == ["给导师发周报"]
+            assert edited[0].due_at.year == 2099 and edited[0].due_at.month == 2
+            # the table shows the edited row without a manual refresh
+            await _wait_until(
+                pilot,
+                lambda: any(
+                    "给导师发周报" in str(table.get_row_at(i)[2]) for i in range(table.row_count)
+                ),
+            )
+            rows = " ".join(
+                " ".join(str(c) for c in table.get_row_at(i)) for i in range(table.row_count)
+            )
+            assert "给导师发周报" in rows
+
+            # delete it: custom todos are removed for real
+            idx = next(
+                i for i in range(table.row_count) if "给导师发周报" in str(table.get_row_at(i)[2])
             )
             table.move_cursor(row=idx, animate=False)  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause(0.05)

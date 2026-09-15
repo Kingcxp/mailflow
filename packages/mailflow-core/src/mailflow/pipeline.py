@@ -169,7 +169,11 @@ class PipelineEngine:
                 result = await self._run_with_retries(binding, mail, context)
             except Exception as exc:
                 finished_at = now or utcnow()
-                message = f"failed: {self._sanitize(str(exc))}"
+                # an exception without a message (asyncio timeouts, bare
+                # raises) would otherwise persist "failed: " and leave the
+                # user with no cause at all
+                detail = self._sanitize(str(exc)) or type(exc).__name__
+                message = f"failed: {detail}"
                 notes.append(
                     ProcessorNote(
                         processor_id=binding.processor_id,

@@ -19,8 +19,8 @@ from mailflow.domain import (
     ActionOrigin,
     MailRecord,
     ReplyDraft,
-    SeminarDiscoveryResult,
-    SmartSearchResult,
+    SmartActionIntent,
+    SmartActionResult,
     Urgency,
 )
 from mailflow.plugin_market import MarketPlugin, Repository
@@ -459,10 +459,10 @@ class MailPane(Vertical):
         # smart search: while active, the table shows ONLY the LLM-picked
         # results; cancel restores the previous view. The snapshot is the
         # full record list taken when the search started.
-        self._smart_searching = False
-        self._smart_search_task: asyncio.Task[SmartSearchResult] | None = None
+        self._smart_action_running = False
+        self._smart_action_task: asyncio.Task[SmartActionResult] | None = None
         self._smart_spinner_task: asyncio.Task[None] | None = None
-        self._smart_result: SmartSearchResult | None = None
+        self._smart_action_result: SmartActionResult | None = None
         # Re-analysis emits mail-processed events which asynchronously refresh
         # this pane. Keep the operation outcome separately so that refresh
         # cannot erase feedback before the user can read it.
@@ -474,8 +474,10 @@ class MailPane(Vertical):
         # so it never stamps an override onto the selected mail
         self._urgency_suppress = True
         with Horizontal(id="mail-search-row"):
-            yield Input(placeholder=self._service.t("tui.search_placeholder"), id="mail-search")
-            yield Button(self._service.t("tui.smart_search"), id="smart-search", variant="primary")
+            yield Input(
+                placeholder=self._service.t("tui.smart_action_placeholder"), id="mail-search"
+            )
+            yield Button(self._service.t("tui.smart_action"), id="smart-action", variant="primary")
         yield Static("", id="mail-empty-hint")
         with Horizontal():
             yield DataTable(id="mail-table")
@@ -488,20 +490,19 @@ class MailPane(Vertical):
                 yield Static("", id="mail-body")
                 yield Static("", id="mail-attachments")
                 yield Static("", id="mail-notes")
-        with Vertical(id="mail-controls"):
-            with Horizontal(id="mail-filter-controls"):
-                yield Select(self._urgency_options(), id="urgency-select", allow_blank=False)
-                yield Select(
-                    self._urgency_filter_options(), id="mail-urgency-filter", allow_blank=False
-                )
-                yield Select(
-                    [
-                        (self._service.t("tui.sort_time"), "time"),
-                        (self._service.t("tui.sort_urgency"), "urgency"),
-                    ],
-                    id="mail-sort",
-                    allow_blank=False,
-                )
+        with Horizontal(id="mail-controls"):
+            yield Select(self._urgency_options(), id="urgency-select", allow_blank=False)
+            yield Select(
+                self._urgency_filter_options(), id="mail-urgency-filter", allow_blank=False
+            )
+            yield Select(
+                [
+                    (self._service.t("tui.sort_time"), "time"),
+                    (self._service.t("tui.sort_urgency"), "urgency"),
+                ],
+                id="mail-sort",
+                allow_blank=False,
+            )
             with Vertical(id="mail-actions-buttons"):
                 with Horizontal(id="mail-actions-row1"):
                     yield Button(
@@ -513,7 +514,6 @@ class MailPane(Vertical):
                         id="btn-ask-correct",
                         variant="warning",
                     )
-                yield Static("", id="mail-actions-spacer")
                 with Horizontal(id="mail-actions-row2"):
                     yield Button(
                         self._service.t("tui.btn_reply"), id="btn-reply", variant="success"
@@ -594,15 +594,15 @@ class MailPane(Vertical):
         await self.refresh_mail()
 
     async def refresh_mail(self) -> None:
-        if getattr(self, "_smart_searching", False):
+        if getattr(self, "_smart_action_running", False):
             # An active smart search owns the table: a re-read here would
             # replace results or previews with the full mailbox mid-search.
             return
         async with self._refresh_lock:
-            if getattr(self, "_smart_searching", False):
+            if getattr(self, "_smart_action_running", False):
                 return
-            if self._smart_result is not None:
-                await self._render_smart_result(self._smart_result)
+            if self._smart_action_result is not None:
+                await self._render_smart_action_result(self._smart_action_result)
                 return
             await self._refresh_mail_unlocked()
 
@@ -651,18 +651,40 @@ class MailPane(Vertical):
             self._selected_id = records[0].record_id if records else None
         await self._show_selected()
 
-    async def _render_smart_result(self, result: SmartSearchResult) -> None:
-        """Render ranked matches and retain an explicit incomplete warning."""
+    async def _render_smart_action_result(self, result: SmartActionResult) -> None:
+        """Render the mails the instruction matched plus what it changed.
+
+        A search shows its ranked matches; an operation additionally reports
+        the schedule entries it created and hands any proposal it could not
+        schedule on its own to the review form instead of guessing.
+        """
         self._records = result.records
-        status_hint = ""
+        hints: list[str] = []
+        if result.intent is SmartActionIntent.SCHEDULE_SEMINAR:
+            hints.append(self._service.t("tui.smart_action_scheduled", count=len(result.scheduled)))
+            if result.needs_review:
+                hints.append(
+                    self._service.t("tui.smart_action_needs_review", count=len(result.needs_review))
+                )
+            if result.scheduled:
+                # the schedule pane is another tab: refresh it so the new
+                # entries are there when the user switches over
+                cast(MailFlowApp, self.app).schedule_reload()  # pyright: ignore[reportUnknownMemberType]
+        elif result.records:
+            hints.append(self._service.t("tui.smart_action_found", count=len(result.records)))
         if result.failed_mails:
-            key = "tui.smart_search_partial" if result.records else "tui.smart_search_incomplete"
-            status_hint = f"[yellow]{self._service.t(key, failed=result.failed_mails)}[/yellow]"
+            key = "tui.smart_action_partial" if result.records else "tui.smart_action_incomplete"
+            hints.append(self._service.t(key, failed=result.failed_mails))
+        status_hint = f"[yellow]{'; '.join(hints)}[/yellow]" if hints else ""
         await self._render_records(
             result.records,
             empty_hint_key="tui.mail_no_match",
             status_hint=status_hint,
         )
+        if result.needs_review:
+            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+                SeminarReviewModal(self._service, result.needs_review)
+            )
 
     async def _preview_matches(self, match_ids: set[str]) -> None:
         """Fetch preview records missing from the cache from storage and
@@ -699,7 +721,7 @@ class MailPane(Vertical):
             existing.add(record.record_id)
 
     async def _refresh_mail_unlocked(self) -> None:
-        if getattr(self, "_smart_searching", False):
+        if getattr(self, "_smart_action_running", False):
             # a search owns the table (preview stream + result render): a
             # refresh landing mid-search would clear the streamed previews
             return
@@ -730,7 +752,7 @@ class MailPane(Vertical):
                 self.run_worker(_background_reread(), exclusive=True, group="mail-cache")
         else:
             records = self._records = await self._service.list_mails()
-        if getattr(self, "_smart_searching", False):
+        if getattr(self, "_smart_action_running", False):
             # a search started while this refresh was reading storage: the
             # search's own renders (preview stream, result set) own the
             # table now — a late render here would wipe them
@@ -825,7 +847,7 @@ class MailPane(Vertical):
 
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "mail-search":
-            self._clear_smart_result()
+            self._clear_smart_action_result()
             await self.refresh_mail()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -841,7 +863,7 @@ class MailPane(Vertical):
         """Cursor movement (arrow keys) highlights rows without selecting;
         the detail pane must follow the highlight so what the user looks at
         is what the right side shows."""
-        if event.row_key.value is None or getattr(self, "_smart_searching", False):
+        if event.row_key.value is None or getattr(self, "_smart_action_running", False):
             return
         self._selected_id = event.row_key.value
         record = next((r for r in self._records if r.record_id == self._selected_id), None)
@@ -850,7 +872,7 @@ class MailPane(Vertical):
         await self._show_selected()
 
     def _smart_button(self) -> Button | None:
-        return self.query_one_optional("#smart-search", Button)
+        return self.query_one_optional("#smart-action", Button)
 
     def _set_smart_label(self, key: str) -> None:
         button = self._smart_button()
@@ -859,12 +881,12 @@ class MailPane(Vertical):
             # while searching the button is the only visible sign that
             # something is running: make it shout (red) so cancel is
             # impossible to miss; back to primary when idle
-            button.variant = "error" if key == "tui.smart_search_cancel" else "primary"
+            button.variant = "error" if key == "tui.smart_action_cancel" else "primary"
 
-    def _clear_smart_result(self) -> None:
+    def _clear_smart_action_result(self) -> None:
         """Return to the ordinary mailbox view after an explicit user action."""
-        if self._smart_result is not None:
-            self._smart_result = None
+        if self._smart_action_result is not None:
+            self._smart_action_result = None
             # Do not apply a literal text filter to the ranked subset while a
             # background cache reread is pending; load the full mailbox first.
             self._records = []
@@ -878,43 +900,43 @@ class MailPane(Vertical):
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-    async def _toggle_smart_search(self) -> None:
+    async def _toggle_smart_action(self) -> None:
         search = self.query_one_optional("#mail-search", Input)
         query = search.value.strip() if search is not None else ""
-        if self._smart_searching:
+        if self._smart_action_running:
             # Cancellation restores the full mailbox rather than a stale
             # pre-search cache, so mail arriving during the search remains visible.
-            self._smart_searching = False
-            task = self._smart_search_task
-            self._smart_search_task = None
+            self._smart_action_running = False
+            task = self._smart_action_task
+            self._smart_action_task = None
             if task is not None and not task.done():
                 task.cancel()
             await self._stop_smart_spinner()
-            self._clear_smart_result()
+            self._clear_smart_action_result()
             if search is not None:
                 search.value = ""
-            self._set_smart_label("tui.smart_search")
+            self._set_smart_label("tui.smart_action")
             await self.refresh_mail()
             return
         if not query:
             return
-        self._smart_searching = True
-        self._clear_smart_result()
-        self._set_smart_label("tui.smart_search_cancel")
+        self._smart_action_running = True
+        self._clear_smart_action_result()
+        self._set_smart_label("tui.smart_action_cancel")
         hint = self.query_one_optional("#mail-empty-hint", Static)
         table = self._mail_table()
         SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         spinner_state: dict[str, Any] = {
             "frame": 0,
             "running": True,
-            "message": self._service.t("tui.smart_search_working"),
+            "message": self._service.t("tui.smart_action_working"),
         }
 
         async def _spin() -> None:
             while bool(spinner_state["running"]):
                 frame = SPINNER[int(spinner_state["frame"]) % len(SPINNER)]
                 spinner_state["frame"] = int(spinner_state["frame"]) + 1
-                if hint is not None and self._smart_searching:
+                if hint is not None and self._smart_action_running:
                     hint.update(f"{frame} {spinner_state['message']}")
                     hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
                 await asyncio.sleep(0.12)
@@ -925,7 +947,7 @@ class MailPane(Vertical):
         def _show_progress(
             stage: str, done: int, total: int, detail: str | tuple[str, dict[str, Any]]
         ) -> None:
-            if hint is None or not self._smart_searching:
+            if hint is None or not self._smart_action_running:
                 return
             detail_key = ""
             detail_params: dict[str, Any] = {}
@@ -935,7 +957,7 @@ class MailPane(Vertical):
             else:
                 detail_text = detail
             message = self._service.t(
-                "tui.smart_search_progress",
+                "tui.smart_action_progress",
                 stage=self._service.t(f"tui.smart_stage_{stage}"),
                 done=done,
                 total=total,
@@ -966,37 +988,37 @@ class MailPane(Vertical):
         if table is not None:
             table.clear()
 
-        async def _run() -> SmartSearchResult:
-            return await self._service.smart_search(query, progress=_show_progress)
+        async def _run() -> SmartActionResult:
+            return await self._service.smart_action(query, progress=_show_progress)
 
         task = asyncio.create_task(_run())
-        self._smart_search_task = task
+        self._smart_action_task = task
         try:
             result = await task
         except asyncio.CancelledError:
             return  # the cancellation path above restored the ordinary view
         except Exception:
-            if self._smart_search_task is not task:
+            if self._smart_action_task is not task:
                 return
-            self._smart_search_task = None
-            self._smart_searching = False
+            self._smart_action_task = None
+            self._smart_action_running = False
             await self._stop_smart_spinner()
-            self._clear_smart_result()
-            self._set_smart_label("tui.smart_search")
+            self._clear_smart_action_result()
+            self._set_smart_label("tui.smart_action")
             await self.refresh_mail()
             if hint is not None:
-                hint.update(f"[red]{self._service.t('tui.smart_search_failed')}[/red]")
+                hint.update(f"[red]{self._service.t('tui.smart_action_failed')}[/red]")
                 hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
             return
-        if self._smart_search_task is not task:
+        if self._smart_action_task is not task:
             return
-        self._smart_search_task = None
-        self._smart_searching = False
+        self._smart_action_task = None
+        self._smart_action_running = False
         await self._stop_smart_spinner()
-        self._set_smart_label("tui.smart_search")
-        self._smart_result = result
+        self._set_smart_label("tui.smart_action")
+        self._smart_action_result = result
         async with self._refresh_lock:
-            await self._render_smart_result(result)
+            await self._render_smart_action_result(result)
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id in ("mail-urgency-filter", "mail-sort"):
@@ -1060,21 +1082,32 @@ class MailPane(Vertical):
             status = ""
         self._set_static("#mail-analysis-status", f"[red]{escape(status)}[/red]" if status else "")
         self._set_static("#mail-operation-status", self._operation_status)
-        if record.analysis_is_fallback:
+        # The stored summary and reason are the mail's content: they stay
+        # visible even when the pipeline had to fall back, because hiding them
+        # left the user with no content at all. A fallback is labelled, never
+        # presented as a generated analysis.
+        summary_value = service.display_text(record.summary).strip()
+        if summary_value:
+            summary_text = escape(summary_value)
+            if record.analysis_is_fallback:
+                summary_text += (
+                    f" [yellow]({escape(service.t('tui.detail_summary_fallback'))})[/yellow]"
+                )
+        else:
             summary_text = (
                 f"[yellow]{escape(service.t('tui.detail_analysis_unavailable'))}[/yellow]"
             )
-        else:
-            summary_text = escape(service.display_text(record.summary))
         self._set_static(
             "#mail-summary",
             f"[bold]{service.t('tui.detail_summary')}:[/bold] {summary_text}",
         )
-        reason = record.analysis.reason if record.analysis else ""
-        if not reason and record.analysis_is_fallback:
+        reason = service.display_text(record.analysis.reason if record.analysis else "").strip()
+        if reason:
+            reason_text = escape(reason)
+        elif record.analysis_is_fallback:
             reason_text = f"[yellow]{escape(service.t('tui.detail_reason_unavailable'))}[/yellow]"
         else:
-            reason_text = escape(service.display_text(reason) or "-")
+            reason_text = "-"
         self._set_static(
             "#mail-reason",
             f"[bold]{service.t('tui.detail_reason')}:[/bold] {reason_text}",
@@ -1167,14 +1200,14 @@ class MailPane(Vertical):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
-        if button_id == "smart-search":
+        if button_id == "smart-action":
             # The search itself awaits network I/O. Keep the message handler
             # free so a second press can cancel it and progress updates can
             # be rendered while the model is working.
-            self.run_worker(self._toggle_smart_search(), exclusive=False, group="smart-search")
+            self.run_worker(self._toggle_smart_action(), exclusive=False, group="smart-action")
             return
         if button_id == "btn-refresh":
-            self._clear_smart_result()
+            self._clear_smart_action_result()
             await self.refresh_mail()
             return
         if button_id == "btn-reparse-failed":
@@ -1188,7 +1221,7 @@ class MailPane(Vertical):
         if self._selected_id is None:
             return
         if button_id == "btn-trash":
-            self._clear_smart_result()
+            self._clear_smart_action_result()
             await self._service.delete_mail(self._selected_id)
             self._selected_id = None
             await self.refresh_mail()
@@ -1288,10 +1321,10 @@ class ActionsPane(Vertical):
         super().__init__()
         self._service = service
         self._items: list[ActionItem] = []
+        # refresh_actions runs from the mount worker, filter changes and
+        # reload-all; concurrent clear+add_row passes interleave into
+        # DuplicateKeys — serialize them
         self._refresh_lock = asyncio.Lock()
-        self._seminar_searching = False
-        self._seminar_task: asyncio.Task[SeminarDiscoveryResult] | None = None
-        self._seminar_spinner_task: asyncio.Task[None] | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="actions-controls"):
@@ -1317,8 +1350,14 @@ class ActionsPane(Vertical):
                 variant="primary",
             )
             yield Button(
-                self._service.t("tui.btn_find_seminars"),
-                id="actions-find-seminars",
+                self._service.t("tui.btn_edit"),
+                id="actions-edit",
+                variant="primary",
+            )
+            yield Button(
+                self._service.t("tui.btn_review_seminars", count=0),
+                id="actions-review-seminars",
+                variant="warning",
             )
             yield Button(
                 self._service.t("tui.btn_delete_todo"),
@@ -1414,6 +1453,7 @@ class ActionsPane(Vertical):
                 escape(item.mail_id),
                 key=item.item_id,
             )
+        await self._sync_review_button()
 
     def _select_value(self, selector: str) -> str:
         select = _typed_select(self, selector)
@@ -1444,132 +1484,68 @@ class ActionsPane(Vertical):
             ActionModal(self._service, item), callback=_after_action
         )
 
-    def _seminar_button(self) -> Button | None:
-        return self.query_one_optional("#actions-find-seminars", Button)
+    def _selected_item(self) -> ActionItem | None:
+        """The row under the cursor, by the same rule Delete uses."""
+        table = self._actions_table()
+        if table is None:
+            return None
+        row_index = table.cursor_row
+        if row_index < 0 or row_index >= table.row_count:
+            return None
+        from textual.coordinate import Coordinate
 
-    def _set_seminar_label(self, key: str) -> None:
-        button = self._seminar_button()
-        if button is not None:
-            button.label = self._service.t(key)
-            button.variant = "error" if key == "tui.seminar_cancel" else "default"
+        row_key = table.coordinate_to_cell_key(Coordinate(row_index, 0)).row_key
+        return next((item for item in self._items if item.item_id == str(row_key.value)), None)
 
-    async def _stop_seminar_spinner(self) -> None:
-        task = self._seminar_spinner_task
-        self._seminar_spinner_task = None
-        if task is None:
-            return
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-    async def _toggle_seminar_discovery(self) -> None:
-        hint = self.query_one_optional("#actions-hint", Static)
-        if self._seminar_searching:
-            self._seminar_searching = False
-            task = self._seminar_task
-            self._seminar_task = None
-            if task is not None and not task.done():
-                task.cancel()
-            await self._stop_seminar_spinner()
-            self._set_seminar_label("tui.btn_find_seminars")
-            await self.refresh_actions()
-            return
-        self._seminar_searching = True
-        self._set_seminar_label("tui.seminar_cancel")
-        spinner_state: dict[str, Any] = {
-            "frame": 0,
-            "running": True,
-            "message": self._service.t("tui.seminar_scan_running"),
-        }
-        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-        async def _spin() -> None:
-            while bool(spinner_state["running"]):
-                frame = spinner[int(spinner_state["frame"]) % len(spinner)]
-                spinner_state["frame"] = int(spinner_state["frame"]) + 1
-                if hint is not None and self._seminar_searching:
-                    hint.update(f"{frame} {spinner_state['message']}")
-                    hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
-                await asyncio.sleep(0.12)
-
-        def _show_progress(
-            stage: str, done: int, total: int, detail: str | tuple[str, dict[str, Any]]
-        ) -> None:
-            if hint is None or not self._seminar_searching:
-                return
-            if isinstance(detail, tuple):
-                detail_key, detail_params = detail
-                detail_text = self._service.t(f"tui.{detail_key}", **detail_params)
-            else:
-                detail_text = detail
-            message = self._service.t(
-                "tui.seminar_scan_progress",
-                stage=self._service.t(f"tui.seminar_stage_{stage}"),
-                done=done,
-                total=total,
-                detail=detail_text,
+    def _refresh_after_edit(self, changed: bool | None) -> None:
+        if changed:
+            self.run_worker(
+                self.refresh_actions(),
+                exclusive=True,
+                group="actions-refresh",
+                exit_on_error=False,
             )
-            spinner_state["message"] = message
-            hint.update(message)
-            hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
 
-        self._seminar_spinner_task = asyncio.create_task(_spin())
-        task = asyncio.create_task(self._service.discover_seminars(progress=_show_progress))
-        self._seminar_task = task
-        try:
-            result = await task
-        except asyncio.CancelledError:
+    def edit_selected(self) -> None:
+        """Open the edit form for the selected todo (no-op without a row)."""
+        item = self._selected_item()
+        if item is None:
             return
-        except Exception:
-            if self._seminar_task is not task:
-                return
-            self._seminar_task = None
-            self._seminar_searching = False
-            await self._stop_seminar_spinner()
-            self._set_seminar_label("tui.btn_find_seminars")
-            await self.refresh_actions()
-            if hint is not None:
-                hint.update(f"[red]{self._service.t('tui.seminar_scan_failed')}[/red]")
-                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
-            return
-        if self._seminar_task is not task:
-            return
-        self._seminar_task = None
-        self._seminar_searching = False
-        await self._stop_seminar_spinner()
-        self._set_seminar_label("tui.btn_find_seminars")
-        if hint is not None:
-            message_key = (
-                "tui.seminar_scan_partial" if result.failed_mails else "tui.seminar_scan_complete"
-            )
-            hint.update(
-                self._service.t(
-                    message_key,
-                    failed=result.failed_mails,
-                    count=len(result.candidates),
-                )
-            )
-            hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
-        if not result.candidates:
-            return
-
-        def _refresh_after_review(changed: bool | None) -> None:
-            if changed:
-                self.run_worker(
-                    self.refresh_actions(),
-                    exclusive=True,
-                    group="actions-refresh",
-                    exit_on_error=False,
-                )
-
         cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-            SeminarReviewModal(self._service, result.candidates),
-            callback=_refresh_after_review,
+            TodoEditModal(self._service, item), callback=self._refresh_after_edit
+        )
+
+    async def _sync_review_button(self) -> None:
+        """Show the proposal review entry only while proposals await review.
+
+        Discovery itself is not a user-facing feature: it is one operation of
+        the Mail tab's smart action, so this control appears (with the pending
+        count) instead of a permanent button that would advertise it.
+        """
+        button = self.query_one_optional("#actions-review-seminars", Button)
+        if button is None:
+            return
+        pending = await self._service.list_seminar_candidates()
+        if pending:
+            button.label = self._service.t("tui.btn_review_seminars", count=len(pending))
+            button.display = "block"  # pyright: ignore[reportUnknownMemberType]
+        else:
+            button.display = "none"  # pyright: ignore[reportUnknownMemberType]
+
+    async def _open_seminar_review(self) -> None:
+        pending = await self._service.list_seminar_candidates()
+        if not pending:
+            return
+        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+            SeminarReviewModal(self._service, pending), callback=self._refresh_after_edit
         )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "actions-find-seminars":
-            await self._toggle_seminar_discovery()
+        if event.button.id == "actions-edit":
+            self.edit_selected()
+            return
+        if event.button.id == "actions-review-seminars":
+            self.run_worker(self._open_seminar_review(), exclusive=False, group="seminar-review")
             return
         if event.button.id == "actions-add":
 
@@ -1588,16 +1564,7 @@ class ActionsPane(Vertical):
             return
         if event.button.id != "actions-delete":
             return
-        table = self._actions_table()
-        if table is None:
-            return
-        row_index = table.cursor_row
-        if row_index < 0 or row_index >= table.row_count:
-            return
-        from textual.coordinate import Coordinate
-
-        row_key = table.coordinate_to_cell_key(Coordinate(row_index, 0)).row_key
-        item = next((i for i in self._items if i.item_id == str(row_key.value)), None)
+        item = self._selected_item()
         if item is None:
             return
         await self._service.delete_action(item.item_id)
@@ -2981,6 +2948,14 @@ class MailFlowApp(App[None]):
 
     async def _on_mail_processed(self, event: str, **payload: Any) -> None:
         # the service runs on the same loop as the app: schedule directly
+        self._schedule_reload()
+
+    def schedule_reload(self) -> None:
+        """Coalesced refresh of the Mail/Actions/Runtime panes.
+
+        Used after an operation changes stored state outside the
+        mail-processed event (e.g. a smart action that scheduled entries).
+        """
         self._schedule_reload()
 
     def _schedule_reload(self) -> None:
