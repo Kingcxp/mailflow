@@ -402,6 +402,118 @@ async def test_install_avoids_a_taken_port_and_wires_linux_bridge(
 
 
 @pytest.mark.asyncio
+async def test_instance_ids_with_equivalent_legacy_slugs_do_not_share_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two valid notifier ids must never generate the same Docker names."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gateway, "_find_docker_compose", lambda: "/usr/bin/docker")
+
+    def available(_: int) -> bool:
+        return True
+
+    monkeypatch.setattr(gateway, "_port_is_available", available)
+
+    async def fake_pull(_: Any, __: str, ___: Path, ____: Any) -> None:
+        pass
+
+    monkeypatch.setattr(gateway.WechatPadProProvisioner, "_pull_with_progress", fake_pull)
+    provisioner = gateway.WechatPadProProvisioner()
+    await provisioner.install("wx.one", {"bot_url": "http://bot"})
+    await provisioner.install("wx-one", {"bot_url": "http://bot"})
+
+    names = [
+        next(
+            line.strip()
+            for line in (tmp_path / "data/gateways" / directory / "compose.yml")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip().startswith("container_name: mailflow-wpp-")
+        )
+        for directory in ("wechatpadpro-wx.one", "wechatpadpro-wx-one")
+    ]
+    assert names[0] != names[1]
+
+
+@pytest.mark.asyncio
+async def test_stop_reports_compose_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed cleanup must reach the manager instead of faking a stopped state."""
+    monkeypatch.chdir(tmp_path)
+    instance_dir = tmp_path / "data/gateways/wechatpadpro-wechat-1"
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "compose.yml").write_text("services: {}\n", encoding="utf-8")
+    monkeypatch.setattr(gateway, "_find_docker_compose", lambda: "/usr/bin/docker")
+
+    def failed_stop(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="daemon unavailable")
+
+    monkeypatch.setattr(subprocess, "run", failed_stop)
+
+    with pytest.raises(RuntimeError, match="docker compose stop failed: daemon unavailable"):
+        await gateway.WechatPadProProvisioner().stop("wechat-1")
+
+
+@pytest.mark.asyncio
+async def test_guide_escape_cancels_deployment_and_shuts_down() -> None:
+    """Escape has the same cleanup semantics as the visible Cancel button."""
+    from mailflow_tui.gateway_guide import GatewayGuideModal
+    from textual.app import App
+
+    class GuideService:
+        def __init__(self) -> None:
+            self.gateways = SimpleNamespace(_last_progress=None)
+            self.provision_started = asyncio.Event()
+            self.provision_cancelled = asyncio.Event()
+            self.shutdowns: list[tuple[str, str]] = []
+
+        def t(self, key: str, **_: Any) -> str:
+            return key
+
+        async def gateway_detect(self, _: str) -> str:
+            return "ready"
+
+        async def gateway_provision(self, *_: Any) -> None:
+            self.provision_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                self.provision_cancelled.set()
+
+        async def gateway_shutdown(self, provider: str, instance_id: str) -> None:
+            self.shutdowns.append((provider, instance_id))
+
+    class GuideApp(App[None]):
+        def __init__(self, guide: GatewayGuideModal) -> None:
+            super().__init__()
+            self._guide = guide
+
+        def on_mount(self) -> None:
+            self.push_screen(self._guide)
+
+    service = GuideService()
+    guide = GatewayGuideModal(cast(Any, service), "wechatpadpro", "wechat-1", {})
+    app = GuideApp(guide)
+    async with app.run_test(size=(140, 50)) as pilot:
+        for _ in range(40):
+            if service.provision_started.is_set():
+                break
+            await pilot.pause(0.05)
+        assert service.provision_started.is_set()
+
+        await pilot.press("escape")
+        for _ in range(40):
+            if service.shutdowns and service.provision_cancelled.is_set():
+                break
+            await pilot.pause(0.05)
+
+        assert service.shutdowns == [("wechatpadpro", "wechat-1")]
+        assert service.provision_cancelled.is_set()
+        assert app.screen is not guide
+
+
+@pytest.mark.asyncio
 async def test_install_starts_stopped_windows_desktop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

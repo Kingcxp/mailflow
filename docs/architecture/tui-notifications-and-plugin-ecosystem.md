@@ -81,6 +81,12 @@ minimum urgency, target count, live connection status). This includes:
   (`GatewayGuideModal`) to auto-install/start NapCat or OpenWeChat, or create
   a per-instance WeChatPadPro Docker Compose stack, then drive QR login. The
   guide writes the corresponding reachable notifier endpoint only on success.
+- **Deployment lifecycle** — a retry or re-login first replaces the prior
+  supervisor and its saved bridge options. A cancelled or failed install/start
+  stops any partial gateway process, retains the generated payload for retry,
+  and exposes a failed stop as an error instead of claiming the instance is
+  stopped. WeChatPadPro's Compose resource suffix is collision-resistant, so
+  distinct notifier ids cannot share containers, networks, or volumes.
 
 ### Live status & auto-connect
 

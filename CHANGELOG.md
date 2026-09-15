@@ -223,6 +223,7 @@ All notable changes are recorded here; the format follows
   reachable `base_url` and loads the QR-minted credential from private
   per-instance state rather than persisting it in editable config; fragmented
   webhook HTTP bodies are read to their declared length before dispatch.
+- **Gateway retries and cancellation no longer leave stale processes** — retrying or re-logging-in replaces the old supervisor and bridge options; cancelled or failed install/start tears down partial gateways while retaining the payload for a retry. A failed Compose stop stays visible as an error, and distinct WeChatPadPro instance ids use collision-resistant container, network, and volume suffixes.
 - **Rate-limited mail analysis no longer yields blank failures** — an expired
   processor deadline now persists `processor timed out after N seconds`;
   deterministic advertising detection stops the pipeline at `ad`, so obvious

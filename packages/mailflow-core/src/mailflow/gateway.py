@@ -123,6 +123,35 @@ class GatewayManager:
     def _key(self, provider: str, instance_id: str) -> str:
         return f"{provider}.{instance_id}"
 
+    async def _cancel_supervisor(self, provider: str, instance_id: str) -> None:
+        """Cancel and join the one supervisor for this exact gateway instance."""
+        task = self._supervise_tasks.pop(self._key(provider, instance_id), None)
+        if task is None:
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _cleanup_failed_provision(
+        self, provisioner: GatewayProvisioner, instance: GatewayInstance
+    ) -> str:
+        """Best-effort stop after a failed or cancelled install/start.
+
+        A provisioner can have launched child processes before reporting a
+        readiness failure. Leave the generated payload for a retry, but never
+        leave that partial process tree running without a managed instance.
+        """
+        try:
+            await provisioner.stop(instance.instance_id)
+        except Exception as exc:
+            logger.error(
+                "gateway %s.%s cleanup after failed provisioning failed: %s",
+                instance.provider,
+                instance.instance_id,
+                exc,
+            )
+            return f"; cleanup failed: {exc}"
+        return ""
+
     async def _load_state(self, provider: str, instance_id: str) -> GatewayInstance | None:
         raw = await self._storage.get_preference(f"{_PREF_PREFIX}{provider}.{instance_id}")
         if not raw:
@@ -193,7 +222,7 @@ class GatewayManager:
             if instance.status in (_STATUS_RUNNING, "error") and instance.extra.get(
                 "autostart", True
             ):
-                self._supervise_tasks[instance.instance_id] = asyncio.create_task(
+                self._supervise_tasks[key] = asyncio.create_task(
                     self._supervise(instance, resume=True),
                     name=f"gateway-{instance.instance_id}",
                 )
@@ -464,16 +493,31 @@ class GatewayManager:
         """
         provisioner = self.provisioner(provider)
         key = self._key(provider, instance_id)
-        # underscore-prefixed keys are per-call transport (_progress,
-        # _ask_sudo_password): callables the provisioner consumes during
-        # THIS install — they must not persist into extra.options (a
-        # function there breaks model_dump_json) and must not survive the
-        # call
+        # A re-login/retry replaces its old supervisor before it starts a new
+        # lifecycle, avoiding two pollers racing the same gateway process.
+        await self._cancel_supervisor(provider, instance_id)
+        # Underscore-prefixed keys are per-call transport (_progress,
+        # _ask_sudo_password): provisioners consume them only during this
+        # operation. They must not persist into extra.options (a function
+        # there breaks model_dump_json) or survive the call.
         persistent_options = {k: v for k, v in options.items() if not k.startswith("_")}
-        instance = self._instances.get(key) or GatewayInstance(
-            provider=provider,
-            instance_id=instance_id,
-            extra={"options": persistent_options, "autostart": autostart},
+        existing = self._instances.get(key)
+        instance = (
+            GatewayInstance(
+                provider=provider,
+                instance_id=instance_id,
+                extra={"options": persistent_options, "autostart": autostart},
+            )
+            if existing is None
+            else existing.model_copy(
+                update={
+                    "extra": {
+                        **existing.extra,
+                        "options": persistent_options,
+                        "autostart": autostart,
+                    }
+                }
+            )
         )
         self._instances[key] = instance
         instance.status = "installing"
@@ -481,22 +525,36 @@ class GatewayManager:
         await self._save_state(instance)
         progress = InstallProgress()
         self._last_progress = progress  # polled by the TUI guide
-        install_options = {**options, "_progress": progress}
+        operation_options = {**options, "_progress": progress}
         try:
-            await provisioner.install(instance_id, install_options)
+            await provisioner.install(instance_id, operation_options)
+        except asyncio.CancelledError:
+            cleanup_error = await self._cleanup_failed_provision(provisioner, instance)
+            instance.status = "error" if cleanup_error else "stopped"
+            instance.error = f"provision cancelled{cleanup_error}" if cleanup_error else ""
+            await self._save_state(instance)
+            raise
         except Exception as exc:
+            cleanup_error = await self._cleanup_failed_provision(provisioner, instance)
             instance.status = "error"
-            instance.error = f"install failed: {exc}"
+            instance.error = f"install failed: {exc}{cleanup_error}"
             await self._save_state(instance)
             raise RuntimeError(instance.error) from exc
         instance.status = "starting"
         await self._save_state(instance)
         try:
             async with self._start_limiter:
-                running = await provisioner.start(instance_id, options)
+                running = await provisioner.start(instance_id, operation_options)
+        except asyncio.CancelledError:
+            cleanup_error = await self._cleanup_failed_provision(provisioner, instance)
+            instance.status = "error" if cleanup_error else "stopped"
+            instance.error = f"provision cancelled{cleanup_error}" if cleanup_error else ""
+            await self._save_state(instance)
+            raise
         except Exception as exc:
+            cleanup_error = await self._cleanup_failed_provision(provisioner, instance)
             instance.status = "error"
-            instance.error = f"start failed: {exc}"
+            instance.error = f"start failed: {exc}{cleanup_error}"
             await self._save_state(instance)
             raise RuntimeError(instance.error) from exc
         # start() returns a bare extra ({port, pid}); the persisted
@@ -511,8 +569,9 @@ class GatewayManager:
         if instance_id not in ids:
             ids.append(instance_id)
             await self._storage.set_preference(f"{_PREF_PREFIX}{provider}.ids", ",".join(ids))
+        progress.finish()
         # supervise while running
-        self._supervise_tasks[instance_id] = asyncio.create_task(
+        self._supervise_tasks[key] = asyncio.create_task(
             self._supervise(running), name=f"gateway-{instance_id}"
         )
         return running
@@ -527,20 +586,19 @@ class GatewayManager:
     async def shutdown_instance(self, provider: str, instance_id: str) -> None:
         """Stop one instance and stop supervising it."""
         key = self._key(provider, instance_id)
-        task = self._supervise_tasks.pop(instance_id, None)
-        if task is not None:
-            task.cancel()
-            # a cancelled supervisor raises CancelledError on await: swallow
-            # it like any other shutdown noise
-            await asyncio.gather(task, return_exceptions=True)
+        await self._cancel_supervisor(provider, instance_id)
         instance = self._instances.get(key)
         if instance is None:
             return
         try:
             await self.provisioner(provider).stop(instance_id)
         except Exception as exc:
-            logger.warning("gateway %s stop failed: %s", key, exc)
+            instance.status = "error"
+            instance.error = f"stop failed: {exc}"
+            await self._save_state(instance)
+            raise
         instance.status = "stopped"
+        instance.error = ""
         await self._save_state(instance)
 
 

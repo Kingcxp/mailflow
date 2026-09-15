@@ -124,6 +124,28 @@ async def test_provision_install_failure_marks_error() -> None:
     assert instance is not None
     assert instance.status == "error"
     assert "download failed" in instance.error
+    assert provisioner.stopped == ["gw-1"]
+
+
+@pytest.mark.asyncio
+async def test_provision_start_failure_stops_partial_gateway() -> None:
+    """A failed readiness check must not leave a launched child unmanaged."""
+
+    class FailingStart(FakeProvisioner):
+        async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
+            self.started.append(instance_id)
+            raise RuntimeError("gateway did not become ready")
+
+    provisioner = FailingStart()
+    manager, _storage = _manager(provisioner)
+
+    with pytest.raises(RuntimeError, match="start failed"):
+        await manager.provision("fake-gw", "gw-1", {})
+
+    instance = manager.instance("fake-gw", "gw-1")
+    assert instance is not None
+    assert instance.status == "error"
+    assert provisioner.stopped == ["gw-1"]
 
 
 @pytest.mark.asyncio
@@ -163,26 +185,53 @@ def test_install_progress_updates_and_clamps() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provision_injects_progress_into_install_options() -> None:
-    """The manager passes a shared InstallProgress to the provisioner's
-    install() so the TUI can render a live download bar."""
+async def test_provision_shares_progress_with_install_and_start() -> None:
+    """The live guide needs one progress channel through startup completion."""
     from mailflow.gateway import InstallProgress
 
-    captured: dict[str, Any] = {}
+    captured: dict[str, dict[str, Any]] = {}
 
     class RecordingProvisioner(FakeProvisioner):
         async def install(self, instance_id: str, options: dict[str, Any]) -> None:
-            captured.update(options)
+            captured["install"] = options
             await super().install(instance_id, options)
 
+        async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
+            captured["start"] = options
+            return await super().start(instance_id, options)
+
     provisioner = RecordingProvisioner()
-    manager, _storage = _manager(provisioner)  # type: ignore[arg-type]
+    manager, _storage = _manager(provisioner)
     await manager.provision("fake-gw", "gw-1", {"x": 1})
-    progress = captured.get("_progress")
+
+    progress = captured["install"].get("_progress")
     assert isinstance(progress, InstallProgress)
-    assert captured["x"] == 1
-    # original options dict untouched (copy)
+    assert captured["install"]["x"] == 1
+    assert captured["start"]["_progress"] is progress
+    assert progress._done  # pyright: ignore[reportPrivateUsage]
+    # Original options remain free of call-scoped transport state.
     assert "_progress" not in {"x": 1}
+
+
+@pytest.mark.asyncio
+async def test_reprovision_replaces_supervisor_and_persisted_options() -> None:
+    """Re-login cannot leave a stale poller or a stale bridge endpoint."""
+    provisioner = FakeProvisioner()
+    manager, _storage = _manager(provisioner)
+
+    await manager.provision("fake-gw", "gw-1", {"bot_url": "http://old"})
+    first = manager._supervise_tasks["fake-gw.gw-1"]  # pyright: ignore[reportPrivateUsage]
+
+    await manager.provision("fake-gw", "gw-1", {"bot_url": "http://new"}, autostart=False)
+
+    second = manager._supervise_tasks["fake-gw.gw-1"]  # pyright: ignore[reportPrivateUsage]
+    instance = manager.instance("fake-gw", "gw-1")
+    assert instance is not None
+    assert first is not second
+    assert first.done()
+    assert len(manager._supervise_tasks) == 1  # pyright: ignore[reportPrivateUsage]
+    assert instance.extra == {"options": {"bot_url": "http://new"}, "autostart": False}
+    await manager.stop()
 
 
 @pytest.mark.asyncio
@@ -383,6 +432,28 @@ async def test_explicit_shutdown_marks_stopped() -> None:
 
     persisted = storage.preferences["gateway.instance.fake-gw.gw-1"]
     assert '"stopped"' in persisted, persisted
+
+
+@pytest.mark.asyncio
+async def test_shutdown_failure_stays_visible() -> None:
+    """A failed stop must not lie that a managed gateway is stopped."""
+
+    class FailingStop(FakeProvisioner):
+        async def stop(self, instance_id: str) -> None:
+            self.stopped.append(instance_id)
+            raise RuntimeError("docker refused stop")
+
+    provisioner = FailingStop()
+    manager, storage = _manager(provisioner)
+    await manager.provision("fake-gw", "gw-1", {})
+
+    with pytest.raises(RuntimeError, match="docker refused stop"):
+        await manager.shutdown_instance("fake-gw", "gw-1")
+
+    instance = manager.instance("fake-gw", "gw-1")
+    assert instance is not None
+    assert instance.status == "error"
+    assert "stop failed" in storage.preferences["gateway.instance.fake-gw.gw-1"]
 
 
 @pytest.mark.asyncio

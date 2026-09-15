@@ -147,7 +147,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._result: dict[str, Any] | None = None
         self._progress_bucket = -1
         self._last_progress_message = ""
-        self._bindings.bind("escape", "dismiss", self._t("tui.btn_close"))
+        self._guide_worker: Any = None
+        self._cancelling = False
+        self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -220,9 +222,14 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             "INFO",
             self._t("tui.bots_guide_starting", provider=self._provider),
         )
-        self.run_worker(
+        self._guide_worker = self.run_worker(
             self._run_guide(), exclusive=True, group="gateway-guide", exit_on_error=False
         )
+
+    def on_unmount(self) -> None:
+        """Never leave QR polling alive after the modal closes."""
+        if self._guide_worker is not None:
+            self._guide_worker.cancel()
 
     # -- log pane ---------------------------------------------------------------
 
@@ -397,8 +404,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-            with contextlib.suppress(Exception):
-                await service.gateway_shutdown(provider, self._instance_id)
+            if not self._cancelling:
+                with contextlib.suppress(Exception):
+                    await service.gateway_shutdown(provider, self._instance_id)
             raise
 
     # -- sudo password prompt -----------------------------------------------
@@ -580,6 +588,11 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     async def _cancel_and_cleanup(self) -> None:
         """Abort the wizard: stop the gateway we started so no orphan
         process keeps running, then close without saving."""
+        if self._cancelling:
+            return
+        self._cancelling = True
+        if self._guide_worker is not None:
+            self._guide_worker.cancel()
         self._log("WARN", self._t("tui.bots_guide_cancelled"))
         try:
             await self._service.gateway_shutdown(self._provider, self._instance_id)

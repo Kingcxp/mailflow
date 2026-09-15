@@ -61,6 +61,15 @@ def _instance_dir(instance_id: str) -> Path:
     return _data_root() / f"wechatpadpro-{safe}"
 
 
+def _compose_resource_slug(instance_id: str) -> str:
+    """A bounded, Docker-safe and collision-resistant resource suffix."""
+    raw = "".join(
+        c if c.isascii() and (c.isalnum() or c in "-_.") else "-" for c in str(instance_id)
+    ).strip("-_.")
+    digest = hashlib.sha1(str(instance_id).encode()).hexdigest()[:10]
+    return f"{raw[:40] or 'instance'}-{digest}"
+
+
 def managed_notifier_auth_key(instance_id: str) -> str:
     """Read an auto-provisioned instance's minted notifier credential.
 
@@ -865,7 +874,7 @@ class WechatPadProProvisioner:
         if compose_file.exists():
             logger.info("wechatpadpro %s: compose project already present", instance_id)
             return
-        safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in instance_id)
+        safe = _compose_resource_slug(instance_id)
         admin_key = str(options.get("admin_key") or secrets.token_hex(16))
         webhook_secret = secrets.token_hex(16)
         mysql_root = secrets.token_hex(8)
@@ -1071,13 +1080,18 @@ class WechatPadProProvisioner:
         compose = _find_docker_compose()
         if compose is None:
             return
-        await asyncio.to_thread(
+        stopped = await asyncio.to_thread(
             subprocess.run,
             _compose_arguments(compose, "-f", str(compose_file), "stop"),
             capture_output=True,
             text=True,
             timeout=300,
         )
+        if stopped.returncode != 0:
+            raise RuntimeError(
+                f"wechatpadpro {instance_id}: docker compose stop failed: "
+                f"{(stopped.stderr or stopped.stdout).strip()[:400]}"
+            )
 
     async def status(self, instance_id: str) -> GatewayInstance:
         endpoint = self._endpoint(instance_id)
