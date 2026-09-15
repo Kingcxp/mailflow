@@ -13,7 +13,7 @@ from mailflow.commands import CommandRouter
 from mailflow.config import MailFlowConfig
 from mailflow.service import MailFlowService
 from mailflow_bundled import create_plugin_manager
-from mailflow_tui.app import MailFlowApp
+from mailflow_tui.app import MailFlowApp, MailPane
 from mailflow_tui.ask_correct import AskCorrectModal
 from textual.widgets import Button, Input, Select, Static, TabbedContent
 
@@ -392,6 +392,106 @@ async def test_ask_correct_modal_opens_and_sends(tmp_path: Path) -> None:
             app.screen.action_close()
             await pilot.pause()
             assert not isinstance(app.screen, AskCorrectModal)
+    finally:
+        await service.stop()
+
+
+async def test_failed_analysis_is_disclosed_without_a_fake_summary(tmp_path: Path) -> None:
+    """A subject fallback must never look like a successful mail analysis."""
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from mailflow.domain import MailAnalysis, MailRecord, ProcessorNote, Urgency
+    from mailflow_testkit.fakes import make_mail as make_test_mail
+
+    service = await start_service_quiet(tmp_path)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    mail = make_test_mail(
+        message_id="failed-analysis",
+        subject="Source subject, not a summary",
+        body_text="The complete original mail body remains readable.",
+    )
+    record = MailRecord(
+        record_id="failed-analysis",
+        mail=mail,
+        auto_urgency=Urgency.INFO,
+        analysis=MailAnalysis(
+            summary=mail.subject,
+            urgency=Urgency.INFO,
+            summary_is_fallback=True,
+        ),
+        processor_notes=[
+            ProcessorNote(
+                processor_id="llm-importance",
+                plugin_id="mailflow-core",
+                status="failed",
+                message="failed: HTTP 500: Internal Server Error",
+                started_at=_dt.now(UTC),
+                finished_at=_dt.now(UTC),
+            )
+        ],
+    )
+    await service.storage.save_mail(record)
+    try:
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause(0.2)
+            app.query_one("#btn-refresh", Button).press()
+            await _wait_until(
+                pilot,
+                lambda: (
+                    "complete original mail body"
+                    in str(app.query_one("#mail-body", Static).render()).lower()
+                ),
+            )
+            assert (
+                "analysis failed"
+                in str(app.query_one("#mail-analysis-status", Static).render()).lower()
+            )
+            assert (
+                "no generated analysis"
+                in str(app.query_one("#mail-summary", Static).render()).lower()
+            )
+            assert (
+                "no generated reason" in str(app.query_one("#mail-reason", Static).render()).lower()
+            )
+            assert (
+                "complete original mail body"
+                in str(app.query_one("#mail-body", Static).render()).lower()
+            )
+
+            assert record.analysis is not None
+            record.analysis.reason = "A real urgency reason remains visible."
+            await service.storage.save_mail(record)
+            app.query_one("#btn-refresh", Button).press()
+            await _wait_until(
+                pilot,
+                lambda: (
+                    "real urgency reason"
+                    in str(app.query_one("#mail-reason", Static).render()).lower()
+                ),
+            )
+            assert (
+                "real urgency reason" in str(app.query_one("#mail-reason", Static).render()).lower()
+            )
+
+            app.push_screen(AskCorrectModal(service, record))
+            await _wait_until(pilot, lambda: isinstance(app.screen, AskCorrectModal))
+            assert (
+                "analysis failed"
+                in str(
+                    app.screen.query_one("#ask-correct-analysis-status", Static).render()
+                ).lower()
+            )
+            assert (
+                "no generated analysis"
+                in str(app.screen.query_one("#ask-correct-summary", Static).render()).lower()
+            )
+            assert (
+                "real urgency reason"
+                in str(app.screen.query_one("#ask-correct-reason", Static).render()).lower()
+            )
+            app.exit()
+            await pilot.pause()
     finally:
         await service.stop()
 
@@ -817,19 +917,20 @@ async def test_reparse_failed_works_without_selection(tmp_path: Path) -> None:
 
             # do NOT select any row — the bulk re-analyze button must not
             # depend on selection
-            notes_before = str(app.query_one("#mail-notes").render())
+            pane = app.query_one(MailPane)
+            pane._selected_id = None  # pyright: ignore[reportPrivateUsage]
+            assert pane._selected_id is None  # pyright: ignore[reportPrivateUsage]
             app.query_one("#btn-reparse-failed", Button).press()
-            await pilot.pause(1.5)
+            completion = service.t("tui.history_reanalyzed", count=1)
+            await _wait_until(
+                pilot,
+                lambda: completion in str(app.query_one("#mail-operation-status", Static).render()),
+            )
             assert "failed-1" in calls, (
                 "re-analyze failed must process failed mails without a selection; "
                 f"process_mail calls: {calls}"
             )
-            # the user-facing feedback must appear even with nothing selected
-            notes_after = str(app.query_one("#mail-notes").render())
-            assert notes_after != notes_before, (
-                "status feedback must update when re-analyzing failed mails; "
-                f"before={notes_before!r} after={notes_after!r}"
-            )
+            assert completion in str(app.query_one("#mail-operation-status", Static).render())
             app.exit()
             await pilot.pause()
     finally:

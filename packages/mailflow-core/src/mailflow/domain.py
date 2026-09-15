@@ -254,6 +254,10 @@ class MailAnalysis(BaseModel):
     summary: str
     urgency: Urgency
     reason: str = ""
+    # True only when the pipeline had no generated summary and showed the
+    # source subject as a storage fallback. Consumers must never present it
+    # as a successful content analysis.
+    summary_is_fallback: bool = False
     reply_required: bool = False
     suggested_reply: str = ""
     action_items: list[ActionItem] = Field(default_factory=lambda: [])
@@ -287,6 +291,22 @@ class MailRecord(BaseModel):
         if self.analysis is not None:
             return self.analysis.summary
         return self.mail.subject
+
+    @property
+    def analysis_is_fallback(self) -> bool:
+        """Whether no generated summary is available for this record.
+
+        The processor note branch preserves this distinction for records
+        written before ``MailAnalysis.summary_is_fallback`` existed.
+        """
+        if self.analysis is None:
+            return True
+        if self.analysis.summary_is_fallback:
+            return True
+        return any(
+            note.processor_id == "pipeline" and note.message.startswith("fallback summary used")
+            for note in self.processor_notes
+        )
 
     @property
     def action_items(self) -> list[ActionItem]:

@@ -131,6 +131,15 @@ class TestMailRecordUrgency:
         )
         assert record.summary == "the summary"
 
+    def test_explicit_fallback_analysis_is_not_treated_as_generated(self) -> None:
+        record = MailRecord(
+            record_id="r1",
+            mail=make_mail(),
+            auto_urgency=Urgency.INFO,
+            analysis=MailAnalysis(summary="Hello", urgency=Urgency.INFO, summary_is_fallback=True),
+        )
+        assert record.analysis_is_fallback is True
+
     def test_serialization_roundtrip(self) -> None:
         record = MailRecord(
             record_id="r1",

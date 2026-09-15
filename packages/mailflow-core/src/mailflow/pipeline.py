@@ -54,6 +54,7 @@ def merge_analysis(base: MailAnalysis, overlay: MailAnalysis) -> MailAnalysis:
     merged = base.model_copy(deep=True)
     if overlay.summary:
         merged.summary = overlay.summary
+        merged.summary_is_fallback = overlay.summary_is_fallback
     merged.urgency = overlay.urgency
     merged.reply_required = overlay.reply_required
     if overlay.reason:
@@ -216,6 +217,7 @@ class PipelineEngine:
 
         if not accumulated.summary.strip():
             accumulated.summary = mail.subject or "(no subject)"
+            accumulated.summary_is_fallback = True
             notes.append(
                 ProcessorNote(
                     processor_id="pipeline",

@@ -61,6 +61,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
                     yield Vertical(id="ask-correct-messages")
             with Vertical(id="ask-correct-info"):
                 yield Static(self._t("tui.ask_correct_info_label"), id="ask-correct-info-label")
+                yield Static("", id="ask-correct-analysis-status")
                 yield Static("", id="ask-correct-urgency")
                 yield Static("", id="ask-correct-summary")
                 yield Static("", id="ask-correct-reason")
@@ -88,11 +89,35 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
             f"[bold]{self._t('tui.column_urgency')}:[/bold] "
             f"[bold {urgency.color}]■ {escape(label)}[/bold {urgency.color}]"
         )
-        summary = record.summary or ""
+        failed_notes = [note for note in record.processor_notes if note.status == "failed"]
+        failure_detail = "; ".join(
+            f"{note.processor_id}: {note.message}" for note in failed_notes[:2]
+        )
+        if failure_detail:
+            status_key = (
+                "tui.detail_analysis_failed"
+                if record.analysis_is_fallback
+                else "tui.detail_analysis_partial"
+            )
+            status = self._t(status_key, error=failure_detail)
+        elif record.analysis_is_fallback:
+            status = self._t("tui.detail_analysis_unavailable")
+        else:
+            status = ""
+        self.query_one("#ask-correct-analysis-status", Static).update(  # pyright: ignore[reportUnknownMemberType]
+            f"[red]{escape(status)}[/red]" if status else ""
+        )
+        summary = (
+            self._t("tui.detail_analysis_unavailable")
+            if record.analysis_is_fallback
+            else record.summary or ""
+        )
+        reason = record.analysis.reason if record.analysis else ""
+        if not reason and record.analysis_is_fallback:
+            reason = self._t("tui.detail_reason_unavailable")
         self.query_one("#ask-correct-summary", Static).update(  # pyright: ignore[reportUnknownMemberType]
             f"[bold]{self._t('tui.detail_summary')}:[/bold] {escape(summary)}"
         )
-        reason = record.analysis.reason if record.analysis else ""
         self.query_one("#ask-correct-reason", Static).update(  # pyright: ignore[reportUnknownMemberType]
             f"[bold]{self._t('tui.detail_reason')}:[/bold] {escape(reason or '-')}"
         )

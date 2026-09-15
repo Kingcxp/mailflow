@@ -372,6 +372,7 @@ class TestPipeline:
         engine = PipelineEngine([self._binding(noop, "noop")])
         analysis, notes, _, _ = await engine.process(make_mail(subject="Exam notice"), "acct-1")
         assert analysis.summary == "Exam notice"
+        assert analysis.summary_is_fallback is True
         assert any(n.processor_id == "pipeline" for n in notes)
 
     async def test_processor_stop_decision(self) -> None:

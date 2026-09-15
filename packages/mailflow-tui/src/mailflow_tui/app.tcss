@@ -247,6 +247,12 @@ SeminarReviewModal {
     margin-right: 1;
 }
 
+#mail-analysis-status,
+#mail-operation-status {
+    height: auto;
+    margin-bottom: 1;
+}
+
 #mail-summary {
     color: $text;
     margin-bottom: 1;

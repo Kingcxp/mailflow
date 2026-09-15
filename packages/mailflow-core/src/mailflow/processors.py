@@ -408,9 +408,11 @@ class LLMImportanceProcessor:
                     "dropping malformed action item %d from %r: %s", position, mail.message_id, exc
                 )
         urgency = parse_urgency(payload.urgency)
+        summary = payload.summary[: self._max_summary_chars].strip()
         analysis = MailAnalysis(
-            summary=payload.summary[: self._max_summary_chars] or mail.subject,
+            summary=summary or mail.subject,
             urgency=urgency,
+            summary_is_fallback=not bool(summary),
             reason=payload.reason[:300],
             reply_required=payload.reply_required,
             suggested_reply=payload.suggested_reply[:2000],

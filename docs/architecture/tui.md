@@ -33,15 +33,20 @@ tears them down with the screen — nothing keeps ticking after it closes.
   highlighted row (single click or arrow keys — no double-click needed) and
   shows summary, reason, action items, the **original body** (HTML rendered as
   text, binary attachment payloads detected and replaced by an explanatory
-  note, bodies truncated at 4000 chars), attachment metadata (name/type/size)
-  and failed processor notes. All stored timestamps are projected into
-  `general.timezone`, including action windows. The bottom controls use a
+  note, bodies truncated at 4000 chars), attachment metadata (name/type/size),
+  and a localized analysis status. A source-subject fallback is explicitly
+  unavailable analysis, never presented as a generated summary; real reasons
+  remain visible and absent reasons are explicit. All stored timestamps are
+  projected into `general.timezone`, including action windows. The bottom controls use a
   full-width filter row (manual urgency — a localized
   `ad/info/important/urgent/follow-automatic` dropdown that mirrors the
   selected mail — plus urgency filter and sort) followed by a two-row button
   container (refresh/trash/Ask & Correct then reply/re-analyze/re-analyze-failed)
-  with equal-width buttons. An empty view shows a hint (no mail yet vs. no match for
-  the search/filter) and clears the detail pane; any results-only render also
+  with equal-width buttons. **Re-analyze failed** requires no selected row; it
+  works through every failed record and keeps its live progress/final outcome in
+  a dedicated status widget, so the `mailflow.mail.processed` refresh cannot
+  erase feedback. An empty view shows a hint (no mail yet vs. no match for the
+  search/filter) and clears the detail pane; any results-only render also
   refreshes detail for its selected result. Reply opens the confirmation-gated
   modal. **Smart find** delegates matching and relevance ranking to
   `service.smart_search`. Its hint line reflects real warm-up and completed

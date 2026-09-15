@@ -83,6 +83,15 @@ The structured interpretation produced by the processor chain: `summary`,
 `urgency`, `reason`, `reply_required`, `suggested_reply`, `action_items`,
 `notes`, and `backend` (the LLM backend plugin actually used, if any).
 
+When no processor supplies a non-empty summary, the pipeline stores the source
+subject only as a display fallback and marks `summary_is_fallback=True`.
+`MailRecord` keeps recognizing the corresponding legacy pipeline note for
+records written before that field existed. A host MUST present this as an
+unavailable summary — and show a localized failed/partial status when a
+processor note failed — not as an LLM-generated summary. A real non-empty
+urgency reason remains visible; an absent reason is explicitly unavailable.
+The original mail body remains visible.
+
 ## ActionItem
 
 `ActionItem` is a provider-neutral timed entry in the reminder schedule. Every
@@ -128,8 +137,10 @@ The stored unit: `mail` + `analysis` + `auto_urgency` + `manual_urgency` +
 - `summary` falls back to the subject when no analysis exists.
 - `action_items` are the analysis action items (empty without analysis).
 
-The pipeline guarantees that after processing a record always has a summary
-(subject-based fallback recorded as a pipeline note).
+The pipeline guarantees that after processing a record always has a summary.
+Its subject-based fallback is recorded as a pipeline note and explicitly marked
+on `MailAnalysis`, so consumers can distinguish storage continuity from a
+successful content analysis.
 
 ## SmartSearchResult
 

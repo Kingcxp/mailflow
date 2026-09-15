@@ -142,6 +142,20 @@ class TestLLMImportanceProcessor:
         assert result.analysis.urgency is Urgency.INFO
         assert result.analysis.action_items == []
 
+    async def test_empty_model_summary_is_explicitly_marked_as_fallback(self) -> None:
+        router = StubRouter(
+            '{"summary": "", "urgency": "info", "reason": "", '
+            '"reply_required": false, "suggested_reply": "", "action_items": [], "notes": ""}'
+        )
+        processor = make_processor(router)
+        mail = make_mail(subject="Source subject, not a summary")
+
+        result = await processor.process(mail, CONTEXT)
+
+        assert result.analysis is not None
+        assert result.analysis.summary == mail.subject
+        assert result.analysis.summary_is_fallback is True
+
     async def test_no_llm_configured_leaves_rules_result_intact(self) -> None:
         config = ProcessorConfig(processor_id="p1", provider="llm-importance", llm=None)
         processor = LLMImportanceProcessor(config, None)  # type: ignore[arg-type]

@@ -462,6 +462,10 @@ class MailPane(Vertical):
         self._smart_search_task: asyncio.Task[SmartSearchResult] | None = None
         self._smart_spinner_task: asyncio.Task[None] | None = None
         self._smart_result: SmartSearchResult | None = None
+        # Re-analysis emits mail-processed events which asynchronously refresh
+        # this pane. Keep the operation outcome separately so that refresh
+        # cannot erase feedback before the user can read it.
+        self._operation_status = ""
 
     def compose(self) -> ComposeResult:
         # the urgency Select auto-selects "auto" while mounting and fires
@@ -475,6 +479,8 @@ class MailPane(Vertical):
         with Horizontal():
             yield DataTable(id="mail-table")
             with ScrollableContainer(id="mail-detail"):
+                yield Static("", id="mail-analysis-status")
+                yield Static("", id="mail-operation-status")
                 yield Static("", id="mail-summary")
                 yield Static("", id="mail-reason")
                 yield Static("", id="mail-actions")
@@ -1015,6 +1021,8 @@ class MailPane(Vertical):
     def _clear_mail_detail(self) -> None:
         """Remove detail from a record no longer visible in the table."""
         for selector in (
+            "#mail-analysis-status",
+            "#mail-operation-status",
             "#mail-summary",
             "#mail-reason",
             "#mail-actions",
@@ -1034,16 +1042,41 @@ class MailPane(Vertical):
             self._clear_mail_detail()
             return
         service = self._service
+        failed_notes = [note for note in record.processor_notes if note.status == "failed"]
+        failure_detail = "; ".join(
+            f"{note.processor_id}: {note.message}" for note in failed_notes[:2]
+        )
+        if failure_detail:
+            status_key = (
+                "tui.detail_analysis_failed"
+                if record.analysis_is_fallback
+                else "tui.detail_analysis_partial"
+            )
+            status = service.t(status_key, error=failure_detail)
+        elif record.analysis_is_fallback:
+            status = service.t("tui.detail_analysis_unavailable")
+        else:
+            status = ""
+        self._set_static("#mail-analysis-status", f"[red]{escape(status)}[/red]" if status else "")
+        self._set_static("#mail-operation-status", self._operation_status)
+        if record.analysis_is_fallback:
+            summary_text = (
+                f"[yellow]{escape(service.t('tui.detail_analysis_unavailable'))}[/yellow]"
+            )
+        else:
+            summary_text = escape(service.display_text(record.summary))
         self._set_static(
             "#mail-summary",
-            f"[bold]{service.t('tui.detail_summary')}:[/bold] "
-            f"{escape(service.display_text(record.summary))}",
+            f"[bold]{service.t('tui.detail_summary')}:[/bold] {summary_text}",
         )
         reason = record.analysis.reason if record.analysis else ""
+        if not reason and record.analysis_is_fallback:
+            reason_text = f"[yellow]{escape(service.t('tui.detail_reason_unavailable'))}[/yellow]"
+        else:
+            reason_text = escape(service.display_text(reason) or "-")
         self._set_static(
             "#mail-reason",
-            f"[bold]{service.t('tui.detail_reason')}:[/bold] "
-            f"{escape(service.display_text(reason) or '-')}",
+            f"[bold]{service.t('tui.detail_reason')}:[/bold] {reason_text}",
         )
         actions_text = ""
         if record.action_items:
@@ -1102,17 +1135,9 @@ class MailPane(Vertical):
                     f"\n[bold yellow]{service.t('tui.feedback_marker')}: "
                     f"{escape(existing)}[/bold yellow]"
                 )
-        failed_notes = [note for note in record.processor_notes if note.status == "failed"]
-        failure_text = ""
-        if failed_notes:
-            shown = "; ".join(f"{note.processor_id}: {note.message}" for note in failed_notes[:2])
-            more = f" (+{len(failed_notes) - 2})" if len(failed_notes) > 2 else ""
-            failure_text = (
-                f"\n[red]{service.t('tui.detail_failed_note')}: {escape(shown + more)}[/red]"
-            )
         self._set_static(
             "#mail-notes",
-            f"{reply_flag}{feedback}{failure_text}\n{service.t('tui.urgency_label')}: "
+            f"{reply_flag}{feedback}\n{service.t('tui.urgency_label')}: "
             f"{urgency_label(service, record.effective_urgency)} "
             f"({service.t('tui.detail_manual_marker') if record.manual_urgency is not None else service.t('tui.detail_auto_marker')})",
         )
@@ -1134,6 +1159,11 @@ class MailPane(Vertical):
         if node is not None:
             node.update(content)
 
+    def _set_operation_status(self, content: str) -> None:
+        """Show re-analysis feedback and retain it through event refreshes."""
+        self._operation_status = content
+        self._set_static("#mail-operation-status", content)
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "smart-search":
@@ -1145,6 +1175,14 @@ class MailPane(Vertical):
         if button_id == "btn-refresh":
             self._clear_smart_result()
             await self.refresh_mail()
+            return
+        if button_id == "btn-reparse-failed":
+            self.run_worker(
+                self._reparse_failed(),
+                exclusive=True,
+                group="mail-reparse",
+                exit_on_error=False,
+            )
             return
         if self._selected_id is None:
             return
@@ -1181,14 +1219,6 @@ class MailPane(Vertical):
                 exit_on_error=False,
             )
             return
-        if button_id == "btn-reparse-failed":
-            self.run_worker(
-                self._reparse_failed(),
-                exclusive=True,
-                group="mail-reparse",
-                exit_on_error=False,
-            )
-            return
         if button_id == "btn-reply":
             if getattr(self._service, "remote", False):
                 self._set_static(
@@ -1205,51 +1235,45 @@ class MailPane(Vertical):
 
     async def _reparse_batch(self, mails: list[Any]) -> None:
         """Force re-analysis for the given messages, with per-mail progress."""
-        status_node = self.query_one_optional("#mail-notes", Static)
         total = len(mails)
         done = 0
         failed: list[str] = []
         for position, mail in enumerate(mails, start=1):
             subject_short = escape((mail.subject or "")[:36])
-            if status_node is not None:
-                status_node.update(
-                    f"[cyan]{self._service.t('tui.history_progress', position=position, total=total)} "
-                    f"{subject_short}[/cyan]"
-                )
+            self._set_operation_status(
+                f"[cyan]{self._service.t('tui.history_progress', position=position, total=total)} "
+                f"{subject_short}[/cyan]"
+            )
             try:
                 await self._service.process_mail(mail, force=True)
                 done += 1
             except Exception as exc:
                 failed.append(f"{mail.subject[:40]}: {exc}")
         await self.refresh_mail()
-        if status_node is None:
-            return
         if failed:
             detail = "; ".join(failed[:3])
             more = f" (+{len(failed) - 3})" if len(failed) > 3 else ""
-            status_node.update(
+            self._set_operation_status(
                 f"[red]{self._service.t('tui.history_failed', count=len(failed))}: "
                 f"{escape(detail)}{more}[/red]"
             )
         else:
-            status_node.update(
+            self._set_operation_status(
                 f"[green]{self._service.t('tui.history_reanalyzed', count=done)}[/green]"
             )
 
     async def _reparse_failed(self) -> None:
         failed_records = await self._service.list_failed_mails()
         if not failed_records:
-            self._set_static(
-                "#mail-notes",
-                f"[green]{self._service.t('tui.reparse_none_failed')}[/green]",
+            self._set_operation_status(
+                f"[green]{self._service.t('tui.reparse_none_failed')}[/green]"
             )
             return
         # immediate feedback before the first LLM call: each re-analysis can
         # take seconds (and may rate-limit), so without this the bulk
         # action looks like it never started
-        self._set_static(
-            "#mail-notes",
-            f"[cyan]{self._service.t('tui.reparse_failed_start', count=len(failed_records))}[/cyan]",
+        self._set_operation_status(
+            f"[cyan]{self._service.t('tui.reparse_failed_start', count=len(failed_records))}[/cyan]"
         )
         await self._reparse_batch([record.mail for record in failed_records])
 
