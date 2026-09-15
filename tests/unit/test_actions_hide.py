@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 import pytest
 from mailflow.config import MailFlowConfig
-from mailflow.domain import ActionItem
+from mailflow.domain import ActionItem, ActionOrigin
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.pipeline import PipelineEngine
@@ -112,3 +112,19 @@ async def test_custom_todo_delete_is_real(service: MailFlowService) -> None:
     store.custom[item.item_id] = item
     assert await service.delete_action("custom-1") is True
     assert await service.list_actions() == []
+
+
+async def test_imported_seminar_delete_is_real(service: MailFlowService) -> None:
+    item = ActionItem(
+        item_id="seminar-1",
+        mail_id="m1",
+        summary="Research seminar",
+        action_type="seminar",
+        due_at=datetime.now(UTC) + timedelta(days=1),
+        origin=ActionOrigin.SEMINAR,
+    )
+    store = cast(Any, service.storage)
+    store.custom[item.item_id] = item
+
+    assert await service.delete_action(item.item_id) is True
+    assert store.custom == {}

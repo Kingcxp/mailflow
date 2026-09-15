@@ -721,25 +721,26 @@ class MailFlowRuntime:
                 kind=kind,
                 scheduled=when,
             )
+            display_range = item.time_range_in(config.timezone)
             await self._push_text(
                 self._rt(
                     "reminder.push",
                     summary=item.summary,
-                    due=item.time_range,
+                    due=display_range,
                 )
-                or f"【日程提醒】「{item.summary}」即将到期（{item.time_range}）"
+                or f"【日程提醒】「{item.summary}」即将到期（{display_range}）"
             )
             source = record.record_id if record is not None else "user"
             if item.notes:
                 message = self._rt(
                     "reminder.reminder_log_notes",
                     kind=kind,
-                    range=item.time_range,
+                    range=display_range,
                     summary=item.summary,
                     source=source,
                     notes=item.notes,
                 ) or (
-                    f"REMINDER [{kind}] due {item.time_range} — "
+                    f"REMINDER [{kind}] due {display_range} — "
                     f"{item.summary} (mail {source}; notes: {item.notes})"
                 )
             else:
@@ -747,11 +748,11 @@ class MailFlowRuntime:
                     self._rt(
                         "reminder.reminder_log",
                         kind=kind,
-                        range=item.time_range,
+                        range=display_range,
                         summary=item.summary,
                         source=source,
                     )
-                    or f"REMINDER [{kind}] due {item.time_range} — {item.summary} (mail {source})"
+                    or f"REMINDER [{kind}] due {display_range} — {item.summary} (mail {source})"
                 )
             reminder_logger.warning(message)
             fired += 1
@@ -774,15 +775,17 @@ class MailFlowRuntime:
                 )
 
     def _format_digest(self, date_key: str, items: list[ActionItem]) -> str:
-        """Items FIRST, then the summary line — a chat message must open
-        with the content it refers to (the inverted order was reported
-        as confusing)."""
+        """Format digest item times in the configured display timezone."""
+        display_timezone = self._config.general.timezone
         if self._i18n is not None:
             lines = [
                 self._rt(
-                    "reminder.digest_item", index=index, summary=item.summary, due=item.time_range
+                    "reminder.digest_item",
+                    index=index,
+                    summary=item.summary,
+                    due=item.time_range_in(display_timezone),
                 )
-                or f"{index}. {item.summary}（{item.time_range}）"
+                or f"{index}. {item.summary}（{item.time_range_in(display_timezone)}）"
                 for index, item in enumerate(items, start=1)
             ]
             header = self._rt(
@@ -793,7 +796,7 @@ class MailFlowRuntime:
             if header and lines:
                 return header + "\n" + "\n".join(lines)
         lines_fallback = [
-            f"{index}. {item.summary}（{item.time_range}）"
+            f"{index}. {item.summary}（{item.time_range_in(display_timezone)}）"
             for index, item in enumerate(items, start=1)
         ]
         return "\n".join(lines_fallback)

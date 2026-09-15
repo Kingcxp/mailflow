@@ -14,7 +14,15 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, ClassVar, cast
 
-from mailflow.domain import ActionItem, MailRecord, ReplyDraft, SmartSearchResult, Urgency
+from mailflow.domain import (
+    ActionItem,
+    ActionOrigin,
+    MailRecord,
+    ReplyDraft,
+    SeminarDiscoveryResult,
+    SmartSearchResult,
+    Urgency,
+)
 from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
 from rich.text import Text as RichText
@@ -46,8 +54,9 @@ from mailflow_tui.labels import urgency_label
 from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
+from mailflow_tui.seminars import SeminarReviewModal
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
-from mailflow_tui.todo_create import TodoCreateModal
+from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 
 _BLANK = ""
 
@@ -65,6 +74,7 @@ _ACTION_TYPE_KEYS: dict[str, str] = {
     "exam": "tui.action_type_exam",
     "meeting": "tui.action_type_meeting",
     "other": "tui.action_type_other",
+    "seminar": "tui.action_type_seminar",
 }
 
 
@@ -362,11 +372,17 @@ class ActionModal(ModalScreen[Any]):
             yield Label(f"{self._service.t('tui.action_content')}:\n{escape(item.summary)}\n")
             yield Label(f"{self._service.t('tui.action_notes')}: {escape(item.notes or '-')}\n")
             yield Label(f"{self._service.t('tui.action_source')}: {escape(item.mail_id)}")
+            if item.location:
+                yield Label(f"{self._service.t('tui.action_location')}: {escape(item.location)}\n")
+            if item.url:
+                yield Label(f"{self._service.t('tui.action_url')}: {escape(item.url)}\n")
             # the source mail's own details load asynchronously below
             yield Static("", id="action-mail-detail")
         # outside the scroll box: always visible, never scrolls away
         with Horizontal(id="action-footer"):
-            yield Button(self._service.t("tui.btn_close"), id="action-close", variant="primary")
+            if not (item.origin is ActionOrigin.ANALYSIS and item.mail_id):
+                yield Button(self._service.t("tui.btn_edit"), id="action-edit", variant="primary")
+            yield Button(self._service.t("tui.btn_close"), id="action-close", variant="default")
 
     async def on_mount(self) -> None:
         """Load the source mail: a todo without its original message context
@@ -413,8 +429,19 @@ class ActionModal(ModalScreen[Any]):
         )
         node.update("\n".join(lines))
 
+    def _open_editor(self) -> None:
+        def _after_edit(changed: bool | None) -> None:
+            if changed:
+                self.dismiss(True)
+
+        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+            TodoEditModal(self._service, self._item), callback=_after_edit
+        )
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "action-close":
+        if event.button.id == "action-edit":
+            self._open_editor()
+        elif event.button.id == "action-close":
             self.dismiss(None)
 
 
@@ -1237,6 +1264,9 @@ class ActionsPane(Vertical):
         self._service = service
         self._items: list[ActionItem] = []
         self._refresh_lock = asyncio.Lock()
+        self._seminar_searching = False
+        self._seminar_task: asyncio.Task[SeminarDiscoveryResult] | None = None
+        self._seminar_spinner_task: asyncio.Task[None] | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="actions-controls"):
@@ -1260,6 +1290,10 @@ class ActionsPane(Vertical):
                 self._service.t("tui.btn_add_todo"),
                 id="actions-add",
                 variant="primary",
+            )
+            yield Button(
+                self._service.t("tui.btn_find_seminars"),
+                id="actions-find-seminars",
             )
             yield Button(
                 self._service.t("tui.btn_delete_todo"),
@@ -1368,13 +1402,150 @@ class ActionsPane(Vertical):
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         item = next((i for i in self._items if i.item_id == event.row_key.value), None)
-        if item is not None:
-            # textual types Widget.app loosely; the cast pins the concrete app
-            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-                ActionModal(self._service, item)
+        if item is None:
+            return
+
+        def _after_action(changed: bool | None) -> None:
+            if changed:
+                self.run_worker(
+                    self.refresh_actions(),
+                    exclusive=True,
+                    group="actions-refresh",
+                    exit_on_error=False,
+                )
+
+        # textual types Widget.app loosely; the cast pins the concrete app
+        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+            ActionModal(self._service, item), callback=_after_action
+        )
+
+    def _seminar_button(self) -> Button | None:
+        return self.query_one_optional("#actions-find-seminars", Button)
+
+    def _set_seminar_label(self, key: str) -> None:
+        button = self._seminar_button()
+        if button is not None:
+            button.label = self._service.t(key)
+            button.variant = "error" if key == "tui.seminar_cancel" else "default"
+
+    async def _stop_seminar_spinner(self) -> None:
+        task = self._seminar_spinner_task
+        self._seminar_spinner_task = None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _toggle_seminar_discovery(self) -> None:
+        hint = self.query_one_optional("#actions-hint", Static)
+        if self._seminar_searching:
+            self._seminar_searching = False
+            task = self._seminar_task
+            self._seminar_task = None
+            if task is not None and not task.done():
+                task.cancel()
+            await self._stop_seminar_spinner()
+            self._set_seminar_label("tui.btn_find_seminars")
+            await self.refresh_actions()
+            return
+        self._seminar_searching = True
+        self._set_seminar_label("tui.seminar_cancel")
+        spinner_state: dict[str, Any] = {
+            "frame": 0,
+            "running": True,
+            "message": self._service.t("tui.seminar_scan_running"),
+        }
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+        async def _spin() -> None:
+            while bool(spinner_state["running"]):
+                frame = spinner[int(spinner_state["frame"]) % len(spinner)]
+                spinner_state["frame"] = int(spinner_state["frame"]) + 1
+                if hint is not None and self._seminar_searching:
+                    hint.update(f"{frame} {spinner_state['message']}")
+                    hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+                await asyncio.sleep(0.12)
+
+        def _show_progress(
+            stage: str, done: int, total: int, detail: str | tuple[str, dict[str, Any]]
+        ) -> None:
+            if hint is None or not self._seminar_searching:
+                return
+            if isinstance(detail, tuple):
+                detail_key, detail_params = detail
+                detail_text = self._service.t(f"tui.{detail_key}", **detail_params)
+            else:
+                detail_text = detail
+            message = self._service.t(
+                "tui.seminar_scan_progress",
+                stage=self._service.t(f"tui.seminar_stage_{stage}"),
+                done=done,
+                total=total,
+                detail=detail_text,
             )
+            spinner_state["message"] = message
+            hint.update(message)
+            hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+
+        self._seminar_spinner_task = asyncio.create_task(_spin())
+        task = asyncio.create_task(self._service.discover_seminars(progress=_show_progress))
+        self._seminar_task = task
+        try:
+            result = await task
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            if self._seminar_task is not task:
+                return
+            self._seminar_task = None
+            self._seminar_searching = False
+            await self._stop_seminar_spinner()
+            self._set_seminar_label("tui.btn_find_seminars")
+            await self.refresh_actions()
+            if hint is not None:
+                hint.update(f"[red]{self._service.t('tui.seminar_scan_failed')}[/red]")
+                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+            return
+        if self._seminar_task is not task:
+            return
+        self._seminar_task = None
+        self._seminar_searching = False
+        await self._stop_seminar_spinner()
+        self._set_seminar_label("tui.btn_find_seminars")
+        if hint is not None:
+            message_key = (
+                "tui.seminar_scan_partial" if result.failed_mails else "tui.seminar_scan_complete"
+            )
+            hint.update(
+                self._service.t(
+                    message_key,
+                    failed=result.failed_mails,
+                    count=len(result.candidates),
+                )
+            )
+            hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+        if not result.candidates:
+            return
+
+        def _refresh_after_review(changed: bool | None) -> None:
+            if changed:
+                self.run_worker(
+                    self.refresh_actions(),
+                    exclusive=True,
+                    group="actions-refresh",
+                    exit_on_error=False,
+                )
+
+        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+            SeminarReviewModal(self._service, result.candidates),
+            callback=_refresh_after_review,
+        )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "actions-find-seminars":
+            await self._toggle_seminar_discovery()
+            return
         if event.button.id == "actions-add":
 
             def _refresh_after_create(_result: bool | None) -> None:

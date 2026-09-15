@@ -205,6 +205,48 @@ TodoCreateModal {
     margin-right: 1;
 }
 
+/* Seminar review: candidate data is editable but must fit a short terminal. */
+SeminarReviewModal {
+    align: center middle;
+}
+#seminar-review-dialog {
+    width: 72;
+    height: 90%;
+    max-height: 90%;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+#seminar-review-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+#seminar-review-form {
+    height: 1fr;
+    padding: 0 1;
+}
+#seminar-review-form Input,
+#seminar-review-form TextArea {
+    margin-bottom: 1;
+}
+#seminar-description {
+    height: 7;
+    min-height: 4;
+}
+#seminar-evidence,
+#seminar-review-error,
+#seminar-expired {
+    height: auto;
+    margin-bottom: 1;
+}
+#seminar-review-buttons {
+    height: auto;
+    margin-top: 1;
+}
+#seminar-review-buttons Button {
+    margin-right: 1;
+}
+
 #mail-summary {
     color: $text;
     margin-bottom: 1;
@@ -430,6 +472,22 @@ LogExportScreen {
 #ask-correct-messages {
     height: auto;
     padding: 0 1 1 1;
+}
+#ask-correct-messages .ask-correct-role {
+    height: auto;
+    margin-top: 1;
+    margin-bottom: 0;
+}
+#ask-correct-messages Markdown {
+    height: auto;
+    margin-bottom: 1;
+    padding: 0 1;
+}
+#ask-correct-messages Markdown.ask-correct-user {
+    background: $surface-lighten-1;
+}
+#ask-correct-messages Markdown.ask-correct-assistant {
+    background: $surface;
 }
 #ask-correct-info {
     width: 40%;

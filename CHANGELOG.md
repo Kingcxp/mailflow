@@ -12,15 +12,30 @@ All notable changes are recorded here; the format follows
   feedback, empty states, and time displays now use the active language and
   configured timezone. Remote clients initialize from and follow the server's
   language setting.
-- **Mail controls and AI chat are responsive under real use** — filters occupy
-  a full-width row above equal-width two-row actions, standalone forms are
-  centered bordered panels, and Ask & Correct accepts only one question at a
-  time so the visible conversation cannot be reordered by concurrent replies.
+- **Ask & Correct stays readable and responsive** — conversation entries now
+  render user/assistant content as Markdown, while the original mail remains
+  escaped text. LLM requests run in a cancellable background worker and the
+  Send control stays disabled until the ordered response is applied.
+- **Mail controls remain usable at normal terminal sizes** — filters occupy a
+  full-width row above equal-width two-row actions, and standalone forms use
+  centered bordered panels.
+- **Smart seminar review remains explicit** — discovered proposals stay out
+  of the schedule until confirmation; edited/future timezone-aware imports
+  retain their source mail and stable event id, and repeated scans do not
+  duplicate a timed event when the model rewords its title.
 - **Smart mail search stays truthful under network latency** — the finder shows
   actual warmup and per-batch progress, ranks selected mail by relevance rather
   than internal id, and marks unavailable batches as incomplete instead of
   claiming no matches. Its button remains responsive while the model runs:
   Cancel stops the request and restores the full mailbox.
+- **Seminar discovery is review-first and duplicate-safe** — the Actions tab
+  scans stored mail in bounded LLM batches with truthful, cancellable progress,
+  then presents each proposal as an editable confirmation form. Discovery never
+  creates a reminder: a user must import it with a valid future time, timezone,
+  and time window. Confirmed seminars retain their source mail, location and
+  join URL in the reminder schedule; stable candidate ids make repeated scans
+  and repeated confirmation idempotent, while rejection remains respected.
+
 
 
 - **Full chat command surface in the mailflow namespace** — every

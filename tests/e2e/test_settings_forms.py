@@ -374,16 +374,74 @@ async def test_ask_correct_modal_opens_and_sends(tmp_path: Path) -> None:
             input_box.value = "这是重要的会议吗?"
             app.screen.query_one("#ask-correct-send", Button).press()
             for _ in range(60):
-                if "No LLM" in str(app.screen.query_one("#ask-correct-messages").render()):
+                messages = list(app.screen.query("#ask-correct-messages Markdown"))
+                rendered = (
+                    " ".join(str(node.render()) for node in messages[-1].query("*"))
+                    if messages
+                    else ""
+                )
+                if "No LLM" in rendered:
                     break
                 await pilot.pause(0.05)
-            messages = str(app.screen.query_one("#ask-correct-messages").render())
-            assert "No LLM" in messages
+            messages = list(app.screen.query("#ask-correct-messages Markdown"))
+            assert messages
+            rendered = " ".join(str(node.render()) for node in messages[-1].query("*"))
+            assert "No LLM" in rendered
 
             # closing dismisses the modal and discards the chat
             app.screen.action_close()
             await pilot.pause()
             assert not isinstance(app.screen, AskCorrectModal)
+    finally:
+        await service.stop()
+
+
+async def test_ask_correct_worker_keeps_modal_responsive_and_renders_markdown(
+    tmp_path: Path,
+) -> None:
+    """The LLM call runs in a modal worker and the reply is real Markdown."""
+    from mailflow.domain import MailAnalysis, MailRecord, Urgency
+    from mailflow_testkit.fakes import make_mail as make_test_mail
+
+    service = await start_service_quiet(tmp_path)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_chat(record_id: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+        started.set()
+        await release.wait()
+        return {"reply": "**strong reply**\n\n- one item", "corrections": {}}
+
+    service.chat_about_mail = fake_chat  # type: ignore[method-assign]
+    record = MailRecord(
+        record_id="m-worker",
+        mail=make_test_mail(message_id="m-worker", subject="Worker test"),
+        auto_urgency=Urgency.INFO,
+        analysis=MailAnalysis(summary="Worker test", urgency=Urgency.INFO),
+    )
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            app.push_screen(AskCorrectModal(service, record))
+            await _wait_until(pilot, lambda: isinstance(app.screen, AskCorrectModal))
+            modal = cast(AskCorrectModal, app.screen)
+            modal.query_one("#ask-correct-input", Input).value = "Explain this"
+            modal.query_one("#ask-correct-send", Button).press()
+            await _wait_until(pilot, started.is_set)
+
+            # The event loop can process this assertion while the fake LLM is
+            # blocked, and the input is gated against reordering messages.
+            assert modal.query_one("#ask-correct-send", Button).disabled
+            release.set()
+            await _wait_until(
+                pilot,
+                lambda: len(list(modal.query("#ask-correct-messages Markdown"))) >= 2,
+            )
+            messages = list(modal.query("#ask-correct-messages Markdown"))
+            rendered = " ".join(str(node.render()) for node in messages[-1].query("*"))
+            assert "strong reply" in rendered
+            assert "one item" in rendered
+            assert not modal.query_one("#ask-correct-send", Button).disabled
     finally:
         await service.stop()
 
@@ -580,6 +638,56 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             app.query_one("#actions-delete", Button).press()
             await pilot.pause(0.3)
             assert await service.storage.list_custom_actions() == []
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+async def test_seminar_review_requires_explicit_import(tmp_path: Path) -> None:
+    """A discovered proposal stays out of the schedule until the user confirms it."""
+    import json
+    from datetime import UTC, datetime
+
+    from mailflow.domain import ActionOrigin, SeminarCandidate
+    from mailflow_tui.seminars import SeminarReviewModal
+
+    service = await start_service_quiet(tmp_path)
+    CommandRouter(service)
+    candidate = SeminarCandidate(
+        candidate_id="seminar-test-1",
+        mail_id="mail-1",
+        title="Initial title",
+        starts_at=datetime(2099, 1, 2, 9, 0, tzinfo=UTC),
+        timezone="UTC",
+        location="Room 201",
+        url="https://events.example.test/seminar",
+        description="Bring questions.",
+        confidence=92,
+    )
+    await service.storage.set_preference(
+        "seminars.candidates", json.dumps([candidate.model_dump(mode="json")])
+    )
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause(0.2)
+            assert await service.storage.list_custom_actions() == []
+            app.push_screen(SeminarReviewModal(service, [candidate]))
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, SeminarReviewModal)
+
+            app.screen.query_one("#seminar-title", Input).value = "Edited seminar"
+            app.screen.query_one("#seminar-import", Button).press()
+            await _wait_until(pilot, lambda: not isinstance(app.screen, SeminarReviewModal))
+
+            custom = await service.storage.list_custom_actions()
+            assert len(custom) == 1
+            imported = custom[0]
+            assert imported.summary == "Edited seminar"
+            assert imported.mail_id == "mail-1"
+            assert imported.origin is ActionOrigin.SEMINAR
+            assert imported.location == "Room 201"
             app.exit()
             await pilot.pause()
     finally:

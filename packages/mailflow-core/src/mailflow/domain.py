@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
@@ -177,23 +178,74 @@ class ProcessorNote(BaseModel):
         return max(0, int((self.finished_at - self.started_at).total_seconds() * 1000))
 
 
+class ActionOrigin(StrEnum):
+    """How a calendar item entered MailFlow's reminder schedule."""
+
+    ANALYSIS = "analysis"
+    CUSTOM = "custom"
+    SEMINAR = "seminar"
+
+
+class SeminarStatus(StrEnum):
+    """Review state of a discovered seminar; imports are always explicit."""
+
+    PENDING = "pending"
+    REJECTED = "rejected"
+    IMPORTED = "imported"
+    EXPIRED = "expired"
+
+
+class SeminarCandidate(BaseModel):
+    """A provider-neutral seminar proposal grounded in one source mail."""
+
+    candidate_id: str
+    mail_id: str
+    title: str
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    timezone: str = "UTC"
+    location: str = ""
+    url: str = ""
+    description: str = ""
+    confidence: int = 0
+    evidence: str = ""
+    status: SeminarStatus = SeminarStatus.PENDING
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class ActionItem(BaseModel):
-    """A timed task extracted from a mail (exam, meeting, errand, ...)."""
+    """A timed item in MailFlow's provider-neutral reminder schedule."""
 
     item_id: str
     mail_id: str
     summary: str
-    action_type: str  # exam | meeting | errand | other (free-form labels allowed)
+    action_type: str  # exam | meeting | errand | seminar | other
     due_at: datetime
     due_end: datetime | None = None
     notes: str = ""
+    location: str = ""
+    url: str = ""
+    origin: ActionOrigin = ActionOrigin.ANALYSIS
+
+    def time_range_in(self, timezone_name: str) -> str:
+        """Format the stored instant in a configured display timezone."""
+        zone = ZoneInfo(timezone_name)
+
+        def _local(value: datetime) -> datetime:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=UTC)
+            return value.astimezone(zone)
+
+        fmt = "%Y-%m-%d %H:%M"
+        start = _local(self.due_at)
+        if self.due_end is None or self.due_end == self.due_at:
+            return start.strftime(fmt)
+        return f"{start.strftime(fmt)} ~ {_local(self.due_end).strftime(fmt)}"
 
     @property
     def time_range(self) -> str:
-        fmt = "%Y-%m-%d %H:%M"
-        if self.due_end is None or self.due_end == self.due_at:
-            return self.due_at.strftime(fmt)
-        return f"{self.due_at.strftime(fmt)} ~ {self.due_end.strftime(fmt)}"
+        """Format the stored instant as UTC for provider-neutral callers."""
+        return self.time_range_in("UTC")
 
 
 class MailAnalysis(BaseModel):
@@ -255,6 +307,20 @@ class SmartSearchResult(BaseModel):
     def is_complete(self) -> bool:
         """True only when no candidate batch was unavailable or malformed."""
         return self.failed_mails == 0
+
+
+class SeminarDiscoveryResult(BaseModel):
+    """Seminar scan outcome, including batches the model could not inspect."""
+
+    candidates: list[SeminarCandidate] = Field(default_factory=lambda: [])
+    total_mails: int = 0
+    evaluated_mails: int = 0
+    failed_mails: int = 0
+    failed_batches: int = 0
+
+    @property
+    def is_complete(self) -> bool:
+        return self.failed_batches == 0
 
 
 class TrashRecord(BaseModel):
@@ -438,6 +504,7 @@ def to_utc(value: datetime) -> datetime:
 __all__ = [
     "AccountSnapshot",
     "ActionItem",
+    "ActionOrigin",
     "Attachment",
     "CommandResponse",
     "ComponentKind",
@@ -453,6 +520,9 @@ __all__ = [
     "ReplyDraft",
     "ReplyState",
     "RuntimeSnapshot",
+    "SeminarCandidate",
+    "SeminarDiscoveryResult",
+    "SeminarStatus",
     "SmartSearchResult",
     "StyleSpan",
     "TrashRecord",

@@ -14,8 +14,7 @@ behaviour — the user's stated preference is recorded into the feedback
 guidelines so future analyses tune the same way.
 """
 
-from __future__ import annotations
-
+import asyncio
 from typing import Any, ClassVar
 
 from mailflow.domain import MailRecord
@@ -24,7 +23,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Input, Static
+from textual.widgets import Button, Footer, Input, Markdown, Static
 
 from mailflow_tui.labels import urgency_label
 
@@ -59,7 +58,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
             with Vertical(id="ask-correct-chat"):
                 yield Static(self._t("tui.ask_correct_chat_label"), id="ask-correct-chat-label")
                 with ScrollableContainer(id="ask-correct-scroll"):
-                    yield Static("", id="ask-correct-messages")
+                    yield Vertical(id="ask-correct-messages")
             with Vertical(id="ask-correct-info"):
                 yield Static(self._t("tui.ask_correct_info_label"), id="ask-correct-info-label")
                 yield Static("", id="ask-correct-urgency")
@@ -75,7 +74,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
 
     async def on_mount(self) -> None:
         self._render_mail_info()
-        self._render_chat()
+        await self._render_chat()
         self.query_one("#ask-correct-input", Input).focus()  # pyright: ignore[reportUnknownMemberType]
 
     def _render_mail_info(self) -> None:
@@ -109,19 +108,29 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
             notes
         )
 
-    def _render_chat(self) -> None:
-        node = self.query_one("#ask-correct-messages", Static)
-        blocks: list[str] = []
+    async def _render_chat(self) -> None:
+        container = self.query_one("#ask-correct-messages", Vertical)
+        await container.remove_children()
+        children: list[Any] = []
         for item in self._history:
             if item["role"] == "user":
-                role = f"[bold {_ACCENT}]{escape(self._t('tui.ask_correct_you'))}[/bold {_ACCENT}]"
+                role = self._t("tui.ask_correct_you")
+                classes = "ask-correct-user"
             else:
-                role = f"[bold #67C23A]{escape(self._t('tui.ask_correct_llm'))}[/bold #67C23A]"
-            blocks.append(f"{role}\n{escape(item['content'])}")
-        node.update("\n\n".join(blocks))  # pyright: ignore[reportUnknownMemberType]
-        self.query_one("#ask-correct-scroll", ScrollableContainer).scroll_end(  # pyright: ignore[reportUnknownMemberType]
-            animate=False
-        )
+                role = self._t("tui.ask_correct_llm")
+                classes = "ask-correct-assistant"
+            children.extend(
+                (
+                    Static(
+                        f"[bold]{escape(role)}[/bold]",
+                        classes=f"ask-correct-role {classes}",
+                    ),
+                    Markdown(item["content"], classes=classes),
+                )
+            )
+        if children:
+            await container.mount(*children)
+        self.query_one("#ask-correct-scroll", ScrollableContainer).scroll_end(animate=False)
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "ask-correct-input":
@@ -152,34 +161,58 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
             return
         input_box.value = ""
         self._history.append({"role": "user", "content": text})
-        self._render_chat()
+        await self._render_chat()
         self._request_in_flight = True
         self._set_request_state(True)
+        self.run_worker(
+            self._request_worker(list(self._history)),
+            exclusive=True,
+            group="ask-correct-request",
+            exit_on_error=False,
+        )
+
+    async def _request_worker(self, messages: list[dict[str, str]]) -> None:
+        """Run the service call outside the input event handler.
+
+        The service owns the LLM/network work. The modal worker only applies
+        the result if the screen is still mounted; closing the modal cancels
+        its worker without adding a misleading failure message.
+        """
         try:
-            result = await self._service.chat_about_mail(self._record.record_id, self._history)
-        except Exception:
-            self._history.append(
-                {"role": "assistant", "content": self._t("tui.ask_correct_request_failed")}
-            )
-            self._render_chat()
-            return
+            try:
+                result = await self._service.chat_about_mail(self._record.record_id, messages)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self.is_mounted:
+                    self._history.append(
+                        {
+                            "role": "assistant",
+                            "content": self._t("tui.ask_correct_request_failed"),
+                        }
+                    )
+                    await self._render_chat()
+                return
+            if not self.is_mounted:
+                return
+            reply = str(result.get("reply") or "")
+            corrections: dict[str, Any] = result.get("corrections") or {}
+            if corrections:
+                content = "\n\n".join(
+                    part for part in (reply, self._t("tui.ask_correct_applied")) if part
+                )
+                self._history.append({"role": "assistant", "content": content})
+                fresh = await self._service.get_mail(self._record.record_id)
+                if fresh is not None:
+                    self._record = fresh
+            else:
+                self._history.append({"role": "assistant", "content": reply})
+            self._render_mail_info()
+            await self._render_chat()
         finally:
-            self._request_in_flight = False
-            self._set_request_state(False)
-        reply = str(result.get("reply") or "")
-        corrections: dict[str, Any] = result.get("corrections") or {}
-        if corrections:
-            content = "\n\n".join(
-                part for part in (reply, self._t("tui.ask_correct_applied")) if part
-            )
-            self._history.append({"role": "assistant", "content": content})
-            fresh = await self._service.get_mail(self._record.record_id)
-            if fresh is not None:
-                self._record = fresh
-        else:
-            self._history.append({"role": "assistant", "content": reply})
-        self._render_mail_info()
-        self._render_chat()
+            if self.is_mounted:
+                self._request_in_flight = False
+                self._set_request_state(False)
 
     def action_close(self) -> None:
         self.dismiss(None)

@@ -9,9 +9,12 @@ import pytest
 from mailflow.config import LLMConfig, MailFlowConfig
 from mailflow.contracts import LLMRouter, MailMessage, ReplyDraft
 from mailflow.domain import (
+    ActionItem,
+    ActionOrigin,
     MailAddress,
     MailRecord,
     ReplyState,
+    SeminarStatus,
     TrashRecord,
     Urgency,
 )
@@ -30,6 +33,8 @@ class MemoryStorage:
     def __init__(self) -> None:
         self.mails: dict[str, MailRecord] = {}
         self.drafts: dict[str, ReplyDraft] = {}
+        self.preferences: dict[str, str] = {}
+        self.custom_actions: dict[str, ActionItem] = {}
 
     async def initialize(self) -> None:
         pass
@@ -79,10 +84,19 @@ class MemoryStorage:
         self.drafts.pop(draft_id, None)
 
     async def get_preference(self, key: str) -> str | None:
-        return None
+        return self.preferences.get(key)
 
     async def set_preference(self, key: str, value: str) -> None:
-        pass
+        self.preferences[key] = value
+
+    async def save_custom_action(self, item: ActionItem) -> None:
+        self.custom_actions[item.item_id] = item
+
+    async def list_custom_actions(self) -> list[ActionItem]:
+        return list(self.custom_actions.values())
+
+    async def delete_custom_action(self, item_id: str) -> bool:
+        return self.custom_actions.pop(item_id, None) is not None
 
 
 class RecordingSource:
@@ -552,3 +566,201 @@ class TestSmartSearch:
         assert result.records == []
         assert result.total_mails == 0
         assert result.is_complete
+
+
+class TestSeminarDiscovery:
+    """Seminar discovery must remain review-only, timezone-safe and idempotent."""
+
+    @staticmethod
+    def make_service(router: Any) -> MailFlowService:
+        config = MailFlowConfig()
+        config.llms = [LLMConfig(llm_id="llm-1")]
+        return MailFlowService(
+            config=config,
+            registry=ComponentRegistry(),
+            plugin_manager=cast(Any, None),
+            storage=cast(Any, MemoryStorage()),
+            sources={},
+            router=cast(LLMRouter, router),
+            pipeline=PipelineEngine([]),
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            i18n=I18n(),
+        )
+
+    @staticmethod
+    def reply(text: str) -> Any:
+        class Reply:
+            def __init__(self, value: str) -> None:
+                self.text = value
+
+        return Reply(text)
+
+    async def test_discovers_review_only_candidate_and_imports_once(self) -> None:
+        opaque_record_id = "opaque-record-id@example.test"
+
+        class SeminarRouter:
+            def __init__(self) -> None:
+                self.listing = ""
+                self.calls = 0
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                self.calls += 1
+                self.listing = messages[-1]["content"]
+                title = "Research colloquium" if self.calls == 1 else "Reworded colloquium"
+                return TestSeminarDiscovery.reply(
+                    "["
+                    f'{{"id":"m1","title":"{title}",'
+                    '"starts_at":"2030-10-15T14:00:00+08:00",'
+                    '"ends_at":"2030-10-15T15:30:00+08:00",'
+                    '"timezone":"Asia/Shanghai","location":"Room 201",'
+                    '"url":"https://events.example.test/seminar",'
+                    '"description":"Guest lecture",'
+                    '"confidence":93,"evidence":"15 October, Room 201"}'
+                    "]"
+                )
+
+        router = SeminarRouter()
+        service = self.make_service(router)
+        storage = cast(Any, service.storage)
+        mail = make_mail("source-message", minute=10).model_copy(
+            update={"subject": "Research seminar invitation"}
+        )
+        await storage.save_mail(MailRecord(record_id=opaque_record_id, mail=mail))
+        stages: list[tuple[str, int, int, Any]] = []
+
+        def _progress(stage: str, done: int, total: int, detail: Any) -> None:
+            stages.append((stage, done, total, detail))
+
+        result = await service.discover_seminars(progress=_progress)
+
+        assert opaque_record_id not in router.listing
+        assert result.total_mails == 1
+        assert result.evaluated_mails == 1
+        assert result.failed_mails == 0
+        assert result.is_complete
+        assert stages[0][:3] == ("scan", 0, 1)
+        assert stages[-1][:3] == ("scan", 1, 1)
+        assert await service.list_actions() == []
+        candidate = result.candidates[0]
+        assert candidate.mail_id == opaque_record_id
+        assert candidate.starts_at == datetime(2030, 10, 15, 6, tzinfo=UTC)
+        assert candidate.status is SeminarStatus.PENDING
+
+        first = await service.import_seminar(candidate.candidate_id)
+        second = await service.import_seminar(candidate.candidate_id)
+
+        assert first.item_id == candidate.candidate_id
+        assert second == first
+        assert first.origin is ActionOrigin.SEMINAR
+        assert first.due_end == datetime(2030, 10, 15, 7, 30, tzinfo=UTC)
+        assert len(await storage.list_custom_actions()) == 1
+        saved = await service.list_seminar_candidates(include_resolved=True)
+        assert saved[0].status is SeminarStatus.IMPORTED
+        assert (await service.discover_seminars()).candidates == []
+
+    async def test_timed_candidate_deduplicates_when_title_changes(self) -> None:
+        class RewordingRouter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                self.calls += 1
+                title = "Original seminar" if self.calls == 1 else "Reworded seminar"
+                return TestSeminarDiscovery.reply(
+                    '[{"id":"m1",'
+                    f'"title":"{title}",'
+                    '"starts_at":"2030-10-15T14:00:00+08:00",'
+                    '"timezone":"Asia/Shanghai"}]'
+                )
+
+        service = self.make_service(RewordingRouter())
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+
+        first = (await service.discover_seminars()).candidates[0]
+        second = (await service.discover_seminars()).candidates[0]
+
+        assert second.candidate_id == first.candidate_id
+        assert second.title == "Reworded seminar"
+        assert len(await service.list_seminar_candidates(include_resolved=True)) == 1
+
+    async def test_malformed_batch_is_retried_and_reported_incomplete(self) -> None:
+        class MalformedRouter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                self.calls += 1
+                return TestSeminarDiscovery.reply("I found a seminar but cannot format it.")
+
+        router = MalformedRouter()
+        service = self.make_service(router)
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        stages: list[tuple[str, int, int, Any]] = []
+
+        def _progress(stage: str, done: int, total: int, detail: Any) -> None:
+            stages.append((stage, done, total, detail))
+
+        result = await service.discover_seminars(progress=_progress)
+
+        assert router.calls == 2
+        assert result.candidates == []
+        assert result.evaluated_mails == 0
+        assert result.failed_mails == 1
+        assert result.failed_batches == 1
+        assert not result.is_complete
+        assert stages[-1][3][0] == "seminar_batch_unreadable"
+
+    async def test_expired_candidate_requires_future_edited_confirmation(self) -> None:
+        class PastSeminarRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                return TestSeminarDiscovery.reply(
+                    '[{"id":"m1","title":"Past seminar",'
+                    '"starts_at":"2020-01-01T10:00:00+08:00",'
+                    '"timezone":"Asia/Shanghai"}]'
+                )
+
+        service = self.make_service(PastSeminarRouter())
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        candidate = (await service.discover_seminars()).candidates[0]
+
+        assert candidate.status is SeminarStatus.EXPIRED
+        with pytest.raises(ValueError):
+            await service.import_seminar(candidate.candidate_id)
+
+        imported = await service.import_seminar(
+            candidate.candidate_id,
+            starts_at=datetime(2030, 2, 1, 10, 0),
+            timezone="Asia/Shanghai",
+        )
+
+        assert imported.due_at == datetime(2030, 2, 1, 2, 0, tzinfo=UTC)
+
+    async def test_rejected_candidate_remains_hidden_after_repeat_scan(self) -> None:
+        class SeminarRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                return TestSeminarDiscovery.reply(
+                    '[{"id":"m1","title":"Seminar",'
+                    '"starts_at":"2030-02-01T10:00:00+08:00",'
+                    '"timezone":"Asia/Shanghai"}]'
+                )
+
+        service = self.make_service(SeminarRouter())
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        candidate = (await service.discover_seminars()).candidates[0]
+
+        assert await service.reject_seminar(candidate.candidate_id)
+        result = await service.discover_seminars()
+
+        assert result.candidates == []
+        saved = await service.list_seminar_candidates(include_resolved=True)
+        assert saved[0].status is SeminarStatus.REJECTED

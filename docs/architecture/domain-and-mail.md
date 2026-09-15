@@ -85,10 +85,37 @@ The structured interpretation produced by the processor chain: `summary`,
 
 ## ActionItem
 
-A timed obligation extracted from a mail, with a `mail_id` backlink so the
-action table can drill down into the source mail. Fields: `summary` (what),
-`action_type` (`exam` | `meeting` | `errand` | `other`), `due_at`/`due_end`
-(the time window), `notes` (what to bring, what to wear, materials).
+`ActionItem` is a provider-neutral timed entry in the reminder schedule. Every
+item retains its `mail_id` source field (empty only for a user-created todo),
+and has `summary`, `action_type`, `due_at`/`due_end`, `notes`, optional
+`location`/`url`, and an `origin`: `analysis`, `custom`, or `seminar`.
+Pipeline-derived action items use `analysis`; user todos use `custom`; an
+explicitly confirmed seminar uses `seminar`. The origin makes deletion safe:
+analysis output is dismissed by its stable natural key so re-analysis keeps it
+hidden, while custom and seminar entries are deleted from the custom-action
+store for real.
+
+## SeminarCandidate and SeminarDiscoveryResult
+
+`SeminarCandidate` is **not** an `ActionItem`: it is a review proposal grounded
+in one `mail_id`, with title, optional start/end timestamps and IANA timezone,
+location/URL/description, confidence, and a short source evidence excerpt. A
+candidate begins `pending`, can be `rejected`, becomes `expired` when its stated
+start has passed, and becomes `imported` only after confirmation.
+
+`service.discover_seminars()` scans stored mail in bounded LLM batches. It gives
+the model per-batch opaque aliases rather than raw record ids, validates the
+model JSON, and persists review proposals; it never creates reminders directly.
+`SeminarDiscoveryResult` reports total, successfully evaluated, and failed mail
+counts plus failed batches, so a host can expose partial work honestly. A
+malformed or unavailable batch is incomplete work, not an empty result.
+
+`service.import_seminar()` is the only import path. It accepts user edits,
+requires a title and future start time, validates timezone and end-after-start,
+and writes one `ActionItem` with the stable candidate id. Repeated confirmation
+returns that same item rather than creating a duplicate. Rejected proposals stay
+hidden on later scans; expired proposals can only be imported after the user
+corrects them to a future time.
 
 ## MailRecord
 

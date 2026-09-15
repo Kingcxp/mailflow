@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 from mailflow import __version__
 from mailflow.domain import (
     ActionItem,
+    ActionOrigin,
     CommandResponse,
     ComponentKind,
     MailRecord,
@@ -711,7 +712,10 @@ class CommandRouter:
                 StyleSpan(
                     text=f"\n{self._t('action.header_time')}: {self._fmt_time(action.due_at)}"
                 ),
-                StyleSpan(text=f"\n{self._t('action.header_type')}: {action.action_type}"),
+                StyleSpan(
+                    text=f"\n{self._t('action.header_type')}: "
+                    f"{self._t('action.type_seminar') if action.action_type == 'seminar' else action.action_type}"
+                ),
                 StyleSpan(text=f"\n{self._t('action.header_summary')}: {action.summary}"),
                 StyleSpan(text=f"\n{self._t('action.header_notes')}: {action.notes or '-'}"),
                 StyleSpan(
@@ -719,14 +723,22 @@ class CommandRouter:
                     f"{action.mail_id or self._t('action.source_user')}"
                 ),
             ]
+            if action.location:
+                spans.append(
+                    StyleSpan(text=f"\n{self._t('action.field_location')}: {action.location}")
+                )
+            if action.url:
+                spans.append(StyleSpan(text=f"\n{self._t('action.field_url')}: {action.url}"))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         if args[0] == "add":
             return await self._action_add(args[1:])
+        if args[0] == "edit":
+            return await self._action_edit(args[1:])
         if args[0] == "delete" and len(args) == 2:
             action = await self._find_action(args[1])
             if action is None:
                 return self._err(self._t("action.not_found", item_id=args[1]))
-            if action.mail_id:
+            if action.origin is ActionOrigin.ANALYSIS and action.mail_id:
                 # mail-derived items are deleted with the source mail
                 return self._err(self._t("action.not_found", item_id=args[1]))
             if await self.service.delete_action(action.item_id):
@@ -811,6 +823,65 @@ class CommandRouter:
                 item_id=item.item_id[:10],
                 summary=item.summary,
                 time=self._fmt_time(item.due_at),
+            )
+        )
+
+    async def _action_edit(self, args: list[str]) -> CommandResponse:
+        """Edit a custom or imported seminar action by id or list number."""
+        if not args:
+            return self._err(self._t("action.edit_usage"))
+        action = await self._find_action(args[0])
+        if action is None:
+            return self._err(self._t("action.not_found", item_id=args[0]))
+        summary: str | None = None
+        due_raw: str | None = None
+        action_type: str | None = None
+        notes: str | None = None
+        index = 1
+        while index < len(args):
+            arg = args[index]
+            if arg not in ("--summary", "--due", "--type", "--notes"):
+                return self._err(self._t("action.edit_usage"))
+            if index + 1 >= len(args):
+                return self._err(self._t("action.edit_usage"))
+            value = args[index + 1]
+            if arg == "--due":
+                if (
+                    index + 2 < len(args)
+                    and self._looks_like_date(value)
+                    and self._looks_like_clock(args[index + 2])
+                ):
+                    value = f"{value} {args[index + 2]}"
+                    index += 1
+                due_raw = value
+            elif arg == "--summary":
+                summary = value
+            elif arg == "--type":
+                action_type = value
+            else:
+                notes = value
+            index += 2
+        if summary is None and due_raw is None and action_type is None and notes is None:
+            return self._err(self._t("action.edit_usage"))
+        due = None if due_raw is None else self._parse_local_time(due_raw)
+        if due_raw is not None and due is None:
+            return self._err(self._t("action.invalid_due", value=due_raw))
+        try:
+            updated = await self.service.edit_action(
+                action.item_id,
+                summary=summary,
+                due_at=due,
+                action_type=action_type,
+                notes=notes,
+            )
+        except ValueError as exc:
+            return self._err(str(exc))
+        return self._ok(
+            self._t(
+                "action.updated",
+                item_id=updated.item_id[:10],
+                summary=updated.summary,
+                time=self._fmt_time(updated.due_at),
             )
         )
 

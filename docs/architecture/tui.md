@@ -64,22 +64,34 @@ tears them down with the screen — nothing keeps ticking after it closes.
 - **Mail detail**: an **Ask & Correct** button opens a live LLM chat over
   the selected mail — left chat history, right panel with the current
   urgency / summary / reason and the original body, bottom input sent by
-  Enter or the Send button. The conversation is ephemeral (discarded on
-  close, with a reminder in the header); the LLM can apply corrections to
-  urgency / summary / reason (never the original body), which are persisted
-  to the stored analysis and reflected in the right panel immediately. When
-  a correction is applied the user's latest message is recorded into the
-  rolling correction guidelines that every future LLM analysis receives
-  (`feedback.guidelines`, most recent 20 kept), matching the old Reject
-  behaviour.
+  Enter or the Send button. User and assistant messages are rendered as
+  Markdown (the original mail remains escaped plain text). Each request runs
+  in a cancellable Textual worker, so the modal remains responsive while the
+  model is thinking; the send control is disabled until that response lands.
+  The conversation is ephemeral (discarded on close, with a reminder in the
+  header); the LLM can apply corrections to urgency / summary / reason (never
+  the original body), which are persisted to the stored analysis and reflected
+  in the right panel immediately. When a correction is applied the user's
+  latest message is recorded into the rolling correction guidelines that every
+  future LLM analysis receives (`feedback.guidelines`, most recent 20 kept),
+  matching the old Reject behaviour.
 - **Actions**: localized time / type / content / notes / source-mail columns;
-  every stored time is displayed in `general.timezone`. Row selection opens a
-  detail modal that fills the screen — a scrollable box with the action plus
-  the **source mail** (subject, sender, date, analysis summary/reason and the
-  original body, HTML-as-text) and a close button pinned outside the scroll
-  area. **Delete** removes the selected entry: user-created todos are deleted
-  for real, mail-derived ones are dismissed by their stable identity (mail id +
-  due time + type) so re-analyzing the source mail keeps them hidden.
+  every stored time is displayed in `general.timezone`. **Find seminars** scans
+  stored mail through `service.discover_seminars`; its button stays clickable as
+  Cancel and the hint reports each completed batch and incomplete batches rather
+  than treating background startup as completion. Candidates open in a centered,
+  scrollable review form with editable title, time window, timezone, location,
+  URL, and description plus confidence/evidence. **Import to schedule** is an
+  explicit confirmation — discovery alone adds nothing — and expired candidates
+  require a future corrected start time; Reject keeps a proposal hidden on later
+  scans. Imported seminars preserve their source-mail link and use stable ids to
+  prevent duplicate imports. Row selection opens a detail modal that fills the
+  screen — a scrollable box with the action plus the **source mail** (subject,
+  sender, date, analysis summary/reason and the original body, HTML-as-text) and
+  a close button pinned outside the scroll area. **Delete** removes selected
+  custom todos and imported seminars for real; mail-analysis items are dismissed
+  by their stable identity (mail id + due time + type) so re-analyzing the source
+  mail keeps them hidden.
 - **LLMs** (`settings.py: LLMPane`): the ordered fallback chain. Add / Edit /
   Delete plus Move up / Move down; the first row is the default and each row
   falls back to the ones below it, so `default` and `fallback` are never typed

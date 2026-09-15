@@ -1,17 +1,12 @@
-"""Create a user-owned todo item (Actions tab "Add todo").
-
-User-created todos live in the storage's custom-action store (no source
-mail), participate in the reminder scheduler like mail-derived items, and
-are deleted for real (no dismissal semantics). The form validates the due
-timestamp in the service timezone and rejects empty summaries.
-"""
+"""Create or edit a user-owned todo item in the Actions tab."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
+from mailflow.domain import ActionItem
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -27,21 +22,20 @@ _ACTION_TYPES: tuple[tuple[str, str], ...] = (
 
 
 class TodoCreateModal(ModalScreen[bool]):
-    """Modal form: summary, type, due-at, notes → create_custom_action."""
+    """Modal form for creating one user-owned todo."""
 
     BINDINGS: ClassVar[list[Any]] = []
 
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
+        self._item: ActionItem | None = None
         self._bindings.bind("escape", "cancel", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
 
     def compose(self) -> ComposeResult:
-        # one centered bordered panel (same chrome as reply/entry dialogs):
-        # ModalScreen centers its single child
         with Vertical(id="todo-create-dialog"):
             yield Static(self._t("tui.todo_add_title"), id="todo-create-title")
             with Vertical(id="todo-create-form"):
@@ -95,11 +89,48 @@ class TodoCreateModal(ModalScreen[bool]):
         action_type = str(raw_value) if raw_value is not Select.NULL else "errand"  # pyright: ignore[reportUnknownArgumentType]
         notes = str(self.query_one("#todo-notes", Input).value).strip()
         try:
-            await self._service.add_action(summary, due_at, action_type=action_type, notes=notes)
+            if self._item is None:
+                await self._service.add_action(
+                    summary, due_at, action_type=action_type, notes=notes
+                )
+            else:
+                await self._service.edit_action(
+                    self._item.item_id,
+                    summary=summary,
+                    due_at=due_at,
+                    action_type=action_type,
+                    notes=notes,
+                )
         except Exception as exc:
-            error.update(f"[red]{self._t('tui.todo_create_failed', error=str(exc))}[/red]")
+            key = "tui.todo_create_failed" if self._item is None else "tui.todo_edit_failed"
+            error.update(f"[red]{self._t(key, error=str(exc))}[/red]")
             return
         self.dismiss(True)
 
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+
+class TodoEditModal(TodoCreateModal):
+    """Modal form for editing a custom todo or imported seminar."""
+
+    def __init__(self, service: MailFlowService, item: ActionItem) -> None:
+        super().__init__(service)
+        self._item = item
+
+    def compose(self) -> ComposeResult:
+        yield from super().compose()
+
+    async def on_mount(self) -> None:
+        await super().on_mount()
+        item = self._item
+        assert item is not None  # set by TodoEditModal.__init__
+        self.query_one("#todo-create-title", Static).update(self._t("tui.todo_edit_title"))
+        self.query_one("#todo-summary", Input).value = item.summary
+        self.query_one("#todo-due", Input).value = item.time_range_in(
+            self._service.config.general.timezone
+        ).split(" ~ ", 1)[0]
+        self.query_one("#todo-notes", Input).value = item.notes
+        select = cast("Select[str]", self.query_one("#todo-type", Select))
+        if item.action_type in {value for _key, value in _ACTION_TYPES}:
+            select.value = item.action_type
