@@ -12,7 +12,7 @@ provider = "openai-compatible"     # backend adapter component id
 base_url = "https://relay.example/v1"
 api_key = "${MAILFLOW_LLM_GO_TOKEN}"   # or api_key_env; optional
 model = "deepseek-chat"
-timeout_seconds = 60
+timeout_seconds = 120
 max_retries = 2
 default = true
 fallback = ["local"]               # named llms tried after this one
@@ -23,6 +23,12 @@ extra_body = { ... }
 
 One backend instance is created per named LLM (each has its own endpoint,
 model and credentials), keyed by `llm_id`.
+
+`timeout_seconds` bounds one HTTP request and defaults to **120 s**: it has to
+cover the wait for the first token as well as the whole answer, and a cold or
+slow local model regularly needs more than the 60 s this used to default to.
+Raise it (and the owning `[[processors]] timeout_seconds`) for an endpoint that
+thinks for a long time before answering; the Settings UI edits both.
 
 ## Routing
 

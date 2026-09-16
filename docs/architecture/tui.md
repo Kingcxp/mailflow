@@ -46,9 +46,11 @@ tears them down with the screen — nothing keeps ticking after it closes.
   including action windows. The bottom controls are one row: three dropdowns
   (manual urgency — a localized
   `ad/info/important/urgent/follow-automatic` dropdown that mirrors the
-  selected mail — plus urgency filter and sort) followed by a two-row button
-  container (refresh/trash/Ask & Correct then
-  reply/re-analyze/re-analyze-failed) with equal-width buttons. **Re-analyze
+  selected mail — plus urgency filter and sort) taking two thirds of the row,
+  and a two-row button container (refresh/trash/Ask & Correct then
+  reply/re-analyze/re-analyze-failed) taking the remaining third with
+  equal-width buttons, so long localized labels keep their spacing instead of
+  being squeezed into slivers. **Re-analyze
   failed** requires no selected row; it works through every failed record and
   keeps its live progress/final outcome in a dedicated status widget, so the
   `mailflow.mail.processed` refresh cannot erase feedback. An empty view shows
@@ -197,6 +199,11 @@ schema knowledge of its own.
 - List and mapping values open `ListEditScreen` (one entry per line, or JSON
   for mappings); structured entries open `EntryFormScreen`, a real form window
   with per-field labels, descriptions and a Back button.
+- Editing an `[[llms]]` entry (including renaming its `llm_id`) succeeds: the
+  settings editor re-derives `default`/`fallback` from the list order and
+  rewrites every processor binding *before* validating, so a valid edit is not
+  rejected for a reference it is about to update. Deleting an LLM clears the
+  bindings that named it instead of leaving them dangling.
 - **Plugin-declared forms**: a plugin may register `FormField`s for a
   component (`registrar.add_form_fields(kind, component_id, fields)`); the
   form renders them generically (string / password / number / boolean /
@@ -207,8 +214,9 @@ schema knowledge of its own.
   (it could connect to a message platform that is only "like a mailbox").
 - Each form's **Test** button dispatches by group: mailbox forms run a
   real IMAP login probe (20s socket timeout), LLM forms send a one-shot
-  completion and report latency plus the model name, notifier forms probe
-  the registered connector.
+  completion (60s request budget, 120s wait, so a cold local model's
+  first-token latency does not read as a failure) and report latency plus the
+  model name, notifier forms probe the registered connector.
 - An invalid edit shows which option is wrong and why (from
   `SettingsError.option`/`.message`) in the status line and as a notification;
   a valid edit is persisted immediately through the service.

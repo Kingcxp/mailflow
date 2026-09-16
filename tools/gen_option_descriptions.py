@@ -30,6 +30,15 @@ EN: dict[str, str] = {
         "Base URL of a Carbonyl-compatible terminal render service (e.g. http://127.0.0.1:8080); "
         "required when browser_mode = graphical."
     ),
+    "general.command_prefix": (
+        "Command prefix for chat-platform messages (e.g. /mail list); messages "
+        "without it are ignored."
+    ),
+    "general.hourly_summary": (
+        "Every hour the LLM summarizes all mail received in that hour into a "
+        "briefing pushed through the notifiers that opted in (options.hourly_summary "
+        "= true); silent when the hour had no mail."
+    ),
     "general.timezone": (
         "IANA timezone used for display, the daily cleanup and reminders (e.g. Asia/Shanghai)."
     ),
@@ -131,7 +140,11 @@ EN: dict[str, str] = {
     ),
     "llms[].query": "Extra query-string parameters, one 'name = value' per line.",
     "llms[].extra_body": "Extra JSON body fields merged into every request.",
-    "llms[].timeout_seconds": "Per-request timeout in seconds (at least 1).",
+    "llms[].timeout_seconds": (
+        "Per-request timeout in seconds (at least 1). It must cover the wait for the "
+        "model's first token plus the whole answer, so raise it for cold or slow "
+        "local models."
+    ),
     "llms[].max_retries": "How many times a failed request is retried before falling back.",
     "llms[].default": (
         "Default LLM for processors without an explicit one. The first entry in the list wins."
@@ -150,7 +163,11 @@ EN: dict[str, str] = {
         "continue runs the next processor after a failure; stop halts the chain for that mail."
     ),
     "processors[].retries": "Extra attempts after the first failed run (0-5).",
-    "processors[].timeout_seconds": "Per-mail timeout for this processor, in seconds.",
+    "processors[].timeout_seconds": (
+        "Per-mail timeout for this processor, in seconds. It must cover the model's "
+        "first-token latency plus the full answer, so a cold or slow LLM needs more "
+        "than a couple of minutes."
+    ),
     "processors[].options": "Processor-specific options, one 'key = value' per line or JSON.",
     "notifiers[].notifier_id": "Unique name of this notification channel.",
     "notifiers[].provider": "Notifier component id (built in: console).",
@@ -172,6 +189,13 @@ ZH: dict[str, str] = {
     ),
     "general.browser_render_url": (
         "Carbonyl 兼容终端渲染服务地址（如 http://127.0.0.1:8080），browser_mode=graphical 时必填。"
+    ),
+    "general.command_prefix": (
+        "聊天平台消息的命令前缀（如 /mail list）；不以它开头的消息会被忽略。"
+    ),
+    "general.hourly_summary": (
+        "每小时由 LLM 将该小时内收到的所有邮件汇总为简报，并推送给启用了此项的"
+        "通知（options.hourly_summary = true）；该小时没有邮件则不发送。"
     ),
     "general.timezone": "用于显示、每日清理与提醒的 IANA 时区（如 Asia/Shanghai）。",
     "general.mail_retention_days": "超过该天数的邮件会被每日清理移入回收站；填 0 表示不移动。",
@@ -226,7 +250,10 @@ ZH: dict[str, str] = {
     "llms[].headers": "额外 HTTP 请求头，每行一条“名称 = 值”。疑似令牌的值会在日志中被打码。",
     "llms[].query": "额外查询参数，每行一条“名称 = 值”。",
     "llms[].extra_body": "合并进每次请求体的额外 JSON 字段。",
-    "llms[].timeout_seconds": "单次请求超时秒数（至少 1）。",
+    "llms[].timeout_seconds": (
+        "单次请求超时秒数（至少 1）。需覆盖等待模型首字的时间与完整回答耗时，"
+        "本地模型较慢或首次调用时应调大。"
+    ),
     "llms[].max_retries": "请求失败后重试的次数，用尽后才切换到后备模型。",
     "llms[].default": "作为未显式指定模型的处理器的默认模型。列表中第一项即为默认。",
     "llms[].fallback": "该模型失败时依次尝试的模型 id，由列表顺序自动推导。",
@@ -239,7 +266,10 @@ ZH: dict[str, str] = {
     "processors[].fallback_llms": "主模型失败时依次尝试的模型 id，每行一个。",
     "processors[].failure_policy": "continue：失败后继续下一个处理器；stop：该邮件的处理链就此中断。",
     "processors[].retries": "首次失败后的额外重试次数（0-5）。",
-    "processors[].timeout_seconds": "该处理器处理单封邮件的超时秒数。",
+    "processors[].timeout_seconds": (
+        "该处理器处理单封邮件的超时秒数。需覆盖模型首字延迟与完整回答耗时，"
+        "本地模型较慢或首次调用时应设置为数分钟以上。"
+    ),
     "processors[].options": "处理器专属选项，每行一条“键 = 值”，或填写 JSON。",
     "notifiers[].notifier_id": "该通知渠道的唯一名称。",
     "notifiers[].provider": "通知器组件 id（内置：console）。",

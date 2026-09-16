@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from mailflow.config import MailFlowConfig
+from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
 from mailflow.settings import (
     EditorKind,
     SettingsError,
@@ -257,6 +257,77 @@ class TestLLMChain:
         assert config.processors[0].fallback_llms == []
         # no llm still lists the removed id as a fallback
         assert all("b" not in llm.fallback for llm in config.llms)
+
+    def test_renaming_an_llm_rewrites_every_reference(self) -> None:
+        """Editing an id used to fail validation ("does not match any
+        configured llm") because the stale references were validated before
+        the derived chain and the processor bindings were repaired."""
+        config = self._three()
+        config = add_entry(
+            config,
+            "processors",
+            {
+                "processor_id": "p",
+                "provider": "llm-importance",
+                "llm": "c",
+                "fallback_llms": [],
+            },
+        )
+
+        renamed = update_entry(config, "llms", 1, {"llm_id": "b2", "model": "m-b2"})
+
+        assert [llm.llm_id for llm in renamed.llms] == ["a", "b2", "c"]
+        assert renamed.llms[0].fallback == ["b2", "c"]
+        assert renamed.llms[2].fallback == []
+        assert renamed.processors[0].llm == "c"
+        assert all("b" not in llm.fallback for llm in renamed.llms)
+
+    def test_renaming_the_bound_llm_follows_the_processor(self) -> None:
+        config = self._three()
+        config = add_entry(
+            config,
+            "processors",
+            {
+                "processor_id": "p",
+                "provider": "llm-importance",
+                "llm": "b",
+                "fallback_llms": ["c"],
+            },
+        )
+
+        renamed = update_entry(config, "llms", 1, {"llm_id": "b2"})
+
+        assert renamed.processors[0].llm == "b2"
+        assert renamed.processors[0].fallback_llms == ["c"]
+
+    def test_adding_an_llm_extends_the_chain(self) -> None:
+        config = add_entry(self._three(), "llms", {"llm_id": "d", "model": "m-d"})
+        assert [llm.llm_id for llm in config.llms] == ["a", "b", "c", "d"]
+        # the new entry is reachable as the last fallback, not an orphan
+        assert config.llms[0].fallback == ["b", "c", "d"]
+
+
+class TestTimeouts:
+    """First-token latency must fit inside the shipped defaults."""
+
+    def test_default_timeouts_cover_a_slow_first_token(self) -> None:
+        config = MailFlowConfig()
+        # 30s per mail proved too short: a cold local model spends longer than
+        # that before its first token, and every mail then fell back to a
+        # subject summary
+        assert config.processors == []  # the default chain binds in start_service
+        assert ProcessorConfig(processor_id="p", provider="rules").timeout_seconds == 120.0
+        assert LLMConfig(llm_id="l").timeout_seconds == 120.0
+
+    def test_timeouts_stay_configurable(self) -> None:
+        config = add_entry(MailFlowConfig(), "llms", {"llm_id": "l", "timeout_seconds": 240})
+        assert config.llms[0].timeout_seconds == 240.0
+        config = add_entry(
+            config,
+            "processors",
+            {"processor_id": "p", "provider": "rules", "timeout_seconds": 45},
+        )
+        assert config.processors[0].timeout_seconds == 45.0
 
 
 class TestPlaceholderBookkeeping:

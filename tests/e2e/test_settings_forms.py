@@ -153,6 +153,81 @@ async def test_llm_form_default_provider_and_extras_rebuild(tmp_path: Path) -> N
         await service.stop()
 
 
+async def test_editing_an_llm_id_saves_and_rewrites_references(tmp_path: Path) -> None:
+    """Editing an LLM must not be rejected for its own references.
+
+    Renaming an id used to fail with "does not match any configured llm"
+    because the entry's stale fallback list (and every processor binding) was
+    validated before the derived chain was rebuilt.
+    """
+    from mailflow.settings import add_entry, update_entry
+    from mailflow_tui.settings import EntryFormScreen
+
+    service = await start_service_quiet(tmp_path)
+    CommandRouter(service)
+    config = add_entry(
+        service.config, "llms", {"llm_id": "alpha", "model": "m-a", "api_key": "sk-a"}
+    )
+    # a real key so the form's required credential extra is already satisfied
+    config = add_entry(config, "llms", {"llm_id": "beta", "model": "m-b", "api_key": "sk-b"})
+    config = add_entry(
+        config,
+        "processors",
+        {
+            "processor_id": "llm-importance",
+            "provider": "llm-importance",
+            "llm": "beta",
+            "fallback_llms": [],
+        },
+    )
+    # the first LLM falls back to the entry that is about to be renamed: the
+    # stale reference that used to be rejected on save
+    config = update_entry(config, "llms", 0, {"fallback": ["beta"]})
+    service.config = config
+
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause(0.2)
+            results: list[dict[str, Any] | None] = []
+            app.push_screen(
+                cast(
+                    Any,
+                    EntryFormScreen(
+                        cast(Any, service),
+                        "llms",
+                        values=config.llms[1].model_dump(mode="json"),
+                    ),
+                ),
+                results.append,
+            )
+            await _wait_until(pilot, lambda: bool(app.screen.query("#field-llm-id")))
+            app.screen.query_one("#field-llm-id", Input).value = "beta-2"
+            await _wait_until(
+                pilot,
+                lambda: not app.screen.query_one("#entry-form-save", Button).disabled,
+            )
+            app.screen.query_one("#entry-form-save", Button).press()
+            await _wait_until(pilot, lambda: bool(results))
+
+            payload = results[0]
+            assert payload is not None, "the edit form reported no payload"
+            saved = await service.update_config_entry("llms", 1, payload)
+
+            assert [llm.llm_id for llm in saved.llms] == ["alpha", "beta-2"]
+            # the derived chain and the processor binding follow the rename
+            assert saved.llms[0].fallback == ["beta-2"]
+            assert saved.processors[0].llm == "beta-2"
+            # and the repaired config is what got written to disk
+            written = (tmp_path / "cfg.toml").read_text(encoding="utf-8")
+            assert 'llm_id = "beta-2"' in written
+            assert '"beta"' not in written
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
 async def test_llm_form_required_validation_and_eye_toggle(tmp_path: Path) -> None:
     from mailflow_tui.settings import EntryFormScreen
 

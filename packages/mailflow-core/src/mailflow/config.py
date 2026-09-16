@@ -299,7 +299,13 @@ class LLMConfig(BaseModel):
         default_factory=lambda: {}, description="Extra JSON body fields merged into every request"
     )
     timeout_seconds: float = Field(
-        default=60.0, ge=1.0, description="Per-request timeout in seconds"
+        default=120.0,
+        ge=1.0,
+        description=(
+            "Per-request timeout in seconds. It must cover the wait for the model's "
+            "first token as well as the whole answer; raise it for slow or cold "
+            "local models"
+        ),
     )
     max_retries: int = Field(default=2, ge=0, le=20, description="Bounded transport retries")
     default: bool = Field(
@@ -346,7 +352,13 @@ class ProcessorConfig(BaseModel):
         default=1, ge=0, le=5, description="Extra attempts after the initial processor run"
     )
     timeout_seconds: float = Field(
-        default=30.0, ge=1.0, description="Per-processor timeout in seconds"
+        default=120.0,
+        ge=1.0,
+        description=(
+            "Per-mail timeout for this processor, in seconds. It must cover the "
+            "model's first-token latency plus the full answer, so a cold or slow "
+            "LLM needs more than a couple of minutes"
+        ),
     )
     options: dict[str, Any] = Field(
         default_factory=lambda: {}, description="Processor-specific options"

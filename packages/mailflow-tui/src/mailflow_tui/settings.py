@@ -850,7 +850,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             headers=dict(values.get("headers") or {}),
             query=dict(values.get("query") or {}),
             options=dict(values.get("options") or {}),
-            timeout_seconds=20.0,
+            # a cold local model can take a while before its first token, so the
+            # probe gets a per-request budget well above the old 20s default
+            timeout_seconds=60.0,
             max_retries=0,
         )
         provider = config.provider
@@ -868,7 +870,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         try:
             completion = await asyncio.wait_for(
                 backend.chat([{"role": "user", "content": "ping"}], temperature=0.0),
-                timeout=45.0,
+                timeout=120.0,
             )
         except TimeoutError:
             status.update(f"[red]{self._t('tui.llm_test_timeout')}[/red]")

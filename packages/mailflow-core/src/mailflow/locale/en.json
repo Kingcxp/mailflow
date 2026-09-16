@@ -109,6 +109,8 @@
         "general.browser_render_url": "Base URL of a Carbonyl-compatible terminal render service (e.g. http://127.0.0.1:8080); required when browser_mode = graphical.",
         "general.cleanup_hour": "Local-time hour (0-23) at which the daily retention cleanup runs.",
         "general.cleanup_minute": "Local-time minute (0-59) at which the daily retention cleanup runs.",
+        "general.command_prefix": "Command prefix for chat-platform messages (e.g. /mail list); messages without it are ignored.",
+        "general.hourly_summary": "Every hour the LLM summarizes all mail received in that hour into a briefing pushed through the notifiers that opted in (options.hourly_summary = true); silent when the hour had no mail.",
         "general.language": "Default display language code (en, zh-CN, or an external pack).",
         "general.mail_retention_days": "Mail older than this many days is moved to trash by the daily cleanup. 0 keeps everything.",
         "general.queue_size": "Maximum number of fetched mails waiting to be analyzed; sources pause when it is full.",
@@ -136,7 +138,7 @@
         "llms[].options": "Backend-specific options (e.g. path = chat/completions).",
         "llms[].provider": "LLM backend component id (built in: openai-compatible, anthropic).",
         "llms[].query": "Extra query-string parameters, one 'name = value' per line.",
-        "llms[].timeout_seconds": "Per-request timeout in seconds (at least 1).",
+        "llms[].timeout_seconds": "Per-request timeout in seconds (at least 1). It must cover the wait for the model's first token plus the whole answer, so raise it for cold or slow local models.",
         "logging.console": "Print rich console output. The TUI turns this off so logs cannot corrupt the screen.",
         "logging.console_level": "Minimum level written to the console sink.",
         "logging.console_redirect": "Optional file path: also mirror console output there. Empty means no mirror.",
@@ -167,14 +169,10 @@
         "processors[].processor_id": "Unique name of this processor instance.",
         "processors[].provider": "Processor component id (built in: rules, llm-importance).",
         "processors[].retries": "Extra attempts after the first failed run (0-5).",
-        "processors[].timeout_seconds": "Per-mail timeout for this processor, in seconds.",
+        "processors[].timeout_seconds": "Per-mail timeout for this processor, in seconds. It must cover the model's first-token latency plus the full answer, so a cold or slow LLM needs more than a couple of minutes.",
         "storage.options": "Backend-specific options, one 'key = value' per line or a JSON object.",
         "storage.path": "Database file path. Relative paths resolve against the working directory.",
-        "storage.provider": "Storage backend component id (built in: sqlite).",
-        "general": {
-          "command_prefix": "Command prefix for chat-platform messages (e.g. /mail list); messages without it are ignored"
-        },
-        "general.hourly_summary": "Every hour the LLM summarizes all mail received in that hour into a briefing pushed through the notifiers that opted in (options.hourly_summary = true); silent when the hour had no mail"
+        "storage.provider": "Storage backend component id (built in: sqlite)."
       },
       "collection": "{count} entries",
       "description": "DESCRIPTION",

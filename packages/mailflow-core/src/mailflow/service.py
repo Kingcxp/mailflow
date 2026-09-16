@@ -1094,7 +1094,7 @@ class MailFlowService:
                             fallback=llm_ids[1:],
                             options={"temperature": 0.0, "max_tokens": 1800},
                         ),
-                        timeout=180,
+                        timeout=300,
                     )
                     raw = _extract_json_typed(completion.text, list[Any])
                     if isinstance(raw, list):
@@ -1638,7 +1638,7 @@ schedule/calendar. Choose `search` when unsure."""
                     fallback=llm_ids[1:],
                     options={"temperature": 0.0, "max_tokens": 5},
                 ),
-                timeout=180,
+                timeout=300,
             )
         except Exception as exc:
             logger.warning("smart search warmup failed (%s); continuing", type(exc).__name__)

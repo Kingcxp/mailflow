@@ -9,9 +9,13 @@ Each configured processor becomes a `ProcessorBinding` (in `mailflow.pipeline`):
 
 - `priority` — ascending order; equal priorities sort by processor id.
 - `retries` — extra attempts after the initial one (0 = no retries).
-- `timeout_seconds` — `asyncio.wait_for` bound on one `process()` call. An
-  expired deadline is recorded as `processor timed out after N seconds`, never
-  as an empty failure reason.
+- `timeout_seconds` — `asyncio.wait_for` bound on one `process()` call,
+  **120 s by default**. It must cover the model's first-token latency *and* the
+  whole answer: 30 s made cold or slow local models time out on every mail,
+  which then fell back to a subject summary with a failed note. An expired
+  deadline is recorded as `processor timed out after N seconds`, never as an
+  empty failure reason. The per-request budget is `[[llms]] timeout_seconds`
+  (also 120 s by default) — raise both for a slow endpoint.
 - `failure_policy` — `continue` (default: record a failed note, run the next
   processor) or `stop` (halt the chain).
 - `llm` / `fallback_llms` — named LLMs routed through the `LLMRouter` for

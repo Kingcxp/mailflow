@@ -109,6 +109,8 @@
         "general.browser_render_url": "Carbonyl 兼容终端渲染服务地址（如 http://127.0.0.1:8080），browser_mode=graphical 时必填。",
         "general.cleanup_hour": "每日清理执行的本地时间小时（0-23）。",
         "general.cleanup_minute": "每日清理执行的本地时间分钟（0-59）。",
+        "general.command_prefix": "聊天平台消息的命令前缀（如 /mail list）；不以它开头的消息会被忽略。",
+        "general.hourly_summary": "每小时由 LLM 将该小时内收到的所有邮件汇总为简报，并推送给启用了此项的通知（options.hourly_summary = true）；该小时没有邮件则不发送。",
         "general.language": "默认界面语言代码（en、zh-CN 或外部语言包）。",
         "general.mail_retention_days": "超过该天数的邮件会被每日清理移入回收站；填 0 表示不移动。",
         "general.queue_size": "等待分析的邮件队列上限；队列满时邮件源会暂停拉取。",
@@ -136,7 +138,7 @@
         "llms[].options": "后端专属选项（如 path = chat/completions）。",
         "llms[].provider": "大模型后端组件 id（内置：openai-compatible、anthropic）。",
         "llms[].query": "额外查询参数，每行一条“名称 = 值”。",
-        "llms[].timeout_seconds": "单次请求超时秒数（至少 1）。",
+        "llms[].timeout_seconds": "单次请求超时秒数（至少 1）。需覆盖等待模型首字的时间与完整回答耗时，本地模型较慢或首次调用时应调大。",
         "logging.console": "输出富文本控制台日志。TUI 会关闭它，避免日志破坏界面。",
         "logging.console_level": "控制台通道记录的最低级别。",
         "logging.console_redirect": "可选文件路径：把控制台日志同时镜像到该文件。留空表示不镜像。",
@@ -167,14 +169,10 @@
         "processors[].processor_id": "该处理器实例的唯一名称。",
         "processors[].provider": "处理器组件 id（内置：rules、llm-importance）。",
         "processors[].retries": "首次失败后的额外重试次数（0-5）。",
-        "processors[].timeout_seconds": "该处理器处理单封邮件的超时秒数。",
+        "processors[].timeout_seconds": "该处理器处理单封邮件的超时秒数。需覆盖模型首字延迟与完整回答耗时，本地模型较慢或首次调用时应设置为数分钟以上。",
         "storage.options": "后端专属选项，每行一条“键 = 值”，或填写 JSON 对象。",
         "storage.path": "数据库文件路径。相对路径基于当前工作目录解析。",
-        "storage.provider": "存储后端组件 id（内置：sqlite）。",
-        "general": {
-          "command_prefix": "聊天平台消息的命令前缀（如 /mail list）；不以它开头的消息会被忽略"
-        },
-        "general.hourly_summary": "每小时由 LLM 将该小时内收到的所有邮件汇总为简报，并推送给启用了此项的 notifier（options.hourly_summary = true）；该小时没有邮件则不发送"
+        "storage.provider": "存储后端组件 id（内置：sqlite）。"
       },
       "collection": "{count} 项",
       "description": "说明",

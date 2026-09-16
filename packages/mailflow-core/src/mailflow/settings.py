@@ -564,6 +564,8 @@ def add_entry(config: MailFlowConfig, group: str, values: dict[str, Any]) -> Mai
     except ValidationError as exc:
         raise SettingsError(group, _format_validation_error(exc)) from exc
     data[group] = [*data[group], entry.model_dump()]
+    if group == "llms":
+        _sync_llm_references(data)
     updated = _revalidate(data, group)
     updated.env_placeholders = dict(config.env_placeholders)
     return updated
@@ -578,12 +580,19 @@ def update_entry(
     entries = data[group]
     if not 0 <= index < len(entries):
         raise SettingsError(group, f"{group}[{index}] does not exist")
+    previous = dict(entries[index])
     merged = {**entries[index], **values}
     try:
         entry = model.model_validate(merged)
     except ValidationError as exc:
         raise SettingsError(group, _format_validation_error(exc)) from exc
     entries[index] = entry.model_dump()
+    if group == "llms":
+        old_id = str(previous.get("llm_id") or "")
+        new_id = str(entry.model_dump().get("llm_id") or "")
+        _sync_llm_references(
+            data, renamed=(old_id, new_id) if old_id and old_id != new_id else None
+        )
     updated = _revalidate(data, group)
     updated.env_placeholders = _carried_placeholders(config)
     for name in values:
@@ -601,9 +610,35 @@ def remove_entry(config: MailFlowConfig, group: str, index: int) -> MailFlowConf
     removed = entries.pop(index)
     if group == "llms":
         _drop_llm_references(data, str(removed.get("llm_id", "")))
+        _sync_llm_references(data)
     updated = _revalidate(data, group)
     updated.env_placeholders = _carried_placeholders(config, group_removed=(group, index))
     return updated
+
+
+def _sync_llm_references(data: dict[str, Any], *, renamed: tuple[str, str] | None = None) -> None:
+    """Make ``[[llms]]`` cross-references valid *before* the config is validated.
+
+    ``default``/``fallback`` are derived from the list order, and processor
+    bindings name LLMs explicitly, so an edit that reorders, adds, removes or
+    renames an LLM has to re-derive the chain and rewrite the references
+    first. Otherwise a perfectly valid edit is rejected with "does not match
+    any configured llm" — the message the user sees for a stale reference.
+    """
+    entries = data.get("llms", [])
+    if renamed is not None:
+        old_id, new_id = renamed
+        for processor in data.get("processors", []):
+            if processor.get("llm") == old_id:
+                processor["llm"] = new_id
+            processor["fallback_llms"] = [
+                new_id if name == old_id else name for name in processor.get("fallback_llms", [])
+            ]
+        for entry in entries:
+            entry["fallback"] = [
+                new_id if name == old_id else name for name in entry.get("fallback", [])
+            ]
+    _rebuild_llm_chain(entries)
 
 
 def _drop_llm_references(data: dict[str, Any], llm_id: str) -> None:
