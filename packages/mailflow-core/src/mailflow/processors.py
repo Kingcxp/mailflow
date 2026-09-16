@@ -25,7 +25,6 @@ from mailflow.contracts import (
     LLMEnhancer,
     LLMRouter,
     ProcessingContext,
-    ProcessorDecision,
     ProcessorResult,
 )
 from mailflow.domain import (
@@ -38,16 +37,21 @@ from mailflow.domain import (
 
 logger = logging.getLogger("mailflow.processor")
 
-_DEFAULT_KEYWORDS = (
-    "unsubscribe",
+_STRONG_KEYWORDS = (
     "promotion",
     "sale",
     "discount",
     "advertisement",
     "limited offer",
     "act now",
+)
+_WEAK_KEYWORDS = (
+    # mailing-list boilerplate: official notices carry these in their footer,
+    # so one hit means nothing on its own
+    "unsubscribe",
     "click here",
 )
+_DEFAULT_KEYWORDS = (*_STRONG_KEYWORDS, *_WEAK_KEYWORDS)
 
 
 def _plain_body(mail: MailMessage) -> str:
@@ -60,44 +64,90 @@ def _plain_body(mail: MailMessage) -> str:
     return ""
 
 
+def _prompt_guidelines(text: str, *, limit: int = 20) -> str:
+    """Distinct feedback notes, newest last, capped for the prompt.
+
+    Stored guidelines can already contain the same sentence many times over
+    (an earlier build appended repeats without checking), and a wall of
+    identical lines reads to the model as an absolute rule — one user's
+    repeated "this is an ad" then reclassified unrelated mail. Collapsing
+    repeats here fixes existing stores, not just future ones.
+    """
+    seen: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped in seen:
+            continue
+        seen.append(stripped)
+    return "\n".join(seen[-limit:])
+
+
 class RulesProcessor:
-    """Deterministic ad/sender pre-filter before any LLM work."""
+    """Cheap deterministic hints *before* the LLM, never a verdict.
+
+    The old keyword rule returned ``STOP``/``ad`` on a single hit, and because
+    every bulk mailing — university notices, lecture invitations, newsletters —
+    carries "unsubscribe" or "click here" in its footer, that quietly removed
+    exactly the mail the user cares about from analysis. A hit is now only a
+    hint: it contributes an ``ad`` overlay (the value that survives if the LLM
+    fails) and the chain continues, so the model can and does overrule it.
+    """
 
     processor_id = "rules"
 
     def __init__(self, config: ProcessorConfig, router: LLMRouter | None = None) -> None:
-        self._keywords: list[str] = [
-            str(kw).lower() for kw in config.options.get("advertising_keywords", _DEFAULT_KEYWORDS)
+        # a keyword list configured by the user is taken at face value
+        configured = config.options.get("advertising_keywords")
+        self._strong_keywords: list[str] = [
+            str(kw).lower() for kw in (configured if configured else _STRONG_KEYWORDS)
         ]
+        self._weak_keywords: list[str] = [] if configured else [kw.lower() for kw in _WEAK_KEYWORDS]
         self._important_senders: list[str] = [
             str(addr).lower() for addr in config.options.get("important_senders", [])
         ]
 
-    def _is_advertisement(self, haystack: str) -> bool:
-        return any(re.search(rf"\b{re.escape(keyword)}\b", haystack) for keyword in self._keywords)
+    def _hits(self, haystack: str, keywords: list[str]) -> list[str]:
+        return [
+            keyword for keyword in keywords if re.search(rf"\b{re.escape(keyword)}\b", haystack)
+        ]
+
+    def _promotional_hits(self, haystack: str) -> list[str]:
+        """Keywords that justify a promotional *hint*.
+
+        One strong word is enough; footer boilerplate needs two independent
+        hits, which is what separates a promotional mail from an official
+        notice that merely offers an unsubscribe link.
+        """
+        strong = self._hits(haystack, self._strong_keywords)
+        if strong:
+            return strong
+        weak = self._hits(haystack, self._weak_keywords)
+        return weak if len(weak) >= 2 else []
 
     def _is_important_sender(self, sender_address: str) -> bool:
         normalized = sender_address.lower()
         return any(normalized == important for important in self._important_senders)
 
     async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
-        haystack = f"{mail.subject}\n{_plain_body(mail)}".lower()
-        if self._is_advertisement(haystack):
-            return ProcessorResult(
-                decision=ProcessorDecision.STOP,
-                analysis=MailAnalysis(
-                    summary="Advertisement detected by rules",
-                    urgency=Urgency.AD,
-                    reason="matches advertising keywords",
-                    backend="",
-                ),
-            )
         if self._is_important_sender(mail.sender.address):
+            # a user-listed sender is at least important, but the LLM may raise
+            # it to urgent, so this hint continues the chain too
             return ProcessorResult(
                 analysis=MailAnalysis(
-                    summary=mail.subject,
+                    summary="",
                     urgency=Urgency.IMPORTANT,
                     reason="sender is on the important-senders list",
+                    backend="",
+                )
+            )
+        haystack = f"{mail.subject}\n{_plain_body(mail)}".lower()
+        hits = self._promotional_hits(haystack)
+        if hits:
+            return ProcessorResult(
+                analysis=MailAnalysis(
+                    summary="",
+                    urgency=Urgency.AD,
+                    reason=f"promotional wording detected ({', '.join(sorted(set(hits))[:3])})",
                     backend="",
                 )
             )
@@ -113,53 +163,66 @@ busy student actually need to act on?
   card, certificate), attend an exam/meeting/defense at a stated time, complete
   registration/payment before a deadline, submit paperwork by a date. A due
   date/time is present or clearly implied.
-- "important" (orange #E6A23C): needs timely attention but is NOT a physical
-  appointment — verification codes, one-time passwords, action-required online
-  steps (pay a fee online, confirm enrollment), official notices the recipient
-  must read and respond to this week.
-- "info" (green #67C23A): optional or FYI content — academic lectures/seminars
-  the recipient MAY attend, club activities, general announcements, grade
-  postings, newsletters, campus/service notices, recruitment and internship
-  invitations, workshop and library announcements.
-- "ad" (gray #909399): genuinely unusable mail only — unsolicited sales and
-  promotions, spam, and automated system chatter (routine login reminders,
-  "your account was accessed" boilerplate, password-expiry nudges, delivery
-  status updates) that carries no information the recipient can use.
+- "important" (orange #E6A23C): the recipient must act, respond or read
+  something they are responsible for, but it is not a fixed appointment —
+  registration/enrollment steps, applications and their deadlines, forms,
+  fees and payments, official notices about the recipient's own course,
+  program, account, accommodation or employment, a request addressed to the
+  recipient, a confirmation they must give, an interview or slot to schedule,
+  anything with a stated deadline that is not an appointment. **A stated
+  deadline or a required action makes a mail important even when it arrives as
+  a bulk announcement, newsletter or invitation.**
+- "info" (green #67C23A): genuinely optional or FYI — event announcements the
+  recipient MAY attend, lectures/seminars without attendance requirements,
+  club activities, general notices, newsletters, postings that need no action
+  and carry no deadline for this recipient.
+- "ad" (gray #909399): unusable mail only — unsolicited sales and promotions,
+  spam, and automated system chatter (routine login reminders, "your account
+  was accessed" boilerplate, password-expiry nudges, delivery status updates)
+  that carries no information the recipient can use.
 
 Calibration rules:
-1. When in doubt between urgent and important, choose important. Urgent is
-   reserved for concrete scheduled obligations with a date/time.
-2. Login reminders, "your account was accessed", password-expiry notices and
+1. Judge by what the recipient must DO, not by tone, sender or formatting. Ask
+   "is there anything this person has to act on, answer, or track?" — if yes,
+   the mail is at least important. Only mail with nothing to act on and nothing
+   to know can be info, and only unusable mail is ad.
+2. When in doubt between urgent and important, choose important; when in doubt
+   between important and info, choose important. Being mass-mailed, automated,
+   promotional-looking or sent to everyone is NOT a reason to choose info or
+   ad: institutional notices, newsletters, invitations, recruitment and
+   workshop announcements are info when they ask for nothing, and important
+   when they carry a deadline, a required response or a registration step.
+3. Login reminders, "your account was accessed", password-expiry notices and
    similar routine system mails are ALWAYS "ad", never important/urgent.
-3. Lectures and seminars without mandatory attendance are "info", even with a
-   date. Only mark urgent/important if attendance is required for THIS
-   recipient (their name, their session, compulsory for their program).
-4. "ad" is the smallest bucket, and being bulk, automated or sent to everyone
-   is NOT what makes a mail "ad". Before choosing "ad", name the reason: it
-   must be promotional, repetitive system chatter, or otherwise impossible to
-   use. If the mail announces an event, deadline, opportunity, service change,
-   recruitment, result, schedule or anything the recipient might act on or
-   would want to know, it is at least "info" — a mass-mailed institutional
-   notice, newsletter with a date, or recruiter invitation is "info".
-   Never invent facts not in the mail. Unknown fields use "".
-5. reply_required=true ONLY when the sender explicitly expects an answer.
-6. Every timed obligation classified urgent/important MUST yield exactly one
-   action item with due_at parsed from the mail; action_type ∈
-   {"exam","meeting","errand","other"}; notes list practical preparations.
-   Category definitions: "exam" = tests/exams/quizzes; "meeting" = scheduled
-   meetings, calls, defenses, interviews; "errand" = physical errands and
-   deadlines requiring an action (pickups, payments, registrations,
-   appointments, submission deadlines); "other" ONLY when none of the three
-   fit — always prefer the closest specific category.
-7. reason MUST agree with urgency. Never write a reason describing something
-   the recipient must act on, read, respond to or track this week and then
-   classify it "info". If the mail asks for action, has a deadline, needs a
-   response, or the reason says it matters to the recipient, pick
-   important (or urgent when a concrete date/time is set). "info" reasons
-   must be genuinely optional/FYI (seminar you MAY attend, general notice).
-   A reason like "action required" with urgency "info" is a contradiction:
-   re-check and raise the urgency.
-8. Schedule/course CHANGES affecting the recipient's own commitments (a
+   Lectures and seminars without mandatory attendance are "info", even with a
+   date; only mark urgent/important when attendance is required for THIS
+   recipient (their name, their session, compulsory for their program) or an
+   action (registration, RSVP by a date, submission) is demanded.
+4. Before choosing "ad", name the reason in the "reason" field: it must be
+   promotional, repetitive system chatter, or otherwise impossible to use. If
+   the mail announces an event, deadline, opportunity, service change,
+   recruitment, result, schedule, or anything the recipient might act on or
+   would want to know, it is at least "info" — and "important" as soon as
+   action or a deadline is involved.
+5. Never invent facts not in the mail. Unknown fields use "".
+6. reply_required=true ONLY when the sender explicitly expects an answer.
+7. Every obligation the mail states MUST yield an action item: any deadline,
+   registration, submission, payment, appointment, exam, interview, pickup or
+   event with a date — including ones inside announcements and newsletters.
+   Parse due_at from the mail (ISO-8601 with timezone offset); when only a date
+   is given, use 09:00 in the mail's timezone and say so in the notes; when the
+   mail states no concrete date, leave action_items empty rather than inventing
+   one. action_type ∈ {"exam","meeting","errand","other"}: "exam" =
+   tests/exams/quizzes; "meeting" = scheduled meetings, calls, defenses,
+   interviews, events to attend; "errand" = physical errands and deadlines
+   requiring an action (pickups, payments, registrations, applications,
+   appointments, submissions); "other" ONLY when none of the three fit.
+8. reason MUST agree with urgency: write the level you chose and why in one
+   sentence, and never describe an action, deadline or required response in the
+   reason of an "info" or "ad" mail — re-check and raise the level instead.
+   "info" reasons must be genuinely optional/FYI; "ad" reasons must name what
+   makes the mail unusable.
+9. Schedule/course CHANGES affecting the recipient's own commitments (a
    class rescheduled, an exam moved, a venue/time change, a canceled or
    added session for THEIR course) are "urgent" when the new date/time is
    stated: the recipient must update their calendar even though no reply
@@ -167,12 +230,19 @@ Calibration rules:
    "moved to", "postponed", "time change" next to a date are strong urgent
    signals. Downgrade to important/info ONLY when the change clearly
    concerns a session the recipient is not enrolled in.
-9. The recipient profile below is authoritative for relevance: mail matching
-   what they say they care about is at least "info" (important/urgent when it
-   also has a deadline), and mail in the categories they say they ignore is
-   "ad". Apply the feedback notes to mail of the same kind only — never use
-   them to turn an announcement or notice into "ad".
-10. Output ONLY a single JSON object, no prose, no markdown fences:
+10. If a recipient profile is given below, it is authoritative for what matters
+    to that person: mail matching what they care about is at least info
+    (important/urgent when it also carries action or a deadline), and mail in
+    the categories they say they ignore is ad even when it looks informative.
+11. User feedback notes, if given, are narrow preferences from past
+    corrections: use them to re-rank mail of the same kind (a promotion the
+    user rejects becomes ad rather than info) and to skip similar mail. They
+    never override rules 1-9: a note may not turn a mail that carries action,
+    a deadline, or an obligation of the recipient into "ad" or "info". When a
+    note conflicts with those rules, follow the rules and the profile.
+12. "urgency" must be exactly one of the English tokens ad, info, important,
+    urgent — never a translation, synonym or number.
+13. Output ONLY a single JSON object, no prose, no markdown fences:
 {
   "summary": "one or two sentence summary",
   "urgency": "ad|info|important|urgent",
@@ -347,10 +417,18 @@ class LLMImportanceProcessor:
             f"Body:\n{body}\n"
         )
         if context.feedback_guidelines:
+            notes = _prompt_guidelines(context.feedback_guidelines)
+        else:
+            notes = ""
+        if notes:
             user += (
-                "\nUser feedback on previously received mail (treat as strong "
-                "priorities; e.g. mark matching mail lower importance):\n"
-                f"{context.feedback_guidelines}\n"
+                "\nUser feedback notes from earlier corrections. Treat them as "
+                "narrow, kind-scoped preferences: they may re-rank mail of the "
+                "same kind (a promotion the user rejected is ad rather than "
+                "info), but they never change what the mail actually asks for — "
+                "mail that carries an action, a deadline or an obligation of the "
+                "recipient keeps the level the rules above give it:\n"
+                f"{notes}\n"
             )
         if context.user_profile:
             user += (

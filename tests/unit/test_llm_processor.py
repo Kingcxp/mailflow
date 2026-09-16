@@ -323,15 +323,35 @@ class TestPromptContract:
     def test_ad_is_reserved_for_unusable_mail(self) -> None:
         prompt = self._prompt()
         assert "any bulk mail" not in prompt
-        assert "is not what makes a mail" in prompt  # bulk/automated != ad
-        assert "smallest bucket" in prompt
-        assert "recruitment" in prompt  # named as info, not ad
-        assert "newsletters" in prompt
+        assert "is not a reason to choose info or ad" in prompt  # bulk != ad
+        assert "unusable mail only" in prompt
+        assert 'before choosing "ad", name the reason' in prompt
+
+    def test_action_and_deadlines_force_important(self) -> None:
+        """`important` must be reachable: a deadline or a required action of the
+        recipient makes a mail important even when it arrives as a bulk notice."""
+        prompt = self._prompt()
+        assert "stated deadline or a required action makes a mail important" in prompt
+        assert "is there anything this person has to act on, answer, or track?" in prompt
+        assert (
+            "when in doubt\n   between important and info, choose important"
+            in prompt.replace("  ", " ")
+            or "between important and info, choose important" in prompt
+        )
+
+    def test_feedback_notes_cannot_override_the_rules(self) -> None:
+        prompt = self._prompt()
+        assert "narrow preferences from past" in prompt
+        assert "never override rules 1-9" in prompt
 
     def test_profile_and_feedback_rules_are_stated(self) -> None:
         prompt = self._prompt()
         assert "recipient profile" in prompt
-        assert "never use them to turn an announcement" in prompt
+        assert "authoritative for what matters" in prompt
+
+    def test_urgency_tokens_are_english_only(self) -> None:
+        prompt = self._prompt()
+        assert "exactly one of the english tokens ad, info, important" in prompt
 
     def test_profile_is_appended_to_the_user_message(self) -> None:
         processor = make_processor(StubRouter(CRITICAL_EXAM_JSON))
@@ -344,3 +364,26 @@ class TestPromptContract:
         user = messages[-1]["content"]
         assert "I ignore shopping mail" in user
         assert "written by the recipient themselves" in user
+
+
+class TestGuidelineRendering:
+    """A polluted feedback store must not read as an absolute rule."""
+
+    def test_repeated_notes_collapse_to_one_line(self) -> None:
+        from mailflow.processors import _prompt_guidelines  # pyright: ignore[reportPrivateUsage]
+
+        stored = "\n".join(["m-reject: 这是营销广告，永远归为 ad"] * 20)
+
+        rendered = _prompt_guidelines(stored)
+
+        assert rendered.count("永远归为 ad") == 1
+
+    def test_repeats_do_not_crowd_out_other_notes(self) -> None:
+        from mailflow.processors import _prompt_guidelines  # pyright: ignore[reportPrivateUsage]
+
+        stored = "\n".join(["m1: 这是营销广告，永远归为 ad"] * 19 + ["m2: 考试通知请保留"])
+
+        rendered = _prompt_guidelines(stored).splitlines()
+
+        assert len(rendered) == 2
+        assert any("考试通知请保留" in line for line in rendered)

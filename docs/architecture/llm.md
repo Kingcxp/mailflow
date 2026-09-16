@@ -74,17 +74,34 @@ URL is reduced to `transport error` before it can reach a persisted note.
 `mailflow/processors.py` (registered under plugin id `mailflow-core`, **not**
 a plugin) holds both defaults:
 
-- `rules` — deterministic pre-filter: advertising keywords (word-boundary
-  matches) stop the chain with an `ad` result, so obvious junk never reaches
-  the model; an important-senders allowlist marks known senders important.
+- `rules` — deterministic hints before any LLM work; **never a verdict**. A
+  promotional keyword hit contributes an `ad` overlay (the value that survives
+  if the model call fails) and the chain continues, so the model can and does
+  overrule it. A single strong word (`promotion`, `sale`, `discount`,
+  `advertisement`, `limited offer`, `act now`) is enough to hint; the
+  mailing-list boilerplate (`unsubscribe`, `click here`) that every bulk mail —
+  university notices, lecture invitations, newsletters — carries in its footer
+  needs two independent hits. The old rule stopped the chain on one hit, which
+  quietly classified exactly that mail as `ad` without ever analysing it.
+  An important-senders allowlist contributes `important` and also continues.
 - `llm-importance` — prompts with the exact four-level semantics, injects the
-  mail content, current time, timezone and the rolling feedback guidelines,
-  and parses a structured JSON answer (summary, urgency, reason,
-  reply_required, suggested_reply, action_items with due windows and
+  mail content, current time, timezone, the recipient profile and the rolling
+  feedback notes, and parses a structured JSON answer (summary, urgency,
+  reason, reply_required, suggested_reply, action_items with due windows and
   preparation notes). Fenced or prose-wrapped JSON is tolerated; urgency
-  synonyms and case variants are normalized; action items carry a `mail_id`
-  backlink and timezone-aware dates. The result records which backend/LLM
-  actually served the request.
+  synonyms — including the Chinese level names a model may translate to — and
+  case variants are normalized; action items carry a `mail_id` backlink and
+  timezone-aware dates. The result records which backend/LLM actually served
+  the request.
+
+  The prompt's level contract is load-bearing and test-enforced: mail is judged
+  by **what the recipient must do** — anything to act on, answer or track is at
+  least `important`, `info` is for optional/FYI mail, and `ad` is reserved for
+  unusable mail (bulk, automated or mass-mailed is explicitly *not* a reason to
+  choose `info` or `ad`). Feedback notes are rendered as narrow, kind-scoped
+  preferences with repeats collapsed (a store polluted by twenty identical
+  rejections used to read as an absolute rule), and they may never override a
+  deadline or a required action.
 
 The default chain when `[[processors]]` is absent is `rules` at priority 10
 and `llm-importance` at 20. `general.summary_language` (or the interface

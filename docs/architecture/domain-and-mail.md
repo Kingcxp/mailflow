@@ -83,8 +83,11 @@ The structured interpretation produced by the processor chain: `summary`,
 `urgency`, `reason`, `reply_required`, `suggested_reply`, `action_items`,
 `notes`, and `backend` (the LLM backend plugin actually used, if any).
 
-The prompt's calibration is part of the contract: **`ad` is the smallest
-bucket**. Bulk, automated or mass-mailed is explicitly *not* what makes a mail
+The prompt's calibration is part of the contract, and it judges by **what the
+recipient must do**: anything to act on, answer or track makes the mail at least
+`important` (a stated deadline or a required action does so even inside a bulk
+notice, newsletter or invitation), `info` is for genuinely optional/FYI mail,
+and **`ad` is reserved for unusable mail**. Bulk, automated or mass-mailed is explicitly *not* what makes a mail
 `ad` — an institutional notice, newsletter with a date, recruitment or
 internship invitation, workshop or library announcement, or anything the
 recipient could act on is at least `info`. `ad` is reserved for mail that is

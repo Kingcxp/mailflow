@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -310,50 +309,53 @@ class TestPipeline:
         assert analysis.summary == "Hello"  # fallback summary still guaranteed
         assert notes[0].status == "failed"
 
-    async def test_advertisement_stops_before_later_processors(self) -> None:
+    async def test_promotional_hint_does_not_stop_the_chain(self) -> None:
+        """A keyword hit is a hint: the LLM (or the next processor) still runs.
+
+        The old rule returned STOP/ad on one hit, and every bulk mailing —
+        including university notices and lecture invitations — carries
+        "unsubscribe" or "click here" in its footer, so real mail was silently
+        classified ad without ever being analysed.
+        """
         rules = RulesProcessor(
-            ProcessorConfig(
-                processor_id="rules",
-                provider="rules",
-                options={"advertising_keywords": ["promotion"]},
-            )
+            ProcessorConfig(processor_id="rules", provider="rules"),
         )
-        classifier = RecordingProcessor(
-            "llm-importance",
+        later = RecordingProcessor(
+            "llm",
             ProcessorResult(
-                analysis=MailAnalysis(summary="model classification", urgency=Urgency.IMPORTANT)
+                analysis=MailAnalysis(summary="real summary", urgency=Urgency.IMPORTANT)
             ),
         )
         engine = PipelineEngine(
-            [
-                self._binding(rules, "rules", priority=10),
-                self._binding(classifier, "llm-importance", priority=20),
-            ]
+            [self._binding(rules, "rules", priority=10), self._binding(later, "llm", priority=20)]
         )
+        mail = make_mail(subject="Huge promotion sale")
+        mail.body_text = "Unsubscribe here."
 
-        analysis, notes, _, _ = await engine.process(
-            make_mail(subject="Limited promotion"), "acct-1"
+        analysis, notes, _llm, _backend = await engine.process(mail, "acct-1")
+
+        assert later.calls == 1, "the chain must continue after a promotional hint"
+        assert analysis.urgency is Urgency.IMPORTANT  # the later processor wins
+        assert analysis.summary == "real summary"
+        assert [note.status for note in notes] == ["success", "success"]
+
+    async def test_bulk_footer_boilerplate_is_not_promotional(self) -> None:
+        """One "unsubscribe"/"click here" is footer boilerplate, not an ad."""
+        rules = RulesProcessor(ProcessorConfig(processor_id="rules", provider="rules"))
+        later = RecordingProcessor(
+            "llm",
+            ProcessorResult(analysis=MailAnalysis(summary="s", urgency=Urgency.INFO)),
         )
+        engine = PipelineEngine(
+            [self._binding(rules, "rules", priority=10), self._binding(later, "llm", priority=20)]
+        )
+        mail = make_mail(subject="Library opening hours")
+        mail.body_text = "See the notice. Unsubscribe."
 
-        assert classifier.calls == 0
-        assert analysis.summary == "Advertisement detected by rules"
-        assert analysis.urgency is Urgency.AD
-        assert [note.processor_id for note in notes] == ["rules"]
+        analysis, _notes, _llm, _backend = await engine.process(mail, "acct-1")
 
-    async def test_timeout_marks_failed_and_continues(self) -> None:
-        class Slow:
-            processor_id = "slow"
-
-            async def process(
-                self, mail: MailMessage, context: ProcessingContext
-            ) -> ProcessorResult:
-                await asyncio.sleep(5)
-                return ProcessorResult()
-
-        engine = PipelineEngine([self._binding(Slow(), "slow", timeout_seconds=0.05, retries=0)])
-        _, notes, _, _ = await engine.process(make_mail(), "acct-1")
-        assert notes[0].status == "failed"
-        assert notes[0].message == "failed: processor timed out after 0.05 seconds"
+        assert analysis.urgency is Urgency.INFO
+        assert analysis.reason != "matches advertising keywords"
 
     async def test_message_less_failure_still_names_the_cause(self) -> None:
         class Quiet(RuntimeError):

@@ -273,6 +273,8 @@ _SMART_MATCH_RELEVANCE_FLOOR = 40.0
 _SEMINAR_CANDIDATES_PREFERENCE = "seminars.candidates"
 _PROFILE_PREFERENCE = "feedback.profile"
 _PROFILE_MAX_CHARS = 4000
+_FEEDBACK_WINDOW = 20
+"""Distinct feedback notes kept for the LLM (repeats collapse onto one line)."""
 _EXPIRED_AD_AGE = timedelta(hours=24)
 """Ads only count as expired once they are a day old: the mail the user is
 reading right now must never be swept away by a single click."""
@@ -1434,8 +1436,13 @@ class MailFlowService:
             raise ValueError("feedback reason must not be empty")
         await self.storage.set_preference(f"feedback.{mail_id}", reason.strip())
         guidelines = await self.storage.get_preference("feedback.guidelines") or ""
-        lines = [line for line in guidelines.splitlines() if line.strip()][-19:]
-        lines.append(f"{mail_id}: {reason.strip()}")
+        note = reason.strip()
+        lines = [line for line in guidelines.splitlines() if line.strip()]
+        # One repeated rejection must not fill the whole window: twenty identical
+        # entries used to crowd out every other note and read to the model as an
+        # absolute rule ("永远归为 ad"), which then swallowed unrelated mail.
+        lines = [line for line in lines if line.split(": ", 1)[-1].strip() != note]
+        lines = [*lines, f"{mail_id}: {note}"][-_FEEDBACK_WINDOW:]
         await self.storage.set_preference("feedback.guidelines", "\n".join(lines))
 
     async def get_feedback(self, mail_id: str) -> str | None:

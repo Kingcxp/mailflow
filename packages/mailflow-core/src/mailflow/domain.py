@@ -61,19 +61,40 @@ def parse_urgency(value: str | None) -> Urgency:
     try:
         return Urgency(value.strip().lower())
     except ValueError:
-        # Accept common synonyms produced by imperfect LLM endpoints.
+        # Accept common synonyms produced by imperfect LLM endpoints — including
+        # endpoints asked to answer in Chinese, which translate the level too
+        # (a silent fallback to INFO made every such mail "info").
         normalized = value.strip().lower().replace("_", "-")
         synonyms: dict[str, Urgency] = {
             "junk": Urgency.AD,
             "spam": Urgency.AD,
             "ads": Urgency.AD,
             "advertisement": Urgency.AD,
+            "promotion": Urgency.AD,
+            "promotional": Urgency.AD,
+            "marketing": Urgency.AD,
             "normal": Urgency.INFO,
             "low": Urgency.INFO,
+            "informational": Urgency.INFO,
             "medium": Urgency.IMPORTANT,
+            "moderate": Urgency.IMPORTANT,
             "high": Urgency.URGENT,
             "critical": Urgency.URGENT,
             "urgently": Urgency.URGENT,
+            "广告": Urgency.AD,
+            "推广": Urgency.AD,
+            "营销": Urgency.AD,
+            "垃圾": Urgency.AD,
+            "信息": Urgency.INFO,
+            "一般": Urgency.INFO,
+            "低": Urgency.INFO,
+            "通知": Urgency.INFO,
+            "重要": Urgency.IMPORTANT,
+            "中": Urgency.IMPORTANT,
+            "中等": Urgency.IMPORTANT,
+            "紧急": Urgency.URGENT,
+            "高": Urgency.URGENT,
+            "非常紧急": Urgency.URGENT,
         }
         return synonyms.get(normalized, Urgency.INFO)
 

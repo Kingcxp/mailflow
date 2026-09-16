@@ -22,6 +22,7 @@ from mailflow.domain import (
     SmartActionIntent,
     TrashRecord,
     Urgency,
+    parse_urgency,
 )
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
@@ -1226,3 +1227,50 @@ class TestExpiredMailGuards:
         assert await service.purge_expired_mails() == 1
 
         assert storage.refresh_deleted_at_calls == [True]
+
+
+class TestFeedbackWindow:
+    """One repeated rejection must not fill the whole prompt window."""
+
+    async def test_repeated_notes_are_stored_once(self) -> None:
+        service = TestExpiredMail.make_service()
+        for _ in range(25):
+            await service.record_feedback("m-reject", "这是营销广告，永远归为 ad")
+
+        guidelines = (await service.feedback_guidelines()).splitlines()
+
+        assert len(guidelines) == 1
+
+    async def test_distinct_notes_survive_and_keep_the_newest(self) -> None:
+        service = TestExpiredMail.make_service()
+        await service.record_feedback("m1", "广告")
+        await service.record_feedback("m2", "考试通知请保留")
+        await service.record_feedback("m1", "广告")
+
+        guidelines = (await service.feedback_guidelines()).splitlines()
+
+        assert guidelines == ["m2: 考试通知请保留", "m1: 广告"]
+
+
+class TestUrgencySynonyms:
+    """A model answering in Chinese must not silently become info."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("important", Urgency.IMPORTANT),
+            ("urgent", Urgency.URGENT),
+            ("重要", Urgency.IMPORTANT),
+            ("紧急", Urgency.URGENT),
+            ("广告", Urgency.AD),
+            ("推广", Urgency.AD),
+            ("信息", Urgency.INFO),
+            ("medium", Urgency.IMPORTANT),
+            ("high", Urgency.URGENT),
+        ],
+    )
+    def test_synonyms_resolve_to_the_contract_levels(self, value: str, expected: Urgency) -> None:
+        assert parse_urgency(value) is expected
+
+    def test_unknown_value_still_defaults_to_info(self) -> None:
+        assert parse_urgency("??") is Urgency.INFO
