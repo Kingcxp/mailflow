@@ -110,6 +110,7 @@ class ProcessingContext(BaseModel):
     options: dict[str, Any] = Field(default_factory=lambda: {})
     now: datetime | None = None  # injected clock for deterministic processors
     feedback_guidelines: str = ""  # user notes on what to ignore, for the LLM
+    user_profile: str = ""  # the recipient's own description of who they are
 
 
 class ProcessorDecision(StrEnum):
@@ -249,8 +250,9 @@ class StorageBackend(Protocol):
         summary: str | None = None,
         reason: str | None = None,
     ) -> MailRecord | None: ...
-    async def delete_mail(self, record_id: str) -> None:  # moves full record to trash
-        ...
+    async def delete_mail(  # moves full record to trash
+        self, record_id: str, *, refresh_deleted_at: bool = False
+    ) -> None: ...
 
     # -- trash (recovery) ----------------------------------------------------
     async def list_trash(self) -> list[TrashRecord]: ...

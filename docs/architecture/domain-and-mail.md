@@ -83,6 +83,16 @@ The structured interpretation produced by the processor chain: `summary`,
 `urgency`, `reason`, `reply_required`, `suggested_reply`, `action_items`,
 `notes`, and `backend` (the LLM backend plugin actually used, if any).
 
+The prompt's calibration is part of the contract: **`ad` is the smallest
+bucket**. Bulk, automated or mass-mailed is explicitly *not* what makes a mail
+`ad` — an institutional notice, newsletter with a date, recruitment or
+internship invitation, workshop or library announcement, or anything the
+recipient could act on is at least `info`. `ad` is reserved for mail that is
+purely promotional, repetitive system chatter, or otherwise unusable. The
+recipient profile (below) is authoritative for relevance, and the rolling
+feedback notes apply to mail of the same kind only — they may not be used to
+turn an announcement into `ad`.
+
 When no processor supplies a non-empty summary, the pipeline stores the source
 subject only as a display fallback and marks `summary_is_fallback=True`.
 `MailRecord` keeps recognizing the corresponding legacy pipeline note for
@@ -180,6 +190,45 @@ every scheduled entry is an ordinary, deletable `ActionItem` carrying its
 source-mail backlink. Asking for the operation is the user's confirmation, so
 the operation itself needs no second prompt; an unreadable intent answer means
 `search` (filtering is always safe, writing never is).
+
+## Recipient profile
+
+`feedback.profile` holds the recipient's own description of who they are and
+which mail matters to them (`service.user_profile()` / `set_user_profile()`,
+trimmed and capped at 4000 characters; an empty save clears it). It is threaded
+into `ProcessingContext.user_profile` for every analysis and into the smart
+action/search requests, so both the classification and the matching follow that
+person's situation. Because it is user-authored **data**, it is sent in the
+user message — a mail can never impersonate it as an instruction.
+
+## Expired mail
+
+`service.list_expired_mails()` is the only definition of "expired", and
+`purge_expired_mails()` moves exactly those records to the trash (returning the
+count), so the one-click clear is the same recoverable delete the per-mail
+button performs. A record is expired when **all** of these hold:
+
+- `manual_urgency is None` — a manual classification is never overridden by an
+  automatic decision;
+- the analysis **completed**: no missing analysis, no fallback summary and no
+  failed processor note. Nothing was extracted from such a mail, so nothing can
+  be known to have passed — it is evidence for keeping, never for deleting;
+- `effective_urgency` is `ad` or `info` — urgent/important mail stays, because
+  passing dates do not make exam material, receipts or decisions stop mattering;
+- nothing is scheduled ahead: no `action_items` entry (in the record **or** in a
+  custom/seminar entry that keeps this mail's `mail_id`) has `due_end or due_at`
+  in the future. An event whose window is still running is not over;
+- for `ad`, the mail is at least 24 hours old, so the message being read right
+  now is never swept away; for `info`, it must have announced at least one timed
+  item that has already passed (undated FYI mail has no expiry signal and stays).
+
+The purge deletes exactly the ids a confirmation dialog listed, re-reading and
+re-checking each record immediately before its own delete: a manual
+classification, a re-analysis or a new schedule entry landing while the dialog
+is open wins over the earlier snapshot. The count it reports is what this call
+really moved, and the retention window is refreshed, so a mail that was already
+sitting in the trash cannot expire minutes after the user was told it is
+restorable.
 
 ## TrashRecord
 

@@ -49,10 +49,12 @@ from textual.widgets import (
     TextArea,
 )
 
+from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
 from mailflow_tui.labels import error_detail, error_message, urgency_label
 from mailflow_tui.notifications import NotificationsPane
+from mailflow_tui.profile import UserProfileModal
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
 from mailflow_tui.seminars import SeminarReviewModal
@@ -527,6 +529,22 @@ class MailPane(Vertical):
                         self._service.t("tui.btn_reparse_failed"),
                         id="btn-reparse-failed",
                         variant="error",
+                    )
+                with Horizontal(id="mail-actions-row3"):
+                    yield Button(
+                        self._service.t("tui.btn_purge_expired"),
+                        id="btn-purge-expired",
+                        variant="warning",
+                    )
+                    yield Button(
+                        self._service.t("tui.btn_reparse_all"),
+                        id="btn-reparse-all",
+                        variant="primary",
+                    )
+                    yield Button(
+                        self._service.t("tui.btn_profile"),
+                        id="btn-profile",
+                        variant="success",
                     )
 
     async def on_mount(self) -> None:
@@ -1218,6 +1236,23 @@ class MailPane(Vertical):
                 exit_on_error=False,
             )
             return
+        if button_id == "btn-purge-expired":
+            # app-owned worker: a pane remount (language switch) cancels the
+            # pane's own workers, which would stop a half-finished purge
+            cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
+                self._purge_expired(), exclusive=True, group="mail-purge", exit_on_error=False
+            )
+            return
+        if button_id == "btn-reparse-all":
+            cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
+                self._reparse_all(), exclusive=True, group="mail-reparse", exit_on_error=False
+            )
+            return
+        if button_id == "btn-profile":
+            cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
+                self._edit_profile(), exclusive=True, group="mail-profile", exit_on_error=False
+            )
+            return
         if self._selected_id is None:
             return
         if button_id == "btn-trash":
@@ -1310,6 +1345,113 @@ class MailPane(Vertical):
             f"[cyan]{self._service.t('tui.reparse_failed_start', count=len(failed_records))}[/cyan]"
         )
         await self._reparse_batch([record.mail for record in failed_records])
+
+    async def _reparse_all(self) -> None:
+        """Re-analyze every stored mail, after stating the real count."""
+        try:
+            records = await self._service.list_mails()
+            if not records:
+                self._set_operation_status(f"[yellow]{self._service.t('tui.mail_empty')}[/yellow]")
+                return
+            confirmed = await self._confirm(
+                title=self._service.t("tui.reparse_all_title"),
+                body=self._service.t("tui.reparse_all_body", count=len(records)),
+                confirm_label=self._service.t("tui.btn_reparse_all"),
+            )
+            if not confirmed:
+                return
+            self._set_operation_status(
+                f"[cyan]{self._service.t('tui.reparse_all_start', count=len(records))}[/cyan]"
+            )
+            await self._reparse_batch([record.mail for record in records])
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # remote mode, provider failures
+            self._report_bulk_failure(exc)
+
+    async def _purge_expired(self) -> None:
+        """Move mail that has nothing left to act on to the trash."""
+        try:
+            expired = await self._service.list_expired_mails()
+            if not expired:
+                self._set_operation_status(
+                    f"[green]{self._service.t('tui.purge_expired_none')}[/green]"
+                )
+                return
+            confirmed = await self._confirm(
+                title=self._service.t("tui.purge_expired_title"),
+                body=self._service.t(
+                    "tui.purge_expired_body",
+                    count=len(expired),
+                    ad=sum(1 for record in expired if record.effective_urgency is Urgency.AD),
+                    info=sum(1 for record in expired if record.effective_urgency is Urgency.INFO),
+                ),
+                confirm_label=self._service.t("tui.btn_purge_expired"),
+            )
+            if not confirmed:
+                return
+            # exactly the records the dialog listed; the service re-verifies
+            # each one against the state it holds at delete time
+            moved = await self._service.purge_expired_mails(
+                [record.record_id for record in expired]
+            )
+            self._selected_id = None
+            await self.refresh_mail()
+            self._set_operation_status(
+                f"[green]{self._service.t('tui.purge_expired_done', count=moved)}[/green]"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # remote mode, storage failures
+            self._report_bulk_failure(exc)
+
+    def _report_bulk_failure(self, exc: BaseException) -> None:
+        """A bulk action that cannot run says so instead of doing nothing."""
+        self._set_operation_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
+
+    async def _edit_profile(self) -> None:
+        """Open the recipient-profile form; the text personalizes analysis."""
+        try:
+            profile = await self._service.user_profile()
+            saved = await self._ask_screen(UserProfileModal(self._service, profile))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._report_bulk_failure(exc)
+            return
+        if not saved:
+            return
+        self._set_operation_status(f"[green]{self._service.t('tui.profile_saved')}[/green]")
+
+    async def _confirm(self, *, title: str, body: str, confirm_label: str) -> bool:
+        """Ask before a destructive or expensive bulk action."""
+        result = await self._ask_screen(
+            ConfirmModal(self._service, title=title, body=body, confirm_label=confirm_label)
+        )
+        return bool(result)
+
+    async def _ask_screen(self, screen: Any) -> Any:
+        """Push a modal from a worker and await its result.
+
+        ``push_screen`` normally takes a callback; the bulk actions need the
+        answer inline, so the worker owns a future the callback completes.
+        Cancellation (the pane was remounted by a language switch) dismisses
+        the modal instead of leaving a dead dialog that still accepts clicks.
+        """
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+
+        def _done(value: Any) -> None:
+            if not future.done():
+                future.set_result(value)
+
+        app = cast(MailFlowApp, self.app)  # pyright: ignore[reportUnknownMemberType]
+        app.push_screen(screen, _done)
+        try:
+            return await future
+        except asyncio.CancelledError:
+            if screen.is_current:
+                screen.dismiss(None)
+            raise
 
     def select_mail(self, mail_id: str) -> None:
         self._selected_id = mail_id

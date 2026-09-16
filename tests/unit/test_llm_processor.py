@@ -303,3 +303,44 @@ class TestThinkBlockStripping:
         result = await processor.process(make_mail(), CONTEXT)
         assert result.analysis is not None
         assert "chain of thought" not in (result.analysis.summary + result.analysis.reason)
+
+
+class TestPromptContract:
+    """The classification prompt is the behaviour: these rules are load-bearing.
+
+    Mass-mailed institutional notices used to land in "ad" (the old definition
+    ended with "and any bulk mail"), which buried lectures, workshops and
+    recruitment invitations the user wanted to see.
+    """
+
+    @staticmethod
+    def _prompt() -> str:
+        from mailflow.processors import SYSTEM_PROMPT
+
+        # the prompt is wrapped for readability: compare on normalized spaces
+        return " ".join(SYSTEM_PROMPT.lower().split())
+
+    def test_ad_is_reserved_for_unusable_mail(self) -> None:
+        prompt = self._prompt()
+        assert "any bulk mail" not in prompt
+        assert "is not what makes a mail" in prompt  # bulk/automated != ad
+        assert "smallest bucket" in prompt
+        assert "recruitment" in prompt  # named as info, not ad
+        assert "newsletters" in prompt
+
+    def test_profile_and_feedback_rules_are_stated(self) -> None:
+        prompt = self._prompt()
+        assert "recipient profile" in prompt
+        assert "never use them to turn an announcement" in prompt
+
+    def test_profile_is_appended_to_the_user_message(self) -> None:
+        processor = make_processor(StubRouter(CRITICAL_EXAM_JSON))
+        context = CONTEXT.model_copy(update={"user_profile": "I ignore shopping mail"})
+
+        messages = processor._build_messages(  # pyright: ignore[reportPrivateUsage]
+            make_mail(subject="Exam", body_text="Bring your ID."), context
+        )
+
+        user = messages[-1]["content"]
+        assert "I ignore shopping mail" in user
+        assert "written by the recipient themselves" in user

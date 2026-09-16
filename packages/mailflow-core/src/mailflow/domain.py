@@ -383,7 +383,7 @@ class TrashRecord(BaseModel):
     analysis: MailAnalysis | None
     processor_notes: list[ProcessorNote] = Field(default_factory=lambda: [])
     deleted_at: datetime
-    expires_at: datetime  # purge time; compared against deletion time only
+    expires_at: datetime  # the deletion timestamp the backend stored
 
     def to_mail_record(self) -> MailRecord:
         return MailRecord(

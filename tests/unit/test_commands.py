@@ -84,7 +84,7 @@ class MemoryStorage:
         record.manual_urgency = urgency
         return record
 
-    async def delete_mail(self, record_id: str) -> None:
+    async def delete_mail(self, record_id: str, *, refresh_deleted_at: bool = False) -> None:
         record = self.mails.pop(record_id, None)
         if record is not None:
             self.trash[record_id] = TrashRecord(

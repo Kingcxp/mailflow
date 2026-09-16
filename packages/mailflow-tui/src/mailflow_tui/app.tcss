@@ -136,7 +136,8 @@ ActionModal {
 }
 
 #mail-actions-row1,
-#mail-actions-row2 {
+#mail-actions-row2,
+#mail-actions-row3 {
     height: auto;
     align-vertical: middle;
 }
@@ -151,7 +152,8 @@ ActionModal {
 }
 
 #mail-actions-row1 Button,
-#mail-actions-row2 Button {
+#mail-actions-row2 Button,
+#mail-actions-row3 Button {
     width: 1fr;
     min-width: 0;
     margin-right: 1;
@@ -1240,4 +1242,75 @@ ListEditScreen, EntryFormScreen {
 #guide-actions Button {
     height: 3;
     min-width: 12;
+}
+
+/* Bulk-action confirmation and the recipient profile form: the same centered
+   bordered chrome as every other standalone dialog. */
+ConfirmModal,
+UserProfileModal {
+    align: center middle;
+}
+#confirm-dialog {
+    width: 76;
+    height: auto;
+    max-height: 80%;
+    border: round $warning;
+    background: $surface;
+    padding: 1 2;
+}
+#confirm-title {
+    text-style: bold;
+    margin-bottom: 1;
+    height: auto;
+}
+#confirm-body {
+    height: auto;
+    margin-bottom: 1;
+}
+#confirm-buttons {
+    height: auto;
+    align-vertical: middle;
+}
+#confirm-buttons Button {
+    width: 1fr;
+    min-width: 0;
+    margin-right: 1;
+}
+#profile-dialog {
+    width: 90;
+    height: auto;
+    max-height: 90%;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+#profile-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+#profile-hint {
+    height: auto;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+#profile-scroll {
+    height: 12;
+    border: round $secondary;
+    margin-bottom: 1;
+}
+#profile-text {
+    height: 100%;
+}
+#profile-status {
+    height: auto;
+    margin-bottom: 1;
+}
+#profile-buttons {
+    height: auto;
+    align-vertical: middle;
+}
+#profile-buttons Button {
+    width: 1fr;
+    min-width: 0;
+    margin-right: 1;
 }

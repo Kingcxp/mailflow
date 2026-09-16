@@ -25,6 +25,7 @@ from textual.widgets import (
     Select,
     Static,
     TabbedContent,
+    TextArea,
 )
 
 AD_JSON = """{
@@ -1371,6 +1372,170 @@ async def test_notifications_pane_lists_all_notifiers_and_toggles(
             assert "错误" in status
             assert "notify-token-secret" not in status
             assert "***" in status
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path) -> None:
+    """The Mail tab's third button row: clear expired mail (recoverable),
+    re-analyze everything, and save the preferences the LLM reads."""
+    import queue
+    from datetime import UTC, datetime, timedelta
+
+    from mailflow.domain import ActionItem, MailAnalysis, MailRecord
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.app import MailPane
+    from mailflow_tui.confirm import ConfirmModal
+    from mailflow_tui.profile import UserProfileModal
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+    now = datetime.now(UTC)
+    stale = make_mail(
+        message_id="stale-ad", account_id="acct-1", subject="Old promotion", body_text="sale"
+    ).model_copy(update={"received_at": now - timedelta(days=3)})
+    await service.storage.save_mail(
+        MailRecord(
+            record_id="stale-ad",
+            mail=stale,
+            auto_urgency=Urgency.AD,
+            analysis=MailAnalysis(summary="promotion", urgency=Urgency.AD),
+        )
+    )
+    live = make_mail(
+        message_id="live-info", account_id="acct-1", subject="Lab talk", body_text="attend"
+    ).model_copy(update={"received_at": now})
+    await service.storage.save_mail(
+        MailRecord(
+            record_id="live-info",
+            mail=live,
+            auto_urgency=Urgency.INFO,
+            analysis=MailAnalysis(
+                summary="Lab talk",
+                urgency=Urgency.INFO,
+                action_items=[
+                    ActionItem(
+                        item_id="live-info-1",
+                        mail_id="live-info",
+                        summary="Attend the talk",
+                        action_type="meeting",
+                        due_at=now + timedelta(days=2),
+                    )
+                ],
+            ),
+        )
+    )
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(160, 50)) as pilot:
+            for _ in range(200):
+                if await service.count_mails() == 2:
+                    break
+                await pilot.pause(0.05)
+            pane = app.query_one(MailPane)
+            assert pane.query("#btn-purge-expired") and pane.query("#btn-reparse-all")
+            assert pane.query("#btn-profile")
+
+            # 1. clearing expired mail asks first, then moves exactly the
+            #    expired mail to the trash
+            expired_ids = {record.record_id for record in await service.list_expired_mails()}
+            assert "stale-ad" in expired_ids
+            assert "live-info" not in expired_ids  # a future talk still matters
+            app.query_one("#btn-purge-expired", Button).press()
+            purge_dialog: ConfirmModal | None = None
+            for _ in range(80):
+                current = app.screen
+                if isinstance(current, ConfirmModal):
+                    purge_dialog = current
+                    break
+                await pilot.pause(0.05)
+            assert purge_dialog is not None, "clear-expired must ask before deleting"
+            body = str(purge_dialog.query_one("#confirm-body", Static).render())
+            assert f"{len(expired_ids)} mail(s)" in body
+            purge_dialog.query_one("#confirm-run", Button).press()
+            for _ in range(120):
+                remaining = {record.record_id for record in await service.list_mails()}
+                if not (remaining & expired_ids):
+                    break
+                await pilot.pause(0.05)
+            remaining = {record.record_id for record in await service.list_mails()}
+            assert "stale-ad" not in remaining and "live-info" in remaining
+            # recoverable: the purged mail is in the trash and comes back
+            trashed = {entry.record_id for entry in await service.list_trash()}
+            assert "stale-ad" in trashed
+            restored = await service.restore_mail("stale-ad")
+            assert restored is not None and restored.record_id == "stale-ad"
+            await service.storage.delete_mail("stale-ad")
+            await pilot.pause(0.2)
+
+            # 2. re-analyzing everything states the real count first
+            app.query_one("#btn-reparse-all", Button).press()
+            reanalyze_dialog: ConfirmModal | None = None
+            for _ in range(80):
+                current = app.screen
+                if isinstance(current, ConfirmModal):
+                    reanalyze_dialog = current
+                    break
+                await pilot.pause(0.05)
+            assert reanalyze_dialog is not None, "re-analyze-all must state the count first"
+            body = str(reanalyze_dialog.query_one("#confirm-body", Static).render())
+            assert f"{await service.count_mails()} stored mail(s)" in body
+            reanalyze_dialog.query_one("#confirm-cancel", Button).press()
+            dismissed = False
+            for _ in range(80):
+                if not isinstance(app.screen, ConfirmModal):
+                    dismissed = True
+                    break
+                await pilot.pause(0.05)
+            assert dismissed, "cancel must close the dialog without running anything"
+
+            # a second dismissal (button then Escape) must not pop the whole
+            # screen stack (that used to end the session with ScreenStackError)
+            assert await service.restore_mail("stale-ad") is not None
+            app.query_one("#btn-purge-expired", Button).press()
+            double_dialog: ConfirmModal | None = None
+            for _ in range(80):
+                current = app.screen
+                if isinstance(current, ConfirmModal):
+                    double_dialog = current
+                    break
+                await pilot.pause(0.05)
+            assert double_dialog is not None
+            double_dialog.query_one("#confirm-cancel", Button).press()
+            double_dialog.action_cancel()  # Escape on the already-dismissed dialog
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, ConfirmModal)
+            assert app.is_running
+
+            # 3. the preferences form saves what the model will read
+            app.query_one("#btn-profile", Button).press()
+            profile_dialog: UserProfileModal | None = None
+            for _ in range(80):
+                current = app.screen
+                if isinstance(current, UserProfileModal):
+                    profile_dialog = current
+                    break
+                await pilot.pause(0.05)
+            assert profile_dialog is not None
+            profile_dialog.query_one("#profile-text", TextArea).text = "I am a CS master's student"
+            profile_dialog.query_one("#profile-save", Button).press()
+            for _ in range(80):
+                if await service.user_profile():
+                    break
+                await pilot.pause(0.05)
+            assert await service.user_profile() == "I am a CS master's student"
             app.exit()
             await pilot.pause()
     finally:

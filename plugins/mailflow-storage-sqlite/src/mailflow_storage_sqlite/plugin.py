@@ -7,8 +7,9 @@
 - deletion (manual or retention cleanup) moves the *full* record to trash
   with a deletion timestamp; restore returns the identical record
 - purge compares the trash deletion timestamp, never the receipt time
-- first-deletion timestamps are preserved (INSERT OR IGNORE) across
-  restore → re-trash cycles
+- the deletion timestamp is preserved while the trash row survives (so a
+  restore → edit → delete cycle cannot postpone expiry), and an explicit
+  user action (the expired-mail purge) refreshes it deliberately
 """
 
 from __future__ import annotations
@@ -205,8 +206,16 @@ class SQLiteStorage:
             conn.commit()
         return record
 
-    async def delete_mail(self, record_id: str) -> None:
-        """Move the full record to trash, stamping the deletion time."""
+    async def delete_mail(self, record_id: str, *, refresh_deleted_at: bool = False) -> None:
+        """Move the full record to trash, stamping the deletion time.
+
+        ``refresh_deleted_at`` restarts the retention window for an explicit
+        user action (the one-click expired-mail purge): a record that was
+        already sitting in the trash would otherwise inherit its old deletion
+        timestamp and be purged for good minutes after the user was told it is
+        restorable. The automatic cleanup keeps the first timestamp so a
+        re-sync cycle cannot postpone a mail's expiry forever.
+        """
         async with self._lock:
             conn = self._check_conn()
             row = conn.execute(
@@ -218,10 +227,15 @@ class SQLiteStorage:
             # re-trash cycles (restore -> edit -> delete again) must keep the
             # FIRST deletion timestamp but refresh the stored content, or the
             # trash would restore a stale record
+            conflict = (
+                "DO UPDATE SET record_json = excluded.record_json, deleted_ts = excluded.deleted_ts"
+                if refresh_deleted_at
+                else "DO UPDATE SET record_json = excluded.record_json"
+            )
             conn.execute(
                 "INSERT INTO trash_records (record_id, record_json, deleted_ts) "
                 "VALUES (?, ?, ?) "
-                "ON CONFLICT(record_id) DO UPDATE SET record_json = excluded.record_json",
+                f"ON CONFLICT(record_id) {conflict}",
                 (record_id, row[0], deleted_at.timestamp()),
             )
             conn.execute("DELETE FROM mails WHERE record_id = ?", (record_id,))

@@ -8,12 +8,14 @@ from typing import Any, cast
 
 import pytest
 from mailflow.config import LLMConfig, MailFlowConfig
-from mailflow.contracts import LLMRouter, MailMessage, ReplyDraft
+from mailflow.contracts import LLMRouter, MailMessage, ProcessorResult, ReplyDraft
 from mailflow.domain import (
     ActionItem,
     ActionOrigin,
     MailAddress,
+    MailAnalysis,
     MailRecord,
+    ProcessorNote,
     ReplyState,
     SeminarCandidate,
     SeminarStatus,
@@ -23,7 +25,7 @@ from mailflow.domain import (
 )
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
-from mailflow.pipeline import PipelineEngine
+from mailflow.pipeline import PipelineEngine, ProcessorBinding
 from mailflow.registry import ComponentRegistry
 from mailflow.service import MailFlowService
 
@@ -38,6 +40,9 @@ class MemoryStorage:
         self.drafts: dict[str, ReplyDraft] = {}
         self.preferences: dict[str, str] = {}
         self.custom_actions: dict[str, ActionItem] = {}
+        self.deleted: list[str] = []
+        self.refresh_deleted_at_calls: list[bool] = []
+        self.trashed: dict[str, MailRecord] = {}
 
     async def initialize(self) -> None:
         pass
@@ -60,13 +65,37 @@ class MemoryStorage:
     async def set_manual_urgency(
         self, record_id: str, urgency: Urgency | None
     ) -> MailRecord | None:
-        return None
+        record = self.mails.get(record_id)
+        if record is None:
+            return None
+        updated = record.model_copy(update={"manual_urgency": urgency})
+        self.mails[record_id] = updated
+        return updated
 
-    async def delete_mail(self, record_id: str) -> None:
-        pass
+    async def delete_mail(self, record_id: str, *, refresh_deleted_at: bool = False) -> None:
+        # the real backends move the record to the trash; the fake does the
+        # same so purge tests can assert what the user still has
+        self.deleted.append(record_id)
+        self.refresh_deleted_at_calls.append(refresh_deleted_at)
+        record = self.mails.pop(record_id, None)
+        if record is not None:
+            self.trashed[record_id] = record
 
     async def list_trash(self) -> list[TrashRecord]:
-        return []
+        now = datetime.now(UTC)
+        return [
+            TrashRecord(
+                record_id=record_id,
+                mail=record.mail,
+                auto_urgency=record.auto_urgency,
+                manual_urgency=record.manual_urgency,
+                analysis=record.analysis,
+                processor_notes=record.processor_notes,
+                deleted_at=now,
+                expires_at=now,
+            )
+            for record_id, record in self.trashed.items()
+        ]
 
     async def restore_from_trash(self, record_id: str) -> MailRecord | None:
         return None
@@ -117,6 +146,16 @@ class RecordingSource:
 
     async def close(self) -> None:
         pass
+
+
+def _reply(text: str) -> Any:
+    """Minimal LLMCompletion stand-in the smart-action routers return."""
+
+    class Reply:
+        def __init__(self, value: str) -> None:
+            self.text = value
+
+    return Reply(text)
 
 
 def make_record() -> MailRecord:
@@ -613,14 +652,6 @@ class TestSeminarDiscovery:
             i18n=I18n(),
         )
 
-    @staticmethod
-    def reply(text: str) -> Any:
-        class Reply:
-            def __init__(self, value: str) -> None:
-                self.text = value
-
-        return Reply(text)
-
     async def test_discovers_review_only_candidate_and_imports_once(self) -> None:
         opaque_record_id = "opaque-record-id@example.test"
 
@@ -633,7 +664,7 @@ class TestSeminarDiscovery:
                 self.calls += 1
                 self.listing = messages[-1]["content"]
                 title = "Research colloquium" if self.calls == 1 else "Reworded colloquium"
-                return TestSeminarDiscovery.reply(
+                return _reply(
                     "["
                     f'{{"id":"m1","title":"{title}",'
                     '"starts_at":"2030-10-15T14:00:00+08:00",'
@@ -692,7 +723,7 @@ class TestSeminarDiscovery:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
                 title = "Original seminar" if self.calls == 1 else "Reworded seminar"
-                return TestSeminarDiscovery.reply(
+                return _reply(
                     '[{"id":"m1",'
                     f'"title":"{title}",'
                     '"starts_at":"2030-10-15T14:00:00+08:00",'
@@ -718,7 +749,7 @@ class TestSeminarDiscovery:
 
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
-                return TestSeminarDiscovery.reply("I found a seminar but cannot format it.")
+                return _reply("I found a seminar but cannot format it.")
 
         router = MalformedRouter()
         service = self.make_service(router)
@@ -743,7 +774,7 @@ class TestSeminarDiscovery:
     async def test_expired_candidate_requires_future_edited_confirmation(self) -> None:
         class PastSeminarRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                return TestSeminarDiscovery.reply(
+                return _reply(
                     '[{"id":"m1","title":"Past seminar",'
                     '"starts_at":"2020-01-01T10:00:00+08:00",'
                     '"timezone":"Asia/Shanghai"}]'
@@ -770,7 +801,7 @@ class TestSeminarDiscovery:
     async def test_rejected_candidate_remains_hidden_after_repeat_scan(self) -> None:
         class SeminarRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                return TestSeminarDiscovery.reply(
+                return _reply(
                     '[{"id":"m1","title":"Seminar",'
                     '"starts_at":"2030-02-01T10:00:00+08:00",'
                     '"timezone":"Asia/Shanghai"}]'
@@ -792,14 +823,6 @@ class TestSeminarDiscovery:
 
 class TestSmartAction:
     """One instruction routes to filtering or to the matching operation."""
-
-    @staticmethod
-    def _reply(text: str) -> Any:
-        class Reply:
-            def __init__(self, value: str) -> None:
-                self.text = value
-
-        return Reply(text)
 
     @staticmethod
     def make_service(router: Any) -> MailFlowService:
@@ -831,15 +854,15 @@ class TestSmartAction:
             system = str(messages[0]["content"])
             if system.startswith("You route one free-form"):
                 self.phases.append("intent")
-                return TestSmartAction._reply(f'{{"intent":"{self.intent}"}}')
+                return _reply(f'{{"intent":"{self.intent}"}}')
             if "smart mail finder" in system:
                 self.phases.append("match")
-                return TestSmartAction._reply('[{"id":"m1","relevance":91}]')
+                return _reply('[{"id":"m1","relevance":91}]')
             if system.startswith("You identify optional academic seminars"):
                 self.phases.append("extract")
-                return TestSmartAction._reply(self.event_json)
+                return _reply(self.event_json)
             self.phases.append("warmup")
-            return TestSmartAction._reply("ok")
+            return _reply("ok")
 
     async def test_search_intent_returns_ranked_matches_only(self) -> None:
         router = self._RoutingRouter("search", "[]")
@@ -934,3 +957,272 @@ class TestSmartAction:
         service.config.llms = []
         with pytest.raises(RuntimeError):
             await service.smart_action("find the exam mails")
+
+
+def _expired_record(
+    record_id: str,
+    *,
+    urgency: Urgency,
+    age_hours: float = 48.0,
+    due_in_hours: float | None = None,
+    manual: Urgency | None = None,
+) -> MailRecord:
+    """One analyzed record for the expired-mail rule tests."""
+    now = datetime.now(UTC)
+    mail = make_mail(record_id, minute=10).model_copy(
+        update={"received_at": now - timedelta(hours=age_hours)}
+    )
+    items = (
+        [
+            ActionItem(
+                item_id=f"{record_id}-1",
+                mail_id=record_id,
+                summary="Deadline",
+                action_type="errand",
+                due_at=now + timedelta(hours=due_in_hours),
+            )
+        ]
+        if due_in_hours is not None
+        else []
+    )
+    return MailRecord(
+        record_id=record_id,
+        mail=mail,
+        auto_urgency=urgency,
+        manual_urgency=manual,
+        analysis=MailAnalysis(summary="s", urgency=urgency, action_items=items),
+    )
+
+
+class TestExpiredMail:
+    """Clearing expired mail must never touch mail that still matters."""
+
+    @staticmethod
+    def make_service() -> MailFlowService:
+        config = MailFlowConfig()
+        config.llms = [LLMConfig(llm_id="llm-1")]
+        return MailFlowService(
+            config=config,
+            registry=ComponentRegistry(),
+            plugin_manager=cast(Any, None),
+            storage=cast(Any, MemoryStorage()),
+            sources={},
+            router=cast(LLMRouter, None),
+            pipeline=PipelineEngine([]),
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            i18n=I18n(),
+        )
+
+    async def test_purges_old_ads_and_past_info_only(self) -> None:
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(_expired_record("old-ad", urgency=Urgency.AD))
+        await storage.save_mail(_expired_record("past-info", urgency=Urgency.INFO, due_in_hours=-5))
+        await storage.save_mail(_expired_record("fresh-ad", urgency=Urgency.AD, age_hours=1))
+        await storage.save_mail(
+            _expired_record("future-info", urgency=Urgency.INFO, due_in_hours=48)
+        )
+        await storage.save_mail(_expired_record("urgent", urgency=Urgency.URGENT))
+        await storage.save_mail(_expired_record("important", urgency=Urgency.IMPORTANT))
+        await storage.save_mail(
+            _expired_record("manual-ad", urgency=Urgency.AD, manual=Urgency.INFO)
+        )
+        await storage.save_mail(_expired_record("bare-info", urgency=Urgency.INFO))
+
+        expired = await service.list_expired_mails()
+
+        assert sorted(record.record_id for record in expired) == ["old-ad", "past-info"]
+        assert await service.purge_expired_mails() == 2
+        # exactly the expired records were handed to the trash move (the real
+        # backend keeps them restorable; the error-prone part is the rule)
+        assert sorted(storage.deleted) == ["old-ad", "past-info"]
+
+    async def test_purge_is_a_noop_without_expired_mail(self) -> None:
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(_expired_record("fresh", urgency=Urgency.INFO))
+        assert await service.purge_expired_mails() == 0
+        assert len(await service.list_mails()) == 1
+
+
+class TestUserProfile:
+    """The recipient profile personalizes analysis and smart actions."""
+
+    async def test_profile_round_trip_is_trimmed_and_capped(self) -> None:
+        service = TestExpiredMail.make_service()
+        assert await service.user_profile() == ""
+
+        stored = await service.set_user_profile("  CS master's student, cares about labs  ")
+
+        assert stored == "CS master's student, cares about labs"
+        assert await service.user_profile() == stored
+
+    async def test_profile_reaches_the_processor_context(self) -> None:
+        seen: dict[str, str] = {}
+
+        class Capturing:
+            processor_id = "cap"
+
+            async def process(self, mail: Any, context: Any) -> Any:
+                seen["profile"] = context.user_profile
+                return ProcessorResult()
+
+        engine = PipelineEngine(
+            [
+                ProcessorBinding(
+                    priority=10,
+                    processor_id="cap",
+                    plugin_id="test",
+                    processor=Capturing(),
+                    retries=0,
+                    timeout_seconds=5.0,
+                )
+            ]
+        )
+        await engine.process(make_mail("m1", minute=1), "acct-1", user_profile="I ignore ads")
+
+        assert seen["profile"] == "I ignore ads"
+
+    async def test_smart_action_sends_the_profile_to_the_model(self) -> None:
+        prompts: list[str] = []
+
+        class RecordingRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                prompts.append(str(messages[-1]["content"]))
+                return _reply('{"intent":"search"}')
+
+        service = TestSmartAction.make_service(RecordingRouter())
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+        await service.set_user_profile("I am a CS master's student")
+
+        await service.smart_action("the lab notice")
+
+        assert any("I am a CS master's student" in prompt for prompt in prompts)
+
+
+class TestExpiredMailGuards:
+    """The review found ways a sweep could delete the wrong mail; each is
+    covered here so it cannot come back."""
+
+    @staticmethod
+    def _service() -> MailFlowService:
+        return TestExpiredMail.make_service()
+
+    @staticmethod
+    def _rich(
+        record_id: str,
+        *,
+        urgency: Urgency,
+        age_hours: float = 72.0,
+        due_in_hours: float | None = None,
+        due_end_in_hours: float | None = None,
+        summary_is_fallback: bool = False,
+        failed_note: bool = False,
+    ) -> MailRecord:
+        record = _expired_record(
+            record_id, urgency=urgency, age_hours=age_hours, due_in_hours=due_in_hours
+        )
+        assert record.analysis is not None
+        if due_end_in_hours is not None:
+            now = datetime.now(UTC)
+            record.analysis.action_items[0].due_end = now + timedelta(hours=due_end_in_hours)
+        record.analysis.summary_is_fallback = summary_is_fallback
+        if failed_note:
+            record.processor_notes.append(
+                ProcessorNote(
+                    processor_id="llm-importance",
+                    plugin_id="mailflow-core",
+                    status="failed",
+                    message="failed: HTTP 500",
+                    started_at=datetime.now(UTC),
+                    finished_at=datetime.now(UTC),
+                )
+            )
+        return record
+
+    async def test_never_sweeps_a_mail_whose_analysis_failed(self) -> None:
+        service = self._service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(self._rich("failed-ad", urgency=Urgency.AD, failed_note=True))
+        await storage.save_mail(
+            self._rich("fallback-ad", urgency=Urgency.AD, summary_is_fallback=True)
+        )
+        bare = _expired_record("no-analysis", urgency=Urgency.AD)
+        await storage.save_mail(bare.model_copy(update={"analysis": None}))
+
+        assert await service.list_expired_mails() == []
+
+    async def test_never_sweeps_a_mail_with_a_live_schedule_entry(self) -> None:
+        service = self._service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(self._rich("seminar-source", urgency=Urgency.INFO))
+        # importing a seminar keeps the source mail id on the schedule entry
+        await storage.save_custom_action(
+            ActionItem(
+                item_id="seminar-source-1",
+                mail_id="seminar-source",
+                summary="Attend the colloquium",
+                action_type="seminar",
+                due_at=datetime.now(UTC) + timedelta(days=3),
+                origin=ActionOrigin.SEMINAR,
+            )
+        )
+
+        assert await service.list_expired_mails() == []
+
+    async def test_an_event_that_is_still_running_is_not_expired(self) -> None:
+        service = self._service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(
+            self._rich(
+                "ongoing",
+                urgency=Urgency.INFO,
+                due_in_hours=-2,
+                due_end_in_hours=20,
+            )
+        )
+
+        assert await service.list_expired_mails() == []
+
+    async def test_purge_rechecks_each_record_before_deleting_it(self) -> None:
+        """A manual classification landing while the dialog is open wins."""
+        service = self._service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(self._rich("sweepme", urgency=Urgency.AD))
+        expired = await service.list_expired_mails()
+        assert [record.record_id for record in expired] == ["sweepme"]
+
+        # the user re-classifies the mail between the dialog and the confirm
+        await storage.set_manual_urgency("sweepme", Urgency.URGENT)
+        moved = await service.purge_expired_mails([record.record_id for record in expired])
+
+        assert moved == 0
+        assert storage.deleted == []
+        stored = await service.get_mail("sweepme")
+        assert stored is not None and stored.manual_urgency is Urgency.URGENT
+
+    async def test_purge_only_touches_the_ids_it_was_given(self) -> None:
+        service = self._service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(self._rich("first", urgency=Urgency.AD))
+        await storage.save_mail(self._rich("second", urgency=Urgency.AD))
+
+        assert await service.purge_expired_mails(["first"]) == 1
+
+        assert storage.deleted == ["first"]
+        remaining = {record.record_id for record in await service.list_mails()}
+        assert remaining == {"second"}
+
+    async def test_purge_refreshes_the_trash_window(self) -> None:
+        """A mail already sitting in the trash must not expire right after."""
+        service = self._service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(self._rich("stale-trash", urgency=Urgency.AD))
+
+        assert await service.purge_expired_mails() == 1
+
+        assert storage.refresh_deleted_at_calls == [True]

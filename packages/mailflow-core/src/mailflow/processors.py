@@ -119,10 +119,12 @@ busy student actually need to act on?
   must read and respond to this week.
 - "info" (green #67C23A): optional or FYI content — academic lectures/seminars
   the recipient MAY attend, club activities, general announcements, grade
-  postings, newsletters.
-- "ad" (gray #909399): marketing, promotions, routine system/account login
-  reminders, security-notice boilerplate, password-expiry nudges, delivery
-  status updates, and any bulk mail.
+  postings, newsletters, campus/service notices, recruitment and internship
+  invitations, workshop and library announcements.
+- "ad" (gray #909399): genuinely unusable mail only — unsolicited sales and
+  promotions, spam, and automated system chatter (routine login reminders,
+  "your account was accessed" boilerplate, password-expiry nudges, delivery
+  status updates) that carries no information the recipient can use.
 
 Calibration rules:
 1. When in doubt between urgent and important, choose important. Urgent is
@@ -132,7 +134,14 @@ Calibration rules:
 3. Lectures and seminars without mandatory attendance are "info", even with a
    date. Only mark urgent/important if attendance is required for THIS
    recipient (their name, their session, compulsory for their program).
-4. Never invent facts not in the mail. Unknown fields use "".
+4. "ad" is the smallest bucket, and being bulk, automated or sent to everyone
+   is NOT what makes a mail "ad". Before choosing "ad", name the reason: it
+   must be promotional, repetitive system chatter, or otherwise impossible to
+   use. If the mail announces an event, deadline, opportunity, service change,
+   recruitment, result, schedule or anything the recipient might act on or
+   would want to know, it is at least "info" — a mass-mailed institutional
+   notice, newsletter with a date, or recruiter invitation is "info".
+   Never invent facts not in the mail. Unknown fields use "".
 5. reply_required=true ONLY when the sender explicitly expects an answer.
 6. Every timed obligation classified urgent/important MUST yield exactly one
    action item with due_at parsed from the mail; action_type ∈
@@ -158,7 +167,12 @@ Calibration rules:
    "moved to", "postponed", "time change" next to a date are strong urgent
    signals. Downgrade to important/info ONLY when the change clearly
    concerns a session the recipient is not enrolled in.
-9. Output ONLY a single JSON object, no prose, no markdown fences:
+9. The recipient profile below is authoritative for relevance: mail matching
+   what they say they care about is at least "info" (important/urgent when it
+   also has a deadline), and mail in the categories they say they ignore is
+   "ad". Apply the feedback notes to mail of the same kind only — never use
+   them to turn an announcement or notice into "ad".
+10. Output ONLY a single JSON object, no prose, no markdown fences:
 {
   "summary": "one or two sentence summary",
   "urgency": "ad|info|important|urgent",
@@ -337,6 +351,14 @@ class LLMImportanceProcessor:
                 "\nUser feedback on previously received mail (treat as strong "
                 "priorities; e.g. mark matching mail lower importance):\n"
                 f"{context.feedback_guidelines}\n"
+            )
+        if context.user_profile:
+            user += (
+                "\nRecipient profile, written by the recipient themselves "
+                "(authoritative for what matters to them; mail matching what they "
+                "care about is at least info, mail in the categories they ignore "
+                "is ad):\n"
+                f"{context.user_profile}\n"
             )
         language = str(self._config.options.get("language") or "").strip()
         if language:

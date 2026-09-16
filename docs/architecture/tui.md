@@ -50,7 +50,18 @@ tears them down with the screen — nothing keeps ticking after it closes.
   and a two-row button container (refresh/trash/Ask & Correct then
   reply/re-analyze/re-analyze-failed) taking the remaining third with
   equal-width buttons, so long localized labels keep their spacing instead of
-  being squeezed into slivers. **Re-analyze
+  being squeezed into slivers. A third row holds the bulk and personalization
+  actions: **Clear expired mail** (asks first, then moves mail that has nothing
+  left to act on to the trash — completed analysis, no future deadline in the
+  mail or in the schedule entry it created, classified ad or info, never
+  manually re-classified, and at least a day old when it is an ad; the dialog
+  states the count, the service re-checks every record at delete time, and the
+  trash keeps it restorable), **Re-analyze all** (asks first, naming the real
+  mail count, then re-runs the pipeline over every stored mail) and **Mail
+  preferences** (below). Both bulk actions run on the *app's* worker, so a pane
+  remount from a language switch cannot cancel a half-finished purge, and a
+  failure (e.g. a remote service that does not implement the call) is reported
+  in the operation status instead of doing nothing. **Re-analyze
   failed** requires no selected row; it works through every failed record and
   keeps its live progress/final outcome in a dedicated status widget, so the
   `mailflow.mail.processed` refresh cannot erase feedback. An empty view shows
@@ -75,6 +86,15 @@ tears them down with the screen — nothing keeps ticking after it closes.
   `service.process_mail`. Already-stored mail is marked and skipped, so
   re-analyzing is a no-op instead of a duplicate. Sources that do not
   implement the optional history capability report that instead of failing.
+- **Mail preferences** (`profile.py: UserProfileModal`): the recipient
+  describes who they are and which mail matters to them (course/exam/lab
+  notices, internships, research opportunities — or what to ignore). The text
+  is stored once (`feedback.profile`) and handed to the model with **every**
+  analysis and smart action, so classification and matching follow that
+  person's situation instead of a generic student's. It is user-authored
+  context and travels in the user message (data about the recipient), never in
+  the system prompt, so a mail cannot impersonate it as an instruction. An
+  empty save clears it.
 - **Mail detail**: an **Ask & Correct** button opens a live LLM chat over
   the selected mail — left chat history, right panel with the current
   urgency / summary / reason and the original body, bottom input sent by

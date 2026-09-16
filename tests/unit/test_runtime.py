@@ -136,7 +136,7 @@ class FakeStorage:
     ) -> MailRecord | None:
         return None
 
-    async def delete_mail(self, record_id: str) -> None:
+    async def delete_mail(self, record_id: str, *, refresh_deleted_at: bool = False) -> None:
         pass
 
     async def list_trash(self) -> list[TrashRecord]:

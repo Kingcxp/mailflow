@@ -108,6 +108,43 @@ class TestSQLiteStorage:
         assert fetched is not None and fetched == restored
         assert await storage.list_trash() == []
 
+    async def test_user_delete_can_refresh_the_trash_window(
+        self, storage: SQLiteStorage, tmp_path: Path
+    ) -> None:
+        """An explicit purge restarts retention for a mail already in the trash.
+
+        Preserving the first deletion timestamp is right for the automatic
+        cleanup, but it would let a mail the user was just told is restorable
+        be purged for good minutes later.
+        """
+        import sqlite3
+
+        record = make_record("rewindow")
+        await storage.save_mail(record)
+        await storage.delete_mail("rewindow")
+        # simulate the both-stores state with an ancient deletion timestamp
+        stale = (utcnow() - timedelta(days=30)).timestamp()
+        db_path = str(tmp_path / "test.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE trash_records SET deleted_ts = ? WHERE record_id = ?",
+            (stale, "rewindow"),
+        )
+        conn.commit()
+        conn.close()
+        await storage.save_mail(record)
+        await storage.delete_mail("rewindow", refresh_deleted_at=True)
+
+        # the refreshed entry survives a cleanup that would have purged it
+        assert await storage.purge_trash(utcnow() - timedelta(days=7)) == 0
+        assert len(await storage.list_trash()) == 1
+
+        # the automatic path still preserves the first timestamp
+        await storage.restore_from_trash("rewindow")
+        await storage.delete_mail("rewindow")
+        preserved = (await storage.list_trash())[0].deleted_at
+        assert preserved >= utcnow() - timedelta(minutes=1)
+
     async def test_restore_unknown_id_returns_none(self, storage: SQLiteStorage) -> None:
         assert await storage.restore_from_trash("ghost") is None
 

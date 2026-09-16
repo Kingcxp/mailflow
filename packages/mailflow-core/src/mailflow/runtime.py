@@ -353,6 +353,7 @@ class MailFlowRuntime:
                 feedback_guidelines=(
                     await self._storage.get_preference("feedback.guidelines") or ""
                 ),
+                user_profile=(await self._storage.get_preference("feedback.profile") or ""),
             )
             record = MailRecord(
                 record_id=record_id,
