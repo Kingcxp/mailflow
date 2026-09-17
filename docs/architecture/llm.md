@@ -103,6 +103,12 @@ a plugin) holds both defaults:
   rejections used to read as an absolute rule), and they may never override a
   deadline or a required action.
 
+A processor's `fallback_llms` is kept in sync with the configured chain:
+adding a second LLM makes the model reachable as a fallback, and deleting one
+drops it from the list (an explicitly configured fallback list is preserved).
+Without that, a failing primary simply failed the analysis instead of routing
+to the next named LLM.
+
 The default chain when `[[processors]]` is absent is `rules` at priority 10
 and `llm-importance` at 20. `general.summary_language` (or the interface
 language) is injected as the output language unless the processor's

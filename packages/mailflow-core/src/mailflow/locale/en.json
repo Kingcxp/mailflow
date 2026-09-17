@@ -873,7 +873,10 @@
       "profile_hint": "Describe who you are and which mail matters to you — the AI reads this with every analysis and search, so its judgement follows your situation instead of a generic student's. Example: \"I am a CS master's student; course, exam and lab notices matter, as do internship and research opportunities; shopping, promotions and club socials do not.\"",
       "profile_saved": "Mail preferences saved — the AI will use them from now on.",
       "profile_cleared": "Mail preferences cleared.",
-      "profile_save_failed": "Could not save your preferences: {error}"
+      "profile_save_failed": "Could not save your preferences: {error}",
+      "reparse_stop": "Stop re-analysis",
+      "reparse_stopping": "Stopping after the current mail…",
+      "reparse_stopped": "Re-analysis stopped: {count} of {total} mail(s) analyzed."
     },
     "update": {
       "applied_title": "Applied updates",

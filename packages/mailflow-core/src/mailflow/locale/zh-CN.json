@@ -873,7 +873,10 @@
       "profile_hint": "描述你的身份与关心的邮件类型——AI 会在每次分析与查找时参考它，从而按你的实际情况判断，而不是按泛泛的“学生”来猜。例如：“我是计算机专业硕士生；课程、考试、实验室通知，以及实习和科研机会对我重要；购物促销和社团社交活动不重要。”",
       "profile_saved": "邮件偏好已保存——AI 之后会参考它。",
       "profile_cleared": "邮件偏好已清空。",
-      "profile_save_failed": "无法保存邮件偏好：{error}"
+      "profile_save_failed": "无法保存邮件偏好：{error}",
+      "reparse_stop": "终止重析",
+      "reparse_stopping": "将在当前邮件完成后停止…",
+      "reparse_stopped": "已终止重析：共分析 {count}/{total} 封。"
     },
     "update": {
       "applied_title": "已应用的更新",

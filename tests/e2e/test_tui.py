@@ -1540,3 +1540,91 @@ async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path
             await pilot.pause()
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_reparse_all_can_be_stopped_while_running(tmp_path: Path) -> None:
+    """The bulk button runs the job and, while it runs, ends it.
+
+    A full re-analysis of a real mailbox takes a long time on a local model;
+    being unable to stop it forced killing the app.
+    """
+    import asyncio
+    import queue
+
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.app import MailPane
+    from mailflow_tui.confirm import ConfirmModal
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+
+    gate = asyncio.Event()
+    started = asyncio.Event()
+    processed: list[str] = []
+    original = service.process_mail
+
+    async def slow_process(mail: Any, *, force: bool = False) -> Any:
+        started.set()
+        await gate.wait()
+        processed.append(mail.message_id)
+        return await original(mail, force=force)
+
+    service.process_mail = slow_process  # type: ignore[method-assign]
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(140, 45)) as pilot:
+            for _ in range(200):
+                if await service.count_mails() == 3:
+                    break
+                await pilot.pause(0.05)
+            pane = app.query_one(MailPane)
+            button = app.query_one("#btn-reparse-all", Button)
+
+            button.press()
+            dialog: ConfirmModal | None = None
+            for _ in range(80):
+                current = app.screen
+                if isinstance(current, ConfirmModal):
+                    dialog = current
+                    break
+                await pilot.pause(0.05)
+            assert dialog is not None
+            dialog.query_one("#confirm-run", Button).press()
+            for _ in range(80):
+                if started.is_set():
+                    break
+                await pilot.pause(0.05)
+            assert started.is_set(), "the bulk run must start"
+            # the same button is the stop control while the job is in flight
+            for _ in range(40):
+                if "Stop" in str(button.label):
+                    break
+                await pilot.pause(0.05)
+            assert "Stop" in str(button.label), f"label stayed {button.label!r}"
+
+            button.press()  # stop
+            await pilot.pause(0.1)
+            gate.set()
+            for _ in range(120):
+                if "Re-analyze" in str(button.label):
+                    break
+                await pilot.pause(0.05)
+            assert "Re-analyze" in str(button.label), "the button must return to its run label"
+            assert len(processed) == 1, f"stopped after the in-flight mail, got {processed}"
+            status = str(pane.query_one("#mail-operation-status", Static).render())
+            assert "stopped" in status.lower()
+            assert "1 of 3" in status
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
 from mailflow.settings import (
@@ -389,3 +391,47 @@ class TestPlaceholderBookkeeping:
         config = self._config_with_placeholder()
         with pytest.raises(SettingsError):
             apply_value(config, "llms[x].model", "m")
+
+
+class TestTimeoutMigration:
+    """Configs written by earlier versions pin timeouts a slow model cannot meet."""
+
+    def test_legacy_defaults_are_raised(self, tmp_path: Path) -> None:
+        from mailflow.config import load_config
+
+        path = tmp_path / "legacy.toml"
+        path.write_text(
+            '[general]\ntimezone = "UTC"\n'
+            '[[llms]]\nllm_id = "a"\nprovider = "openai-compatible"\ntimeout_seconds = 60\n'
+            '[[processors]]\nprocessor_id = "llm-importance"\n'
+            'provider = "llm-importance"\nllm = "a"\ntimeout_seconds = 30\n',
+            encoding="utf-8",
+        )
+
+        config = load_config(path)
+
+        assert [llm.timeout_seconds for llm in config.llms] == [120.0]
+        assert [p.timeout_seconds for p in config.processors] == [120.0]
+        assert config.timeouts_migrated is True
+
+    def test_a_deliberate_value_is_preserved(self, tmp_path: Path) -> None:
+        from mailflow.config import load_config
+
+        path = tmp_path / "custom.toml"
+        path.write_text(
+            '[general]\ntimezone = "UTC"\n'
+            '[[llms]]\nllm_id = "a"\nprovider = "openai-compatible"\ntimeout_seconds = 15\n'
+            '[[processors]]\nprocessor_id = "rules"\nprovider = "rules"\ntimeout_seconds = 5\n',
+            encoding="utf-8",
+        )
+
+        config = load_config(path)
+
+        assert [llm.timeout_seconds for llm in config.llms] == [15.0]
+        assert [p.timeout_seconds for p in config.processors] == [5.0]
+        assert config.timeouts_migrated is False
+
+    def test_fresh_defaults_need_no_migration(self) -> None:
+        config = MailFlowConfig()
+        assert config.llms == []  # nothing to migrate in a fresh config
+        assert config.timeouts_migrated is False

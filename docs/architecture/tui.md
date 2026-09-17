@@ -57,7 +57,9 @@ tears them down with the screen — nothing keeps ticking after it closes.
   manually re-classified, and at least a day old when it is an ad; the dialog
   states the count, the service re-checks every record at delete time, and the
   trash keeps it restorable), **Re-analyze all** (asks first, naming the real
-  mail count, then re-runs the pipeline over every stored mail) and **Mail
+  mail count, then re-runs the pipeline over every stored mail — while it
+  runs, that same button becomes **Stop re-analysis** and ends the job after
+  the mail in flight, reporting how many were analyzed) and **Mail
   preferences** (below). Both bulk actions run on the *app's* worker, so a pane
   remount from a language switch cannot cancel a half-finished purge, and a
   failure (e.g. a remote service that does not implement the call) is reported
@@ -232,6 +234,11 @@ schema knowledge of its own.
   and the Notifications status column. The contract is capability-based — a
   `mail_source` plugin may declare exactly the fields its transport needs
   (it could connect to a message platform that is only "like a mailbox").
+- LLM entries edit their **timeout** (and retry count) directly in the form:
+  a slow or cold model needs the wait for its first token plus the whole
+  answer, and a config written by an earlier version has its legacy 60 s/30 s
+  defaults raised automatically (see `mailflow.config.migrate_legacy_timeouts`;
+  a value the user chose deliberately is preserved).
 - Each form's **Test** button dispatches by group: mailbox forms run a
   real IMAP login probe (20s socket timeout), LLM forms send a one-shot
   completion (60s request budget, 120s wait, so a cold local model's

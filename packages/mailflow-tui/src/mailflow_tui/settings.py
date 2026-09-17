@@ -318,9 +318,11 @@ _LLM_PROVIDER_FIELDS: dict[str, tuple[_Extra, ...]] = {
 _LLM_PROVIDER_FIELDS["openai-compatible"] = _LLM_PROVIDER_FIELDS["openai-completions"]
 
 _MINIMAL_CORE_FIELDS: dict[str, frozenset[str]] = {
-    # everything else (timeouts, retries, fallback chains, raw mappings) is
-    # editable in config.toml or via `config set`; forms stay minimal
-    "llms": frozenset({"llm_id", "model", "provider"}),
+    # Everything else (retries, fallback chains, raw mappings) stays editable in
+    # config.toml or via `config set`; forms stay minimal. The timeout is part
+    # of the form on purpose: a slow or cold model that cannot answer within the
+    # default needs it raised, and hunting for it in TOML is not acceptable.
+    "llms": frozenset({"llm_id", "model", "provider", "timeout_seconds", "max_retries"}),
     "accounts": frozenset({"account_id", "provider", "email", "enabled"}),
 }
 

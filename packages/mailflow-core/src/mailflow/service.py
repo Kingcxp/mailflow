@@ -403,6 +403,12 @@ def _bind_llm_processor(config: MailFlowConfig) -> MailFlowConfig:
     the user hand-writing a [[processors]] entry: bind to the first LLM in
     the chain — which is also the fallback head — and leave explicit user
     bindings untouched.
+
+    The fallback list is re-derived whenever it is missing or points at ids
+    that no longer exist. It used to be written only when the primary binding
+    itself changed, so adding a second LLM left the processor without
+    fallbacks: the primary failing simply failed the analysis instead of
+    routing to the next named LLM.
     """
     if not config.llms:
         return config
@@ -422,6 +428,15 @@ def _bind_llm_processor(config: MailFlowConfig) -> MailFlowConfig:
     if processor.llm is None or processor.llm not in llm_ids:
         processor.llm = llm_ids[0]
         processor.fallback_llms = llm_ids[1:]
+        return config
+    known = set(llm_ids)
+    stale = [name for name in processor.fallback_llms if name not in known]
+    if stale or not processor.fallback_llms:
+        # keep the user's own explicit fallbacks; just drop dead ids and make
+        # sure the rest of the chain is reachable when none were configured
+        remaining = [name for name in processor.fallback_llms if name in known]
+        after_bound = [name for name in llm_ids if name != processor.llm]
+        processor.fallback_llms = remaining or after_bound
     return config
 
 
@@ -3277,6 +3292,13 @@ async def start_service(
         )
         if config_path is not None:
             service.config_path = Path(config_path)
+        if getattr(config, "timeouts_migrated", False) and service.config_path is not None:
+            # a legacy 30 s/60 s default was raised at load time: write it back so
+            # the file (and every settings screen reading it) shows the value in
+            # effect instead of the stale one
+            service.config.timeouts_migrated = False
+            write_config(service.config, service.config_path)
+            service.config.timeouts_migrated = True
         await service.start()
         return service
     except Exception:

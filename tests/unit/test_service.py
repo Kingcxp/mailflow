@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from mailflow.config import LLMConfig, MailFlowConfig
+from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
 from mailflow.contracts import LLMRouter, MailMessage, ProcessorResult, ReplyDraft
 from mailflow.domain import (
     ActionItem,
@@ -1274,3 +1275,78 @@ class TestUrgencySynonyms:
 
     def test_unknown_value_still_defaults_to_info(self) -> None:
         assert parse_urgency("??") is Urgency.INFO
+
+
+class TestLLMFallbackBinding:
+    """A failing primary must route to the next named LLM."""
+
+    @staticmethod
+    def _service(config: MailFlowConfig, tmp_path: Path) -> MailFlowService:
+        service = MailFlowService(
+            config=config,
+            registry=ComponentRegistry(),
+            plugin_manager=cast(Any, None),
+            storage=cast(Any, MemoryStorage()),
+            sources={},
+            router=cast(LLMRouter, None),
+            pipeline=PipelineEngine([]),
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            i18n=I18n(),
+        )
+        service.config_path = tmp_path / "cfg.toml"
+        return service
+
+    @staticmethod
+    def _processor(config: MailFlowConfig) -> Any:
+        return next(p for p in config.processors if p.provider == "llm-importance")
+
+    async def test_adding_a_second_llm_extends_the_binding(self, tmp_path: Path) -> None:
+        config = MailFlowConfig()
+        config.llms = [LLMConfig(llm_id="primary"), LLMConfig(llm_id="backup")]
+        service = self._service(config, tmp_path)
+
+        await service.add_config_entry("llms", {"llm_id": "third", "model": "m"})
+
+        bound = self._processor(service.config)
+        assert bound.llm == "primary"
+        assert "backup" in bound.fallback_llms and "third" in bound.fallback_llms
+
+    async def test_a_new_llm_becomes_reachable_after_a_deletion(self, tmp_path: Path) -> None:
+        """Deleting a chain member clears the binding; adding one re-fills it."""
+        config = MailFlowConfig()
+        config.llms = [LLMConfig(llm_id="primary"), LLMConfig(llm_id="backup")]
+        config.processors = [
+            ProcessorConfig(
+                processor_id="llm-importance",
+                provider="llm-importance",
+                llm="primary",
+                fallback_llms=["backup"],
+            )
+        ]
+        service = self._service(config, tmp_path)
+
+        await service.remove_config_entry("llms", 1)  # drop "backup"
+        assert self._processor(service.config).fallback_llms == []
+
+        await service.add_config_entry("llms", {"llm_id": "replacement", "model": "m"})
+
+        assert self._processor(service.config).fallback_llms == ["replacement"]
+
+    async def test_explicit_fallbacks_are_kept(self, tmp_path: Path) -> None:
+        config = MailFlowConfig()
+        config.llms = [LLMConfig(llm_id="primary"), LLMConfig(llm_id="backup")]
+        config.processors = [
+            ProcessorConfig(
+                processor_id="llm-importance",
+                provider="llm-importance",
+                llm="primary",
+                fallback_llms=["backup"],
+            )
+        ]
+        service = self._service(config, tmp_path)
+
+        await service.update_config_entry("llms", 0, {"model": "changed"})
+
+        assert self._processor(service.config).fallback_llms == ["backup"]

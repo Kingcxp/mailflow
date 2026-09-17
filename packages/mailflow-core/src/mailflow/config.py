@@ -8,6 +8,7 @@ placeholders are expanded; ``prefix-${VAR}-suffix`` is left literal.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic.fields import FieldInfo
 
 from mailflow.domain import Urgency
+
+logger = logging.getLogger("mailflow.config")
 
 _ENV_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
@@ -458,6 +461,9 @@ class MailFlowConfig(BaseModel):
     # file. Excluded from serialization so the placeholder — never the
     # resolved secret — is written back by ``write_config``.
     env_placeholders: PlaceholderMap = Field(default_factory=lambda: {}, exclude=True, repr=False)
+    timeouts_migrated: bool = Field(default=False, exclude=True, repr=False)
+    """True when ``load_config`` raised a legacy timeout default; the host
+    persists the config once so the file reflects the value in effect."""
 
     # -- cross-reference validation ------------------------------------------
 
@@ -533,7 +539,44 @@ def load_config(path: str | Path | None = None) -> MailFlowConfig:
     interpolated = _interpolate(raw, str(path) if path else "<memory>", placeholders)
     config = MailFlowConfig.model_validate(interpolated)
     config.env_placeholders = placeholders
+    if migrate_legacy_timeouts(config):
+        config.timeouts_migrated = True
     return config
+
+
+LEGACY_LLM_TIMEOUT = 60.0
+"""The per-request default shipped before first-token latency was accounted for."""
+LEGACY_PROCESSOR_TIMEOUT = 30.0
+"""The per-processor default that made cold local models time out on every mail."""
+
+
+def migrate_legacy_timeouts(config: MailFlowConfig) -> list[str]:
+    """Raise timeouts that still carry the old shipped defaults.
+
+    A config written by an earlier version pins 60 s per LLM request and 30 s
+    per processor. Those values are indistinguishable from "never touched", and
+    they demonstrably fail: waiting for a model's first token plus the answer
+    needs minutes, and every timeout turns into a fallback subject summary. The
+    migration only rewrites values that equal the old defaults, so a timeout the
+    user raised (or lowered on purpose to something else) is preserved. Returns
+    the changed option keys; the caller decides whether to persist.
+    """
+    changed: list[str] = []
+    for index, llm in enumerate(config.llms):
+        if llm.timeout_seconds == LEGACY_LLM_TIMEOUT:
+            llm.timeout_seconds = LLMConfig.model_fields["timeout_seconds"].default
+            changed.append(f"llms[{index}].timeout_seconds")
+    for index, processor in enumerate(config.processors):
+        if processor.timeout_seconds == LEGACY_PROCESSOR_TIMEOUT:
+            processor.timeout_seconds = ProcessorConfig.model_fields["timeout_seconds"].default
+            changed.append(f"processors[{index}].timeout_seconds")
+    if changed:
+        logger.info(
+            "raised legacy timeout defaults (%s); a slow model needs the wait for its "
+            "first token plus the whole answer",
+            ", ".join(changed),
+        )
+    return changed
 
 
 # ---------------------------------------------------------------------------
