@@ -430,11 +430,18 @@ async def test_ask_correct_modal_opens_and_sends(tmp_path: Path) -> None:
 
             app.query_one("#btn-ask-correct", Button).press()
 
-            # modal mounts asynchronously: poll for its input field
-            for _ in range(60):
-                if isinstance(app.screen, AskCorrectModal) and app.screen.query_one_optional(
-                    "#ask-correct-input", Input
-                ):
+            # The modal fills its info panel in on_mount, which runs after the
+            # widgets exist: poll for the rendered content, not for the input,
+            # or a slower runner reads an empty pane (this failed on Windows CI).
+            def _panel_shows_urgency() -> bool:
+                screen = app.screen
+                if not isinstance(screen, AskCorrectModal):
+                    return False
+                node = screen.query_one_optional("#ask-correct-urgency", Static)
+                return bool(node) and "urgent" in str(node.render()).lower()
+
+            for _ in range(120):
+                if _panel_shows_urgency():
                     break
                 await pilot.pause(0.05)
             assert isinstance(app.screen, AskCorrectModal)
@@ -554,8 +561,15 @@ async def test_failed_analysis_is_disclosed_without_a_fake_summary(tmp_path: Pat
                 "real urgency reason" in str(app.query_one("#mail-reason", Static).render()).lower()
             )
 
+            def _panel_shows_failure() -> bool:
+                screen = app.screen
+                if not isinstance(screen, AskCorrectModal):
+                    return False
+                node = screen.query_one_optional("#ask-correct-analysis-status", Static)
+                return bool(node) and "analysis failed" in str(node.render()).lower()
+
             app.push_screen(AskCorrectModal(service, record))
-            await _wait_until(pilot, lambda: isinstance(app.screen, AskCorrectModal))
+            await _wait_until(pilot, _panel_shows_failure)
             assert (
                 "analysis failed"
                 in str(
