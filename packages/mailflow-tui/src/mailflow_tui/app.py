@@ -113,6 +113,17 @@ def _event_select_value(event: Any) -> str:
     return "" if value is Select.NULL else str(value)
 
 
+def _select_ready(select: Any) -> bool:
+    """Whether a Select finished mounting its internal current-value label.
+
+    Textual builds a Select's value label on mount, and `set_options`/`value`
+    changes query that child (`#label`); poking the widget before its mount
+    raises NoMatches — a race that slower runners (Windows CI) lose. Every
+    Select poke below goes through this check.
+    """
+    return bool(getattr(select, "is_mounted", False)) and bool(select.query("#label"))
+
+
 def _apply_options(owner: Any, selector: str, pairs: list[tuple[str, str]]) -> None:
     """set_options + restore value, skipping identical lists so startup never
     pokes freshly mounted widgets (a Textual render race)."""
@@ -123,6 +134,16 @@ def _apply_options(owner: Any, selector: str, pairs: list[tuple[str, str]]) -> N
     signature = repr(pairs)
     if signatures.get(selector) == signature:
         return
+    if not _select_ready(select):
+        # the widget is still mounting: retry once it has been refreshed, and
+        # give up after a few tries rather than poking a half-built Select
+        attempts = getattr(owner, "_select_retries", 0)
+        if attempts >= 5:
+            return
+        owner._select_retries = attempts + 1
+        owner.call_after_refresh(lambda: _apply_options(owner, selector, pairs))
+        return
+    owner._select_retries = 0
     if not getattr(owner, "_options_seeded", False):
         # compose already mounted these exact options; poking a freshly
         # mounted Select races its internal label rendering (Textual #bug)
@@ -832,8 +853,8 @@ class MailPane(Vertical):
             self._urgency_suppress = True
             try:
                 select = self._urgency_select()
-                if select is not None and str(select.value) != wanted:
-                    select.value = wanted
+                if select is not None and _select_ready(select) and str(select.value) != wanted:
+                    select.value = wanted  # pyright: ignore[reportUnknownMemberType]
             finally:
                 self._urgency_suppress = False
         await self._show_selected()
@@ -1208,8 +1229,8 @@ class MailPane(Vertical):
         self._urgency_suppress = True
         try:
             select = self._urgency_select()
-            if select is not None and str(select.value) != wanted:
-                select.value = wanted
+            if select is not None and _select_ready(select) and str(select.value) != wanted:
+                select.value = wanted  # pyright: ignore[reportUnknownMemberType]
         finally:
             self._urgency_suppress = False
 
@@ -1735,7 +1756,7 @@ class ActionsPane(Vertical):
         if current not in {"all", *types}:
             # stale selection vanished from the list: reset without recursing
             type_select = _typed_select(self, "#actions-type-filter")
-            if type_select is not None:
+            if type_select is not None and _select_ready(type_select):
                 selected_value = type_select.value
                 if selected_value is not Select.NULL and str(selected_value) != "all":
                     type_select.value = "all"
@@ -2251,6 +2272,8 @@ class LogsPane(Vertical):
 
     def _set_level_options(self, level: Select[str]) -> None:
         current = level.value
+        if not _select_ready(level):
+            return
         level.set_options(
             [
                 (self._service.t("tui.logs_level_warning"), "WARNING"),
@@ -2271,7 +2294,7 @@ class LogsPane(Vertical):
         # drain() runs every second; poking Select.set_options with an
         # identical list re-renders the widget each tick — skip it
         signature = repr(pairs)
-        if getattr(self, "_source_signature", None) != signature:
+        if getattr(self, "_source_signature", None) != signature and _select_ready(source):
             source.set_options(pairs)  # pyright: ignore[reportUnknownMemberType]
             self._source_signature = signature
         if current is not Select.NULL and current != "":
@@ -2860,14 +2883,14 @@ class MarketPane(Vertical):
         categories = sorted({c for _r, p in self._entries for c in p.categories})
         if categories != getattr(self, "_categories", None):
             select = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
-            if select is not None:
+            if select is not None and _select_ready(select):
                 select.set_options(  # pyright: ignore[reportUnknownMemberType]
                     [("all", "all"), *[(self._category_label(c), c) for c in categories]]
                 )
                 self._categories = categories
         select = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
         desired = filter_value if filter_value in {*categories, "all"} else "all"
-        if select is not None and select.value != desired:  # pyright: ignore[reportUnknownMemberType]
+        if select is not None and _select_ready(select) and select.value != desired:  # pyright: ignore[reportUnknownMemberType]
             select.value = desired
         self._set_status("")
         if self._selected is not None:
