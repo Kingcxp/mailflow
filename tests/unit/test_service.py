@@ -1334,6 +1334,46 @@ class TestLLMFallbackBinding:
 
         assert self._processor(service.config).fallback_llms == ["replacement"]
 
+    async def test_pinning_a_model_to_the_top_moves_the_analysis(self, tmp_path: Path) -> None:
+        """The chain order is the routing policy: pinning a new model must make
+        analysis use it, or every mail waits out the old model's timeout first."""
+        config = MailFlowConfig()
+        config.llms = [LLMConfig(llm_id="old-slow"), LLMConfig(llm_id="new-fast")]
+        config.processors = [
+            ProcessorConfig(
+                processor_id="llm-importance",
+                provider="llm-importance",
+                llm="old-slow",
+                fallback_llms=["new-fast"],
+            )
+        ]
+        service = self._service(config, tmp_path)
+
+        # the user moves the fast model to the top of the chain
+        await service.move_config_entry("llms", 1, -1)
+
+        bound = self._processor(service.config)
+        assert [llm.llm_id for llm in service.config.llms] == ["new-fast", "old-slow"]
+        assert bound.llm == "new-fast"
+        assert bound.fallback_llms == ["old-slow"]
+
+    async def test_processor_timeout_covers_the_bound_request_budget(self, tmp_path: Path) -> None:
+        config = MailFlowConfig()
+        config.llms = [LLMConfig(llm_id="slow", timeout_seconds=300.0)]
+        config.processors = [
+            ProcessorConfig(
+                processor_id="llm-importance",
+                provider="llm-importance",
+                llm="slow",
+                timeout_seconds=30.0,
+            )
+        ]
+        service = self._service(config, tmp_path)
+
+        await service.update_config_entry("llms", 0, {"model": "changed"})
+
+        assert self._processor(service.config).timeout_seconds >= 300.0
+
     async def test_explicit_fallbacks_are_kept(self, tmp_path: Path) -> None:
         config = MailFlowConfig()
         config.llms = [LLMConfig(llm_id="primary"), LLMConfig(llm_id="backup")]

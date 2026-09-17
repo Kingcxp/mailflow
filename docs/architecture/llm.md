@@ -112,11 +112,16 @@ a plugin) holds both defaults:
   rejections used to read as an absolute rule), and they may never override a
   deadline or a required action.
 
-A processor's `fallback_llms` is kept in sync with the configured chain:
-adding a second LLM makes the model reachable as a fallback, and deleting one
-drops it from the list (an explicitly configured fallback list is preserved).
-Without that, a failing primary simply failed the analysis instead of routing
-to the next named LLM.
+A processor's binding follows the chain: **the first LLM is the one analysis
+uses**, whatever order the user puts the chain in, because the list order *is*
+the routing policy and pinning a model to the top is how a default is chosen.
+Moving a model to the top therefore moves the analysis onto it, and the previous
+primary stays reachable as the first fallback; deleting a model drops it from
+every list. Without that, a pinned new model was ignored (analysis kept hammering
+the old, slower endpoint first and every mail waited out its timeout) and a
+failing primary simply failed the analysis instead of routing to the next LLM.
+The processor's own timeout is raised to cover the bound model's request budget
+(+15 s), since a tighter processor bound can only cut the request off.
 
 The default chain when `[[processors]]` is absent is `rules` at priority 10
 and `llm-importance` at 20. `general.summary_language` (or the interface

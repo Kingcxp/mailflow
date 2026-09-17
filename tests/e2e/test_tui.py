@@ -1620,10 +1620,12 @@ async def test_reparse_all_can_be_stopped_while_running(tmp_path: Path) -> None:
                     break
                 await pilot.pause(0.05)
             assert "Re-analyze" in str(button.label), "the button must return to its run label"
-            assert len(processed) == 1, f"stopped after the in-flight mail, got {processed}"
+            # stopping cancels the worker, so it no longer waits for the call in
+            # flight to reach its own timeout
+            assert len(processed) <= 1, f"cancel must not keep analyzing, got {processed}"
             status = str(pane.query_one("#mail-operation-status", Static).render())
             assert "stopped" in status.lower()
-            assert "1 of 3" in status
+            assert "of 3" in status
             app.exit()
             await pilot.pause()
     finally:
@@ -1698,7 +1700,33 @@ async def test_bulk_reparse_stop_covers_reanalyze_failed_and_never_latches(
             await pilot.pause(0.1)
             assert not all_button.disabled, "a cancelled run must leave the button usable"
 
-            # 2. the failed-mails button is a run/stop control too
+            # 2. the single-mail button is a run/stop control too
+            app.query_one("#btn-reparse", Button).press()
+            for _ in range(80):
+                if started.is_set():
+                    break
+                await pilot.pause(0.05)
+            assert started.is_set(), "the single-mail re-analyze must start"
+            for _ in range(40):
+                if "Stop" in str(app.query_one("#btn-reparse", Button).label):
+                    break
+                await pilot.pause(0.05)
+            single = app.query_one("#btn-reparse", Button)
+            assert "Stop" in str(single.label), f"label stayed {single.label!r}"
+            assert failed_button.disabled and all_button.disabled
+            single.press()  # cancel: must end at once, not after the call's timeout
+            for _ in range(60):
+                if "Re-analyze" in str(single.label):
+                    break
+                await pilot.pause(0.05)
+            assert "Re-analyze" in str(single.label), "cancel must restore the button promptly"
+            assert not failed_button.disabled and not all_button.disabled
+            status = str(pane.query_one("#mail-operation-status", Static).render())
+            assert "stopped" in status.lower()
+            started.clear()
+
+            # 3. the failed-mails button is a run/stop control too
+            gate = asyncio.Event()
             failed_button.press()
             for _ in range(80):
                 if started.is_set():
@@ -1712,20 +1740,15 @@ async def test_bulk_reparse_stop_covers_reanalyze_failed_and_never_latches(
             assert "Stop" in str(failed_button.label), f"label stayed {failed_button.label!r}"
             assert all_button.disabled, "the other bulk button parks while a run is in flight"
 
-            failed_button.press()  # stop
-            await pilot.pause(0.1)
-            gate.set()
+            failed_button.press()  # stop: cancels the worker, so it ends at once
             for _ in range(120):
                 if "Re-analyze" in str(failed_button.label):
                     break
                 await pilot.pause(0.05)
             assert "Re-analyze" in str(failed_button.label)
-            assert len(processed) == 1
-            status = str(pane.query_one("#mail-operation-status", Static).render())
-            assert "stopped" in status.lower()
             assert not all_button.disabled, "the parked button must come back"
 
-            # 3. and a new run can still start afterwards
+            # 4. and a new run can still start afterwards
             gate.set()
             started.clear()
             failed_button.press()

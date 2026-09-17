@@ -1246,12 +1246,19 @@ class MailPane(Vertical):
                 self._purge_expired(), exclusive=True, group="mail-purge", exit_on_error=False
             )
             return
-        if button_id in self._BULK_REPARSE_BUTTONS:
+        if button_id in self._REPARSE_BUTTONS:
             if self._reparse_active():
                 self._stop_reparse()
                 return
-            coro = self._reparse_all() if button_id == "btn-reparse-all" else self._reparse_failed()
-            self._start_bulk_reparse(button_id, coro)
+            # build exactly one coroutine: constructing all three and using one
+            # leaks the others ("coroutine was never awaited")
+            if button_id == "btn-reparse":
+                coro = self._reparse_one()
+            elif button_id == "btn-reparse-failed":
+                coro = self._reparse_failed()
+            else:
+                coro = self._reparse_all()
+            self._start_reparse(button_id, coro)
             return
         if button_id == "btn-profile":
             cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
@@ -1282,17 +1289,6 @@ class MailPane(Vertical):
                 AskCorrectModal(self._service, record)
             )
             return
-        if button_id == "btn-reparse":
-            record = await self._service.get_mail(self._selected_id)
-            if record is None:
-                return
-            self.run_worker(
-                self._reparse_batch([record.mail]),
-                exclusive=True,
-                group="mail-reparse",
-                exit_on_error=False,
-            )
-            return
         if button_id == "btn-reply":
             if getattr(self._service, "remote", False):
                 self._set_static(
@@ -1307,49 +1303,68 @@ class MailPane(Vertical):
                     ReplyModal(self._service, record)
                 )
 
+    _REPARSE_CONCURRENCY = 3
+    """Mails analyzed at once during a bulk run: a slow endpoint makes a strictly
+    sequential sweep feel endless, while a small window keeps rate limits sane."""
+
     async def _reparse_batch(self, mails: list[Any]) -> None:
         """Force re-analysis for the given messages, with per-mail progress.
 
-        Checks the stop flag between mails: a bulk run over a whole mailbox can
-        take an hour on a slow local model, and the user must be able to end it
-        without killing the app. Whatever was already analyzed stays analyzed.
+        Runs a small window of mails concurrently, stops when the user asks to
+        (the worker is cancelled, so an in-flight request ends at once instead
+        of holding the UI until its timeout) and reports how many were really
+        analyzed. Whatever finished stays analyzed.
         """
         total = len(mails)
         done = 0
         failed: list[str] = []
-        stopped = False
-        for position, mail in enumerate(mails, start=1):
-            if self._reparse_stop:
-                stopped = True
-                break
-            subject_short = escape((mail.subject or "")[:36])
-            self._set_operation_status(
-                f"[cyan]{self._service.t('tui.history_progress', position=position, total=total)} "
-                f"{subject_short}[/cyan]"
-            )
-            try:
-                fresh = await self._service.process_mail(mail, force=True)
-                if fresh is not None:
-                    failures = [note for note in fresh.processor_notes if note.status == "failed"]
-                    if failures:
+        completed = 0
+        lock = asyncio.Lock()
+        window = asyncio.Semaphore(self._REPARSE_CONCURRENCY)
+
+        async def _analyze(mail: Any) -> None:
+            nonlocal done, completed
+            async with window:
+                if self._reparse_stop or not self.is_mounted:
+                    return
+                async with lock:
+                    position = completed + 1
+                    completed += 1
+                subject_short = escape((mail.subject or "")[:36])
+                self._set_operation_status(
+                    f"[cyan]{self._service.t('tui.history_progress', position=position, total=total)} "
+                    f"{subject_short}[/cyan]"
+                )
+                try:
+                    fresh = await self._service.process_mail(mail, force=True)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    async with lock:
+                        failed.append(f"{mail.subject[:40]}: {error_detail(self._service, exc)}")
+                    return
+                async with lock:
+                    if fresh is not None and any(
+                        note.status == "failed" for note in fresh.processor_notes
+                    ):
                         # the run itself failed (rate limit, timeout): the record
-                        # keeps its previous analysis, so report the mail
-                        # instead of counting it as a success
-                        failed.append(
-                            f"{mail.subject[:40]}: {error_detail(self._service, failures[-1].message)}"
+                        # keeps its previous analysis, so report the mail instead
+                        # of counting it as a success
+                        note = next(
+                            note for note in fresh.processor_notes if note.status == "failed"
                         )
-                        continue
-                done += 1
-            except asyncio.CancelledError:
-                # propagate: swallowing it here left the worker alive after the
-                # pane was remounted or another run superseded this one, and the
-                # caller's bookkeeping then never ran
-                await self.refresh_mail()
-                raise
-            except Exception as exc:
-                failed.append(f"{mail.subject[:40]}: {error_detail(self._service, exc)}")
-        await self.refresh_mail()
-        if stopped:
+                        failed.append(
+                            f"{mail.subject[:40]}: {error_detail(self._service, note.message)}"
+                        )
+                        return
+                    done += 1
+
+        if self.is_mounted:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.gather(*(_analyze(mail) for mail in mails))
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await self.refresh_mail()
+        if self._reparse_stop:
             self._set_operation_status(
                 f"[yellow]{self._service.t('tui.reparse_stopped', count=done, total=total)}[/yellow]"
             )
@@ -1385,10 +1400,11 @@ class MailPane(Vertical):
         except Exception as exc:  # remote mode, provider failures
             self._report_bulk_failure(exc)
 
-    # both long-running bulk buttons share one run/stop affordance
-    _BULK_REPARSE_BUTTONS: ClassVar[dict[str, str]] = {
-        "btn-reparse-all": "tui.btn_reparse_all",
+    # every re-analysis button: the one that starts a run becomes its cancel
+    _REPARSE_BUTTONS: ClassVar[dict[str, str]] = {
+        "btn-reparse": "tui.btn_reparse",
         "btn-reparse-failed": "tui.btn_reparse_failed",
+        "btn-reparse-all": "tui.btn_reparse_all",
     }
 
     def _reparse_active(self) -> bool:
@@ -1401,13 +1417,13 @@ class MailPane(Vertical):
         worker = self._reparse_worker
         return bool(worker is not None and not worker.is_finished)
 
-    def _set_bulk_reparse_buttons(self, running_button: str | None) -> None:
-        """Label the active button as the stop control and park the other.
+    def _set_reparse_buttons(self, running_button: str | None) -> None:
+        """Label the active button as its cancel control and park the others.
 
-        Only one bulk run may be in flight: a second one would supersede this
-        worker (same exclusive group) and silently drop the work in progress.
+        Only one re-analysis may be in flight: a second one would supersede the
+        running worker (same exclusive group) and silently drop its work.
         """
-        for button_id, key in self._BULK_REPARSE_BUTTONS.items():
+        for button_id, key in self._REPARSE_BUTTONS.items():
             button = self.query_one_optional(f"#{button_id}", Button)
             if button is None:
                 continue
@@ -1420,34 +1436,64 @@ class MailPane(Vertical):
                 button.variant = "primary"
                 button.disabled = running_button is not None
 
-    def _start_bulk_reparse(self, button_id: str, action: Any) -> None:
-        """Run one bulk re-analysis and always restore the buttons afterwards.
+    def _start_reparse(self, button_id: str, action: Any) -> None:
+        """Run one re-analysis and always restore the buttons afterwards.
 
-        The lifecycle lives here, not in each job: whichever path the job takes
-        (finished, stopped, cancelled, raised), the button that became the stop
-        control must turn back into its run label, or the user is left with a
-        control that can never start a run again.
+        The lifecycle lives here, not in each job: whichever way the job ends
+        (finished, stopped, cancelled, raised), the button that became the
+        cancel control must turn back into its run label, or the user is left
+        with a control that can never start a run again.
         """
 
         async def _run() -> None:
             try:
                 await action
             finally:
-                self._finish_bulk_reparse()
+                self._reparse_stop = False
+                self._set_reparse_buttons(None)
 
         self._reparse_stop = False
-        self._set_bulk_reparse_buttons(button_id)
+        self._set_reparse_buttons(button_id)
         self._reparse_worker = self.run_worker(
             _run(), exclusive=True, group="mail-reparse", exit_on_error=False
         )
 
-    def _finish_bulk_reparse(self) -> None:
-        self._reparse_stop = False
-        self._set_bulk_reparse_buttons(None)
-
     def _stop_reparse(self) -> None:
+        """End the running re-analysis now.
+
+        Cancelling the worker is what makes this immediate: setting a flag only
+        would leave the UI in "cancelling" until the in-flight request hit its
+        own timeout, which is exactly what made the control look stuck.
+        """
         self._reparse_stop = True
+        worker = self._reparse_worker
+        if worker is not None and not worker.is_finished:
+            worker.cancel()
         self._set_operation_status(f"[yellow]{self._service.t('tui.reparse_stopping')}[/yellow]")
+
+    async def _reparse_one(self) -> None:
+        """Re-analyze the selected mail, with the same run/cancel controls."""
+        try:
+            if self._selected_id is None:
+                self._set_operation_status(
+                    f"[yellow]{self._service.t('tui.history_none_selected')}[/yellow]"
+                )
+                return
+            record = await self._service.get_mail(self._selected_id)
+            if record is None:
+                self._set_operation_status(
+                    f"[yellow]{self._service.t('tui.mail_no_match')}[/yellow]"
+                )
+                return
+            subject_short = escape((record.mail.subject or "")[:36])
+            self._set_operation_status(
+                f"[cyan]{self._service.t('tui.reparse_one_start', subject=subject_short)}[/cyan]"
+            )
+            await self._reparse_batch([record.mail])
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._report_bulk_failure(exc)
 
     async def _reparse_all(self) -> None:
         """Re-analyze every stored mail, after stating the real count.

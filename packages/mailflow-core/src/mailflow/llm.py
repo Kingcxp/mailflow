@@ -69,9 +69,11 @@ class LLMRouterImpl:
                     temperature=0.0,
                     options={"max_tokens": 4},
                 ),
-                # a cold load legitimately takes minutes; the user's first mail
-                # must not be the one paying for it
-                timeout=max(300.0, float(config.timeout_seconds or 0) or 0.0),
+                # honour the configured request budget (with a small floor, since
+                # a cold load needs some room) instead of granting the warm-up a
+                # longer allowance than any other request: a five-minute outlier
+                # at startup reads as "the timeout never fires"
+                timeout=max(60.0, float(config.timeout_seconds or 0) or 0.0),
             )
         except Exception as exc:
             logger.warning(

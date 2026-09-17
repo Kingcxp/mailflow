@@ -215,9 +215,11 @@ async def test_editing_an_llm_id_saves_and_rewrites_references(tmp_path: Path) -
             saved = await service.update_config_entry("llms", 1, payload)
 
             assert [llm.llm_id for llm in saved.llms] == ["alpha", "beta-2"]
-            # the derived chain and the processor binding follow the rename
+            # the derived chain follows the rename, and the analysis processor
+            # follows the chain head (the list order is the routing policy)
             assert saved.llms[0].fallback == ["beta-2"]
-            assert saved.processors[0].llm == "beta-2"
+            assert saved.processors[0].llm == "alpha"
+            assert saved.processors[0].fallback_llms == ["beta-2"]
             # and the repaired config is what got written to disk
             written = (tmp_path / "cfg.toml").read_text(encoding="utf-8")
             assert 'llm_id = "beta-2"' in written

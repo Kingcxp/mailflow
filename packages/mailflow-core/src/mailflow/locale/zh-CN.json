@@ -878,7 +878,8 @@
       "reparse_stopping": "将在当前邮件完成后停止…",
       "reparse_stopped": "已终止重析：共分析 {count}/{total} 封。",
       "llms_already_first": "已经是首选（链首）。",
-      "llms_already_last": "已经是最后一个备选。"
+      "llms_already_last": "已经是最后一个备选。",
+      "reparse_one_start": "正在重新解析 {subject}…"
     },
     "update": {
       "applied_title": "已应用的更新",

@@ -878,7 +878,8 @@
       "reparse_stopping": "Stopping after the current mail…",
       "reparse_stopped": "Re-analysis stopped: {count} of {total} mail(s) analyzed.",
       "llms_already_first": "Already the default (top of the chain).",
-      "llms_already_last": "Already the last fallback."
+      "llms_already_last": "Already the last fallback.",
+      "reparse_one_start": "Re-analyzing {subject}…"
     },
     "update": {
       "applied_title": "Applied updates",

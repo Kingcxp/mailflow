@@ -59,11 +59,15 @@ tears them down with the screen — nothing keeps ticking after it closes.
   trash keeps it restorable), **Re-analyze all** (asks first, naming the real
   mail count, then re-runs the pipeline over every stored mail — while it
   runs, that same button becomes **Stop re-analysis** and ends the job after
-  the mail in flight, reporting how many were analyzed; **Re-analyze failed**
-  works the same way, only one bulk run can be in flight (the other button
-  parks), and the started job always restores both buttons, so a stopped or
+  the mail in flight, reporting how many were analyzed; **Re-analyze** (the
+  selected mail) and **Re-analyze failed** work the same way, only one
+  re-analysis can be in flight (the others park), cancelling **cancels the
+  worker** so an in-flight request ends at once instead of holding the UI until
+  its own timeout, and the lifecycle always restores every button — a stopped or
   cancelled run can never leave a control that refuses to start again) and
-  **Mail preferences** (below). Both bulk actions run on the *app's* worker, so a pane
+  **Mail preferences** (below). A bulk run analyzes three mails at a time: a
+  strictly sequential sweep of a real mailbox feels endless even on a fast
+  endpoint. Both bulk actions run on the *app's* worker, so a pane
   remount from a language switch cannot cancel a half-finished purge, and a
   failure (e.g. a remote service that does not implement the call) is reported
   in the operation status instead of doing nothing. **Re-analyze

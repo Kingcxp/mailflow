@@ -428,15 +428,44 @@ def _bind_llm_processor(config: MailFlowConfig) -> MailFlowConfig:
     if processor.llm is None or processor.llm not in llm_ids:
         processor.llm = llm_ids[0]
         processor.fallback_llms = llm_ids[1:]
-        return config
+    elif processor.llm != llm_ids[0]:
+        # The list order *is* the routing policy: the first entry is the default
+        # every processor without its own binding uses. Pinning a new model to
+        # the top of the chain (or moving one there) must therefore move the
+        # analysis onto it — keeping a stale primary meant every mail first
+        # waited out the old model's timeout before the new one was tried, which
+        # reads as "the timeout never fires". The previous primary stays
+        # reachable as the first fallback.
+        previous_primary = processor.llm
+        processor.llm = llm_ids[0]
+        rest = [name for name in llm_ids[1:] if name != previous_primary]
+        processor.fallback_llms = [previous_primary, *rest]
     known = set(llm_ids)
-    stale = [name for name in processor.fallback_llms if name not in known]
-    if stale or not processor.fallback_llms:
-        # keep the user's own explicit fallbacks; just drop dead ids and make
-        # sure the rest of the chain is reachable when none were configured
-        remaining = [name for name in processor.fallback_llms if name in known]
-        after_bound = [name for name in llm_ids if name != processor.llm]
-        processor.fallback_llms = remaining or after_bound
+    processor.fallback_llms = [name for name in processor.fallback_llms if name in known]
+    if processor.llm in processor.fallback_llms:
+        processor.fallback_llms = [
+            name for name in processor.fallback_llms if name != processor.llm
+        ]
+    if not processor.fallback_llms:
+        # an empty list means "everything after the primary", the documented
+        # routing policy: deleting the last fallback must not leave the rest of
+        # the chain unreachable
+        processor.fallback_llms = [name for name in llm_ids if name != processor.llm]
+    # The processor bound wraps the whole request, so it can never be tighter
+    # than the request budget it contains: a 30 s processor over a 120 s request
+    # timeout only ever cuts the model off.
+    primary = next((llm for llm in config.llms if llm.llm_id == processor.llm), None)
+    if primary is not None:
+        floor = float(primary.timeout_seconds) + 15.0
+        if processor.timeout_seconds < floor:
+            logger.info(
+                "processor %r timeout raised to %.0fs to cover %r's %.0fs request budget",
+                processor.processor_id,
+                floor,
+                primary.llm_id,
+                primary.timeout_seconds,
+            )
+            processor.timeout_seconds = floor
     return config
 
 
@@ -2293,8 +2322,16 @@ schedule/calendar. Choose `search` when unsure."""
         return updated
 
     async def move_config_entry(self, group: str, index: int, offset: int) -> MailFlowConfig:
-        """Reorder one entry; for LLMs the order *is* the fallback chain."""
+        """Reorder one entry; for LLMs the order *is* the fallback chain.
+
+        Reordering is how a user picks the default model, so the processors that
+        follow the chain have to be rebound here too — otherwise the analysis
+        keeps using whatever was first before the move.
+        """
         updated = move_entry(self.config, group, index, offset)
+        if group == "llms":
+            updated = normalize_llm_chain(updated)
+            updated = _bind_llm_processor(updated)
         await self._persist_config(updated, group)
         return updated
 
