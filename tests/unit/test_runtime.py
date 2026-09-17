@@ -23,6 +23,7 @@ from mailflow.domain import (
     MailAddress,
     MailAnalysis,
     MailRecord,
+    ProcessorNote,
     TrashRecord,
     Urgency,
 )
@@ -99,6 +100,9 @@ class FakeStorage:
         pass
 
     async def save_mail(self, record: MailRecord) -> None:
+        # the real backends upsert by record id; replace so a re-analysis is
+        # observable in the persisted state
+        self.saved = [r for r in self.saved if r.record_id != record.record_id]
         self.saved.append(record)
 
     async def get_mail(self, record_id: str) -> MailRecord | None:
@@ -901,3 +905,254 @@ class TestHourlySummary:
         await runtime._fire_hourly_summary(now, config.general)  # pyright: ignore[reportPrivateUsage]
         # group:888 opted out; group:999 (never toggled) still receives
         assert pusher.pushed == ["group:999: briefing"]
+
+
+class TestFailedReanalysisKeepsPrevious:
+    """A failed re-analysis must not throw away a working analysis."""
+
+    @staticmethod
+    async def _runtime_with(pipeline: Any) -> tuple[MailFlowRuntime, FakeStorage]:
+        storage = FakeStorage()
+        previous_mail = make_mail(subject="Original mail")
+        record = MailRecord(
+            record_id=previous_mail.normalized_message_id(),
+            mail=previous_mail,
+            auto_urgency=Urgency.URGENT,
+            analysis=MailAnalysis(
+                summary="Good previous summary",
+                urgency=Urgency.URGENT,
+                reason="previous reason",
+                action_items=[
+                    ActionItem(
+                        item_id="m1-1",
+                        mail_id="m1",
+                        summary="Collect the document",
+                        action_type="errand",
+                        due_at=datetime(2030, 1, 1, tzinfo=UTC),
+                    )
+                ],
+            ),
+        )
+        await storage.save_mail(record)
+        runtime = MailFlowRuntime(
+            MailFlowConfig.model_validate(
+                {"storage": {"provider": "fake"}, "general": {"workers": 1}}
+            ),
+            sources={},
+            pipeline=pipeline,
+            storage=storage,
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            account_configs=[],
+        )
+        return runtime, storage
+
+    async def test_failed_run_keeps_the_previous_analysis(self) -> None:
+        class FailingPipeline:
+            router = None
+
+            async def process(self, mail: Any, account_id: str, **kwargs: Any) -> Any:
+                # what the pipeline returns when every processor failed
+                return (
+                    MailAnalysis(
+                        summary=mail.subject,
+                        urgency=Urgency.INFO,
+                        summary_is_fallback=True,
+                    ),
+                    [
+                        ProcessorNote(
+                            processor_id="llm-importance",
+                            plugin_id="mailflow-core",
+                            status="failed",
+                            message="failed: processor timed out after 120 seconds",
+                            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+                            finished_at=datetime(2026, 1, 1, tzinfo=UTC),
+                        )
+                    ],
+                    "",
+                    "",
+                )
+
+        runtime, storage = await self._runtime_with(FailingPipeline())
+        mail = (await storage.list_mails())[0].mail
+
+        stored = await runtime.process_mail_now(mail, force=True)
+
+        assert stored is not None
+        # the previous content survives, the failure is disclosed
+        assert stored.summary == "Good previous summary"
+        assert stored.effective_urgency is Urgency.URGENT
+        assert stored.analysis is not None and stored.analysis.reason == "previous reason"
+        assert [item.summary for item in stored.action_items] == ["Collect the document"]
+        assert any(note.status == "failed" for note in stored.processor_notes)
+        persisted = await storage.get_mail(stored.record_id)
+        assert persisted is not None and persisted.summary == "Good previous summary"
+
+    async def test_successful_run_replaces_the_previous_analysis(self) -> None:
+        class WorkingPipeline:
+            router = None
+
+            async def process(self, mail: Any, account_id: str, **kwargs: Any) -> Any:
+                return (
+                    MailAnalysis(summary="Fresh summary", urgency=Urgency.INFO),
+                    [
+                        ProcessorNote(
+                            processor_id="llm-importance",
+                            plugin_id="mailflow-core",
+                            status="success",
+                            message="ok",
+                            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+                            finished_at=datetime(2026, 1, 1, tzinfo=UTC),
+                        )
+                    ],
+                    "llm-1",
+                    "backend",
+                )
+
+        runtime, storage = await self._runtime_with(WorkingPipeline())
+        mail = (await storage.list_mails())[0].mail
+
+        stored = await runtime.process_mail_now(mail, force=True)
+
+        assert stored is not None
+        assert stored.summary == "Fresh summary"
+        assert stored.effective_urgency is Urgency.INFO
+        assert [note.status for note in stored.processor_notes] == ["success"]
+
+    async def test_first_analysis_failure_is_stored_as_a_fallback(self) -> None:
+        """Without a previous analysis there is nothing to keep."""
+
+        class FailingPipeline:
+            router = None
+
+            async def process(self, mail: Any, account_id: str, **kwargs: Any) -> Any:
+                return (
+                    MailAnalysis(
+                        summary=mail.subject, urgency=Urgency.INFO, summary_is_fallback=True
+                    ),
+                    [
+                        ProcessorNote(
+                            processor_id="llm-importance",
+                            plugin_id="mailflow-core",
+                            status="failed",
+                            message="failed: provider down",
+                            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+                            finished_at=datetime(2026, 1, 1, tzinfo=UTC),
+                        )
+                    ],
+                    "",
+                    "",
+                )
+
+        runtime, storage = await self._runtime_with(FailingPipeline())
+        mail = (await storage.list_mails())[0].mail
+        storage.saved.clear()  # no previous record to keep
+
+        stored = await runtime.process_mail_now(mail, force=True)
+
+        assert stored is not None
+        assert stored.analysis_is_fallback
+        assert any(note.status == "failed" for note in stored.processor_notes)
+
+
+class TestSourcesSurviveUnrelatedEdits:
+    """An LLM/notifier edit must not tear down live source connections."""
+
+    class _CountingSource:
+        def __init__(self) -> None:
+            self.closed = 0
+            self.started = 0
+
+        async def run(self, emit: Any, stop_event: Any) -> None:
+            self.started += 1
+            await stop_event.wait()
+
+        async def send_reply(self, mail_id: str, draft: Any) -> None:
+            return None
+
+        async def close(self) -> None:
+            self.closed += 1
+
+    async def _runtime(self) -> tuple[MailFlowRuntime, Any]:
+        account = MailAccountConfig(account_id="acct-1", provider="fake")
+        source = self._CountingSource()
+        runtime = MailFlowRuntime(
+            MailFlowConfig.model_validate(
+                {
+                    "general": {"workers": 1},
+                    "accounts": [{"account_id": "acct-1", "provider": "fake"}],
+                }
+            ),
+            sources={"acct-1": source},
+            pipeline=PipelineEngine([]),
+            storage=FakeStorage(),
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            account_configs=[account],
+        )
+        await runtime.start()
+        await asyncio.sleep(0)  # let the source task enter run()
+        return runtime, source
+
+    async def test_unchanged_accounts_keep_the_same_source_instance(self) -> None:
+        runtime, source = await self._runtime()
+        try:
+            assert source.started == 1
+            same_config = runtime._config  # pyright: ignore[reportPrivateUsage]
+
+            await runtime.reconfigure(
+                config=same_config,
+                sources={"acct-1": self._CountingSource()},
+                pipeline=PipelineEngine([]),
+                notifiers=[],
+                notifier_configs=[],
+            )
+
+            # the running adapter (and its connection) is untouched
+            assert source.closed == 0
+            assert source.started == 1
+            assert runtime._sources["acct-1"] is source  # pyright: ignore[reportPrivateUsage]
+        finally:
+            await runtime.stop()
+
+    async def test_a_changed_account_restarts_the_source(self) -> None:
+        runtime, source = await self._runtime()
+        try:
+            changed = MailFlowConfig.model_validate(
+                {
+                    "general": {"workers": 1},
+                    "accounts": [{"account_id": "acct-1", "provider": "fake", "email": "new"}],
+                }
+            )
+
+            await runtime.reconfigure(
+                config=changed,
+                sources={"acct-1": self._CountingSource()},
+                pipeline=PipelineEngine([]),
+                notifiers=[],
+                notifier_configs=[],
+            )
+
+            assert source.closed == 1
+        finally:
+            await runtime.stop()
+
+    async def test_plugin_changes_can_force_a_restart(self) -> None:
+        runtime, source = await self._runtime()
+        try:
+            same_config = runtime._config  # pyright: ignore[reportPrivateUsage]
+
+            await runtime.reconfigure(
+                config=same_config,
+                sources={"acct-1": self._CountingSource()},
+                pipeline=PipelineEngine([]),
+                notifiers=[],
+                notifier_configs=[],
+                restart_sources=True,
+            )
+
+            assert source.closed == 1
+        finally:
+            await runtime.stop()

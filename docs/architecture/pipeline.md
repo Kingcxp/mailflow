@@ -33,6 +33,20 @@ For each mail, in order:
 3. Append a `ProcessorNote` (success/failed) with timestamps.
 4. `ProcessorDecision.STOP` or a `stop`-policy failure halts the chain.
 
+## Re-analysis
+
+The store upserts by record id, so a re-analysis normally replaces the stored
+record with the fresh result. The exception is a **failed** run — the model
+timed out, was rate-limited or answered unusably, i.e. the result is a
+subject fallback or carries a failed processor note. When the mail already had
+a completed analysis, that previous analysis (summary, reason, urgency, action
+items and any manual override) is kept and the new failure is appended to the
+note trail, so the mail reads "shows the last good analysis, the latest attempt
+failed" instead of regressing to its subject. The on-demand path reports those
+notes back to its caller, which is how the TUI counts such a mail as failed
+rather than as a success. There is nothing to keep on a first analysis, so the
+failure is stored with its fallback summary as before.
+
 ## Fallback-summary guarantee
 
 If no processor produced a summary, the pipeline fills it from the subject

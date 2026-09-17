@@ -24,6 +24,8 @@ logger = logging.getLogger("mailflow.runtime")
 reminder_logger = logging.getLogger("mailflow.reminder")
 
 _WAIT_TIMEOUT = 0.5  # seconds between queue polls while stopping
+_NOTES_KEPT = 20
+"""Processor notes retained per record; a kept analysis accumulates failures."""
 _EVENT_PREFIX = "mailflow."
 
 
@@ -181,30 +183,55 @@ class MailFlowRuntime:
         pipeline: PipelineEngine,
         notifiers: list[Notifier],
         notifier_configs: list[NotifierConfig],
+        restart_sources: bool | None = None,
     ) -> None:
         """Hot-swap components after a settings change; the queue, workers
-        and scheduler loops keep running. Source tasks are restarted (their
-        adapters hold connections and per-adapter state); a restarted IMAP
-        source resumes from its persisted watermark semantics.
+        and scheduler loops keep running.
+
+        Source tasks are restarted only when the account configuration (or an
+        adapter's class) actually changed. Restarting them unconditionally made
+        every settings edit — reordering LLMs, editing a notifier, moving a
+        list entry — tear down live connections and, because a source parked in
+        a blocking connect cannot be cancelled, wait up to five seconds before
+        the edit appeared. ``restart_sources=True`` forces the old behaviour
+        (used when plugins were loaded/unloaded, since adapter implementations
+        can change under an unchanged provider id).
 
         Storage swaps are deliberately not supported: a storage change still
         requires a restart.
         """
-        old_source_tasks = [task for task in self._tasks if task.get_name().startswith("source-")]
-        for task in old_source_tasks:
-            task.cancel()
-        if old_source_tasks:
-            # A source parked in a blocking connect (to_thread cannot be
-            # interrupted) must not stall a settings change indefinitely:
-            # wait briefly, then proceed — the cancelled tasks finish in the
-            # background and are already removed from the task list.
-            await asyncio.wait(old_source_tasks, timeout=5.0)
-        self._tasks = [task for task in self._tasks if task not in old_source_tasks]
-        for source in self._sources.values():
-            with suppress(Exception):
-                await source.close()
+        if restart_sources is None:
+            restart_sources = self._sources_changed(config, sources)
+        if restart_sources:
+            old_source_tasks = [
+                task for task in self._tasks if task.get_name().startswith("source-")
+            ]
+            for task in old_source_tasks:
+                task.cancel()
+            if old_source_tasks:
+                # A source parked in a blocking connect (to_thread cannot be
+                # interrupted) must not stall a settings change indefinitely:
+                # wait briefly, then proceed — the cancelled tasks finish in
+                # the background and are already removed from the task list.
+                await asyncio.wait(old_source_tasks, timeout=5.0)
+            self._tasks = [task for task in self._tasks if task not in old_source_tasks]
+            for source in self._sources.values():
+                with suppress(Exception):
+                    await source.close()
         self._config = config
         self._account_configs = list(config.accounts)
+        if not restart_sources:
+            # the running adapters are still the right ones: keep them (and
+            # their live connections) instead of the freshly built copies
+            self._pipeline = pipeline
+            self._notifiers = list(notifiers)
+            self._notifier_configs = list(notifier_configs)
+            await self._events.emit(f"{_EVENT_PREFIX}runtime.reconfigured")
+            logger.info(
+                "runtime reconfigured without restarting sources: %d account(s)",
+                len(self._account_configs),
+            )
+            return
         self._sources = dict(sources)
         self._pipeline = pipeline
         self._notifiers = list(notifiers)
@@ -237,6 +264,24 @@ class MailFlowRuntime:
         logger.info("runtime reconfigured: %d accounts", len(self._account_configs))
 
     # -- source tasks ------------------------------------------------------------
+
+    def _sources_changed(self, config: MailFlowConfig, sources: dict[str, MailSource]) -> bool:
+        """Whether the running source tasks must be restarted for ``config``.
+
+        Restarting sources is expensive (connections are closed and an IMAP
+        adapter logs in again) and can stall for seconds when a task is parked
+        in a blocking connect, so it happens only when accounts, adapters or
+        their classes actually changed — never for an LLM or notifier edit.
+        """
+        if set(sources) != set(self._sources):
+            return True
+        if list(config.accounts) != list(self._account_configs):
+            return True
+        for account_id, adapter in sources.items():
+            running = self._sources.get(account_id)
+            if running is None or type(adapter) is not type(running):
+                return True
+        return False
 
     def _inject_watermark_store(self, source: MailSource, account_id: str, loop: Any) -> None:
         """Give a source (duck-typed) a persistent UID watermark backed by
@@ -355,15 +400,37 @@ class MailFlowRuntime:
                 ),
                 user_profile=(await self._storage.get_preference("feedback.profile") or ""),
             )
-            record = MailRecord(
-                record_id=record_id,
-                mail=mail,
-                auto_urgency=analysis.urgency,
-                analysis=analysis,
-                processor_notes=notes,
-                received_at=mail.received_at,
-            )
-            await self._persist_with_retry(record)
+            failed = analysis.summary_is_fallback or any(note.status == "failed" for note in notes)
+            previous = await self._storage.get_mail(record_id) if _skip_dedup else None
+            if (
+                failed
+                and previous is not None
+                and previous.analysis is not None
+                and not previous.analysis_is_fallback
+            ):
+                # A failed re-analysis (rate limit, timeout, cold model) must
+                # not throw away a working analysis with its summary, reason and
+                # action items: keep the previous content and disclose this
+                # run's failure in the note trail, so the mail reads "shows the
+                # last good analysis, the latest attempt failed" instead of
+                # regressing to the subject.
+                record = previous.model_copy(
+                    update={
+                        "processor_notes": [*previous.processor_notes, *notes][-_NOTES_KEPT:],
+                    }
+                )
+                await self._persist_with_retry(record)
+                logger.warning("re-analysis of %r failed; kept the previous analysis", record_id)
+            else:
+                record = MailRecord(
+                    record_id=record_id,
+                    mail=mail,
+                    auto_urgency=analysis.urgency,
+                    analysis=analysis,
+                    processor_notes=notes,
+                    received_at=mail.received_at,
+                )
+                await self._persist_with_retry(record)
         except Exception:
             # Not stored: release the dedup mark so a retry this session is
             # possible instead of silently dropping the mail forever.

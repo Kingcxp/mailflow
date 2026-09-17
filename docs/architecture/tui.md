@@ -64,7 +64,9 @@ tears them down with the screen — nothing keeps ticking after it closes.
   remount from a language switch cannot cancel a half-finished purge, and a
   failure (e.g. a remote service that does not implement the call) is reported
   in the operation status instead of doing nothing. **Re-analyze
-  failed** requires no selected row; it works through every failed record and
+  failed** requires no selected row; a mail whose re-analysis fails is counted
+  as failed (with the model's own error) and keeps its previous analysis; it
+  works through every failed record and
   keeps its live progress/final outcome in a dedicated status widget, so the
   `mailflow.mail.processed` refresh cannot erase feedback. An empty view shows
   a hint (no mail yet vs. no match for the search/filter) and clears the detail
@@ -247,6 +249,13 @@ schema knowledge of its own.
 - An invalid edit shows which option is wrong and why (from
   `SettingsError.option`/`.message`) in the status line and as a notification;
   a valid edit is persisted immediately through the service.
+- Adding, editing, deleting or reordering a list entry returns immediately:
+  the runtime keeps its live source tasks (and their connections) for any edit
+  that cannot have changed them — an LLM timeout, a notifier target, a
+  reordered chain — and only restarts them when the accounts, their options or
+  an adapter's class actually changed (plugin loads force a restart). Restarting
+  unconditionally made those edits wait for a source to be torn down, which a
+  blocking connect can hold for seconds.
 - The language `Select` lives in this tab and persists through
   `service.set_language`.
 

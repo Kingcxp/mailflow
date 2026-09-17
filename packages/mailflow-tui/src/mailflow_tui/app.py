@@ -1335,7 +1335,17 @@ class MailPane(Vertical):
                 f"{subject_short}[/cyan]"
             )
             try:
-                await self._service.process_mail(mail, force=True)
+                fresh = await self._service.process_mail(mail, force=True)
+                if fresh is not None:
+                    failures = [note for note in fresh.processor_notes if note.status == "failed"]
+                    if failures:
+                        # the run itself failed (rate limit, timeout): the record
+                        # keeps its previous analysis, so report the mail
+                        # instead of counting it as a success
+                        failed.append(
+                            f"{mail.subject[:40]}: {error_detail(self._service, failures[-1].message)}"
+                        )
+                        continue
                 done += 1
             except asyncio.CancelledError:
                 stopped = True

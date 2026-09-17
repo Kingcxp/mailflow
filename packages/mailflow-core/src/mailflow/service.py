@@ -616,11 +616,17 @@ class MailFlowService:
             notifier_configs.append(notifier)
         await self.runtime.reconfigure_notifiers(notifiers, notifier_configs)
 
-    async def reload_runtime(self) -> None:
+    async def reload_runtime(self, *, restart_sources: bool | None = None) -> None:
         """Rebuild sources, LLMs, pipeline and notifiers from the current
         config without restarting: plugin enable/disable, account edits and
         notifier changes apply immediately (storage swaps still require a
-        restart)."""
+        restart).
+
+        ``restart_sources`` is decided by the runtime when left as ``None``:
+        live source tasks survive an edit that cannot have changed them (an LLM
+        timeout, a notifier target, a reordered list), which is what made those
+        edits take seconds to appear. Plugin (un)loads pass ``True`` because an
+        adapter implementation can change under an unchanged provider id."""
         registry = self.plugin_manager.build_registry()
         register_builtin_processors(registry)
         self.registry = registry
@@ -657,6 +663,7 @@ class MailFlowService:
             pipeline=pipeline,
             notifiers=notifiers,
             notifier_configs=notifier_configs,
+            restart_sources=restart_sources,
         )
 
     async def wait(self) -> None:
@@ -2391,7 +2398,7 @@ schedule/calendar. Choose `search` when unsure."""
         plugins.enabled = [p for p in plugins.enabled if p != plugin_id]
         write_config(self.config, self.config_path)
         await self.events.emit("plugin.disabled", plugin_id=plugin_id)
-        await self.reload_runtime()
+        await self.reload_runtime(restart_sources=True)
 
     def _auto_instances_for(self, plugin_id: str) -> int:
         """Ensure every notifier component of ``plugin_id`` has at least one
@@ -2439,7 +2446,7 @@ schedule/calendar. Choose `search` when unsure."""
             created_instance = f"{self.config.notifiers[-1].notifier_id}"
         write_config(self.config, self.config_path)
         await self.events.emit("plugin.enabled", plugin_id=plugin_id)
-        await self.reload_runtime()
+        await self.reload_runtime(restart_sources=True)
         return created_instance
 
     def plugin_status(self, plugin_id: str) -> str:
