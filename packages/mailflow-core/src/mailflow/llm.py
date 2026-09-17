@@ -7,6 +7,7 @@ raises a single ``LLMRouteError`` aggregating sanitized per-backend failures.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from typing import Any
@@ -47,6 +48,40 @@ class LLMRouterImpl:
             return None
         return backend, config
 
+    async def warmup(self) -> bool:
+        """Load the first backend once so the first analysis is not cold.
+
+        A locally hosted model can spend minutes loading the weights on its
+        first request; measured against the user's own endpoint, the first call
+        exceeded 180 s while later ones were fast. Paying that with one tiny
+        completion keeps the per-mail timeout for actual analysis. Best effort:
+        a failure only warns.
+        """
+        primary = next((name for name in self._configs), "")
+        resolved = self.backend_for(primary) if primary else None
+        if resolved is None:
+            return False
+        backend, config = resolved
+        try:
+            await asyncio.wait_for(
+                backend.chat(
+                    [{"role": "user", "content": "Reply with the single word: ok"}],
+                    temperature=0.0,
+                    options={"max_tokens": 4},
+                ),
+                # a cold load legitimately takes minutes; the user's first mail
+                # must not be the one paying for it
+                timeout=max(300.0, float(config.timeout_seconds or 0) or 0.0),
+            )
+        except Exception as exc:
+            logger.warning(
+                "llm warm-up failed (%s); the first mail may pay the cold start",
+                type(exc).__name__,
+            )
+            return False
+        logger.info("llm warm-up done (%s)", primary)
+        return True
+
     def _redact(self, text: str) -> str:
         for secret in self._secrets:
             if secret:
@@ -75,8 +110,26 @@ class LLMRouterImpl:
                 errors.append(f"llm {llm_id!r}: backend not registered")
                 continue
             backend, config = resolved
+            deadline = max(1.0, float(config.timeout_seconds or 0) or 120.0)
             try:
-                completion = await backend.chat(messages, temperature=temperature, options=options)
+                # The configured timeout is a wall-clock deadline for the whole
+                # request. The transport timeout alone is per read/write chunk,
+                # so a model that trickles tokens could run far past the value
+                # the user set and still succeed; wait_for makes it a hard bound
+                # and the caller learns the request exceeded it.
+                completion = await asyncio.wait_for(
+                    backend.chat(messages, temperature=temperature, options=options),
+                    timeout=deadline,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "llm %r (backend %r) exceeded its %.0fs request timeout",
+                    llm_id,
+                    config.provider,
+                    deadline,
+                )
+                errors.append(f"{llm_id}: request exceeded {deadline:g}s")
+                continue
             except Exception as exc:
                 logger.warning("llm %r (backend %r) failed: %s", llm_id, config.provider, exc)
                 errors.append(f"{llm_id}: {self._redact(str(exc)) or type(exc).__name__}")

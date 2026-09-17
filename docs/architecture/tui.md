@@ -59,8 +59,11 @@ tears them down with the screen — nothing keeps ticking after it closes.
   trash keeps it restorable), **Re-analyze all** (asks first, naming the real
   mail count, then re-runs the pipeline over every stored mail — while it
   runs, that same button becomes **Stop re-analysis** and ends the job after
-  the mail in flight, reporting how many were analyzed) and **Mail
-  preferences** (below). Both bulk actions run on the *app's* worker, so a pane
+  the mail in flight, reporting how many were analyzed; **Re-analyze failed**
+  works the same way, only one bulk run can be in flight (the other button
+  parks), and the started job always restores both buttons, so a stopped or
+  cancelled run can never leave a control that refuses to start again) and
+  **Mail preferences** (below). Both bulk actions run on the *app's* worker, so a pane
   remount from a language switch cannot cancel a half-finished purge, and a
   failure (e.g. a remote service that does not implement the call) is reported
   in the operation status instead of doing nothing. **Re-analyze
@@ -135,7 +138,9 @@ tears them down with the screen — nothing keeps ticking after it closes.
   Reject keeps a proposal hidden on later scans. Imported seminars preserve
   their source-mail link and use stable ids to prevent duplicate imports.
 - **LLMs** (`settings.py: LLMPane`): the ordered fallback chain. Add / Edit /
-  Delete plus Move up / Move down; the first row is the default and each row
+  Delete plus Move up / Move down; the selection follows the moved entry so
+  moves (and deletes) can be repeated, a rejected move puts the cursor back on
+  the entry, and the ends of the chain report instead of jumping; the first row is the default and each row
   falls back to the ones below it, so `default` and `fallback` are never typed
   in by hand (the form hides them). The lower half of the tab is the
   **notification feed**: one colored entry per processed mail (all urgency

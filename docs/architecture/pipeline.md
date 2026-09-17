@@ -14,8 +14,11 @@ Each configured processor becomes a `ProcessorBinding` (in `mailflow.pipeline`):
   whole answer: 30 s made cold or slow local models time out on every mail,
   which then fell back to a subject summary with a failed note. An expired
   deadline is recorded as `processor timed out after N seconds`, never as an
-  empty failure reason. The per-request budget is `[[llms]] timeout_seconds`
-  (also 120 s by default) — raise both for a slow endpoint.
+  empty failure reason. **A timeout is terminal for that processor** — it is
+  not retried, because a second attempt on the same slow call only doubles the
+  wait the user configured while the UI still says "analysing" long after the
+  deadline. The per-request budget is `[[llms]] timeout_seconds` (also 120 s by
+  default) — raise both for a slow endpoint.
 - `failure_policy` — `continue` (default: record a failed note, run the next
   processor) or `stop` (halt the chain).
 - `llm` / `fallback_llms` — named LLMs routed through the `LLMRouter` for

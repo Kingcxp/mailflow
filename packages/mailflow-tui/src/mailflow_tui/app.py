@@ -465,11 +465,13 @@ class MailPane(Vertical):
         self._smart_action_task: asyncio.Task[SmartActionResult] | None = None
         self._smart_spinner_task: asyncio.Task[None] | None = None
         self._smart_action_result: SmartActionResult | None = None
-        # the bulk re-analysis checks _reparse_stop between mails so its own
-        # button can end a long run without killing the app; _reparse_running
-        # is what makes that button a stop control instead of a second start
+        # A bulk re-analysis checks _reparse_stop between mails, and the button
+        # that started it becomes the stop control while its worker is alive.
+        # "running" is derived from the worker (never a hand-set flag) so a
+        # cancelled or finished run cannot leave the button stuck as a stop
+        # control that no longer responds.
         self._reparse_stop = False
-        self._reparse_running = False
+        self._reparse_worker: Any = None
         # Re-analysis emits mail-processed events which asynchronously refresh
         # this pane. Keep the operation outcome separately so that refresh
         # cannot erase feedback before the user can read it.
@@ -1237,14 +1239,6 @@ class MailPane(Vertical):
             self._clear_smart_action_result()
             await self.refresh_mail()
             return
-        if button_id == "btn-reparse-failed":
-            self.run_worker(
-                self._reparse_failed(),
-                exclusive=True,
-                group="mail-reparse",
-                exit_on_error=False,
-            )
-            return
         if button_id == "btn-purge-expired":
             # app-owned worker: a pane remount (language switch) cancels the
             # pane's own workers, which would stop a half-finished purge
@@ -1252,13 +1246,12 @@ class MailPane(Vertical):
                 self._purge_expired(), exclusive=True, group="mail-purge", exit_on_error=False
             )
             return
-        if button_id == "btn-reparse-all":
-            if self._reparse_running:
+        if button_id in self._BULK_REPARSE_BUTTONS:
+            if self._reparse_active():
                 self._stop_reparse()
                 return
-            cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
-                self._reparse_all(), exclusive=True, group="mail-reparse", exit_on_error=False
-            )
+            coro = self._reparse_all() if button_id == "btn-reparse-all" else self._reparse_failed()
+            self._start_bulk_reparse(button_id, coro)
             return
         if button_id == "btn-profile":
             cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
@@ -1348,8 +1341,11 @@ class MailPane(Vertical):
                         continue
                 done += 1
             except asyncio.CancelledError:
-                stopped = True
-                break
+                # propagate: swallowing it here left the worker alive after the
+                # pane was remounted or another run superseded this one, and the
+                # caller's bookkeeping then never ran
+                await self.refresh_mail()
+                raise
             except Exception as exc:
                 failed.append(f"{mail.subject[:40]}: {error_detail(self._service, exc)}")
         await self.refresh_mail()
@@ -1370,28 +1366,84 @@ class MailPane(Vertical):
             )
 
     async def _reparse_failed(self) -> None:
-        failed_records = await self._service.list_failed_mails()
-        if not failed_records:
+        try:
+            failed_records = await self._service.list_failed_mails()
+            if not failed_records:
+                self._set_operation_status(
+                    f"[green]{self._service.t('tui.reparse_none_failed')}[/green]"
+                )
+                return
+            # immediate feedback before the first LLM call: each re-analysis can
+            # take seconds (and may rate-limit), so without this the bulk
+            # action looks like it never started
             self._set_operation_status(
-                f"[green]{self._service.t('tui.reparse_none_failed')}[/green]"
+                f"[cyan]{self._service.t('tui.reparse_failed_start', count=len(failed_records))}[/cyan]"
             )
-            return
-        # immediate feedback before the first LLM call: each re-analysis can
-        # take seconds (and may rate-limit), so without this the bulk
-        # action looks like it never started
-        self._set_operation_status(
-            f"[cyan]{self._service.t('tui.reparse_failed_start', count=len(failed_records))}[/cyan]"
-        )
-        await self._reparse_batch([record.mail for record in failed_records])
+            await self._reparse_batch([record.mail for record in failed_records])
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # remote mode, provider failures
+            self._report_bulk_failure(exc)
 
-    def _set_reparse_button(self, running: bool) -> None:
-        """The bulk button runs the job and, while it runs, ends it."""
-        button = self.query_one_optional("#btn-reparse-all", Button)
-        if button is None:
-            return
-        key = "tui.reparse_stop" if running else "tui.btn_reparse_all"
-        button.label = self._service.t(key)
-        button.variant = "error" if running else "primary"
+    # both long-running bulk buttons share one run/stop affordance
+    _BULK_REPARSE_BUTTONS: ClassVar[dict[str, str]] = {
+        "btn-reparse-all": "tui.btn_reparse_all",
+        "btn-reparse-failed": "tui.btn_reparse_failed",
+    }
+
+    def _reparse_active(self) -> bool:
+        """Whether a bulk re-analysis worker is still alive.
+
+        Derived from the worker rather than a hand-set flag: a cancelled or
+        superseded run used to leave a latched "running" state, which turned
+        the button into a stop control that could never start a run again.
+        """
+        worker = self._reparse_worker
+        return bool(worker is not None and not worker.is_finished)
+
+    def _set_bulk_reparse_buttons(self, running_button: str | None) -> None:
+        """Label the active button as the stop control and park the other.
+
+        Only one bulk run may be in flight: a second one would supersede this
+        worker (same exclusive group) and silently drop the work in progress.
+        """
+        for button_id, key in self._BULK_REPARSE_BUTTONS.items():
+            button = self.query_one_optional(f"#{button_id}", Button)
+            if button is None:
+                continue
+            if running_button == button_id:
+                button.label = self._service.t("tui.reparse_stop")
+                button.variant = "error"
+                button.disabled = False
+            else:
+                button.label = self._service.t(key)
+                button.variant = "primary"
+                button.disabled = running_button is not None
+
+    def _start_bulk_reparse(self, button_id: str, action: Any) -> None:
+        """Run one bulk re-analysis and always restore the buttons afterwards.
+
+        The lifecycle lives here, not in each job: whichever path the job takes
+        (finished, stopped, cancelled, raised), the button that became the stop
+        control must turn back into its run label, or the user is left with a
+        control that can never start a run again.
+        """
+
+        async def _run() -> None:
+            try:
+                await action
+            finally:
+                self._finish_bulk_reparse()
+
+        self._reparse_stop = False
+        self._set_bulk_reparse_buttons(button_id)
+        self._reparse_worker = self.run_worker(
+            _run(), exclusive=True, group="mail-reparse", exit_on_error=False
+        )
+
+    def _finish_bulk_reparse(self) -> None:
+        self._reparse_stop = False
+        self._set_bulk_reparse_buttons(None)
 
     def _stop_reparse(self) -> None:
         self._reparse_stop = True
@@ -1400,11 +1452,12 @@ class MailPane(Vertical):
     async def _reparse_all(self) -> None:
         """Re-analyze every stored mail, after stating the real count.
 
-        Runs until it finishes or the user presses the same button again to
-        stop; the button is the stop control while the job is in flight.
+        Runs until it finishes or the user presses the button again to stop;
+        the button is the stop control while the job is in flight. The press
+        handler is the only entry point and decides start-vs-stop, so this
+        method must not re-check whether a worker is active: its own worker
+        already exists by the time it runs.
         """
-        if self._reparse_running:
-            return
         try:
             records = await self._service.list_mails()
             if not records:
@@ -1420,17 +1473,11 @@ class MailPane(Vertical):
             self._set_operation_status(
                 f"[cyan]{self._service.t('tui.reparse_all_start', count=len(records))}[/cyan]"
             )
-            self._reparse_running = True
-            self._set_reparse_button(running=True)
             await self._reparse_batch([record.mail for record in records])
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # remote mode, provider failures
             self._report_bulk_failure(exc)
-        finally:
-            self._reparse_stop = False
-            self._reparse_running = False
-            self._set_reparse_button(running=False)
 
     async def _purge_expired(self) -> None:
         """Move mail that has nothing left to act on to the trash."""

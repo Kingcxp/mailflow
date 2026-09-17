@@ -308,9 +308,9 @@ class TestThinkBlockStripping:
 class TestPromptContract:
     """The classification prompt is the behaviour: these rules are load-bearing.
 
-    Mass-mailed institutional notices used to land in "ad" (the old definition
-    ended with "and any bulk mail"), which buried lectures, workshops and
-    recruitment invitations the user wanted to see.
+    Mass-mailed institutional notices used to land in "ad" and nothing could
+    reach "important" (the prompt had no positive definition for it), so these
+    assertions pin the wording that carries those rules.
     """
 
     @staticmethod
@@ -325,29 +325,30 @@ class TestPromptContract:
         assert "any bulk mail" not in prompt
         assert "is not a reason to choose info or ad" in prompt  # bulk != ad
         assert "unusable mail only" in prompt
-        assert 'before choosing "ad", name the reason' in prompt
+        assert 'before choosing "ad", the reason must name what makes the mail unusable' in prompt
 
     def test_action_and_deadlines_force_important(self) -> None:
-        """`important` must be reachable: a deadline or a required action of the
-        recipient makes a mail important even when it arrives as a bulk notice."""
+        """`important` must be reachable: a deadline or a required action makes
+        a mail important even when it arrives as a bulk notice."""
         prompt = self._prompt()
-        assert "stated deadline or a required action makes a mail important" in prompt
-        assert "is there anything this person has to act on, answer, or track?" in prompt
-        assert (
-            "when in doubt\n   between important and info, choose important"
-            in prompt.replace("  ", " ")
-            or "between important and info, choose important" in prompt
-        )
+        assert "a stated deadline or required action makes a mail important" in prompt
+        assert "is there anything this person has to act on, answer or track?" in prompt
+        assert 'if yes, it is at least "important"' in prompt
+
+    def test_every_obligation_must_yield_an_action_item(self) -> None:
+        prompt = self._prompt()
+        assert "every stated obligation yields an action item" in prompt
+        assert "never invent a date" in prompt
 
     def test_feedback_notes_cannot_override_the_rules(self) -> None:
         prompt = self._prompt()
-        assert "narrow preferences from past" in prompt
-        assert "never override rules 1-9" in prompt
+        assert "narrow, kind-scoped preferences" in prompt
+        assert "never override rules 1-6" in prompt
 
-    def test_profile_and_feedback_rules_are_stated(self) -> None:
+    def test_profile_rules_are_stated(self) -> None:
         prompt = self._prompt()
         assert "recipient profile" in prompt
-        assert "authoritative for what matters" in prompt
+        assert "decides relevance" in prompt
 
     def test_urgency_tokens_are_english_only(self) -> None:
         prompt = self._prompt()

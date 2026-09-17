@@ -191,8 +191,14 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         assert item.due_at.tzinfo is not None
 
         # -- llm fallback: primary failed, backup handled -----------------------
-        # exactly two chat calls for one mail: primary attempt + backup success
-        assert len(captured) == 2
+        # two analysis calls for one mail (primary attempt + backup success);
+        # the runtime's one-off warm-up ping is not an analysis request
+        analysis_calls = [
+            call
+            for call in captured
+            if "Reply with the single word" not in str(call[-1].get("content", ""))
+        ]
+        assert len(analysis_calls) == 2, analysis_calls
 
         # -- notifier invoked with the computed analysis ------------------------
         await wait_until(lambda: len(notified) == 1)

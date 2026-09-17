@@ -107,9 +107,13 @@ class PipelineEngine:
                     timeout=binding.timeout_seconds,
                 )
             except TimeoutError as exc:
-                last_error = TimeoutError(
+                # A timeout is terminal for this processor: retrying the same
+                # slow call multiplies the wait the user configured (30 s became
+                # 60 s with one retry) without changing the outcome, and the
+                # user sees "it is still analysing" long after the deadline.
+                raise TimeoutError(
                     str(exc) or f"processor timed out after {binding.timeout_seconds:g} seconds"
-                )
+                ) from exc
             except Exception as exc:
                 last_error = exc
             assert last_error is not None

@@ -24,11 +24,20 @@ extra_body = { ... }
 One backend instance is created per named LLM (each has its own endpoint,
 model and credentials), keyed by `llm_id`.
 
-`timeout_seconds` bounds one HTTP request and defaults to **120 s**: it has to
-cover the wait for the first token as well as the whole answer, and a cold or
-slow local model regularly needs more than the 60 s this used to default to.
-Raise it (and the owning `[[processors]] timeout_seconds`) for an endpoint that
-thinks for a long time before answering; the Settings UI edits both.
+`timeout_seconds` is a **wall-clock deadline for one request** and defaults to
+**120 s**. The router enforces it with `asyncio.wait_for`, because the transport
+timeout alone is per read/write chunk: a model that trickles tokens could run
+far past the value the user set and still "succeed", which is what made a 30 s
+setting look ignored. A request that exceeds the deadline is reported as
+`request exceeded Ns` and the next named LLM is tried. The processor's own
+`[[processors]] timeout_seconds` bounds the whole mail and is **not retried on
+expiry** — retrying a slow call only doubled the wait the user configured. Both
+are editable in the Settings UI (LLM form) and in config.toml.
+
+The runtime warms the first LLM up once at startup (one tiny completion, in the
+background), because a locally hosted model can spend minutes loading on its
+first request; without it the first mail of a session pays the cold start out of
+its own timeout budget.
 
 ## Routing
 

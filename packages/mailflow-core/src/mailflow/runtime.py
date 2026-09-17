@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Coroutine
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
@@ -146,12 +147,28 @@ class MailFlowRuntime:
             self._tasks.append(asyncio.create_task(self._worker(index), name=f"worker-{index}"))
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="cleanup"))
         self._tasks.append(asyncio.create_task(self._reminder_loop(), name="reminders"))
+        self._schedule_warmup()
         logger.info(
             "runtime started: %d accounts, %d workers, retention %d days",
             len(self._account_configs),
             self._config.general.workers,
             self._config.general.mail_retention_days,
         )
+
+    def _schedule_warmup(self) -> None:
+        """Load the analysis model in the background.
+
+        A locally hosted model spends minutes loading on its first request
+        (measured on the user's own endpoint: the first call exceeded 180 s
+        while later ones were fast), so the load is paid here instead of inside
+        the first mail's timeout window.
+        """
+        router = getattr(self._pipeline, "router", None)
+        warmup = getattr(router, "warmup", None)
+        if not callable(warmup):
+            return
+        warm: Coroutine[Any, Any, Any] = cast(Coroutine[Any, Any, Any], warmup())
+        self._tasks.append(asyncio.create_task(warm, name="llm-warmup"))
 
     async def stop(self) -> None:
         if self._closed:

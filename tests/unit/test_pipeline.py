@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -474,3 +476,42 @@ class TestFeedbackGuidelines:
         )
         await engine.process(make_mail(), "acct-1")
         assert capturing.seen == [""]
+
+
+class TestTimeoutSemantics(TestPipeline):
+    """A configured timeout must be a real deadline, never doubled."""
+
+    async def test_a_timeout_is_not_retried(self) -> None:
+        """30 s means 30 s: retrying a slow call doubled the wait silently."""
+        attempts = 0
+
+        class AlwaysSlow:
+            processor_id = "slow"
+
+            async def process(self, mail: Any, context: Any) -> Any:
+                nonlocal attempts
+                attempts += 1
+                await asyncio.sleep(1.0)
+                return ProcessorResult()
+
+        engine = PipelineEngine(
+            [self._binding(AlwaysSlow(), "slow", retries=3, timeout_seconds=0.05)]
+        )
+        started = time.monotonic()
+
+        _analysis, notes, _llm, _backend = await engine.process(make_mail(), "acct-1")
+
+        elapsed = time.monotonic() - started
+        assert attempts == 1, "a timeout must not be retried"
+        assert elapsed < 0.5
+        assert notes[0].status == "failed"
+        assert notes[0].message == "failed: processor timed out after 0.05 seconds"
+
+    async def test_other_failures_are_still_retried(self) -> None:
+        flaky = FlakyProcessor("flaky", failures=2)
+        engine = PipelineEngine([self._binding(flaky, "flaky", retries=3, timeout_seconds=5.0)])
+
+        _analysis, notes, _llm, _backend = await engine.process(make_mail(), "acct-1")
+
+        assert flaky.calls == 3
+        assert notes[0].status == "success"

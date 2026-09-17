@@ -1628,3 +1628,187 @@ async def test_reparse_all_can_be_stopped_while_running(tmp_path: Path) -> None:
             await pilot.pause()
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_bulk_reparse_stop_covers_reanalyze_failed_and_never_latches(
+    tmp_path: Path,
+) -> None:
+    """Both long bulk buttons act as their own stop control, and cancelling the
+    confirmation must not leave re-analysis impossible afterwards."""
+    import asyncio
+    import queue
+
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.app import MailPane
+    from mailflow_tui.confirm import ConfirmModal
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+
+    gate = asyncio.Event()
+    started = asyncio.Event()
+    processed: list[str] = []
+    original = service.process_mail
+
+    async def slow_process(mail: Any, *, force: bool = False) -> Any:
+        started.set()
+        await gate.wait()
+        processed.append(mail.message_id)
+        return await original(mail, force=force)
+
+    records = await service.list_mails()
+    service.list_failed_mails = lambda: asyncio.sleep(0, result=list(records))  # type: ignore[method-assign]
+    service.process_mail = slow_process  # type: ignore[method-assign]
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(140, 45)) as pilot:
+            for _ in range(200):
+                if await service.count_mails() == 3:
+                    break
+                await pilot.pause(0.05)
+            pane = app.query_one(MailPane)
+            all_button = app.query_one("#btn-reparse-all", Button)
+            failed_button = app.query_one("#btn-reparse-failed", Button)
+
+            # 1. cancelling the confirmation leaves the button usable
+            all_button.press()
+            dialog: ConfirmModal | None = None
+            for _ in range(80):
+                current = app.screen
+                if isinstance(current, ConfirmModal):
+                    dialog = current
+                    break
+                await pilot.pause(0.05)
+            assert dialog is not None
+            dialog.query_one("#confirm-cancel", Button).press()
+            for _ in range(80):
+                if not isinstance(app.screen, ConfirmModal):
+                    break
+                await pilot.pause(0.05)
+            await pilot.pause(0.1)
+            assert not all_button.disabled, "a cancelled run must leave the button usable"
+
+            # 2. the failed-mails button is a run/stop control too
+            failed_button.press()
+            for _ in range(80):
+                if started.is_set():
+                    break
+                await pilot.pause(0.05)
+            assert started.is_set(), "re-analyze-failed must start"
+            for _ in range(40):
+                if "Stop" in str(failed_button.label):
+                    break
+                await pilot.pause(0.05)
+            assert "Stop" in str(failed_button.label), f"label stayed {failed_button.label!r}"
+            assert all_button.disabled, "the other bulk button parks while a run is in flight"
+
+            failed_button.press()  # stop
+            await pilot.pause(0.1)
+            gate.set()
+            for _ in range(120):
+                if "Re-analyze" in str(failed_button.label):
+                    break
+                await pilot.pause(0.05)
+            assert "Re-analyze" in str(failed_button.label)
+            assert len(processed) == 1
+            status = str(pane.query_one("#mail-operation-status", Static).render())
+            assert "stopped" in status.lower()
+            assert not all_button.disabled, "the parked button must come back"
+
+            # 3. and a new run can still start afterwards
+            gate.set()
+            started.clear()
+            failed_button.press()
+            for _ in range(80):
+                if isinstance(app.screen, ConfirmModal):
+                    app.screen.query_one("#confirm-cancel", Button).press()
+                    break
+                await pilot.pause(0.05)
+            await pilot.pause(0.1)
+            assert not failed_button.disabled
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_llm_move_up_follows_the_entry_and_repeats(tmp_path: Path) -> None:
+    """Moving an entry up keeps the cursor on it so the move can be repeated."""
+    import queue
+
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.settings import LLMPane
+    from textual.widgets import DataTable
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        config_path=tmp_path / "cfg.toml",  # edits persist, like the real runner
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+    service.config.llms = [
+        service.config.llms[0].model_copy(update={"llm_id": f"llm-{i}", "provider": "test-llm"})
+        for i in range(3)
+    ]
+    service.config.processors = [
+        p.model_copy(update={"llm": "llm-0", "fallback_llms": ["llm-1", "llm-2"]})
+        if p.provider == "llm-importance"
+        else p
+        for p in service.config.processors
+    ]
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(140, 45)) as pilot:
+            tabs = app.query_one(TabbedContent)
+            tabs.active = "tab-llms"  # pyright: ignore[reportUnknownMemberType]
+            for _ in range(60):
+                if app.query(LLMPane):
+                    break
+                await pilot.pause(0.05)
+            pane = app.query_one(LLMPane)
+            await pilot.pause(0.3)
+            table = cast(DataTable[Any], pane.query_one("#llms-table", DataTable))
+
+            # select the third entry (index 2) and move it up twice
+            table.move_cursor(row=2, animate=False)  # pyright: ignore[reportUnknownMemberType]
+            await pilot.pause(0.1)
+            assert pane._selected == 2  # pyright: ignore[reportPrivateUsage]
+
+            app.query_one("#llm-up", Button).press()
+            await pilot.pause(0.4)
+            assert [llm.llm_id for llm in service.config.llms] == ["llm-0", "llm-2", "llm-1"]
+            assert pane._selected == 1, "the cursor must follow the moved entry"  # pyright: ignore[reportPrivateUsage]
+
+            app.query_one("#llm-up", Button).press()
+            await pilot.pause(0.4)
+            assert [llm.llm_id for llm in service.config.llms] == ["llm-2", "llm-0", "llm-1"]
+            assert pane._selected == 0  # pyright: ignore[reportPrivateUsage]
+
+            # at the top the move is a no-op with an explanation, not a jump
+            app.query_one("#llm-up", Button).press()
+            await pilot.pause(0.3)
+            assert [llm.llm_id for llm in service.config.llms] == ["llm-2", "llm-0", "llm-1"]
+            assert pane._selected == 0  # pyright: ignore[reportPrivateUsage]
+            status = str(pane.query_one("#llms-status", Static).render())
+            assert "default" in status.lower() or "首选" in status
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()

@@ -1442,6 +1442,9 @@ class LLMPane(Vertical):
         super().__init__()
         self._service = service
         self._selected: int | None = None
+        # a programmatic cursor restore must not be mistaken for the user
+        # highlighting another row
+        self._suppress_highlight = False
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -1531,15 +1534,31 @@ class LLMPane(Vertical):
         if not llms:
             self._set_status(self._t("tui.llms_empty"))
             self._selected = None
+            return
+        # clear() parks the cursor on row 0, and the highlight event would then
+        # overwrite the selection: put the cursor back where the user was so a
+        # move or delete can be repeated without re-selecting the row
+        if self._selected is not None and 0 <= self._selected < len(llms):
+            self._suppress_highlight = True
+            try:
+                table.move_cursor(row=self._selected, animate=False)  # pyright: ignore[reportUnknownMemberType]
+            finally:
+                self._suppress_highlight = False
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if _table_id(event) == "llms-table" and event.row_key.value is not None:
+            if self._suppress_highlight:
+                return
             self._selected = int(str(event.row_key.value))
             if _double_clicked("llms", str(event.row_key.value)):
                 self._open_form(self._selected)
 
     async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if _table_id(event) == "llms-table" and event.row_key.value is not None:
+        if (
+            _table_id(event) == "llms-table"
+            and event.row_key.value is not None
+            and not self._suppress_highlight
+        ):
             self._selected = int(str(event.row_key.value))
 
     async def on_data_table_row_activated(self, event: Any) -> None:
@@ -1565,11 +1584,27 @@ class LLMPane(Vertical):
             return
         if button_id == "llm-delete":
             await self._mutate(self._service.remove_config_entry("llms", index), "entry_removed")
-            self._selected = None
+            # keep the selection on the neighbouring row so several entries can
+            # be deleted in a row without re-selecting
+            remaining = len(self._service.config.llms)
+            self._selected = min(index, remaining - 1) if remaining else None
+            await self.reload()
             return
         offset = -1 if button_id == "llm-up" else 1
-        await self._mutate(self._service.move_config_entry("llms", index, offset), "")
-        self._selected = max(0, min(index + offset, len(self._service.config.llms) - 1))
+        target = index + offset
+        total = len(self._service.config.llms)
+        if target < 0 or target >= total:
+            self._set_status(
+                f"[yellow]{self._t('tui.llms_already_first' if offset < 0 else 'tui.llms_already_last')}[/yellow]"
+            )
+            return
+        # select the entry's new position *before* the reload so the cursor
+        # follows it, letting the user press move-up repeatedly; a rejected move
+        # puts the cursor back on the entry, which did not move
+        self._selected = target
+        if not await self._mutate(self._service.move_config_entry("llms", index, offset), ""):
+            self._selected = index
+            await self.reload()
 
     def _open_form(self, index: int | None) -> None:
         values = (
@@ -1600,24 +1635,26 @@ class LLMPane(Vertical):
             self._service.update_config_entry("llms", index, values), "entry_updated"
         )
 
-    async def _mutate(self, action: Any, message_key: str) -> None:
+    async def _mutate(self, action: Any, message_key: str) -> bool:
+        """Apply one settings mutation; False when it was rejected."""
         try:
             await action
         except SettingsError as exc:
             message = self._t("tui.settings_invalid", option=exc.option, reason=exc.message)
             self._set_status(f"[red]{escape(message)}[/red]")
             self.notify(message, severity="error", timeout=8)
-            return
+            return False
         except ValueError as exc:
             message = error_message(self._service, exc)
             self._set_status(f"[red]{escape(message)}[/red]")
             self.notify(message, severity="error", timeout=8)
-            return
+            return False
         if message_key:
             self._set_status(
                 f"[green]{self._t(f'tui.{message_key}', group=self._t('tui.tab_llms'))}[/green]"
             )
         await self.reload()
+        return True
 
 
 class AccountsPane(Vertical):
