@@ -275,6 +275,13 @@ _PROFILE_PREFERENCE = "feedback.profile"
 _PROFILE_MAX_CHARS = 4000
 _FEEDBACK_WINDOW = 20
 """Distinct feedback notes kept for the LLM (repeats collapse onto one line)."""
+_SCHEDULE_EXPIRY_INTERVAL = 3600.0
+"""How often spent schedule entries are swept (seconds). The sweep is pure
+in-memory filtering over the stored records, so an hourly tick is cheap."""
+_EXPIRED_ACTION_AGE = timedelta(days=1)
+"""A schedule entry is dropped a day after it stopped being actionable, not at
+the moment it passed: the entry the user is looking at right now — and the one
+whose reminder just fired — must survive until they have had a chance to act."""
 _EXPIRED_AD_AGE = timedelta(hours=24)
 """Ads only count as expired once they are a day old: the mail the user is
 reading right now must never be swept away by a single click."""
@@ -581,6 +588,7 @@ class MailFlowService:
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
+        self._expiry_task: asyncio.Task[Any] | None = None
         self.commands: Any | None = None  # CommandRouter wired by mailflow.commands
         self._reply_locks = _DraftLocks()
         self._seminar_lock = asyncio.Lock()
@@ -604,12 +612,17 @@ class MailFlowService:
         self._started = True
         self._stopped_event = asyncio.Event()
         self._update_task = asyncio.create_task(self._update_loop(), name="updates")
+        self._expiry_task = asyncio.create_task(
+            self._schedule_expiry_loop(), name="schedule-expiry"
+        )
         logger.info("mailflow service started (version %s)", __version__)
 
     async def stop(self) -> None:
         self._stopped_event.set()
         if self._update_task is not None:
             self._update_task.cancel()
+        if self._expiry_task is not None:
+            self._expiry_task.cancel()
         # app shutdown: kill the children but KEEP the persisted running
         # status so the next boot's autostart resumes them (writing
         # 'stopped' here made the resume filter skip every gateway)
@@ -938,11 +951,16 @@ class MailFlowService:
         return await self.storage.get_mail(mail.normalized_message_id()) is not None
 
     @staticmethod
-    def _action_natural_key(item: ActionItem) -> str:
+    def action_natural_key(item: ActionItem) -> str:
         """Stable identity across re-analysis: mail id + due time + type.
+
         The summary text varies between LLM runs and is deliberately excluded
-        so a re-generated replacement still matches its dismissed predecessor."""
-        return f"{item.mail_id}|{item.due_at.isoformat()}|{item.action_type}"
+        so a re-generated replacement still matches its dismissed predecessor.
+        Public because the expiry sweep and the manual delete must record the
+        *same* identity — otherwise an entry the sweep removed would silently
+        return the next time its mail was re-analyzed.
+        """
+        return f"{item.mail_id}|{to_utc(item.due_at).isoformat()}|{item.action_type}"
 
     async def _dismissed_keys(self) -> frozenset[str]:
         raw = await self.storage.get_preference("actions.dismissed")
@@ -952,12 +970,13 @@ class MailFlowService:
         except Exception:
             return frozenset()
 
-    async def _add_dismissed_key(self, key: str) -> None:
-        current = await self._dismissed_keys()
-        merged = sorted(current | {key})
+    async def _set_dismissed_keys(self, keys: frozenset[str] | set[str]) -> None:
         await self.storage.set_preference(
-            "actions.dismissed", json.dumps(merged, ensure_ascii=False)
+            "actions.dismissed", json.dumps(sorted(keys), ensure_ascii=False)
         )
+
+    async def _add_dismissed_key(self, key: str) -> None:
+        await self._set_dismissed_keys(await self._dismissed_keys() | {key})
 
     async def list_actions(self) -> list[ActionItem]:
         """All timed action items by due time.
@@ -971,10 +990,10 @@ class MailFlowService:
             items.extend(
                 item
                 for item in record.action_items
-                if self._action_natural_key(item) not in dismissed
+                if self.action_natural_key(item) not in dismissed
             )
         custom = await self.storage.list_custom_actions()
-        items.extend(item for item in custom if self._action_natural_key(item) not in dismissed)
+        items.extend(item for item in custom if self.action_natural_key(item) not in dismissed)
         return sorted(items, key=lambda item: item.due_at)
 
     async def delete_action(self, item_id: str) -> bool:
@@ -994,9 +1013,58 @@ class MailFlowService:
         if target is None:
             return False
         if target.origin is ActionOrigin.ANALYSIS and target.mail_id:
-            await self._add_dismissed_key(self._action_natural_key(target))
+            await self._add_dismissed_key(self.action_natural_key(target))
             return True
         return await self.storage.delete_custom_action(item_id)
+
+    @staticmethod
+    def _action_has_ended(item: ActionItem, cutoff: datetime) -> bool:
+        """Whether the entry finished at or before ``cutoff``.
+
+        An entry with a window (``due_end``) counts as over only when the
+        window closed: deleting a meeting while it is still running would
+        drop the reminder the user is relying on right now.
+        """
+        return to_utc(item.due_end or item.due_at) <= cutoff
+
+    async def purge_expired_actions(self) -> int:
+        """Retire schedule entries that stopped being actionable over a day ago.
+
+        "Expired" is measured from the entry's end: an entry is swept only
+        once it has been over for more than ``_EXPIRED_ACTION_AGE``, so the
+        item the user is looking at — and the one whose reminder just fired —
+        survives until they have had a chance to act on it. Returns how many
+        entries were retired.
+
+        Mail-derived entries cannot be removed from the record that owns
+        them, so they are dismissed by their natural key, exactly like a
+        manual delete; that keeps them hidden when the same mail is
+        re-analyzed. User todos and imported seminars live in the
+        custom-action store and are deleted for real.
+        """
+        cutoff = datetime.now(UTC) - _EXPIRED_ACTION_AGE
+        dismissed = await self._dismissed_keys()
+        expired_keys = {
+            self.action_natural_key(item)
+            for record in await self.storage.list_mails()
+            for item in record.action_items
+            if self.action_natural_key(item) not in dismissed
+            and self._action_has_ended(item, cutoff)
+        }
+        if expired_keys:
+            # one write for the whole sweep: a per-item write would rewrite
+            # the preference list once per expired entry
+            await self._set_dismissed_keys(dismissed | expired_keys)
+        retired = len(expired_keys)
+        for item in await self.storage.list_custom_actions():
+            if self._action_has_ended(item, cutoff) and await self.storage.delete_custom_action(
+                item.item_id
+            ):
+                retired += 1
+        if retired:
+            logger.info("retired %d spent schedule entry(ies)", retired)
+            await self.events.emit("action.expired", count=retired)
+        return retired
 
     async def list_actions_all(self) -> list[ActionItem]:
         """list_actions() without the dismissal filter (internal)."""
@@ -1510,6 +1578,23 @@ class MailFlowService:
             await self.storage.set_preference(f"plugin.source.{plugin_id}", source)
         else:
             await self.clear_plugin_source(plugin_id)
+
+    async def _schedule_expiry_loop(self) -> None:
+        """Periodically retire schedule entries that stopped being actionable.
+
+        Runs once at startup and then on an interval: a reminder schedule that
+        keeps showing events from last week is worse than no schedule at all.
+        The sweep itself lives in :meth:`purge_expired_actions`.
+        """
+        while not self._stopped_event.is_set():
+            try:
+                await self.purge_expired_actions()
+            except Exception as exc:
+                logger.error("schedule expiry sweep failed: %s", exc)
+            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+                await asyncio.wait_for(
+                    self._stopped_event.wait(), timeout=_SCHEDULE_EXPIRY_INTERVAL
+                )
 
     async def _update_loop(self) -> None:
         """Daily auto-update: once per local day, check MailFlow releases and

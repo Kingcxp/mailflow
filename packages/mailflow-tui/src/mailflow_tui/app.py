@@ -3163,6 +3163,9 @@ class MailFlowApp(App[None]):
         )
         self._refresh_lock = asyncio.Lock()
         self._service.on("mailflow.mail.processed", self._on_mail_processed)
+        # a periodic sweep retires spent schedule entries outside any user
+        # action: without this the Actions table keeps showing them
+        self._service.on("action.expired", self._on_mail_processed)
         self._service.on("language.changed", self._on_language_changed)
         if self._splash:
             from mailflow_tui.splash import SplashScreen

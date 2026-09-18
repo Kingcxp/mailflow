@@ -3,8 +3,10 @@ search filtering, urgency change, language switch, reply modal gating."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pytest
 from mailflow.commands import CommandRouter
@@ -48,6 +50,11 @@ INFO_JSON = """{
   "notes": ""
 }"""
 
+# The deadline is relative: an absolute date would age into the past and be
+# retired by the schedule-expiry sweep, which is not what this fixture tests.
+_ID_DUE = (datetime.now(UTC) + timedelta(days=1)).replace(
+    hour=17, minute=0, second=0, microsecond=0
+)
 URGENT_JSON = """{
   "summary": "Pick up student ID card today",
   "urgency": "urgent",
@@ -56,11 +63,11 @@ URGENT_JSON = """{
   "suggested_reply": "I will come before 17:00.",
   "action_items": [
     {"summary": "Collect student ID", "action_type": "errand",
-     "due_at": "2026-06-10T17:00:00+00:00", "due_end": null,
+     "due_at": "@DUE@", "due_end": null,
      "notes": "Bring your own ID photo"}
   ],
   "notes": ""
-}"""
+}""".replace("@DUE@", _ID_DUE.isoformat())
 
 
 class MapLLM:
@@ -248,7 +255,9 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             await actions_pane.refresh_actions()
             actions_table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
             assert actions_table.row_count == 1
-            assert "2026-06-11 01:00" in str(actions_table.get_row_at(0)[0])
+            # the row shows the deadline in the configured display timezone
+            expected_due = _ID_DUE.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
+            assert expected_due in str(actions_table.get_row_at(0)[0])
             # A results-only render (Smart find's final step) must replace
             # the detail too, and an empty result must not leave a stale
             # previously selected mail beside the empty table.

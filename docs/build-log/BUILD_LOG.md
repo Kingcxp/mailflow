@@ -380,3 +380,21 @@ Diagnosed against the user's own mailbox and their configured LLM (a DB/config s
 | **A full TUI walkthrough test** (`tests/e2e/test_tui_walkthrough.py`) drives the real app: table fills, detail pane shows summary/reason/body with no blank rows, typing filters and clearing restores, single-mail re-analyze offers cancel and cancels cleanly, bulk re-analyze confirms/cancels/re-runs, clear-expired asks and cancels without deleting, the preferences form saves, smart action returns matched rows, every tab mounts, the LLM chain reorders with the cursor following, and the log viewer filters. Any unhandled handler exception fails it. | `uv run pytest tests/e2e/test_tui_walkthrough.py -q`: 1 passed. |
 | The **real TUI** (runner + service + app, not a pilot) was launched against a copy of their config and left running for two minutes: it rendered the mail table with the 重要/信息/广告 mix, the detail pane (摘要/原因/原文内容) and the three control rows, with their live mailbox attached. | `hub` process `realtui` (ready on the MailFlow banner, 2 m04s uptime, then terminated externally — Textual quits on Ctrl+Q, which the PTY helper cannot send). |
 | Full quality gate after the change. | `make check`: Ruff clean; 103 files formatted; mypy 97 source files clean; pyright 0 errors/0 warnings; pytest 610 passed (1 existing third-party deprecation warning); docs gate cross-checked 37 documents. |
+
+### Schedule expiry sweep (2026-09-18)
+
+| Command | Result |
+| ------- | ------ |
+| `uv run pytest tests/unit/test_actions_hide.py -q` | 7 passed (4 new expiry regressions) |
+| `uv run pytest tests/e2e -q` | 57 passed |
+| `make check` | see below |
+
+`service.purge_expired_actions()` retires schedule entries that ended more than
+a day ago, driven by an hourly `_schedule_expiry_loop` in the service (plus once
+at startup). Mail-derived entries are dismissed by the same natural key a manual
+delete records, so re-analysis cannot resurrect them; custom todos and imported
+seminars are deleted from the custom-action store. The window end (`due_end`)
+decides "ended", so a running meeting keeps its reminder.
+
+Two e2e fixtures hardcoded 2026-06-10 deadlines that had aged three months into
+the past; they were made relative, because the sweep correctly retires them.

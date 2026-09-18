@@ -120,6 +120,15 @@ analysis output is dismissed by its stable natural key so re-analysis keeps it
 hidden, while custom and seminar entries are deleted from the custom-action
 store for real.
 
+`service.purge_expired_actions()` retires spent entries on a periodic sweep
+(hourly, plus once at startup). "Spent" means the entry ended more than a day
+ago — measured from `due_end` when the entry has a window, so a meeting that is
+still running keeps its reminder. Mail-derived entries are dismissed by the same
+natural key a manual delete records, so re-analysis cannot resurrect them;
+user todos and imported seminars are removed from the custom-action store. The
+delay is deliberate: the entry the user is looking at, and the one whose
+reminder just fired, must survive long enough to be acted on.
+
 ## SeminarCandidate and SeminarDiscoveryResult
 
 `SeminarCandidate` is **not** an `ActionItem`: it is a review proposal grounded
