@@ -60,6 +60,34 @@ class _NotifierProbe:
                     user_id = str(payload_data.get("user_id", "?"))
                     return str(t("tui.bots_logged_in_as", name=nickname, uid=user_id))
                 return http_status(response.status_code)
+            if provider == "whatsapp":
+                url = str(options.get("gateway_url", "")).rstrip("/")
+                if not url:
+                    return str(t("tui.bots_not_configured"))
+                async with httpx.AsyncClient(timeout=6.0) as client:
+                    response = await client.get(f"{url}/health")
+                if response.status_code == 200:
+                    payload: Any = response.json()
+                    if isinstance(payload, dict) and payload.get("logged_in"):
+                        return str(t("tui.bots_online"))
+                    return str(t("tui.bots_not_logged_in"))
+                return http_status(response.status_code)
+            if provider == "telegram":
+                token = str(options.get("bot_token", "")).strip()
+                if not token:
+                    return str(t("tui.bots_not_configured"))
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    response = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+                if response.status_code == 200:
+                    payload = response.json()
+                    result: Any = payload.get("result") if isinstance(payload, dict) else None
+                    name = (
+                        str((result or {}).get("username") or "")
+                        if isinstance(result, dict)
+                        else ""
+                    )
+                    return str(t("tui.bots_logged_in_as", name=name or "bot", uid=name))
+                return http_status(response.status_code)
             if provider == "openwechat":
                 url = str(options.get("gateway_url", "")).rstrip("/")
                 if not url:
@@ -97,7 +125,9 @@ class NotificationsPane(Vertical):
     reports it in the status column.
     """
 
-    IM_PROVIDERS: ClassVar[frozenset[str]] = frozenset({"onebot", "openwechat", "wechatpadpro"})
+    IM_PROVIDERS: ClassVar[frozenset[str]] = frozenset(
+        {"onebot", "openwechat", "wechatpadpro", "telegram", "whatsapp"}
+    )
     _PROBE_INTERVAL = 30.0
 
     def __init__(self, service: MailFlowService) -> None:
@@ -512,6 +542,11 @@ class NotificationsPane(Vertical):
             options["http_url"] = endpoint
         elif provider == "wechatpadpro":
             options["base_url"] = endpoint
+        elif provider == "telegram":
+            # Telegram talks to the public Bot API: there is no local
+            # endpoint to store, and the bridge runs in-process, so the
+            # only settings are the token the form collected plus admins.
+            options["api_base"] = endpoint
         else:
             options["gateway_url"] = endpoint
         form_opts = dict(form_values.get("options") or {}) if form_values else {}

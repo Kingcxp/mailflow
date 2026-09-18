@@ -2147,6 +2147,8 @@ class LogsPane(Vertical):
         "napcat": "chat",
         "openwechat": "chat",
         "wechatpadpro": "chat",
+        "telegram": "chat",
+        "whatsapp": "chat",
         "llm": "llm",
         "pipeline": "parse",
         "processor": "parse",
@@ -2164,6 +2166,8 @@ class LogsPane(Vertical):
         "napcat": ("napcat", "#F56C6C"),
         "openwechat": ("openwechat", "#E6A23C"),
         "wechatpadpro": ("wechatpadpro", "#67C23A"),
+        "telegram": ("telegram", "#229ED9"),
+        "whatsapp": ("whatsapp", "#25D366"),
     }
 
     @staticmethod

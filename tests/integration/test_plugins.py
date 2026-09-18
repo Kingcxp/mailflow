@@ -391,7 +391,9 @@ class TestBundledRegistration:
             "mailflow-notify-console",
             "mailflow-notify-onebot",
             "mailflow-notify-openwechat",
+            "mailflow-notify-telegram",
             "mailflow-notify-wechatpadpro",
+            "mailflow-notify-whatsapp",
             "mailflow-export-nonebot",
             "mailflow-export-astrbot",
         }
@@ -410,6 +412,11 @@ class TestBundledRegistration:
         assert registry.has(ComponentKind.NOTIFIER, "console")
         assert registry.has(ComponentKind.NOTIFIER, "onebot")
         assert registry.has(ComponentKind.NOTIFIER, "wechatpadpro")
+        # the auto-deploy platforms ship a notifier AND its provisioner, so
+        # the Notifications tab can offer guided setup for them
+        for provider in ("telegram", "whatsapp"):
+            assert registry.has(ComponentKind.NOTIFIER, provider)
+            assert registry.has(ComponentKind.GATEWAY_PROVISIONER, provider)
         # rules/llm-importance are built into the core, not plugin-provided;
         # start_service registers them (covered by the e2e service tests)
         assert registry.has(ComponentKind.BOT_EXPORTER, "nonebot")
@@ -507,8 +514,11 @@ class TestTelegramNotifier:
 
         import importlib
 
-        tg_plugin = importlib.import_module("mailflow_notify_telegram.plugin")
-        monkeypatch.setattr(tg_plugin, "urlopen", fake_urlopen)  # pyright: ignore[reportUnknownMemberType]
+        # the HTTP call lives in the gateway module (send_text), which the
+        # notifier calls through a worker thread; patching urlopen there
+        # keeps the assertion on the real request URL and body
+        tg_gateway = importlib.import_module("mailflow_notify_telegram.gateway")
+        monkeypatch.setattr(tg_gateway, "urlopen", fake_urlopen)  # pyright: ignore[reportUnknownMemberType]
         notifier = TelegramNotifier(
             NotifierConfig(
                 notifier_id="tg",

@@ -15,6 +15,8 @@ dependencies = [
   "mailflow-notify-console",
   "mailflow-notify-onebot",
   "mailflow-notify-openwechat",
+  "mailflow-notify-telegram",
+  "mailflow-notify-whatsapp",
   "mailflow-notify-wechatpadpro",
   "mailflow-export-nonebot",
   "mailflow-export-astrbot",

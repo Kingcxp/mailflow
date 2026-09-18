@@ -24,6 +24,7 @@ members = [
     "mailflow-notify-openwechat",
     "mailflow-notify-telegram",
     "mailflow-notify-wechatpadpro",
+    "mailflow-notify-whatsapp",
     "mailflow-server",
     "mailflow-storage-sqlite",
     "mailflow-testkit",
@@ -491,7 +492,9 @@ dependencies = [
     { name = "mailflow-notify-console" },
     { name = "mailflow-notify-onebot" },
     { name = "mailflow-notify-openwechat" },
+    { name = "mailflow-notify-telegram" },
     { name = "mailflow-notify-wechatpadpro" },
+    { name = "mailflow-notify-whatsapp" },
     { name = "mailflow-storage-sqlite" },
 ]
 
@@ -509,7 +512,9 @@ requires-dist = [
     { name = "mailflow-notify-console", editable = "plugins/mailflow-notify-console" },
     { name = "mailflow-notify-onebot", editable = "plugins/mailflow-notify-onebot" },
     { name = "mailflow-notify-openwechat", editable = "plugins/mailflow-notify-openwechat" },
+    { name = "mailflow-notify-telegram", editable = "plugins/mailflow-notify-telegram" },
     { name = "mailflow-notify-wechatpadpro", editable = "plugins/mailflow-notify-wechatpadpro" },
+    { name = "mailflow-notify-whatsapp", editable = "plugins/mailflow-notify-whatsapp" },
     { name = "mailflow-storage-sqlite", editable = "plugins/mailflow-storage-sqlite" },
 ]
 
@@ -703,6 +708,17 @@ requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }
 name = "mailflow-notify-wechatpadpro"
 version = "0.1.0"
 source = { editable = "plugins/mailflow-notify-wechatpadpro" }
+
+[[package]]
+name = "mailflow-notify-whatsapp"
+version = "0.1.0"
+source = { editable = "plugins/mailflow-notify-whatsapp" }
+dependencies = [
+    { name = "mailflow-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mailflow-core", editable = "packages/mailflow-core" }]
 
 [[package]]
 name = "mailflow-server"

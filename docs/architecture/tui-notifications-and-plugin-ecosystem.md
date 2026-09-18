@@ -78,9 +78,12 @@ minimum urgency, target count, live connection status). This includes:
 - **Check all** — concurrent bounded probes (already implemented with
   `asyncio.Semaphore(4)`).
 - **Deploy** — for gateway-backed providers, opens the guided setup
-  (`GatewayGuideModal`) to auto-install/start NapCat or OpenWeChat, or create
-  a per-instance WeChatPadPro Docker Compose stack, then drive QR login. The
-  guide writes the corresponding reachable notifier endpoint only on success.
+  (`GatewayGuideModal`) to auto-install/start NapCat or OpenWeChat, create a
+  per-instance WeChatPadPro Docker Compose stack, validate a Telegram bot
+  token, or install and pair the WhatsApp Node bridge; QR login is driven from
+  the guide where the platform has one (Telegram does not — the token is the
+  credential, so the guide completes immediately). The guide writes the
+  corresponding reachable notifier endpoint only on success.
 - **Deployment lifecycle** — a retry or re-login first replaces the prior
   supervisor and its saved bridge options. A cancelled or failed install/start
   stops any partial gateway process, retains the generated payload for retry,
@@ -262,7 +265,7 @@ Confirmed additions, one folder per plugin under its category:
 | Category | Plugins |
 | -------- | ------- |
 | `mail_source` | mailflow-mail-gmail (OAuth), mailflow-mail-outlook (OAuth) |
-| `notifier` | mailflow-notify-dingtalk, mailflow-notify-feishu, mailflow-notify-wecom, mailflow-notify-slack, mailflow-notify-discord, mailflow-notify-serverchan |
+| `notifier` | mailflow-notify-dingtalk, mailflow-notify-feishu, mailflow-notify-wecom, mailflow-notify-slack, mailflow-notify-discord, mailflow-notify-serverchan (delivery only); **mailflow-notify-telegram** and **mailflow-notify-whatsapp** (delivery + guided auto-deploy) |
 | `llm_backend` | mailflow-llm-deepseek, mailflow-llm-qwen, mailflow-llm-zhipu, mailflow-llm-moonshot (OpenAI-compatible presets) |
 | `processor` | mailflow-processor-filter (rules: sender/subject/keyword), mailflow-processor-archive (auto-archive), mailflow-processor-rules (rule templates) |
 

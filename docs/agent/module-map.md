@@ -53,6 +53,8 @@
 | `mailflow-notify-onebot` | `onebot` notifier — OneBot v11 HTTP (NapCat/go-cqhttp), `user:`/`group:` targets |
 | `mailflow-notify-openwechat` | `openwechat` notifier + gateway provisioner — WeChat web protocol, Go bridge, scan-to-login |
 | `mailflow-notify-wechatpadpro` | `wechatpadpro` notifier + gateway provisioner — WeChat Pad protocol via docker compose (WeChatPadPro+MySQL+Redis), QR login, webhook chat bridge |
+| `mailflow-notify-telegram` | `telegram` notifier + gateway provisioner — Bot API push and an **in-process** long-poll bridge (no runtime to install, no QR: the token is the credential), so chats run MailFlow commands |
+| `mailflow-notify-whatsapp` | `whatsapp` notifier + gateway provisioner — local Node/Baileys bridge installed from npm, QR pairing, `/health` + `/qr` + `/send` HTTP contract, chat commands through the same bridge |
 | `mailflow-llm-google-generative-ai` | `google-generative-ai` LLM backend (Gemini API) |
 | `mailflow-llm-google-vertex` | `google-vertex` LLM backend (Vertex AI, service-account or access-token auth) |
 
@@ -61,12 +63,12 @@ The `rules` and `llm-importance` processors are **not** plugins: they live in
 under the plugin id `mailflow-core`. A plugin registering the same component
 id replaces the built-in.
 
-`plugins/mailflow-notify-telegram` is in the workspace but **not** in
-`BUNDLED_PLUGINS`: the marketplace owns and ships it, and this copy exists so
-`tests/integration/test_plugins.py::TestTelegramNotifier` can assert the
-contract that matters (a missing token skips instead of raising, and the bot
-token never appears in the request body). Keep the two copies identical, or
-delete this one together with its test.
+`mailflow-notify-telegram` and `mailflow-notify-whatsapp` are **bundled**: a
+chat platform only counts as auto-deployable when its provisioner ships with
+the app. The marketplace repo still mirrors the telegram plugin byte for byte
+(`TestTelegramNotifier::test_stays_identical_to_the_marketplace_copy`) and now
+carries the WhatsApp one too; both are listed under the marketplace `gateway`
+category, which no longer ships empty.
 
 A sibling marketplace repository (`mailflow-repo`, pushed to
 github.com/Kingcxp/mailflow-repo) holds plugins one folder per plugin under

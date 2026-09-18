@@ -398,3 +398,27 @@ decides "ended", so a running meeting keeps its reminder.
 
 Two e2e fixtures hardcoded 2026-06-10 deadlines that had aged three months into
 the past; they were made relative, because the sweep correctly retires them.
+
+### Telegram + WhatsApp auto-deploy (2026-09-18)
+
+| Command | Result |
+| ------- | ------ |
+| `uv run pytest tests/unit/test_telegram_provisioner.py -q` | 21 passed |
+| `uv run pytest tests/unit/test_whatsapp_provisioner.py -q` | 16 passed |
+| `uv run pytest tests/integration/test_plugins.py -q` | passed (bundled registration asserts both new notifier+provisioner pairs) |
+| `make check` | see below |
+
+Both plugins register a NOTIFIER **and** a GATEWAY_PROVISIONER, so the existing
+registry-driven guided setup (`#entry-form-next` → `GatewayGuideModal`) picks
+them up with no flow change. Verified against the real world, not only fakes:
+
+- Telegram: token validation via `getMe`, in-process `getUpdates` long-poll,
+  bot's own messages and non-text updates ignored, the exact
+  `{text,sender,chat_id,chat_type,provider,instance_id}` payload posted to
+  `bot_server`, every reply page sent back in order.
+- WhatsApp: real `npm install` (118 packages) by `install()`, real `start()`
+  launching the Node bridge, `/health` → `{"logged_in": false,
+  "status": "pending"}` then `/qr` → a genuine 4808-byte PNG QR
+  (`status=scanning`), a second `start()` reusing the running bridge instead of
+  launching another, and `stop()` reporting `stopped`. Smoke artifacts removed
+  afterwards.

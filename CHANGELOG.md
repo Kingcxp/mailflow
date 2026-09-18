@@ -1004,3 +1004,18 @@ All notable changes are recorded here; the format follows
   exe), Nuitka standalone/onefile executables, docs gate.
 - Tests: 100+ unit, integration (monkeypatched httpx — no real API calls) and
   end-to-end tests through the public `start_service` entry point.
+- **Telegram and WhatsApp auto-deploy notification instances**: the two chat
+  platforms the auto-deploy path was still missing. `telegram` needs no local
+  runtime — the Bot API *is* the gateway — so its provisioner validates the
+  token with `getMe` and runs the command bridge **in-process** as a
+  `getUpdates` long-poll that forwards chat messages to `bot_server` and sends
+  every reply page back; there is no QR, so the guided setup finishes at once.
+  `whatsapp` installs and supervises a local Node/[Baileys](https://github.com/WhiskeySockets/Baileys)
+  bridge (`npm`, pinned `@whiskeysockets/baileys@6.7.24`) exposing
+  `/health` + `/qr` + `/send`, drives scan-to-login in the guide, keeps the
+  session under `data/gateways/`, and routes chat commands through the same
+  bridge. Both ship a notifier (`notify`/`push_text`/`push_to_target`, one
+  request per target, a failing chat never aborts the rest) and are bundled,
+  since a platform is only auto-deployable when its provisioner ships with the
+  app; the marketplace repo mirrors both and its `gateway` category is no
+  longer empty.

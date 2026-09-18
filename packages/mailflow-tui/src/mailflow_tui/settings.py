@@ -397,13 +397,16 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             # notifier id (onebot) so self-hosted users keep the form
             choices = set(NotificationsPane.IM_PROVIDERS)
             choices.update(service.gateway_providers())
-            # Order: console → QQ (onebot, napcat) → WeChat (openwechat)
+            # Order: console → QQ (onebot, napcat) → WeChat → Telegram →
+            # WhatsApp; ids outside this list still appear, sorted last
             _ORDER = (
                 "console",
                 "onebot",
                 "napcat",
                 "openwechat",
                 "wechatpadpro",
+                "telegram",
+                "whatsapp",
             )
             self._provider_choices = tuple(p for p in _ORDER if p in choices) + tuple(
                 sorted(choices - set(_ORDER))
