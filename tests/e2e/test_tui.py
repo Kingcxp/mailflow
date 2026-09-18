@@ -664,6 +664,106 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> None:
+    """A delete instruction matches, states the real count, and removes the
+    mails only once the user confirms — with a recoverable trash move."""
+    import queue
+
+    from mailflow.contracts import LLMCompletion
+    from mailflow.plugin_market import PluginMarket
+    from mailflow_tui.confirm import ConfirmModal
+
+    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    manager.register(TUIPlugin())
+    manager.register(storage_plugin)
+    service = await start_service(
+        build_config(tmp_path / "tui.db"),
+        plugin_manager=manager,
+        discover_plugins=False,
+        enable_logging=False,
+    )
+    service.market = PluginMarket([])
+    CommandRouter(service)
+
+    class DeletingRouter:
+        """Routes the intent to delete and matches only the promotion."""
+
+        async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMCompletion:
+            system = messages[0]["content"]
+            user = messages[-1]["content"]
+            if system.startswith("You route one free-form"):
+                return LLMCompletion(text='{"intent":"delete"}', model="smart")
+            if user.startswith("Reply with"):
+                return LLMCompletion(text="ok", model="smart")
+            if system.startswith("You are MailFlow's smart mail finder and"):
+                before = user.split("subject=Huge promotion sale", maxsplit=1)[0]
+                candidate = before.rsplit("candidate=", maxsplit=1)[1].splitlines()[0]
+                return LLMCompletion(text=f'[{{"id":"{candidate}","relevance":92}}]', model="smart")
+            return LLMCompletion(text="ok", model="smart")
+
+    service.router = cast(Any, DeletingRouter())
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(160, 50)) as pilot:
+            for _ in range(100):
+                if await service.count_mails() == 3:
+                    break
+                await pilot.pause(0.05)
+            search = app.query_one("#mail-search", Input)
+            search.value = "把广告邮件都删掉"
+
+            def modal() -> ConfirmModal | None:
+                screens = [s for s in app.screen_stack if isinstance(s, ConfirmModal)]
+                return screens[-1] if screens else None
+
+            app.query_one("#smart-action", Button).press()
+            for _ in range(80):
+                if modal() is not None:
+                    break
+                await pilot.pause(0.05)
+            prompt = modal()
+            assert prompt is not None, "a delete match must ask before removing mail"
+            body = str(prompt.query_one("#confirm-body", Static).render())
+            assert "1" in body  # the real matched count, not the mailbox size
+
+            # nothing is removed while the dialog is open
+            assert await service.count_mails() == 3
+            # cancelling leaves the mailbox untouched
+            prompt.query_one("#confirm-cancel", Button).press()
+            for _ in range(40):
+                if modal() is None:
+                    break
+                await pilot.pause(0.05)
+            assert await service.count_mails() == 3
+
+            # a second run, this time confirmed
+            search.value = "把广告邮件都删掉"
+            app.query_one("#smart-action", Button).press()
+            for _ in range(80):
+                if modal() is not None:
+                    break
+                await pilot.pause(0.05)
+            prompt = modal()
+            assert prompt is not None
+            prompt.query_one("#confirm-run", Button).press()
+            for _ in range(80):
+                if await service.count_mails() == 2:
+                    break
+                await pilot.pause(0.05)
+            assert await service.count_mails() == 2
+            # the deleted mail is recoverable, not destroyed
+            trash = await service.list_trash()
+            assert [item.mail.subject for item in trash] == ["Huge promotion sale"]
+            # the pane reports the real number moved
+            hint = app.query_one("#mail-empty-hint", Static)
+            assert "1" in str(hint.render())
+            app.exit()
+            await pilot.pause()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
 async def test_plugin_scaffold_wizard(tmp_path: Path) -> None:
     """The market wizard scaffolds a loadable plugin into a picked folder."""
     from mailflow.plugin_market import PluginMarket

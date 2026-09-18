@@ -192,6 +192,19 @@ into a `SmartActionIntent`:
   instruction actually concerns are used), then `discover_seminars` extracts
   the event and the proposals with a usable future start are written through
   `import_seminar`.
+- `delete` — the user wants matching mail removed. The service only **matches**
+  (`_delete_matches`, a stricter prompt than search: every returned mail is a
+  deletion candidate, so precision beats recall) and reports the real count;
+  the host confirms, then calls `delete_mails`, which re-reads each record
+  before moving it to the trash and returns how many actually moved. A model's
+  judgement is never on its own enough to destroy mail, and deletion stays
+  recoverable.
+
+Intent routing is precedence-ordered in `_SMART_INTENT_PROMPT`: removal wording
+wins over a topic, schedule-adding wording wins over a topic, and `search` is
+the fallback for everything else including an unreadable answer — listing is
+always safe, deleting never is. All three intents evaluate every stored mail
+in bounded batches, and the run is cancellable at any point.
 
 `SmartActionResult` reports the intent, the matched `records`, the same
 `total_mails`/`failed_mails`/`failed_batches` completeness counters, the

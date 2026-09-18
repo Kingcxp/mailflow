@@ -422,3 +422,37 @@ them up with no flow change. Verified against the real world, not only fakes:
   (`status=scanning`), a second `start()` reusing the running bridge instead of
   launching another, and `stop()` reporting `stopped`. Smoke artifacts removed
   afterwards.
+
+### Smart action: delete intent + button alignment (2026-09-18)
+
+| Command | Result |
+| ------- | ------ |
+| `uv run pytest tests/unit/test_service.py -q -k TestSmartAction` | 7 passed |
+| `uv run pytest tests/e2e/test_tui.py -q -k deletes_only_after_confirmation` | 1 passed |
+| `uv run pytest tests/unit/test_actions_hide.py -q` | 8 passed |
+| `make check` | see below |
+
+Intent routing was verified against the user's live endpoint with 18 real
+instructions (9 Chinese, 9 English). The first attempt regressed
+"把研讨会邮件加入日程" to `search`, because the added safety wording ("choose
+search when unsure") outranked the schedule branch; the prompt was rewritten
+as an explicit precedence list (delete → schedule_seminar → search) and all 18
+then routed correctly, including "put these lectures in the schedule",
+"schedule the workshop invitations" and "把这些讲座放进日程表".
+
+Layout was measured, not guessed: the input rendered 3 rows tall (124x3) while
+the button was 1 row (16x1) at the same y, so it sat on the input's top edge.
+After `align-vertical: middle` + `#smart-action { height: 100% }` both report
+`region y=3 h=3`, confirmed visually in an exported screenshot.
+
+Live verification on real mail (a copy of the user's database and config, so
+the real data was never touched):
+
+| Instruction | Result |
+| ----------- | ------ |
+| `把广告邮件都删掉` | `intent=delete`, scanned 8/8 mails, matched the shipping notice, `deleted=0` — mailbox still 8 |
+| `删除那封商品发货通知` | `intent=delete`, matched exactly 1, confirmed `delete_mails` moved 1 (8 → 7), the mail is recoverable in the trash |
+| `找出关于研讨会的邮件` | `intent=search`, 2/8 matched |
+
+The full TUI also ran against a copy of their config: the mail list, detail
+pane and the aligned search row rendered on real mail.

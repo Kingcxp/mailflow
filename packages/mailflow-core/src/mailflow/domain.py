@@ -355,6 +355,7 @@ class SmartActionIntent(StrEnum):
 
     SEARCH = "search"
     SCHEDULE_SEMINAR = "schedule_seminar"
+    DELETE = "delete"
 
 
 class SmartActionResult(BaseModel):
@@ -364,6 +365,11 @@ class SmartActionResult(BaseModel):
     acted-on set for an operation). ``scheduled`` are the schedule entries an
     operation created; ``needs_review`` are proposals the operation could not
     schedule on its own (no usable future time), left for explicit review.
+
+    ``delete`` reports matches only: the caller removes them through
+    ``MailFlowService.delete_mails`` after confirming the real count, because
+    a destructive bulk action never runs straight from a model's judgement.
+    ``deleted`` records how many a confirmed call actually moved to the trash.
     """
 
     intent: SmartActionIntent = SmartActionIntent.SEARCH
@@ -373,6 +379,7 @@ class SmartActionResult(BaseModel):
     failed_batches: int = 0
     scheduled: list[ActionItem] = Field(default_factory=lambda: [])
     needs_review: list[SeminarCandidate] = Field(default_factory=lambda: [])
+    deleted: int = 0
 
     @property
     def is_complete(self) -> bool:

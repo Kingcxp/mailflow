@@ -101,6 +101,27 @@ async def test_mail_todo_delete_hides_across_reanalysis(service: MailFlowService
     assert await service.list_actions() == []
 
 
+async def test_bulk_delete_reports_what_really_moved(service: MailFlowService) -> None:
+    """A confirmed bulk delete counts real moves: an id that is already gone
+    must not be reported as deleted, and must not abort the rest."""
+    store = cast(Any, service.storage)
+
+    async def delete_mail(record_id: str) -> None:
+        store.mails.pop(record_id, None)
+
+    async def get_mail(record_id: str) -> Any:
+        return store.mails.get(record_id)
+
+    store.delete_mail = delete_mail
+    store.get_mail = get_mail
+    store.mails["m1"] = object()
+    store.mails["m2"] = object()
+
+    # m-missing is gone; m1 and m2 must still be removed
+    assert await service.delete_mails(["m1", "m-missing", "m2"]) == 2
+    assert store.mails == {}
+
+
 async def test_spent_entries_are_retired_only_after_a_day(service: MailFlowService) -> None:
     """The sweep is a day behind the due time, so an entry the user is
     looking at (or one whose reminder just fired) is never taken away."""

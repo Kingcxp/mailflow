@@ -1019,3 +1019,16 @@ All notable changes are recorded here; the format follows
   since a platform is only auto-deployable when its provisioner ships with the
   app; the marketplace repo mirrors both and its `gateway` category is no
   longer empty.
+- **Smart action can delete matched mail**: the Mail tab's instruction box
+  gained the third intent. `delete` wording ("delete all the ads", "把广告邮件
+  都删掉") matches the mails through a stricter prompt than search — every
+  returned mail is a deletion candidate, so precision beats recall — and then
+  stops: the pane shows the real matched count and a confirmation dialog, and
+  only a confirmed call runs `delete_mails`, which re-reads each record before
+  moving it to the trash and reports how many actually moved. Nothing is
+  destroyed by a model's judgement, and everything stays recoverable.
+  Intent routing is precedence-ordered so removal and schedule-adding wording
+  win over a topic, with `search` as the fallback for an unreadable answer.
+- **Smart action button alignment**: the button now fills the search row's
+  full height (`#smart-action` had no CSS rule at all), so it lines up with the
+  input's frame instead of hanging off its top edge.

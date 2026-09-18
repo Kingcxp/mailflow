@@ -45,8 +45,15 @@ class _StubRouter:
         system = str(messages[0].get("content", ""))
         user = str(messages[-1].get("content", ""))
         if system.startswith("You route one free-form"):
-            return LLMCompletion(text='{"intent":"search"}', model="stub")
+            # mirror the real routing precedence closely enough to exercise
+            # the delete branch: removal wording decides, everything else
+            # falls back to search
+            intent = "delete" if "delete" in user.lower() else "search"
+            return LLMCompletion(text=f'{{"intent":"{intent}"}}', model="stub")
         if "smart mail finder" in system:
+            ref = user.split("candidate=", 1)[1].splitlines()[0] if "candidate=" in user else "m1"
+            return LLMCompletion(text=f'[{{"id":"{ref}","relevance":90}}]', model="stub")
+        if system.startswith("You are MailFlow's smart mail finder and"):
             ref = user.split("candidate=", 1)[1].splitlines()[0] if "candidate=" in user else "m1"
             return LLMCompletion(text=f'[{{"id":"{ref}","relevance":90}}]', model="stub")
         return LLMCompletion(
@@ -193,6 +200,15 @@ async def test_full_tui_walkthrough(tmp_path: Path) -> None:
             )
             assert await _wait_for(pilot, lambda: table.row_count == 1)
             assert "ID card" in str(table.get_row_at(0)[1])
+
+            # -- a delete instruction asks before removing, and cancel is safe
+            before_delete = await service.count_mails()
+            search.value = "delete the ads"
+            app.query_one("#smart-action", Button).press()
+            assert await _wait_for(pilot, lambda: isinstance(app.screen, ConfirmModal))
+            app.screen.query_one("#confirm-cancel", Button).press()
+            assert await _wait_for(pilot, lambda: not isinstance(app.screen, ConfirmModal))
+            assert await service.count_mails() == before_delete, "cancel must not delete anything"
 
             # -- every other tab mounts and renders without raising
             tabs = app.query_one(TabbedContent)

@@ -881,6 +881,40 @@ class TestSmartAction:
         assert "extract" not in router.phases
         assert await storage.list_custom_actions() == []
 
+    async def test_delete_intent_matches_without_removing_anything(self) -> None:
+        """The delete instruction only *matches*: a model's judgement must
+        never be enough to destroy mail, so the service hands the caller the
+        matched set and the caller deletes after confirming."""
+        router = self._RoutingRouter("delete", "[]")
+        service = self.make_service(router)
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        record_id = mail.normalized_message_id()
+        await storage.save_mail(MailRecord(record_id=record_id, mail=mail))
+
+        result = await service.smart_action("delete the ads")
+
+        assert result.intent is SmartActionIntent.DELETE
+        assert [record.record_id for record in result.records] == [record_id]
+        assert result.deleted == 0
+        # the mail is still there until a confirmed delete runs
+        assert await storage.get_mail(record_id) is not None
+        assert "extract" not in router.phases
+
+    async def test_confirmed_delete_moves_the_matches_to_the_trash(self) -> None:
+        router = self._RoutingRouter("delete", "[]")
+        service = self.make_service(router)
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        record_id = mail.normalized_message_id()
+        await storage.save_mail(MailRecord(record_id=record_id, mail=mail))
+        result = await service.smart_action("delete the ads")
+
+        moved = await service.delete_mails([record.record_id for record in result.records])
+
+        assert moved == 1
+        assert await storage.get_mail(record_id) is None
+
     async def test_schedule_intent_adds_a_timed_event_to_the_schedule(self) -> None:
         event = (
             '[{"id":"m1","title":"Research colloquium",'

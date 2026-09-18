@@ -31,8 +31,11 @@ tears them down with the screen — nothing keeps ticking after it closes.
   filters as you type (subject/sender/summary/body) and is the instruction the
   button sends. **Smart action** calls `service.smart_action`: the model
   classifies the instruction, so "find/filter …" returns the ranked matching
-  mails while "add … to my schedule" both matches the mail announcing the
-  event and schedules it (`SmartActionIntent`). The urgency-colored
+  mails, "add … to my schedule" both matches the mail announcing the event and
+  schedules it, and "delete/clear …" matches the mail to remove and asks for
+  confirmation before moving it to the trash (`SmartActionIntent`; every
+  intent scans all stored mail in bounded batches). The button is sized to the
+  input's full height so the row reads as one control. The urgency-colored
   `DataTable` (■ + a localized urgency label in the contract color) fills the
   pane height; the scrollable detail pane follows the highlighted row (single
   click or arrow keys — no double-click needed) and shows summary, reason,
@@ -82,8 +85,10 @@ tears them down with the screen — nothing keeps ticking after it closes.
   reflects real warm-up and completed batches without being overwritten by the
   spinner; a malformed or unavailable batch remains visibly incomplete rather
   than masquerading as an empty result. The running button stays clickable as
-  Cancel; cancellation clears the free-form query and restores the complete
-  mailbox. Candidate refs (not raw mail ids) make model selections robust, and
+  Cancel at any point; cancellation clears the free-form query and restores the
+  complete mailbox. A delete instruction never deletes on its own: it shows
+  the matched count and a confirmation dialog, and the status line afterwards
+  reports how many mails actually moved to the trash. Candidate refs (not raw mail ids) make model selections robust, and
   each phase numbers the mails it was given, so a ref is never reused across
   phases. Chat platforms use the same engine via `mail search <need>` and
   retain global `#` handles.

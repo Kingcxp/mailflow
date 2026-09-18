@@ -706,7 +706,11 @@ class MailPane(Vertical):
         """
         self._records = result.records
         hints: list[str] = []
-        if result.intent is SmartActionIntent.SCHEDULE_SEMINAR:
+        if result.intent is SmartActionIntent.DELETE:
+            hints.append(
+                self._service.t("tui.smart_action_delete_found", count=len(result.records))
+            )
+        elif result.intent is SmartActionIntent.SCHEDULE_SEMINAR:
             hints.append(self._service.t("tui.smart_action_scheduled", count=len(result.scheduled)))
             if result.needs_review:
                 hints.append(
@@ -731,6 +735,48 @@ class MailPane(Vertical):
             cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
                 SeminarReviewModal(self._service, result.needs_review)
             )
+        if result.intent is SmartActionIntent.DELETE and result.records:
+            # a destructive bulk action never runs straight from a model's
+            # judgement: state the real count and require an explicit yes
+            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+                ConfirmModal(
+                    self._service,
+                    title=self._service.t("tui.smart_action_delete_title"),
+                    body=self._service.t("tui.smart_action_delete_body", count=len(result.records)),
+                    confirm_label=self._service.t("tui.btn_delete"),
+                    variant="error",
+                ),
+                lambda confirmed: self._confirm_smart_delete(result, bool(confirmed)),
+            )
+
+    def _confirm_smart_delete(self, result: SmartActionResult, confirmed: bool) -> None:
+        """Run the confirmed delete of a smart action's matched mails."""
+        if not confirmed:
+            return
+        cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
+            self._delete_smart_matches(result),
+            exclusive=True,
+            group="smart-delete",
+            exit_on_error=False,
+        )
+
+    async def _delete_smart_matches(self, result: SmartActionResult) -> None:
+        """Delete the mails a confirmed smart action matched.
+
+        The count reported back is what actually moved, and the view reloads
+        from storage so the deleted rows disappear without a stale cache.
+        """
+        ids = [record.record_id for record in result.records]
+        moved = await self._service.delete_mails(ids)
+        result.deleted = moved
+        self._clear_smart_action_result()
+        await self.refresh_mail()
+        hint = self.query_one_optional("#mail-empty-hint", Static)
+        if hint is not None:
+            hint.update(
+                f"[green]{self._service.t('tui.smart_action_deleted', count=moved)}[/green]"
+            )
+            hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
 
     async def _preview_matches(self, match_ids: set[str]) -> None:
         """Fetch preview records missing from the cache from storage and
