@@ -150,7 +150,11 @@ EN: dict[str, str] = {
         "Default LLM for processors without an explicit one. The first entry in the list wins."
     ),
     "llms[].fallback": ("LLM ids tried in order when this one fails. Derived from the list order."),
-    "llms[].options": "Backend-specific options (e.g. path = chat/completions).",
+    "llms[].options": (
+        "Backend-specific options: path (chat/completions), max_tokens, temperature, "
+        "stream (default true — some OpenAI-compatible proxies only answer with content "
+        "when streaming is requested), headers, query."
+    ),
     "processors[].processor_id": "Unique name of this processor instance.",
     "processors[].provider": ("Processor component id (built in: rules, llm-importance)."),
     "processors[].enabled": "Run this processor as part of the chain.",
@@ -257,7 +261,11 @@ ZH: dict[str, str] = {
     "llms[].max_retries": "请求失败后重试的次数，用尽后才切换到后备模型。",
     "llms[].default": "作为未显式指定模型的处理器的默认模型。列表中第一项即为默认。",
     "llms[].fallback": "该模型失败时依次尝试的模型 id，由列表顺序自动推导。",
-    "llms[].options": "后端专属选项（如 path = chat/completions）。",
+    "llms[].options": (
+        "后端专属选项：path（chat/completions）、max_tokens、temperature、"
+        "stream（默认 true —— 部分 OpenAI 兼容代理只有在请求流式时才返回内容）、"
+        "headers、query。"
+    ),
     "processors[].processor_id": "该处理器实例的唯一名称。",
     "processors[].provider": "处理器组件 id（内置：rules、llm-importance）。",
     "processors[].enabled": "是否在处理链中运行该处理器。",

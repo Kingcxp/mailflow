@@ -217,13 +217,30 @@ class TestSQLiteStorage:
 
 
 class FakeHTTPResponse:
-    def __init__(self, status_code: int, payload: dict[str, Any], reason: str = "") -> None:
+    """Stands in for ``httpx.Response``: the backend reads the body, the
+    content type and, on a parse failure, the raw text for its diagnosis."""
+
+    def __init__(
+        self,
+        status_code: int,
+        payload: dict[str, Any],
+        reason: str = "",
+        *,
+        content_type: str = "application/json",
+    ) -> None:
         self.status_code = status_code
         self._payload = payload
         self.reason_phrase = reason
+        self.headers: dict[str, str] = {"content-type": content_type}
 
     def json(self) -> dict[str, Any]:
         return self._payload
+
+    @property
+    def text(self) -> str:
+        import json as _json
+
+        return _json.dumps(self._payload)
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -312,6 +329,9 @@ class TestOpenAICompatibleBackend:
         body = call["json"]
         assert body["model"] == "m1"
         assert body["messages"] == [{"role": "user", "content": "hi"}]
+        # streaming is requested by default: some proxies only answer with
+        # content when the request streams
+        assert body["stream"] is True
         assert body["temperature"] == 0.7  # per-call option wins over extra_body
         assert completion.text == "the answer"
         assert completion.model == "m1"

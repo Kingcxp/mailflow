@@ -456,3 +456,32 @@ the real data was never touched):
 
 The full TUI also ran against a copy of their config: the mail list, detail
 pane and the aligned search row rendered on real mail.
+
+### LLM transport: streaming endpoints and readable failures (2026-09-30)
+
+| Command | Result |
+| ------- | ------ |
+| `uv run pytest tests/unit/test_openai_backend.py -q` | 14 passed |
+| `make check` | see below |
+
+Diagnosis, verified against the live endpoint: `ai-ext.1343263.xyz` answers
+`text/event-stream` for every request, and its **non**-streaming path returns a
+single frame with `choices: []` and `completion_tokens: 0` — the exact source
+of `llm request failed: Expecting value: line 1 column 1 (char 0)`. An explicit
+`"stream": false` changed nothing; `"stream": true` streams the real answer
+(4 frames, content `hello`). A real analysis prompt streamed back 157 frames
+and parsed to a valid verdict.
+
+Verified after the fix, through the real backend and the real processor:
+
+| Probe | Result |
+| ----- | ------ |
+| tiny probe (`deepseek-flash`) | `text='ok'`, model `deepseek-v4.1-flash` |
+| registration reminder | `important`, 1 action item, deadline in the reason |
+| promotion mail | `ad` |
+| optional guest lecture | `info` |
+| bad model id | `llm request failed: HTTP 404: Not Found` |
+
+Also confirmed the sibling endpoints moved: AMD now serves
+`DeepSeek-V4-Flash` (the configured `self-dploy/DeepSeek-V4-Flash` 404s), and
+`DeepSeek-V4.1-Flash` there is at its concurrency limit.

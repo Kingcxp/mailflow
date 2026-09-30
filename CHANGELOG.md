@@ -1032,3 +1032,16 @@ All notable changes are recorded here; the format follows
 - **Smart action button alignment**: the button now fills the search row's
   full height (`#smart-action` had no CSS rule at all), so it lines up with the
   input's frame instead of hanging off its top edge.
+- **Streaming-only LLM endpoints work, and unreadable replies say why**: the
+  OpenAI-compatible backend now requests `stream: true` by default and folds a
+  server-sent-events body into one answer (`options.stream = false` opts out).
+  Some proxies answer with a stream no matter what the request asks for, and
+  one returns a stream frame carrying `choices: []` — no content — when the
+  request does *not* stream, which surfaced as the useless
+  `llm request failed: Expecting value: line 1 column 1 (char 0)`. Such a
+  reply is now decoded when it contains content, and otherwise reported as
+  what it is (an empty stream naming its `finish_reason`, an HTML error page,
+  or an empty body). The Anthropic, Gemini and Vertex backends gained the same
+  guard: a reply with no text is an explicit error naming the endpoint's
+  `stop_reason` / `finishReason` instead of a silent empty completion that
+  fails later with an unrelated message.

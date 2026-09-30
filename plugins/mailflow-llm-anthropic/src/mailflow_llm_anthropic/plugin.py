@@ -106,8 +106,14 @@ class AnthropicBackend:
             if item.get("type") == "text":
                 content_parts.append(str(item.get("text", "")))
         raw_model = payload.get("model", "")
+        text = "".join(content_parts)
+        if not text.strip():
+            # an empty answer is an error, never a silent empty completion:
+            # the caller would fail much later with an unrelated parse message
+            stop = str(payload.get("stop_reason") or "unknown")
+            raise RuntimeError(f"endpoint returned a response with no content (stop_reason={stop})")
         return LLMCompletion(
-            text="".join(content_parts),
+            text=text,
             model=str(raw_model),
             raw=payload,
         )

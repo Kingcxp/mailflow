@@ -135,7 +135,7 @@
         "llms[].max_retries": "How many times a failed request is retried before falling back.",
         "llms[].model": "Model identifier sent with each request (e.g. gpt-4o-mini).",
         "llms[].name": "Human-readable name shown in the UI. Falls back to the id when empty.",
-        "llms[].options": "Backend-specific options (e.g. path = chat/completions).",
+        "llms[].options": "Backend-specific options: path (chat/completions), max_tokens, temperature, stream (default true — some OpenAI-compatible proxies only answer with content when streaming is requested), headers, query.",
         "llms[].provider": "LLM backend component id (built in: openai-compatible, anthropic).",
         "llms[].query": "Extra query-string parameters, one 'name = value' per line.",
         "llms[].timeout_seconds": "Per-request timeout in seconds (at least 1). It must cover the wait for the model's first token plus the whole answer, so raise it for cold or slow local models.",

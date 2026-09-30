@@ -135,7 +135,7 @@
         "llms[].max_retries": "请求失败后重试的次数，用尽后才切换到后备模型。",
         "llms[].model": "每次请求发送的模型标识（如 gpt-4o-mini）。",
         "llms[].name": "界面上显示的名称。留空时回退为 id。",
-        "llms[].options": "后端专属选项（如 path = chat/completions）。",
+        "llms[].options": "后端专属选项：path（chat/completions）、max_tokens、temperature、stream（默认 true —— 部分 OpenAI 兼容代理只有在请求流式时才返回内容）、headers、query。",
         "llms[].provider": "大模型后端组件 id（内置：openai-compatible、anthropic）。",
         "llms[].query": "额外查询参数，每行一条“名称 = 值”。",
         "llms[].timeout_seconds": "单次请求超时秒数（至少 1）。需覆盖等待模型首字的时间与完整回答耗时，本地模型较慢或首次调用时应调大。",

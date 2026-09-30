@@ -137,3 +137,27 @@ let it extend the prompt and adjust the parsed result within the same
 four-level contract. Enhancers are active as soon as they are installed; an
 explicit `[[processors]]` section with `enabled = false` for that component id
 turns one off.
+
+## Transport: streaming and unreadable replies
+
+Chat-completions requests are sent with `stream: true` by default
+(`[[llms]] ... [llms.options] stream = false` turns it off). Streaming-first
+proxies exist that answer with a server-sent-events body **regardless** of the
+request, and at least one (an OpenAI-compatible proxy in front of a Claude
+deployment) returns a stream frame with `choices: []` — no content at all —
+when the request does *not* stream. Asking for the stream is therefore what
+makes such an endpoint answer.
+
+The backend accepts both reply shapes: a plain JSON body, and
+`text/event-stream`, which is folded frame by frame into one answer
+(`delta.content` and full-`message` frames, content-parts arrays, and
+`reasoning_content` excluded so a thinking model's scratchpad never becomes the
+answer). A stream is decoded even when the response mislabels its content type,
+so a proxy that streams while claiming `application/json` still works.
+
+An answer that carries no text is an error, never a silent empty completion:
+the caller would otherwise fail much later with an unrelated message. The same
+rule applies across backends — Anthropic reports `stop_reason`, Gemini and
+Vertex report `finishReason`, and a reply that is not JSON is diagnosed by what
+actually arrived (an empty SSE stream, an HTML error page, an empty body)
+instead of leaking `Expecting value: line 1 column 1 (char 0)`.

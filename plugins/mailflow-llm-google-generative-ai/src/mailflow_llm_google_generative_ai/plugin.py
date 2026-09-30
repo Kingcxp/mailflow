@@ -125,7 +125,15 @@ class GeminiBackend:
             if text:
                 chunks.append(str(text))
         if not chunks:
-            raise RuntimeError("response contained no candidates text")
+            # name the reason: an empty answer is usually a safety block or a
+            # token limit, and "no candidates text" alone hides both
+            reason = ""
+            if isinstance(candidates, list) and candidates:
+                reason = str(cast(dict[str, Any], candidates[0]).get("finishReason") or "")
+            raise RuntimeError(
+                "endpoint returned a response with no content"
+                + (f" (finish_reason={reason})" if reason else "")
+            )
         usage = cast(dict[str, Any], payload.get("usageMetadata") or {})
         model_name: Any = usage.get("modelVersion") or self._config.model
         return LLMCompletion(text="".join(chunks), model=str(model_name), raw=payload)
