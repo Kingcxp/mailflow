@@ -307,11 +307,6 @@ SeminarReviewModal {
     padding: 0 1;
 }
 
-/* shown by the pane only while proposals await review */
-#actions-review-seminars {
-    display: none;
-}
-
 #actions-hint {
     height: 1;
     color: $text-muted;

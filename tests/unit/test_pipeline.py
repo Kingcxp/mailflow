@@ -13,6 +13,7 @@ from mailflow.config import LLMConfig, ProcessorConfig
 from mailflow.contracts import (
     LLMCompletion,
     MailMessage,
+    MessageDict,
     ProcessingContext,
     ProcessorDecision,
     ProcessorResult,
@@ -50,14 +51,15 @@ class FakeLLM:
     def __init__(self, results: list[str] | None = None, fail: bool = False) -> None:
         self.results = list(results or [])
         self.fail = fail
-        self.calls: list[list[dict[str, str]]] = []
+        self.calls: list[list[MessageDict]] = []
 
     async def chat(
         self,
-        messages: list[dict[str, str]],
+        messages: list[MessageDict],
         *,
         temperature: float | None = None,
         options: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMCompletion:
         self.calls.append(messages)
         if self.fail:
@@ -72,10 +74,11 @@ class FailingLLM:
 
     async def chat(
         self,
-        messages: list[dict[str, str]],
+        messages: list[MessageDict],
         *,
         temperature: float | None = None,
         options: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMCompletion:
         raise RuntimeError("boom")
 

@@ -283,3 +283,83 @@ async def test_imported_seminar_delete_is_real(service: MailFlowService) -> None
 
     assert await service.delete_action(item.item_id) is True
     assert store.custom == {}
+
+
+class TestEventDedupe:
+    """Two mails reminding of one event must not become two schedule entries."""
+
+    @staticmethod
+    def _item(
+        item_id: str,
+        *,
+        mail_id: str,
+        summary: str = "毕业论文答辩",
+        due_at: datetime | None = None,
+    ) -> ActionItem:
+        return ActionItem(
+            item_id=item_id,
+            mail_id=mail_id,
+            summary=summary,
+            action_type="meeting",
+            due_at=due_at or _DUE,
+        )
+
+    async def test_two_mails_reminding_the_same_event_collapse(
+        self, service: MailFlowService
+    ) -> None:
+        store = cast(Any, service.storage)
+        first = self._item("a", mail_id="mail-1", due_at=_DUE)
+        # the reminder arrives 30 minutes after the original notice
+        second = self._item("b", mail_id="mail-2", due_at=_DUE + timedelta(minutes=30))
+        store.mails["mail-1"] = cast(Any, type("R", (), {"action_items": [first]}))
+        store.mails["mail-2"] = cast(Any, type("R", (), {"action_items": [second]}))
+
+        listed = await service.list_actions()
+
+        assert len(listed) == 1
+        assert listed[0].item_id == "a"  # the earliest statement of the event
+        # the unfiltered list keeps both, because the delete path addresses one
+        assert len(await service.list_actions_all()) == 2
+
+    async def test_events_five_hours_apart_stay_separate(self, service: MailFlowService) -> None:
+        store = cast(Any, service.storage)
+        first = self._item("a", mail_id="mail-1", due_at=_DUE)
+        second = self._item("b", mail_id="mail-2", due_at=_DUE + timedelta(hours=5))
+        store.mails["mail-1"] = cast(Any, type("R", (), {"action_items": [first]}))
+        store.mails["mail-2"] = cast(Any, type("R", (), {"action_items": [second]}))
+
+        assert len(await service.list_actions()) == 2
+
+    async def test_different_events_at_the_same_time_stay_separate(
+        self, service: MailFlowService
+    ) -> None:
+        store = cast(Any, service.storage)
+        first = self._item("a", mail_id="mail-1", summary="线性代数考试")
+        second = self._item("b", mail_id="mail-2", summary="小组会议")
+        store.mails["mail-1"] = cast(Any, type("R", (), {"action_items": [first]}))
+        store.mails["mail-2"] = cast(Any, type("R", (), {"action_items": [second]}))
+
+        assert len(await service.list_actions()) == 2
+
+    async def test_a_seminar_marker_does_not_break_identity(self, service: MailFlowService) -> None:
+        """An imported seminar and a mail-derived reminder for it are one event."""
+        store = cast(Any, service.storage)
+        derived = self._item("a", mail_id="mail-1", summary="人工智能前沿讲座")
+        imported = self._item(
+            "b", mail_id="mail-2", summary="[SEMINAR] 人工智能前沿讲座", due_at=_DUE
+        )
+        store.mails["mail-1"] = cast(Any, type("R", (), {"action_items": [derived]}))
+        store.mails["mail-2"] = cast(Any, type("R", (), {"action_items": [imported]}))
+
+        assert len(await service.list_actions()) == 1
+
+    async def test_an_empty_summary_is_never_collapsed(self, service: MailFlowService) -> None:
+        store = cast(Any, service.storage)
+        store.mails["mail-1"] = cast(
+            Any, type("R", (), {"action_items": [self._item("a", mail_id="m1", summary="  ")]})
+        )
+        store.mails["mail-2"] = cast(
+            Any, type("R", (), {"action_items": [self._item("b", mail_id="m2", summary="")]})
+        )
+
+        assert len(await service.list_actions()) == 2

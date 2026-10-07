@@ -98,6 +98,7 @@ class LLMRouterImpl:
         fallback: list[str] | None = None,
         temperature: float | None = None,
         options: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMCompletion:
         candidate_ids: list[str] = []
         for llm_id in [primary, *(fallback or [])]:
@@ -120,7 +121,7 @@ class LLMRouterImpl:
                 # the user set and still succeed; wait_for makes it a hard bound
                 # and the caller learns the request exceeded it.
                 completion = await asyncio.wait_for(
-                    backend.chat(messages, temperature=temperature, options=options),
+                    backend.chat(messages, temperature=temperature, options=options, tools=tools),
                     timeout=deadline,
                 )
             except TimeoutError:

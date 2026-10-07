@@ -7,6 +7,59 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **Smart action is a tool-calling loop, not three hardcoded intents** — the
+  model now receives a tool set (`find_mail`, `delete_mail`, `schedule_event`,
+  `schedule_seminar`, `list_actions`, `add_action`, `edit_action`,
+  `delete_action`, `check_seminars`) and decides itself what to call, with
+  which arguments, in which order. The user states a goal, never a procedure.
+  `find_mail` takes a literal `contains` (case-insensitive substring over
+  subject/body — the user's own hard condition, applied before any ranking and
+  never filtered out by it) and/or a semantic `query`; the old
+  intent-classification prompts and their three branch implementations are
+  gone. The four LLM backends now carry tool definitions and tool calls:
+  OpenAI chat-completions (including streamed `delta.tool_calls` fragments
+  concatenated by index), the responses shape, Anthropic `tool_use`/
+  `tool_result`, and Gemini/Vertex `functionCall`/`functionResponse`. A turn
+  with a tool call and no text is no longer reported as "no content". The loop
+  is bounded (12 round trips), feeds every error back to the model instead of
+  aborting, reports each running tool to the TUI, and is cancellable.
+- **Nothing a smart action plans is written before the user confirms** — every
+  mutating tool only *stages* a `PendingOperation`; the TUI shows one
+  confirmation dialog (focused on Cancel, so a stray Enter cannot apply it)
+  and applies exactly those operations through the service afterwards.
+- **Imported seminars are marked `[SEMINAR]`** — the prefix is added
+  idempotently by `import_seminar`, so a reminder reads as a seminar at a
+  glance and cross-mail de-duplication can match it to the mail-derived entry
+  for the same event.
+- **One event, one schedule entry** — two mails reminding of the same thing
+  (a week ahead and again on the day) collapse onto the earliest entry via a
+  normalized-summary + two-hour-bucket identity. `list_actions_all` keeps
+  every stored entry so the delete path can still address a duplicate.
+- **Failed batches now say why** — `SmartSearchResult` and
+  `SeminarDiscoveryResult` carry `failure_reasons` (e.g. `batch 3: batch
+  failed`), and the TUI's incomplete-state text names them with a retry hint
+  instead of implying the mail itself was unreadable.
+
+### Changed
+
+- **Action items are only for what the recipient must do** — the analysis
+  prompt no longer turns every dated event into a schedule entry: optional
+  seminars, talks, lectures, workshops and club activities belong in the
+  summary and reason, never in `action_items`. Urgency is unaffected (an
+  optional event can still be `info`).
+- **Ask & Correct asks before it writes** — `chat_about_mail` returns the
+  correction as a proposal; the TUI confirms it (naming the fields that change)
+  and only then calls the new `service.apply_mail_correction`. That method is
+  also the only place the user's words become a lasting feedback guideline.
+- **The Actions tab keeps your place** — a refresh (or an edit/delete) restores
+  the cursor row and scroll offset instead of jumping to the top, and entries
+  that already ended render dim rather than disappearing.
+- **The standing "Seminar proposals" button is gone** — discovery is one
+  smart-action operation; a proposal the model cannot schedule on its own (a
+  mail that states no time) still opens the review form.
+- **`ConfirmModal` starts on Cancel** — the confirm button was the first
+  focusable widget, so Enter dismissed the dialog by *confirming* it.
+
 - **TUI chrome follows the selected language** — modal Escape hints, persisted
   urgency and action-type labels, configuration booleans/defaults, remote-login
   feedback, empty states, and time displays now use the active language and

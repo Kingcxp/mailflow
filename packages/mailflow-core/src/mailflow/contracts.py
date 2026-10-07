@@ -27,7 +27,18 @@ from mailflow.domain import (
     Urgency,
 )
 
-MessageDict = dict[str, str]
+# One chat message as sent to a backend. Keys in use:
+#   role          required; "system" | "user" | "assistant" | "tool"
+#   content       str ("" is allowed; a tool-calling assistant turn often has
+#                 no text at all)
+#   tool_calls    assistant turns only: list of
+#                 {"id": str, "type": "function",
+#                  "function": {"name": str, "arguments": str}} — the raw
+#                 OpenAI-shaped call list, because that is what backends accept
+#                 back on the wire.
+#   tool_call_id  "tool" turns only: the id of the call this message answers
+#   name          optional tool/function name on "tool" turns
+MessageDict = dict[str, Any]
 
 MailEmitter = Callable[[MailMessage], Awaitable[None]]
 
@@ -64,6 +75,21 @@ class HistoryCapableSource(Protocol):
         ...
 
 
+class ToolCall(BaseModel):
+    """One model-requested operation invocation.
+
+    ``call_id`` is the provider's identifier for this call, echoed back on the
+    ``role: "tool"`` result turn. ``arguments`` is already parsed: backends that
+    stream fragments of a JSON string parse it before constructing this model,
+    and a malformed payload becomes ``{}`` rather than an error — the tool layer
+    reports bad arguments to the model so it can retry.
+    """
+
+    call_id: str
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=lambda: {})
+
+
 class LLMCompletion(BaseModel):
     """A chat completion from any backend."""
 
@@ -72,6 +98,7 @@ class LLMCompletion(BaseModel):
     backend: str = ""  # backend plugin id, stamped by the router
     llm_id: str = ""  # named llm actually used, stamped by the router
     raw: dict[str, Any] = Field(default_factory=lambda: {})
+    tool_calls: list[ToolCall] = Field(default_factory=lambda: [])
 
 
 class LLMRouter(Protocol):
@@ -85,6 +112,7 @@ class LLMRouter(Protocol):
         fallback: list[str] | None = None,
         temperature: float | None = None,
         options: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMCompletion: ...
 
 
@@ -99,6 +127,7 @@ class LLMBackend(Protocol):
         *,
         temperature: float | None = None,
         options: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMCompletion: ...
 
 
@@ -293,4 +322,5 @@ __all__ = [
     "ProcessorDecision",
     "ProcessorResult",
     "StorageBackend",
+    "ToolCall",
 ]

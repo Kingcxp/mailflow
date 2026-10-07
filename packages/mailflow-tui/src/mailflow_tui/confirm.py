@@ -50,6 +50,17 @@ class ConfirmModal(ModalScreen[bool]):
                 yield Button(self._confirm_label, id="confirm-run", variant=self._variant)
                 yield Button(self._service.t("tui.btn_cancel"), id="confirm-cancel")
 
+    def on_mount(self) -> None:
+        """Start on Cancel, so a stray Enter never confirms a delete.
+
+        The run button is the first focusable widget in the dialog, and
+        Enter activates the focused Button; without this, the keystroke a user
+        presses to dismiss a dialog would trigger the destructive action.
+        """
+        cancel = self.query_one_optional("#confirm-cancel", Button)
+        if cancel is not None:
+            cancel.focus()
+
     def _dismiss_once(self, result: bool) -> None:
         """Dismiss at most once: a double click or Escape must not pop the
         whole screen stack (Textual raises when the stack would go empty)."""

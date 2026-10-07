@@ -7,7 +7,7 @@
 | `domain.py` | Urgency + colors, MailMessage, MailAnalysis, ActionItem, MailRecord (effective_urgency), TrashRecord, ReplyDraft/ReplyState, snapshot models, CommandResponse/StyleSpan |
 | `config.py` | typed TOML config, `${ENV}` interpolation (recording placeholders so secrets are never written back), cross-reference validation |
 | `settings.py` | editor-shaped view of the schema: sections per plugin, `OptionSpec`/`EditorKind`, `apply_value`/`reset_value`, list-entry add/update/remove/move, LLM fallback-chain derivation, `SettingsError` |
-| `contracts.py` | Protocols (MailSource, HistoryCapableSource, MailProcessor, LLMBackend, Notifier, StorageBackend, LLMRouter), ProcessorResult, ProcessingContext, LLMCompletion |
+| `contracts.py` | Protocols (MailSource, HistoryCapableSource, MailProcessor, LLMBackend, Notifier, StorageBackend, LLMRouter), ProcessorResult, ProcessingContext, LLMCompletion + ToolCall, MessageDict |
 | `registry.py` | ComponentRegistry (typed factories + ownership snapshots), PluginRegistrar |
 | `plugins.py` | PluginInfo, hookspecs, PluginManager (discovery, allow/deny, registry build) |
 | `events.py` | async EventBus with wildcard subscriptions |
@@ -18,6 +18,7 @@
 | `i18n.py` | builtin + external JSON packs, English fallback, language switch |
 | `runtime.py` | bounded queue, per-account source tasks, workers, notifier thresholds, cleanup scheduler, wait_idle |
 | `service.py` | MailFlowService facade, start_service composition, run_service, reply workflow |
+| `tools.py` | the smart-action agent: `ToolRegistry` (the tools offered to the model), `PendingOperation` staging, the bounded `run_agent` loop and `AGENT_SYSTEM_PROMPT` |
 | `commands.py` | CommandRouter: shlex parse, transport-neutral colored responses, all management commands (incl. config, plugin repo/market/install); rich markdown→span rendering with span-color support |
 | `plugin_market.py` | PluginMarket: fetch per-plugin metadata from category folders (file://, GitHub contents API, INDEX.json fallback), localized descriptions/readmes, find/search/install via uv pip --no-deps |
 | `plugin_template.py` | Plugin scaffolding: category templates (mail_source/processor/llm_backend/notifier/storage/bot_exporter) that produce complete, loadable plugins; used by the TUI wizard |

@@ -186,17 +186,21 @@ Rules:
 3. Routine login/security/password and delivery notices are ALWAYS "ad". Lectures
    and seminars without mandatory attendance are "info" even with a date; raise
    them only when attendance is required of THIS recipient or an action (register,
-   RSVP, submit) is demanded.
+   RSVP, submit) is demanded. When an event is optional it yields no action item
+   (see rule 5).
 4. reply_required=true ONLY when the sender explicitly expects an answer.
-5. Every stated obligation yields an action item: deadline, registration,
-   submission, payment, appointment, exam, interview, pickup, or an event with a
-   date — including inside announcements. Parse due_at from the mail (ISO-8601
-   with offset); with only a date use 09:00 in the mail's timezone and say so in
-   the notes; never invent a date (leave action_items empty instead).
+5. action_items are ONLY for what the recipient MUST do: a deadline, a
+   registration, a submission, a payment, an appointment they have to attend,
+   an exam, an interview, a pickup, or a meeting/conference they are required
+   to attend or must reply to. Do NOT create an action item for optional
+   events — seminars, talks, lectures, workshops, club activities, or any
+   event they may freely skip; those belong in the summary and reason only.
+   Parse due_at from the mail (ISO-8601 with offset); with only a date use
+   09:00 in the mail's timezone and say so in the notes; never invent a date
+   (leave action_items empty instead).
    action_type ∈ {"exam","meeting","errand","other"}: exam = tests/quizzes;
-   meeting = scheduled meetings, calls, defenses, interviews, events to attend;
-   errand = pickups, payments, registrations, applications, submissions; other
-   only when none fit.
+   meeting = a required meeting, call, defense or interview; errand = pickups,
+   payments, registrations, applications, submissions; other only when none fit.
 6. reason must agree with urgency: never describe an obligation inside an "info"
    or "ad" reason — raise the level instead.
 7. If a recipient profile is given, it decides relevance: mail matching what they

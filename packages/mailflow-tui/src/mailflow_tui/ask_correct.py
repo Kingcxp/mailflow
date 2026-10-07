@@ -3,19 +3,21 @@
 Opened from the Mail tab's Ask & Correct button. The left pane is a live
 conversation with the LLM about this mail; the right pane shows the current
 analysis (urgency, summary, reason, original body). The user can question the
-urgency or ask for details; the LLM replies conversationally and may apply
-corrections (urgency / summary / reason — never the body), which are written
-back to the stored record and reflected in the right pane immediately.
+urgency or ask for details; the LLM replies conversationally and may propose
+corrections (urgency / summary / reason — never the body). A proposal is
+shown in a confirmation dialog and reaches the stored record only once the
+user accepts it.
 
 The conversation is intentionally ephemeral: closing the modal discards it
-(a reminder is shown in the header). Any corrections the LLM applied are
-persisted, matching the old Reject flow's "feedback becomes a guideline"
-behaviour — the user's stated preference is recorded into the feedback
-guidelines so future analyses tune the same way.
+(a reminder is shown in the header). An accepted correction is persisted,
+matching the old Reject flow's "feedback becomes a guideline" behaviour — the
+user's stated preference is recorded into the feedback guidelines so future
+analyses tune the same way.
 """
 
 import asyncio
-from typing import Any, ClassVar
+import logging
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mailflow.domain import MailRecord
 from mailflow.service import MailFlowService
@@ -25,15 +27,21 @@ from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Input, Markdown, Static
 
+from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.labels import urgency_label
+
+if TYPE_CHECKING:
+    from mailflow_tui.app import MailFlowApp
 
 # Brand accent used for the title bar (matches the app's $accent).
 _ACCENT = "#7EA7F8"
 
+logger = logging.getLogger("mailflow.tui.ask_correct")
+
 
 class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
     """Conversational analysis window: left chat, right mail info, bottom
-    input. Closing discards the chat (persisted corrections remain)."""
+    input. Closing discards the chat (confirmed corrections remain)."""
 
     BINDINGS: ClassVar[list[Any]] = []
 
@@ -227,17 +235,81 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
                     part for part in (reply, self._t("tui.ask_correct_applied")) if part
                 )
                 self._history.append({"role": "assistant", "content": content})
-                fresh = await self._service.get_mail(self._record.record_id)
-                if fresh is not None:
-                    self._record = fresh
+                await self._render_chat()
+                # nothing has been written yet: the proposal is confirmed
+                # here before it reaches the stored analysis and the lasting
+                # feedback guidelines
+                cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+                    ConfirmModal(
+                        self._service,
+                        title=self._t("tui.ask_correct_apply_title"),
+                        body=self._correction_body(corrections),
+                        confirm_label=self._t("tui.btn_apply"),
+                        variant="warning",
+                    ),
+                    lambda confirmed: self._apply_correction(
+                        corrections, messages, bool(confirmed)
+                    ),
+                )
             else:
                 self._history.append({"role": "assistant", "content": reply})
-            self._render_mail_info()
-            await self._render_chat()
+                self._render_mail_info()
+                await self._render_chat()
         finally:
             if self.is_mounted:
                 self._request_in_flight = False
                 self._set_request_state(False)
+
+    def _correction_body(self, corrections: dict[str, Any]) -> str:
+        """Show exactly which fields the proposal would rewrite."""
+        lines: list[str] = []
+        for field, label_key in (
+            ("urgency", "tui.ask_correct_field_urgency"),
+            ("summary", "tui.ask_correct_field_summary"),
+            ("reason", "tui.ask_correct_field_reason"),
+        ):
+            value = str(corrections.get(field) or "").strip()
+            if value:
+                lines.append(f"{self._t(label_key)}: {value}")
+        return "\n".join(lines)
+
+    def _apply_correction(
+        self, corrections: dict[str, Any], messages: list[dict[str, str]], confirmed: bool
+    ) -> None:
+        if confirmed:
+            self.run_worker(
+                self._apply_correction_worker(corrections, messages),
+                exclusive=True,
+                group="ask-correct-apply",
+                exit_on_error=False,
+            )
+
+    async def _apply_correction_worker(
+        self, corrections: dict[str, Any], messages: list[dict[str, str]]
+    ) -> None:
+        """Persist the confirmed correction and refresh the analysis pane."""
+        note = ""
+        for item in reversed(messages):
+            if item.get("role") == "user":
+                note = str(item.get("content") or "").strip()
+                break
+        try:
+            await self._service.apply_mail_correction(
+                self._record.record_id, corrections, note=note
+            )
+        except Exception as exc:  # the user must learn the write did not land
+            logger.warning("ask & correct apply failed (%s)", type(exc).__name__)
+            self._history.append(
+                {"role": "assistant", "content": self._t("tui.ask_correct_apply_failed")}
+            )
+            await self._render_chat()
+            return
+        fresh = await self._service.get_mail(self._record.record_id)
+        if fresh is not None:
+            self._record = fresh
+        if self.is_mounted:
+            self._render_mail_info()
+            await self._render_chat()
 
     def action_close(self) -> None:
         self.dismiss(None)

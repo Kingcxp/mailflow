@@ -161,3 +161,32 @@ rule applies across backends — Anthropic reports `stop_reason`, Gemini and
 Vertex report `finishReason`, and a reply that is not JSON is diagnosed by what
 actually arrived (an empty SSE stream, an HTML error page, an empty body)
 instead of leaking `Expecting value: line 1 column 1 (char 0)`.
+
+## Tool calling
+
+`LLMRouter.chat(..., tools=[...])` carries a provider-independent list of tool
+definitions (the OpenAI shape: `{"type": "function", "function": {"name",
+"description", "parameters"}}`) and returns them in
+`LLMCompletion.tool_calls` as `ToolCall(call_id, name, arguments)` with
+`arguments` already parsed. `MessageDict` is therefore `dict[str, Any]`: an
+assistant turn may carry `tool_calls` (the raw OpenAI-shaped call list, because
+that is what a backend accepts back on the wire) and a result turn uses
+`role: "tool"` with `tool_call_id` and `name`. A turn that carries a tool call
+often has **no text at all**, so every backend treats "no text" as an error only
+when there is also no tool call.
+
+Each transport maps that shape itself, because each provider speaks it
+differently:
+
+| Backend | Sends tools as | Returns calls as | Tool results |
+| ------- | -------------- | ---------------- | ------------ |
+| `openai-completions` (and `openai-compatible`) | `body["tools"]`, `tool_choice: "auto"` | `choices[0].message.tool_calls`, and streamed `delta.tool_calls` fragments joined by `index` (`function.arguments` arrives split at arbitrary offsets, so it is concatenated and parsed once the stream ends; unparseable JSON becomes `{}`, never an error) | the `role: "tool"` turn goes back unchanged |
+| `openai-responses` / `openai-codex-responses` | flat `body["tools"]` (name/parameters unwrapped) | `output[].type == "function_call"` | `{"type": "function_call_output", "call_id", "output"}` input items |
+| `anthropic-messages` (alias `anthropic`) | `body["tools"]` | `content[].type == "tool_use"` (its `input` is already an object) | `{"type": "tool_result", "tool_use_id", ...}` blocks of a user turn |
+| `google-generative-ai` / `google-vertex` | `body["tools"] = [{"functionDeclarations": [...]}]` | `candidates[0].content.parts[].functionCall` (`{name, args}`; this protocol returns no call id, so one is synthesised as `f"{name}-{index}"`) | `functionResponse` parts of a user turn |
+
+A plain-text turn keeps the flat string form on the Anthropic and responses
+transports; only a turn that actually carries tool blocks switches to the block
+array. Gemini and Vertex share the same shape but are separate installable
+plugins, so their mapping is implemented per file rather than in a shared
+module.

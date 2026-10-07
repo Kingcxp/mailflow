@@ -18,7 +18,7 @@ from typing import Any, cast
 
 import pytest
 from mailflow.commands import CommandRouter
-from mailflow.contracts import LLMCompletion
+from mailflow.contracts import LLMCompletion, ToolCall
 from mailflow.plugins import PluginManager
 from mailflow.service import start_service
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
@@ -39,17 +39,47 @@ from textual.widgets import (
 
 
 class _StubRouter:
-    """Answers every phase: intent, matching, seminar extraction and analysis."""
+    """Answers every phase: the operator loop, ranking, and analysis.
+
+    The operator turn mirrors the real contract: it asks for `find_mail`
+    first, then answers in prose once the tool result is back.
+    """
 
     async def chat(self, messages: Any, **kwargs: Any) -> LLMCompletion:
         system = str(messages[0].get("content", ""))
         user = str(messages[-1].get("content", ""))
-        if system.startswith("You route one free-form"):
-            # mirror the real routing precedence closely enough to exercise
-            # the delete branch: removal wording decides, everything else
-            # falls back to search
-            intent = "delete" if "delete" in user.lower() else "search"
-            return LLMCompletion(text=f'{{"intent":"{intent}"}}', model="stub")
+        if system.startswith("You are MailFlow's operator"):
+            instruction = str(messages[1].get("content", ""))
+            tool_results = [m for m in messages if m.get("role") == "tool"]
+            if not tool_results:
+                return LLMCompletion(
+                    text="",
+                    model="stub",
+                    tool_calls=[
+                        ToolCall(
+                            call_id="c1",
+                            name="find_mail",
+                            arguments={"query": instruction},
+                        )
+                    ],
+                )
+            if "delete" in instruction.casefold() and len(tool_results) == 1:
+                ids: list[str] = []
+                for message in tool_results:
+                    text = str(message.get("content") or "")
+                    index = text.rfind("ids: ")
+                    if index != -1:
+                        ids = [
+                            part.strip() for part in text[index + 5 :].splitlines()[0].split(",")
+                        ]
+                return LLMCompletion(
+                    text="",
+                    model="stub",
+                    tool_calls=[
+                        ToolCall(call_id="c2", name="delete_mail", arguments={"record_ids": ids})
+                    ],
+                )
+            return LLMCompletion(text="Matched the mail.", model="stub")
         if "smart mail finder" in system:
             ref = user.split("candidate=", 1)[1].splitlines()[0] if "candidate=" in user else "m1"
             return LLMCompletion(text=f'[{{"id":"{ref}","relevance":90}}]', model="stub")
@@ -250,7 +280,7 @@ async def test_full_tui_walkthrough(tmp_path: Path) -> None:
             # -- actions tab renders its own controls
             tabs.active = "tab-actions"  # pyright: ignore[reportUnknownMemberType]
             assert await _wait_for(pilot, lambda: bool(app.query(ActionsPane)))
-            assert bool(app.query("#actions-edit")) and bool(app.query("#actions-review-seminars"))
+            assert bool(app.query("#actions-edit")) and bool(app.query("#actions-add"))
             assert app.is_running
             app.exit()
             await pilot.pause()

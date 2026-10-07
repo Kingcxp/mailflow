@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import queue as queue_module
 import re
 import time
@@ -19,7 +20,6 @@ from mailflow.domain import (
     ActionOrigin,
     MailRecord,
     ReplyDraft,
-    SmartActionIntent,
     SmartActionResult,
     Urgency,
 )
@@ -61,6 +61,8 @@ from mailflow_tui.seminars import SeminarReviewModal
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 
+logger = logging.getLogger("mailflow.tui")
+
 _BLANK = ""
 
 
@@ -93,6 +95,20 @@ def _action_time_range(service: MailFlowService, item: ActionItem) -> str:
     if item.due_end is None or item.due_end == item.due_at:
         return start
     return f"{start} ~ {_localize(service, item.due_end)}"
+
+
+def _event_notes(arguments: dict[str, Any]) -> str:
+    """Fold a staged schedule_event's optional fields into one notes string.
+
+    ``add_action`` stores a single notes text, so the location/url/end time the
+    model supplied are kept there rather than dropped on the way in.
+    """
+    parts: list[str] = []
+    for key in ("ends_at", "location", "url", "notes"):
+        value = str(arguments.get(key) or "").strip()
+        if value:
+            parts.append(f"{key}: {value}")
+    return "\n".join(parts)
 
 
 def _remove_column(table: DataTable[Any], key: str) -> None:
@@ -486,6 +502,9 @@ class MailPane(Vertical):
         self._smart_action_task: asyncio.Task[SmartActionResult] | None = None
         self._smart_spinner_task: asyncio.Task[None] | None = None
         self._smart_action_result: SmartActionResult | None = None
+        # one-shot status line for the next mail render (e.g. what a confirmed
+        # operation applied); cleared as soon as it has been shown
+        self._pending_status_hint = ""
         # A bulk re-analysis checks _reparse_stop between mails, and the button
         # that started it becomes the stop control while its worker is alive.
         # "running" is derived from the worker (never a hand-set flag) so a
@@ -698,85 +717,174 @@ class MailPane(Vertical):
         await self._show_selected()
 
     async def _render_smart_action_result(self, result: SmartActionResult) -> None:
-        """Render the mails the instruction matched plus what it changed.
+        """Render what the instruction produced, by content rather than intent.
 
-        A search shows its ranked matches; an operation additionally reports
-        the schedule entries it created and hands any proposal it could not
-        schedule on its own to the review form instead of guessing.
+        The model decides what to do, so the host renders whatever came back:
+        matched mail into the table, its own summary and the executed steps as
+        a hint, and any staged change as one confirmation dialog. Nothing a
+        mutating tool staged has happened yet.
         """
         self._records = result.records
         hints: list[str] = []
-        if result.intent is SmartActionIntent.DELETE:
-            hints.append(
-                self._service.t("tui.smart_action_delete_found", count=len(result.records))
-            )
-        elif result.intent is SmartActionIntent.SCHEDULE_SEMINAR:
-            hints.append(self._service.t("tui.smart_action_scheduled", count=len(result.scheduled)))
-            if result.needs_review:
-                hints.append(
-                    self._service.t("tui.smart_action_needs_review", count=len(result.needs_review))
-                )
-            if result.scheduled:
-                # the schedule pane is another tab: refresh it so the new
-                # entries are there when the user switches over
-                cast(MailFlowApp, self.app).schedule_reload()  # pyright: ignore[reportUnknownMemberType]
-        elif result.records:
+        if result.records:
             hints.append(self._service.t("tui.smart_action_found", count=len(result.records)))
+        if result.tool_steps:
+            hints.append(
+                self._service.t(
+                    "tui.smart_action_steps",
+                    steps="; ".join(result.tool_steps[-4:]),
+                )
+            )
+        if result.final_text:
+            hints.append(result.final_text)
         if result.failed_mails:
             key = "tui.smart_action_partial" if result.records else "tui.smart_action_incomplete"
-            hints.append(self._service.t(key, failed=result.failed_mails))
+            hints.append(
+                self._service.t(
+                    key,
+                    failed=result.failed_mails,
+                    reasons="; ".join(result.failure_reasons) or "?",
+                )
+            )
         status_hint = f"[yellow]{'; '.join(hints)}[/yellow]" if hints else ""
         await self._render_records(
             result.records,
             empty_hint_key="tui.mail_no_match",
             status_hint=status_hint,
         )
-        if result.needs_review:
-            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-                SeminarReviewModal(self._service, result.needs_review)
-            )
-        if result.intent is SmartActionIntent.DELETE and result.records:
-            # a destructive bulk action never runs straight from a model's
-            # judgement: state the real count and require an explicit yes
-            cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-                ConfirmModal(
-                    self._service,
-                    title=self._service.t("tui.smart_action_delete_title"),
-                    body=self._service.t("tui.smart_action_delete_body", count=len(result.records)),
-                    confirm_label=self._service.t("tui.btn_delete"),
-                    variant="error",
-                ),
-                lambda confirmed: self._confirm_smart_delete(result, bool(confirmed)),
-            )
+        if result.pending:
+            self._ask_pending_operations(result)
 
-    def _confirm_smart_delete(self, result: SmartActionResult, confirmed: bool) -> None:
-        """Run the confirmed delete of a smart action's matched mails."""
+    def _ask_pending_operations(self, result: SmartActionResult) -> None:
+        """Confirm the staged operations, then apply exactly those.
+
+        The model only planned; this is the single point where a write can
+        happen, and the user's yes is what authorizes it.
+        """
+        lines = [
+            self._service.t(
+                line.summary_key,
+                **line.summary_params,
+            )
+            for line in result.pending
+            if line.summary_key
+        ]
+        body = self._service.t("tui.agent_pending_body", count=len(result.pending))
+        if lines:
+            body = f"{body}\n\n" + "\n".join(f"• {line}" for line in lines)
+        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+            ConfirmModal(
+                self._service,
+                title=self._service.t("tui.agent_pending_title"),
+                body=body,
+                confirm_label=self._service.t("tui.btn_apply"),
+                variant="warning",
+            ),
+            lambda confirmed: self._apply_pending(result, bool(confirmed)),
+        )
+
+    def _apply_pending(self, result: SmartActionResult, confirmed: bool) -> None:
         if not confirmed:
             return
         cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
-            self._delete_smart_matches(result),
+            self._apply_pending_unlocked(result),
             exclusive=True,
-            group="smart-delete",
+            group="smart-apply",
             exit_on_error=False,
         )
 
-    async def _delete_smart_matches(self, result: SmartActionResult) -> None:
-        """Delete the mails a confirmed smart action matched.
+    async def _apply_pending_unlocked(self, result: SmartActionResult) -> None:
+        """Apply every staged operation, reporting what really happened.
 
-        The count reported back is what actually moved, and the view reloads
-        from storage so the deleted rows disappear without a stale cache.
+        A staged operation that fails (record already gone, invalid time) is
+        counted as a failure instead of aborting the batch, and the count the
+        user sees is the number of writes that actually landed. A proposal the
+        model could not schedule on its own is handed to the review form
+        rather than guessed at.
         """
-        ids = [record.record_id for record in result.records]
-        moved = await self._service.delete_mails(ids)
-        result.deleted = moved
+        applied = 0
+        failed = 0
+        deleted = 0
+        for_review: list[str] = []
+        for operation in result.pending:
+            if operation.tool == "review_seminar":
+                for_review.append(str(operation.arguments.get("candidate_id") or ""))
+                continue
+            try:
+                applied += await self._apply_operation(operation.tool, operation.arguments)
+                if operation.tool == "delete_mail":
+                    deleted += len(operation.record_ids)
+            except Exception as exc:
+                failed += 1
+                logger.warning("staged %r failed: %s", operation.tool, exc)
+        result.deleted = deleted
         self._clear_smart_action_result()
         await self.refresh_mail()
-        hint = self.query_one_optional("#mail-empty-hint", Static)
-        if hint is not None:
-            hint.update(
-                f"[green]{self._service.t('tui.smart_action_deleted', count=moved)}[/green]"
+        cast(MailFlowApp, self.app).schedule_reload()  # pyright: ignore[reportUnknownMemberType]
+        if for_review:
+            candidates = [
+                candidate
+                for candidate in await self._service.list_seminar_candidates()
+                if candidate.candidate_id in set(for_review)
+            ]
+            if candidates:
+                cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
+                    SeminarReviewModal(self._service, candidates),
+                    callback=self._refresh_after_review,
+                )
+                return
+        # the deferred reload re-renders this hint, so the summary of what was
+        # applied rides along with the next render instead of being written
+        # once and immediately overwritten
+        key = "tui.agent_applied" if not failed else "tui.agent_applied_partial"
+        self._pending_status_hint = (
+            f"[green]{self._service.t(key, applied=applied, failed=failed)}[/green]"
+        )
+
+    def _refresh_after_review(self, changed: bool | None) -> None:
+        if changed:
+            cast(MailFlowApp, self.app).schedule_reload()  # pyright: ignore[reportUnknownMemberType]
+
+    async def _apply_operation(self, tool: str, arguments: dict[str, Any]) -> int:
+        """Apply one confirmed staged operation; returns how many writes landed."""
+        from datetime import datetime as _datetime
+
+        if tool == "delete_mail":
+            return await self._service.delete_mails(cast("list[str]", arguments["record_ids"]))
+        if tool == "schedule_seminar":
+            title = str(arguments.get("title") or "").strip()
+            await self._service.import_seminar(str(arguments["candidate_id"]), title=title or None)
+            return 1
+        if tool == "schedule_event":
+            await self._service.add_action(
+                str(arguments["title"]),
+                _datetime.fromisoformat(str(arguments["starts_at"])),
+                action_type="other",
+                notes=_event_notes(arguments),
             )
-            hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+            return 1
+        if tool == "add_action":
+            await self._service.add_action(
+                str(arguments["summary"]),
+                _datetime.fromisoformat(str(arguments["due_at"])),
+                action_type=str(arguments.get("action_type") or "errand"),
+                notes=str(arguments.get("notes") or ""),
+            )
+            return 1
+        if tool == "edit_action":
+            item_id = str(arguments["item_id"])
+            due_raw = arguments.get("due_at")
+            await self._service.edit_action(
+                item_id,
+                summary=str(arguments["summary"]) if "summary" in arguments else None,
+                due_at=_datetime.fromisoformat(str(due_raw)) if due_raw else None,
+                action_type=str(arguments["action_type"]) if "action_type" in arguments else None,
+                notes=str(arguments["notes"]) if "notes" in arguments else None,
+            )
+            return 1
+        if tool == "delete_action":
+            return 1 if await self._service.delete_action(str(arguments["item_id"])) else 0
+        raise ValueError(f"unstaged tool {tool!r}")
 
     async def _preview_matches(self, match_ids: set[str]) -> None:
         """Fetch preview records missing from the cache from storage and
@@ -876,7 +984,14 @@ class MailPane(Vertical):
                 await asyncio.sleep(0)
         hint = self.query_one_optional("#mail-empty-hint", Static)
         if hint is not None:
-            if not records:
+            status = self._pending_status_hint
+            if status:
+                # a one-shot status from an applied operation wins over the
+                # empty/blank state for exactly one render
+                self._pending_status_hint = ""
+                hint.update(status)
+                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
+            elif not records:
                 if self._records:
                     hint.update(self._service.t("tui.mail_no_match"))
                 else:
@@ -1720,11 +1835,6 @@ class ActionsPane(Vertical):
                 variant="primary",
             )
             yield Button(
-                self._service.t("tui.btn_review_seminars", count=0),
-                id="actions-review-seminars",
-                variant="warning",
-            )
-            yield Button(
                 self._service.t("tui.btn_delete_todo"),
                 id="actions-delete",
                 variant="error",
@@ -1770,6 +1880,11 @@ class ActionsPane(Vertical):
         table = self._actions_table()
         if table is None:
             return
+        # a refresh must not throw the user out of the list they were reading:
+        # remember the cursor row and scroll offset, restore them below when
+        # the row still exists (it may have been deleted or filtered out)
+        previous_scroll_y = int(table.scroll_y)
+        previous_row_key = self._cursor_row_key()
         table.clear()
         self._ensure_columns()
         self._items = await self._service.list_actions()
@@ -1810,15 +1925,44 @@ class ActionsPane(Vertical):
         if hint is not None:
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
         for item in items:
+            # an entry that is over is styled dim instead of being hidden: the
+            # user still needs to see what happened, but must not mistake it
+            # for something still ahead
+            style = "dim" if self._service.is_action_expired(item) else ""
             table.add_row(
-                escape(_action_time_range(self._service, item)),
-                escape(_action_type_label(self._service, item.action_type)),
-                escape(item.summary),
-                escape(item.notes or "-"),
-                escape(item.mail_id),
+                RichText(escape(_action_time_range(self._service, item)), style=style),
+                RichText(escape(_action_type_label(self._service, item.action_type)), style=style),
+                RichText(escape(item.summary), style=style),
+                RichText(escape(item.notes or "-"), style=style),
+                RichText(escape(item.mail_id), style=style),
                 key=item.item_id,
             )
-        await self._sync_review_button()
+        self._restore_actions_view(table, previous_row_key, previous_scroll_y)
+
+    def _restore_actions_view(
+        self, table: DataTable[Any], previous_row_key: str | None, previous_scroll_y: int
+    ) -> None:
+        """Put the cursor back on its row and the list back at its offset."""
+        rows = {str(row_key.value or "") for row_key in table.rows}
+        if previous_row_key and previous_row_key in rows:
+            table.move_cursor(row=table.get_row_index(previous_row_key), scroll=False)
+            table.scroll_y = previous_scroll_y
+            return
+        # the row is gone (deleted, filtered out): keep the offset as close as
+        # the shorter list allows rather than jumping to the top
+        table.scroll_y = max(0, min(previous_scroll_y, max(0, table.row_count - 1)))
+
+    def _cursor_row_key(self) -> str | None:
+        """Row key under the cursor, or None when there is no valid row."""
+        table = self._actions_table()
+        if table is None:
+            return None
+        row_index = table.cursor_row
+        if row_index < 0 or row_index >= table.row_count:
+            return None
+        from textual.coordinate import Coordinate
+
+        return str(table.coordinate_to_cell_key(Coordinate(row_index, 0)).row_key.value or "")
 
     def _select_value(self, selector: str) -> str:
         select = _typed_select(self, selector)
@@ -1880,37 +2024,9 @@ class ActionsPane(Vertical):
             TodoEditModal(self._service, item), callback=self._refresh_after_edit
         )
 
-    async def _sync_review_button(self) -> None:
-        """Show the proposal review entry only while proposals await review.
-
-        Discovery itself is not a user-facing feature: it is one operation of
-        the Mail tab's smart action, so this control appears (with the pending
-        count) instead of a permanent button that would advertise it.
-        """
-        button = self.query_one_optional("#actions-review-seminars", Button)
-        if button is None:
-            return
-        pending = await self._service.list_seminar_candidates()
-        if pending:
-            button.label = self._service.t("tui.btn_review_seminars", count=len(pending))
-            button.display = "block"  # pyright: ignore[reportUnknownMemberType]
-        else:
-            button.display = "none"  # pyright: ignore[reportUnknownMemberType]
-
-    async def _open_seminar_review(self) -> None:
-        pending = await self._service.list_seminar_candidates()
-        if not pending:
-            return
-        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-            SeminarReviewModal(self._service, pending), callback=self._refresh_after_edit
-        )
-
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "actions-edit":
             self.edit_selected()
-            return
-        if event.button.id == "actions-review-seminars":
-            self.run_worker(self._open_seminar_review(), exclusive=False, group="seminar-review")
             return
         if event.button.id == "actions-add":
 

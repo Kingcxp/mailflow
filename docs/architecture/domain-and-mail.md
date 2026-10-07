@@ -96,6 +96,17 @@ recipient profile (below) is authoritative for relevance, and the rolling
 feedback notes apply to mail of the same kind only — they may not be used to
 turn an announcement into `ad`.
 
+**Action items are only for what the recipient must do.** The prompt creates an
+`ActionItem` for a deadline, a registration, a submission, a payment, an
+appointment they must attend, an exam, an interview, a pickup, or a
+meeting/conference they are required to attend or must reply to. An *optional*
+event — a seminar, talk, lecture, workshop, club activity, or anything the
+recipient may freely skip — yields **no** action item (it belongs in `summary`
+and `reason` only), however concrete its date is. Urgency is unaffected by this
+rule: an optional event can still be `info`, and rule 2 keeps an announcement
+at least `info`. Seminars that *should* end up on the schedule enter it through
+the explicit import path or the smart action's `schedule_seminar` tool.
+
 When no processor supplies a non-empty summary, the pipeline stores the source
 subject only as a display fallback and marks `summary_is_fallback=True`.
 `MailRecord` keeps recognizing the corresponding legacy pipeline note for
@@ -128,6 +139,18 @@ natural key a manual delete records, so re-analysis cannot resurrect them;
 user todos and imported seminars are removed from the custom-action store. The
 delay is deliberate: the entry the user is looking at, and the one whose
 reminder just fired, must survive long enough to be acted on.
+`service.is_action_expired()` exposes the same "already over" judgement for the
+TUI, which dims such a row instead of hiding it.
+
+**One event, one entry.** Two mails frequently remind of the same thing (a week
+ahead, and again on the day) and each analysis produces its own entry.
+`service.event_dedupe_key()` gives an entry a cross-mail identity: the summary
+with the `[SEMINAR] ` marker stripped and whitespace/case normalized, plus a
+two-hour bucket of its start time. `list_actions()` keeps the earliest entry per
+identity; `list_actions_all()` deliberately keeps every stored entry, because
+the delete path must still be able to address a duplicate by its id. That is a
+different identity from `action_natural_key()` (mail id + due time + type),
+which encodes the *user's* delete intent and is preserved across re-analysis.
 
 ## SeminarCandidate and SeminarDiscoveryResult
 
@@ -146,10 +169,16 @@ malformed or unavailable batch is incomplete work, not an empty result.
 
 `service.import_seminar()` is the only import path. It accepts user edits,
 requires a title and future start time, validates timezone and end-after-start,
-and writes one `ActionItem` with the stable candidate id. Repeated confirmation
-returns that same item rather than creating a duplicate. Rejected proposals stay
-hidden on later scans; expired proposals can only be imported after the user
-corrects them to a future time.
+and writes one `ActionItem` with the stable candidate id, whose title always
+carries the `[SEMINAR] ` marker (added idempotently, so a re-import or a caller
+that already typed it never stacks prefixes). Repeated confirmation returns that
+same item rather than creating a duplicate. Rejected proposals stay hidden on
+later scans; expired proposals can only be imported after the user corrects them
+to a future time.
+
+The **Smart action** tool loop reaches this same path through the
+`schedule_seminar` tool, so a seminar the model found is staged, confirmed and
+imported exactly like one the user reviewed by hand.
 
 ## MailRecord
 
@@ -179,42 +208,48 @@ state rather than treating unavailable or malformed batches as no matches.
 Candidate aliases exist only inside one LLM batch; raw record ids are never
 exposed to the model.
 
-## SmartActionIntent and SmartActionResult
+## Smart action: a tool-calling loop
 
 `service.smart_action(instruction)` is the single natural-language entry point
-behind the TUI's **Smart action** control. The model classifies the instruction
-into a `SmartActionIntent`:
+behind the TUI's **Smart action** control. It does not classify the instruction
+into a fixed set of intents: it hands the model the request plus a set of tools
+and runs a bounded loop (`mailflow/tools.py`, `run_agent`). The model decides
+which tool to call, with which arguments, in which order; the user states a
+goal, never a procedure.
 
-- `search` — the user wants mails found or filtered. `records` carry the ranked
-  matches of `smart_search`.
-- `schedule_seminar` — the user wants MailFlow to act on mails announcing an
-  attendable event. The mails are matched first (so only mails the user's
-  instruction actually concerns are used), then `discover_seminars` extracts
-  the event and the proposals with a usable future start are written through
-  `import_seminar`.
-- `delete` — the user wants matching mail removed. The service only **matches**
-  (`_delete_matches`, a stricter prompt than search: every returned mail is a
-  deletion candidate, so precision beats recall) and reports the real count;
-  the host confirms, then calls `delete_mails`, which re-reads each record
-  before moving it to the trash and returns how many actually moved. A model's
-  judgement is never on its own enough to destroy mail, and deletion stays
-  recoverable.
+The tools (`ToolRegistry.specs()` returns them as provider-independent
+JSON-schema definitions):
 
-Intent routing is precedence-ordered in `_SMART_INTENT_PROMPT`: removal wording
-wins over a topic, schedule-adding wording wins over a topic, and `search` is
-the fallback for everything else including an unreadable answer — listing is
-always safe, deleting never is. All three intents evaluate every stored mail
-in bounded batches, and the run is cancellable at any point.
+| Tool | Kind | What it does |
+| ---- | ---- | ------------ |
+| `find_mail` | read | `contains` (literal, case-insensitive substring over subject/body) and/or `query` (semantic ranking). A literal condition decides membership and is never filtered out; with both given, the semantic pass only *orders* the literal matches. |
+| `delete_mail` | staged | Validates the mail ids and stages a trash move. |
+| `schedule_event` | staged | Validates an absolute future ISO-8601 start and stages a plain schedule entry. |
+| `schedule_seminar` | staged | Stages the seminar import path for a `check_seminars` candidate, so the `[SEMINAR]` marker is applied by the service rather than by the model. A candidate whose mail states no time becomes a review item instead. |
+| `list_actions` | read | The current schedule with item ids. |
+| `add_action` / `edit_action` / `delete_action` | staged | Validate a todo/entry and stage the change. |
+| `check_seminars` | read | `discover_seminars` over an optional mail subset; reports only candidates that have not started, plus their candidate ids. |
 
-`SmartActionResult` reports the intent, the matched `records`, the same
-`total_mails`/`failed_mails`/`failed_batches` completeness counters, the
-`scheduled` entries it created, and `needs_review` — proposals it deliberately
-did not guess about (no start time, or a start in the past). `needs_review`
-reaches the user as an explicit review form; nothing is scheduled silently and
-every scheduled entry is an ordinary, deletable `ActionItem` carrying its
-source-mail backlink. Asking for the operation is the user's confirmation, so
-the operation itself needs no second prompt; an unreadable intent answer means
-`search` (filtering is always safe, writing never is).
+**Staged means nothing happened.** A mutating tool returns a
+`PendingOperation` (`tool`, `arguments`, `record_ids`, `summary_key`,
+`summary_params`) and touches no storage; the host shows one confirmation
+dialog and only then applies exactly those operations through the service
+(`delete_mails`, `import_seminar`, `add_action`, `edit_action`,
+`delete_action`). A model's judgement is never on its own enough to delete mail
+or edit the schedule, and deletion stays recoverable (trash).
+
+Loop mechanics: at most `_MAX_TOOL_STEPS` (12) model↔tool round trips; each tool
+result is fed back as a `role: "tool"` message keyed by `tool_call_id`; an
+unknown tool, a rejected call or a tool exception becomes an `error: …` text
+for the model instead of aborting the operation. `progress(stage, done, total,
+detail)` reports each step (`smart_tool` with the tool name) so the TUI can
+show what is running, and the whole loop is cancellable.
+
+`SmartActionResult` reports `records` (the union `find_mail` returned),
+`pending` (the staged operations), `tool_steps` (what actually ran, e.g.
+`find_mail {"contains": "seminar"}`), `final_text` (the model's closing
+summary), and the `total_mails`/`failed_mails`/`failed_batches`/
+`failure_reasons` completeness counters.
 
 ## Recipient profile
 

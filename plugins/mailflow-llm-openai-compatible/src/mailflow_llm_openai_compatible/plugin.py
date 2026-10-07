@@ -26,7 +26,7 @@ from typing import Any, cast
 
 import httpx
 from mailflow.config import LLMConfig, MailFlowConfig
-from mailflow.contracts import LLMCompletion, MessageDict
+from mailflow.contracts import LLMCompletion, MessageDict, ToolCall
 from mailflow.domain import ComponentKind
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
@@ -59,21 +59,131 @@ def _join_content_parts(content: Any) -> str:
     return "".join(parts)
 
 
-def decode_sse_completion(text: str) -> tuple[str, str, str]:
+def _fold_tool_call_delta(acc: dict[int, dict[str, Any]], raw: Any) -> None:
+    """Accumulate one streamed ``delta.tool_calls`` entry into ``acc``.
+
+    ``function.arguments`` arrives as *fragments of a JSON string*, split at
+    arbitrary character offsets, so the pieces are concatenated here and only
+    parsed once the stream ends. The same holds for a proxy that sends the
+    whole call in a single frame.
+    """
+    if not isinstance(raw, list):
+        return
+    for entry in cast("list[Any]", raw):
+        if not isinstance(entry, dict):
+            continue
+        item = cast("dict[str, Any]", entry)
+        index = item.get("index")
+        slot = int(index) if isinstance(index, int) else 0
+        bucket = acc.setdefault(slot, {"id": "", "name": "", "arguments": ""})
+        if item.get("id"):
+            bucket["id"] = str(item["id"])
+        name = item.get("name")
+        function: Any = item.get("function")
+        if isinstance(function, dict):
+            fn = cast("dict[str, Any]", function)
+            if fn.get("name"):
+                name = fn["name"]
+            if fn.get("arguments"):
+                bucket["arguments"] = str(bucket["arguments"]) + str(fn["arguments"])
+        if name:
+            bucket["name"] = str(name)
+
+
+def _tool_calls_from_fold(acc: dict[int, dict[str, Any]]) -> list[ToolCall]:
+    """Turn accumulated stream fragments into parsed tool calls."""
+    calls: list[ToolCall] = []
+    for slot in sorted(acc):
+        bucket = acc[slot]
+        name = str(bucket.get("name") or "")
+        if not name:
+            continue
+        calls.append(
+            ToolCall(
+                call_id=str(bucket.get("id") or f"call-{slot}"),
+                name=name,
+                arguments=_parse_tool_arguments(str(bucket.get("arguments") or "")),
+            )
+        )
+    return calls
+
+
+def _parse_tool_arguments(raw: str) -> dict[str, Any]:
+    """Parse a tool-call argument payload; a malformed one becomes ``{}``.
+
+    A model that emits broken JSON must not abort the request: the tool layer
+    answers with a readable error and the model gets to try again.
+    """
+    text = raw.strip()
+    if not text:
+        return {}
+    try:
+        parsed: Any = json.loads(text)
+    except ValueError:
+        return {}
+    return cast("dict[str, Any]", parsed) if isinstance(parsed, dict) else {}
+
+
+def _flatten_tool_for_responses(tool: dict[str, Any]) -> dict[str, Any]:
+    """Convert a chat-shaped tool schema to the responses shape.
+
+    Chat: ``{"type": "function", "function": {"name", "description",
+    "parameters"}}``; responses: the same keys unwrapped, with the parameter
+    schema under ``parameters``.
+    """
+    function: Any = tool.get("function")
+    if not isinstance(function, dict):
+        return dict(tool)
+    fn = cast("dict[str, Any]", function)
+    flat: dict[str, Any] = {"type": "function", "name": str(fn.get("name", ""))}
+    if fn.get("description"):
+        flat["description"] = str(fn["description"])
+    flat["parameters"] = fn.get("parameters") or {"type": "object", "properties": {}}
+    return flat
+
+
+def _tool_calls_from_responses_output(payload: dict[str, Any]) -> list[ToolCall]:
+    """Read ``output[].type == "function_call"`` items into parsed calls."""
+    calls: list[ToolCall] = []
+    for item in cast("list[Any]", payload.get("output") or []):
+        if not isinstance(item, dict):
+            continue
+        entry = cast("dict[str, Any]", item)
+        if entry.get("type") != "function_call":
+            continue
+        name = str(entry.get("name") or "")
+        if not name:
+            continue
+        arguments: Any = entry.get("arguments")
+        calls.append(
+            ToolCall(
+                call_id=str(entry.get("call_id") or entry.get("id") or f"call-{len(calls)}"),
+                name=name,
+                arguments=_parse_tool_arguments(
+                    arguments if isinstance(arguments, str) else json.dumps(arguments or {})
+                ),
+            )
+        )
+    return calls
+
+
+def decode_sse_completion(text: str) -> tuple[str, str, str, list[ToolCall]]:
     """Fold a server-sent-events completion body into one answer.
 
-    Returns ``(content, model, finish_reason)``. Endpoints that answer
-    ``text/event-stream`` regardless of the request's ``stream`` flag (some
-    OpenAI-compatible proxies do exactly that) are unreadable as JSON, so the
-    frames are decoded here instead of failing the call.
+    Returns ``(content, model, finish_reason, tool_calls)``. Endpoints that
+    answer ``text/event-stream`` regardless of the request's ``stream`` flag
+    (some OpenAI-compatible proxies do exactly that) are unreadable as JSON, so
+    the frames are decoded here instead of failing the call.
 
     Both shapes appear in the wild: OpenAI-style ``delta.content`` and the
     full-message form some proxies emit, plus ``reasoning_content`` (a
     thinking model's scratchpad) which must never become the answer.
+    ``delta.tool_calls`` fragments are accumulated across frames.
     """
     parts: list[str] = []
     model = ""
     finish = ""
+    tool_acc: dict[int, dict[str, Any]] = {}
     for line in text.splitlines():
         line = line.strip()
         if not line.startswith("data:"):
@@ -102,12 +212,14 @@ def decode_sse_completion(text: str) -> tuple[str, str, str]:
                 block: Any = choice.get(key)
                 if not isinstance(block, dict):
                     continue
-                content: Any = cast("dict[str, Any]", block).get("content")
+                block_map = cast("dict[str, Any]", block)
+                content: Any = block_map.get("content")
                 if isinstance(content, str):
                     parts.append(content)
                 elif isinstance(content, list):
                     parts.append(_join_content_parts(content))
-    return "".join(parts), model, finish
+                _fold_tool_call_delta(tool_acc, block_map.get("tool_calls"))
+    return "".join(parts), model, finish, _tool_calls_from_fold(tool_acc)
 
 
 def _non_json_diagnosis(exc: Exception, response: Any) -> str:
@@ -200,6 +312,7 @@ class OpenAIBackend:
         messages: list[MessageDict],
         temperature: float | None,
         options: dict[str, Any] | None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"model": self._config.model, "messages": messages}
         if self._use_stream:
@@ -210,6 +323,9 @@ class OpenAIBackend:
             body["temperature"] = self._opt_temperature
         if self._opt_max_tokens:
             body["max_tokens"] = self._opt_max_tokens
+        if tools:
+            body["tools"] = tools
+            body.setdefault("tool_choice", "auto")
         body.update(self._config.extra_body)
         if options:
             if isinstance(options.get("body"), dict):
@@ -230,11 +346,12 @@ class OpenAIBackend:
         *,
         temperature: float | None = None,
         options: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMCompletion:
         url = self._url()
         headers = self._headers(options)
         params = self._query(options)
-        body = self._body(messages, temperature, options)
+        body = self._body(messages, temperature, options, tools)
         max_retries = max(0, min(self._config.max_retries, 20))
 
         last_error: Exception | None = None
@@ -296,32 +413,45 @@ class OpenAIBackend:
 
         The reply is JSON in the normal case and a server-sent-events stream
         when the endpoint streams; both are accepted so a streaming-only
-        endpoint works without configuration. An answer that carries no text
-        at all is an error, never a silent empty completion — the caller would
-        otherwise fail much later with an unrelated parse message.
+        endpoint works without configuration. An answer that carries neither
+        text nor a tool call is an error, never a silent empty completion — the
+        caller would otherwise fail much later with an unrelated parse message.
+        A tool-calling turn legitimately has no text at all.
         """
         content_type = str(response.headers.get("content-type") or "").split(";")[0]
         if content_type.startswith("text/event-stream"):
-            text, model, finish = decode_sse_completion(response.text)
-            if not text.strip():
+            text, model, finish, tool_calls = decode_sse_completion(response.text)
+            if not text.strip() and not tool_calls:
                 raise RuntimeError(
                     "endpoint streamed a response with no content"
                     + (f" (finish_reason={finish})" if finish else "")
                 )
-            return LLMCompletion(text=text, model=model, raw={"streamed": True, "finish": finish})
+            return LLMCompletion(
+                text=text,
+                model=model,
+                raw={"streamed": True, "finish": finish},
+                tool_calls=tool_calls,
+            )
         try:
             payload = response.json()
         except ValueError:
             # not JSON: the endpoint streams without saying so, or returned a
             # non-JSON body; decode the frames before giving up
-            text, model, finish = decode_sse_completion(response.text)
-            if text.strip():
+            text, model, finish, tool_calls = decode_sse_completion(response.text)
+            if text.strip() or tool_calls:
                 return LLMCompletion(
-                    text=text, model=model, raw={"streamed": True, "finish": finish}
+                    text=text,
+                    model=model,
+                    raw={"streamed": True, "finish": finish},
+                    tool_calls=tool_calls,
                 )
             raise
         completion = self._parse(payload)
-        if not completion.text.strip() and not self._content_is_list(payload):
+        if (
+            not completion.text.strip()
+            and not completion.tool_calls
+            and not self._content_is_list(payload)
+        ):
             raise RuntimeError("endpoint returned a response with no content")
         return completion
 
@@ -354,6 +484,36 @@ class OpenAIBackend:
             return f"transport error: {type(exc).__name__}"
         return str(exc)
 
+    @staticmethod
+    def _tool_calls_from_message(message: Any) -> list[ToolCall]:
+        """Read ``message.tool_calls`` (chat shape) into parsed tool calls."""
+        calls: list[ToolCall] = []
+        raw_calls: Any = (
+            cast("dict[str, Any]", message).get("tool_calls") if isinstance(message, dict) else None
+        )
+        if not isinstance(raw_calls, list):
+            return calls
+        for raw in cast("list[Any]", raw_calls):
+            if not isinstance(raw, dict):
+                continue
+            entry = cast("dict[str, Any]", raw)
+            function: Any = entry.get("function")
+            fn = cast("dict[str, Any]", function) if isinstance(function, dict) else {}
+            name = str(fn.get("name") or "")
+            if not name:
+                continue
+            arguments: Any = fn.get("arguments")
+            calls.append(
+                ToolCall(
+                    call_id=str(entry.get("id") or f"call-{len(calls)}"),
+                    name=name,
+                    arguments=_parse_tool_arguments(
+                        arguments if isinstance(arguments, str) else json.dumps(arguments or {})
+                    ),
+                )
+            )
+        return calls
+
     def _parse(self, payload: dict[str, Any]) -> LLMCompletion:
         choices: Any = payload.get("choices") or []
         if not choices:
@@ -364,7 +524,12 @@ class OpenAIBackend:
             # some endpoints return content parts (e.g. [{"type": "text", "text": ...}])
             content = _join_content_parts(content)
         raw_model: Any = payload.get("model") or ""
-        return LLMCompletion(text=str(content), model=str(raw_model), raw=payload)
+        return LLMCompletion(
+            text=str(content),
+            model=str(raw_model),
+            raw=payload,
+            tool_calls=self._tool_calls_from_message(message),
+        )
 
 
 class ResponsesBackend(OpenAIBackend):
@@ -383,13 +548,39 @@ class ResponsesBackend(OpenAIBackend):
         messages: list[MessageDict],
         temperature: float | None,
         options: dict[str, Any] | None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         system = "\n".join(str(m.get("content", "")) for m in messages if m.get("role") == "system")
         turns: list[dict[str, Any]] = []
         for m in messages:
-            if m.get("role") == "system":
+            role = str(m.get("role", "user"))
+            if role == "system":
                 continue
-            turns.append({"role": str(m.get("role", "user")), "content": str(m.get("content", ""))})
+            if role == "tool":
+                # the responses shape carries a tool result as its own input
+                # item, not as a chat turn
+                turns.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": str(m.get("tool_call_id", "")),
+                        "output": str(m.get("content", "")),
+                    }
+                )
+                continue
+            text = str(m.get("content", ""))
+            if text:
+                turns.append({"role": role, "content": text})
+            for raw_call in cast("list[Any]", m.get("tool_calls") or []):
+                call = cast("dict[str, Any]", raw_call)
+                function = cast("dict[str, Any]", call.get("function") or {})
+                turns.append(
+                    {
+                        "type": "function_call",
+                        "call_id": str(call.get("id", "")),
+                        "name": str(function.get("name", "")),
+                        "arguments": str(function.get("arguments", "")),
+                    }
+                )
         body: dict[str, Any] = {
             "model": self._config.model,
             "input": turns or [{"role": "user", "content": ""}],
@@ -402,6 +593,11 @@ class ResponsesBackend(OpenAIBackend):
             body["temperature"] = self._opt_temperature
         if self._opt_max_tokens:
             body.setdefault("max_output_tokens", self._opt_max_tokens)
+        if tools:
+            # the responses shape is flat: name/parameters sit on the tool
+            # itself instead of nesting under "function"
+            body["tools"] = [_flatten_tool_for_responses(tool) for tool in tools]
+            body.setdefault("tool_choice", "auto")
         if self._codex:
             # Codex endpoints are stateless by contract
             body.setdefault("store", False)
@@ -428,10 +624,16 @@ class ResponsesBackend(OpenAIBackend):
                     if part_map.get("type") in ("output_text", "text") and part_map.get("text"):
                         chunks.append(str(part_map["text"]))
             text = "".join(chunks)
-        if not text:
+        tool_calls = _tool_calls_from_responses_output(payload)
+        if not text and not tool_calls:
             raise RuntimeError("response contained no output text")
         raw_model: Any = payload.get("model") or ""
-        return LLMCompletion(text=str(text), model=str(raw_model), raw=payload)
+        return LLMCompletion(
+            text=str(text),
+            model=str(raw_model),
+            raw=payload,
+            tool_calls=tool_calls,
+        )
 
 
 class CodexResponsesBackend(ResponsesBackend):

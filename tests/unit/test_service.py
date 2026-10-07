@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
-from mailflow.contracts import LLMRouter, MailMessage, ProcessorResult, ReplyDraft
+from mailflow.contracts import (
+    LLMCompletion,
+    LLMRouter,
+    MailMessage,
+    MessageDict,
+    ProcessorResult,
+    ReplyDraft,
+    ToolCall,
+)
 from mailflow.domain import (
     ActionItem,
     ActionOrigin,
@@ -18,9 +25,7 @@ from mailflow.domain import (
     MailRecord,
     ProcessorNote,
     ReplyState,
-    SeminarCandidate,
     SeminarStatus,
-    SmartActionIntent,
     TrashRecord,
     Urgency,
     parse_urgency,
@@ -156,8 +161,14 @@ def _reply(text: str) -> Any:
     class Reply:
         def __init__(self, value: str) -> None:
             self.text = value
+            self.tool_calls: list[Any] = []
 
     return Reply(text)
+
+
+def _completion(text: str, *, tool_calls: list[ToolCall] | None = None) -> LLMCompletion:
+    """One scripted model turn for the tool-loop tests."""
+    return LLMCompletion(text=text, model="test-model", tool_calls=tool_calls or [])
 
 
 def make_record() -> MailRecord:
@@ -824,7 +835,7 @@ class TestSeminarDiscovery:
 
 
 class TestSmartAction:
-    """One instruction routes to filtering or to the matching operation."""
+    """One instruction is executed by letting the model call tools."""
 
     @staticmethod
     def make_service(router: Any) -> MailFlowService:
@@ -844,152 +855,125 @@ class TestSmartAction:
             i18n=I18n(),
         )
 
-    class _RoutingRouter:
-        """Answers each phase by its system prompt, like a real endpoint."""
+    class _ToolRouter:
+        """Scripted router: replays one completion per turn.
 
-        def __init__(self, intent: str, event_json: str) -> None:
-            self.intent = intent
-            self.event_json = event_json
-            self.phases: list[str] = []
+        The loop is what is under test, so the router answers by *turn*, not by
+        phase; ``seen_tools`` records whether a tool result already came back,
+        which is how a script proves the loop fed the result to the model.
+        """
 
-        async def chat(self, messages: Any, **kwargs: Any) -> Any:
-            system = str(messages[0]["content"])
-            if system.startswith("You route one free-form"):
-                self.phases.append("intent")
-                return _reply(f'{{"intent":"{self.intent}"}}')
-            if "smart mail finder" in system:
-                self.phases.append("match")
-                return _reply('[{"id":"m1","relevance":91}]')
-            if system.startswith("You identify optional academic seminars"):
-                self.phases.append("extract")
-                return _reply(self.event_json)
-            self.phases.append("warmup")
-            return _reply("ok")
+        def __init__(self, turns: list[LLMCompletion]) -> None:
+            self.turns = list(turns)
+            self.calls: list[list[MessageDict]] = []
+            self.seen_tools: list[bool] = []
+            self.tool_specs: list[Any] = []
 
-    async def test_search_intent_returns_ranked_matches_only(self) -> None:
-        router = self._RoutingRouter("search", "[]")
+        async def chat(self, messages: list[MessageDict], **kwargs: Any) -> LLMCompletion:
+            self.calls.append(list(messages))
+            self.seen_tools.append(any(m.get("role") == "tool" for m in messages))
+            self.tool_specs.append(kwargs.get("tools"))
+            turn = self.turns.pop(0) if self.turns else _completion("done")
+            return turn
+
+    async def test_read_tool_results_reach_the_model_and_the_result(self) -> None:
+        """The model searches, sees the result, then answers in prose."""
+        router = self._ToolRouter(
+            [
+                _completion(
+                    "",
+                    tool_calls=[
+                        ToolCall(
+                            call_id="c1",
+                            name="find_mail",
+                            arguments={"contains": "registration"},
+                        )
+                    ],
+                ),
+                _completion("Found the registration mail."),
+            ]
+        )
         service = self.make_service(router)
         storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-
-        result = await service.smart_action("list the registration mails")
-
-        assert result.intent is SmartActionIntent.SEARCH
-        assert [record.record_id for record in result.records] == [mail.normalized_message_id()]
-        assert result.scheduled == [] and result.needs_review == []
-        assert "extract" not in router.phases
-        assert await storage.list_custom_actions() == []
-
-    async def test_delete_intent_matches_without_removing_anything(self) -> None:
-        """The delete instruction only *matches*: a model's judgement must
-        never be enough to destroy mail, so the service hands the caller the
-        matched set and the caller deletes after confirming."""
-        router = self._RoutingRouter("delete", "[]")
-        service = self.make_service(router)
-        storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10)
+        mail = make_mail("m1", minute=10).model_copy(
+            update={"body_text": "Please finish your registration by Friday."}
+        )
         record_id = mail.normalized_message_id()
         await storage.save_mail(MailRecord(record_id=record_id, mail=mail))
 
-        result = await service.smart_action("delete the ads")
+        result = await service.smart_action("show me the registration mail")
 
-        assert result.intent is SmartActionIntent.DELETE
         assert [record.record_id for record in result.records] == [record_id]
-        assert result.deleted == 0
-        # the mail is still there until a confirmed delete runs
-        assert await storage.get_mail(record_id) is not None
-        assert "extract" not in router.phases
+        assert result.final_text == "Found the registration mail."
+        assert result.pending == []
+        assert result.tool_steps == ['find_mail {"contains": "registration"}']
+        # the second turn really carried the tool result back to the model
+        assert router.seen_tools == [False, True]
+        assert router.tool_specs[0] is not None and router.tool_specs[0][0]["type"] == "function"
 
-    async def test_confirmed_delete_moves_the_matches_to_the_trash(self) -> None:
-        router = self._RoutingRouter("delete", "[]")
+    async def test_mutating_tool_only_stages_and_changes_nothing(self) -> None:
+        router = self._ToolRouter(
+            [
+                _completion(
+                    "",
+                    tool_calls=[
+                        ToolCall(call_id="c1", name="find_mail", arguments={"contains": "invoice"})
+                    ],
+                ),
+                _completion(
+                    "",
+                    tool_calls=[
+                        ToolCall(call_id="c2", name="delete_mail", arguments={"record_ids": ["m1"]})
+                    ],
+                ),
+                _completion("Staged the invoice mail for deletion."),
+            ]
+        )
         service = self.make_service(router)
         storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10)
+        mail = make_mail("m1", minute=10).model_copy(
+            update={"body_text": "Your invoice is attached."}
+        )
         record_id = mail.normalized_message_id()
         await storage.save_mail(MailRecord(record_id=record_id, mail=mail))
-        result = await service.smart_action("delete the ads")
 
-        moved = await service.delete_mails([record.record_id for record in result.records])
+        result = await service.smart_action("delete the invoice mail")
 
-        assert moved == 1
-        assert await storage.get_mail(record_id) is None
+        assert len(result.pending) == 1
+        assert result.pending[0].tool == "delete_mail"
+        assert result.pending[0].record_ids == [record_id]
+        # the loop never deletes: only a confirmed delete_mails call does
+        assert await storage.get_mail(record_id) is not None
 
-    async def test_schedule_intent_adds_a_timed_event_to_the_schedule(self) -> None:
-        event = (
-            '[{"id":"m1","title":"Research colloquium",'
-            '"starts_at":"2030-10-15T14:00:00+08:00",'
-            '"timezone":"Asia/Shanghai","location":"Room 201",'
-            '"confidence":93,"evidence":"15 October, Room 201"}]'
+    async def test_loop_stops_at_its_step_bound(self) -> None:
+        always = _completion(
+            "", tool_calls=[ToolCall(call_id="c", name="list_actions", arguments={})]
         )
-        router = self._RoutingRouter("schedule_seminar", event)
+        router = self._ToolRouter([always] * 20)
         service = self.make_service(router)
-        storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
 
-        result = await service.smart_action("add the seminars to my schedule")
+        result = await service.smart_action("what is on my schedule")
 
-        assert result.intent is SmartActionIntent.SCHEDULE_SEMINAR
-        assert [item.summary for item in result.scheduled] == ["Research colloquium"]
-        assert result.needs_review == []
-        # the entry is a normal, deletable schedule item linked to its mail
-        saved = await storage.list_custom_actions()
-        assert len(saved) == 1
-        assert saved[0].origin is ActionOrigin.SEMINAR
-        assert saved[0].mail_id == mail.normalized_message_id()
-        assert saved[0].due_at == datetime(2030, 10, 15, 6, tzinfo=UTC)
+        assert len(router.calls) == 12
+        assert len(result.tool_steps) == 12
+        assert result.final_text  # the user learns the loop stopped
 
-    async def test_schedule_intent_leaves_untimed_events_for_review(self) -> None:
-        class UntimedRouter(TestSmartAction._RoutingRouter):
-            def __init__(self) -> None:
-                super().__init__(
-                    "schedule_seminar",
-                    '[{"id":"m1","title":"Open day","confidence":80}]',
-                )
-
-        service = self.make_service(UntimedRouter())
-        storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-
-        result = await service.smart_action("put the open days into my calendar")
-
-        assert result.scheduled == []
-        assert [candidate.title for candidate in result.needs_review] == ["Open day"]
-        assert await storage.list_custom_actions() == []
-
-    async def test_schedule_intent_ignores_proposals_from_other_mail(self) -> None:
-        event = (
-            '[{"id":"m1","title":"Matched seminar",'
-            '"starts_at":"2030-10-15T14:00:00+08:00","timezone":"Asia/Shanghai"}]'
+    async def test_unknown_tool_is_reported_to_the_model_without_failing(self) -> None:
+        router = self._ToolRouter(
+            [
+                _completion("", tool_calls=[ToolCall(call_id="c1", name="nonsense", arguments={})]),
+                _completion("I cannot do that."),
+            ]
         )
-        router = self._RoutingRouter("schedule_seminar", event)
         service = self.make_service(router)
-        storage = cast(Any, service.storage)
-        target = make_mail("matched", minute=10)
-        await storage.save_mail(MailRecord(record_id=target.normalized_message_id(), mail=target))
-        # an earlier scan's proposal for mail outside this instruction's set
-        unrelated = SeminarCandidate(
-            candidate_id="seminar-other",
-            mail_id="earlier-scan@example.test",
-            title="Unrelated seminar",
-            starts_at=datetime(2030, 9, 1, 4, tzinfo=UTC),
-            timezone="UTC",
-        )
-        await storage.set_preference(
-            "seminars.candidates",
-            json.dumps([unrelated.model_dump(mode="json")]),
-        )
 
-        result = await service.smart_action("schedule the seminars")
+        result = await service.smart_action("do something impossible")
 
-        assert [item.summary for item in result.scheduled] == ["Matched seminar"]
-        saved = await storage.list_custom_actions()
-        assert [item.summary for item in saved] == ["Matched seminar"]
+        assert result.final_text == "I cannot do that."
+        assert result.tool_steps == ["nonsense {}"]
 
     async def test_instruction_without_llm_reports_the_missing_model(self) -> None:
-        service = self.make_service(TestSmartAction._RoutingRouter("search", "[]"))
+        service = self.make_service(TestSmartAction._ToolRouter([]))
         service.config.llms = []
         with pytest.raises(RuntimeError):
             await service.smart_action("find the exam mails")
@@ -1127,7 +1111,7 @@ class TestUserProfile:
         class RecordingRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 prompts.append(str(messages[-1]["content"]))
-                return _reply('{"intent":"search"}')
+                return _completion("")
 
         service = TestSmartAction.make_service(RecordingRouter())
         storage = cast(Any, service.storage)

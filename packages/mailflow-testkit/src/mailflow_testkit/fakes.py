@@ -123,6 +123,7 @@ class FakeLLMBackend:
         *,
         temperature: float | None = None,
         options: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMCompletion:
         self.calls.append(messages)
         if self.fail:

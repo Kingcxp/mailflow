@@ -146,8 +146,8 @@ def _config_with_llm() -> MailFlowConfig:
 
 
 @pytest.mark.asyncio
-async def test_chat_about_mail_applies_correction_and_keeps_body() -> None:
-    """A [c] block updates urgency/summary/reason but never the mail body."""
+async def test_chat_about_mail_proposes_without_writing() -> None:
+    """A [c] block is a proposal: nothing is stored until it is applied."""
     router = _CorrectionRouter(
         "You are right, this is important.\n"
         "[c]\n"
@@ -165,18 +165,28 @@ async def test_chat_about_mail_applies_correction_and_keeps_body() -> None:
 
     assert result["corrections"]["urgency"] == "important"
     assert "[c]" not in result["reply"]
+    # the proposal has not been applied yet — not to the record, not to the
+    # lasting guidelines the user never agreed to
     record = await service.storage.get_mail("ask-1")
     assert record is not None
-    assert record.auto_urgency == Urgency.IMPORTANT
-    assert record.analysis is not None
-    assert record.analysis.urgency == Urgency.IMPORTANT
-    assert record.analysis.summary == "Confirm meeting"
-    assert record.analysis.reason == "reply required"
-    # original mail untouched
-    assert record.mail.subject == "Important meeting tomorrow"
-    assert "Please confirm your attendance" in (record.mail.body_text or "")
+    assert record.auto_urgency == Urgency.INFO
+    assert await service.feedback_guidelines() == ""
 
-    # the user's disagreement became a lasting guideline
+    # applying it (what the host does after the user confirms) writes both
+    applied = await service.apply_mail_correction(
+        "ask-1", result["corrections"], note="This is important, please raise it."
+    )
+
+    assert applied is not None
+    assert applied.auto_urgency == Urgency.IMPORTANT
+    assert applied.analysis is not None
+    assert applied.analysis.urgency == Urgency.IMPORTANT
+    assert applied.analysis.summary == "Confirm meeting"
+    assert applied.analysis.reason == "reply required"
+    # original mail untouched
+    assert applied.mail.subject == "Important meeting tomorrow"
+    assert "Please confirm your attendance" in (applied.mail.body_text or "")
+
     guidelines = await service.feedback_guidelines()
     assert "raise it" in guidelines
     assert "ask-1" in guidelines

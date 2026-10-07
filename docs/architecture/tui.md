@@ -29,13 +29,17 @@ tears them down with the screen — nothing keeps ticking after it closes.
 
 - **Mail**: one free-form `Input` plus a **Smart action** button; the same box
   filters as you type (subject/sender/summary/body) and is the instruction the
-  button sends. **Smart action** calls `service.smart_action`: the model
-  classifies the instruction, so "find/filter …" returns the ranked matching
-  mails, "add … to my schedule" both matches the mail announcing the event and
-  schedules it, and "delete/clear …" matches the mail to remove and asks for
-  confirmation before moving it to the trash (`SmartActionIntent`; every
-  intent scans all stored mail in bounded batches). The button is sized to the
-  input's full height so the row reads as one control. The urgency-colored
+  button sends. **Smart action** calls `service.smart_action`, which runs the
+  tool-calling loop described in `docs/architecture/domain-and-mail.md`: the
+  model — not the host — picks the tools, so "find the seminar mail containing
+  the word seminar" becomes a literal `contains` search, listing the schedule
+  becomes `list_actions`, and "put these on my calendar" becomes a staged
+  `schedule_event`/`schedule_seminar`. The pane renders the result by content:
+  matched mail into the table, the model's `tool_steps` and `final_text` into
+  the hint line, and every staged operation into one confirmation dialog
+  (**Apply** / Cancel) that is the only place a write can happen. The progress
+  line names the running tool (`tui.smart_stage_tool`, `tui.smart_tool`). The
+  button is sized to the input's full height so the row reads as one control. The urgency-colored
   `DataTable` (■ + a localized urgency label in the contract color) fills the
   pane height; the scrollable detail pane follows the highlighted row (single
   click or arrow keys — no double-click needed) and shows summary, reason,
@@ -122,11 +126,12 @@ tears them down with the screen — nothing keeps ticking after it closes.
   model is thinking; the send control is disabled until that response lands.
   The conversation is ephemeral (discarded on close, with a reminder in the
   header); the LLM can apply corrections to urgency / summary / reason (never
-  the original body), which are persisted to the stored analysis and reflected
-  in the right panel immediately. When a correction is applied the user's
-  latest message is recorded into the rolling correction guidelines that every
-  future LLM analysis receives (`feedback.guidelines`, most recent 20 kept),
-  matching the old Reject behaviour.
+  the original body). A proposed correction is **not** applied on arrival: it
+  opens a confirmation dialog naming the fields that would change, and only on
+  **Apply** does the TUI call `service.apply_mail_correction`, which writes the
+  stored analysis and (with the user's own words) the rolling correction
+  guidelines that every future LLM analysis receives (`feedback.guidelines`,
+  most recent 20 kept). `chat_about_mail` itself only ever returns a proposal.
 - **Actions**: localized time / type / content / notes / source-mail columns;
   every stored time is displayed in `general.timezone`. **Add todo** creates a
   user-owned item; **Edit** opens the same form pre-filled for the row under
@@ -138,14 +143,19 @@ tears them down with the screen — nothing keeps ticking after it closes.
   area. **Delete** removes selected custom todos and imported seminars for
   real; mail-analysis items are dismissed by their stable identity (mail id +
   due time + type) so re-analyzing the source mail keeps them hidden.
-  Discovered seminar proposals are **not** advertised here as a feature: the
-  review control appears (labelled with the pending count) only while
-  proposals await confirmation, and opens the centered, scrollable review form
-  with editable title, time window, timezone, location, URL, and description
-  plus confidence/evidence. **Import to schedule** is an explicit
-  confirmation, expired candidates require a future corrected start time, and
-  Reject keeps a proposal hidden on later scans. Imported seminars preserve
-  their source-mail link and use stable ids to prevent duplicate imports.
+  A refresh never moves the view: the pane restores the cursor row and the
+  scroll offset, falling back to the nearest offset only when the row it was on
+  was deleted or filtered out. Rows whose entry has already ended are rendered
+  **dim** (`service.is_action_expired`) rather than hidden, so a past entry
+  stays readable without looking like something still ahead. There is no
+  standing seminar control: discovery is one smart-action operation. Proposals
+  the model could not schedule on its own (a mail that states no time) open the
+  centered, scrollable review form with editable title, time window, timezone,
+  location, URL, and description plus confidence/evidence. **Import to
+  schedule** is an explicit confirmation, expired candidates require a future
+  corrected start time, and Reject keeps a proposal hidden on later scans.
+  Imported seminars preserve their source-mail link, are marked with a
+  `[SEMINAR] ` title prefix, and use stable ids to prevent duplicate imports.
 - **LLMs** (`settings.py: LLMPane`): the ordered fallback chain. Add / Edit /
   Delete plus Move up / Move down; the selection follows the moved entry so
   moves (and deletes) can be repeated, a rejected move puts the cursor back on
@@ -323,10 +333,13 @@ invalid value / restore default), the LLM chain reordering, the mailbox history
 browser (analyze a picked mail, skip a known one), the repository dialog's Back
 button, the Notifications pane (lists all notifiers, toggles enabled, edits
 urgency), the todo create/edit round trip through the Actions table, the smart
-action (real progress, ranked matches, a scheduled seminar entry with its
-source-mail link and event window, and no review control when nothing is
-pending), and that a processed-mail event refreshes the panes without a manual
-refresh.
+action (real tool progress by tool name, ranked matches, a staged schedule
+entry that exists only after the confirmation dialog is accepted, and a staged
+delete that leaves the mailbox untouched until then), the Actions pane
+(cursor/scroll preserved across a refresh, expired rows dimmed, no standing
+seminar control), and that a processed-mail event refreshes the panes without a
+manual refresh. `ConfirmModal` focuses **Cancel** on mount, so Enter never
+triggers the destructive button.
 
 ## Opening web links (browser_mode)
 

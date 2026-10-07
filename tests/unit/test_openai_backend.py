@@ -82,11 +82,12 @@ def test_decode_sse_joins_deltas_and_ignores_reasoning() -> None:
         + "\n\n"
         + "data: [DONE]\n\n"
     )
-    text, model, finish = decode_sse_completion(body)
+    text, model, finish, tool_calls = decode_sse_completion(body)
     assert text == '{"summary":"hi"}'
     # later frames override the model id, matching the endpoint's own stream
     assert model == "m1"
     assert finish == "stop"
+    assert tool_calls == []
 
 
 def test_decode_sse_accepts_message_style_frames() -> None:

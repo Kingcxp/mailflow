@@ -264,10 +264,13 @@ class {Category}Backend:
     def __init__(self, config):
         self._config = config
 
-    async def chat(self, messages, *, temperature=None, options=None):
+    async def chat(self, messages, *, temperature=None, options=None, tools=None):
         # TODO: call your LLM provider with messages (list of {"role",
-        # "content"}) and return an LLMCompletion(text=..., model=...,
-        # backend_id=self.backend_id).
+        # "content", and for tool calling "tool_calls"/"tool_call_id"}) and
+        # return an LLMCompletion(text=..., model=..., backend_id=
+        # self.backend_id). Pass `tools` (JSON-schema list) through when the
+        # provider supports function calling, and put the model's calls into
+        # LLMCompletion(tool_calls=[...]).
         from mailflow.contracts import LLMCompletion
 
         raise NotImplementedError

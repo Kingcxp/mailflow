@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
@@ -343,6 +344,12 @@ class SmartSearchResult(BaseModel):
     total_mails: int = 0
     failed_mails: int = 0
     failed_batches: int = 0
+    failure_reasons: list[str] = Field(default_factory=lambda: [])
+    """One short phrase per failed batch (e.g. ``"batch 3: request exceeded 300s"``).
+
+    ``failed_mails`` alone reads as "these mails could not be checked", which
+    blames the mail; the reason names what actually failed so the user knows a
+    retry is the right move."""
 
     @property
     def is_complete(self) -> bool:
@@ -350,35 +357,47 @@ class SmartSearchResult(BaseModel):
         return self.failed_mails == 0
 
 
-class SmartActionIntent(StrEnum):
-    """What one natural-language instruction asked MailFlow to do."""
+class PendingOperation(BaseModel):
+    """A mutating operation a model requested but nobody has applied yet.
 
-    SEARCH = "search"
-    SCHEDULE_SEMINAR = "schedule_seminar"
-    DELETE = "delete"
+    The tool loop only stages changes: the host shows what would happen, the
+    user confirms, and only then is the service method called. ``tool`` is the
+    tool name, ``arguments`` its validated arguments, ``record_ids`` the
+    mail/action ids the operation would touch, and ``summary_key`` plus
+    ``summary_params`` describe the action in the user's own language.
+    """
+
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=lambda: {})
+    record_ids: list[str] = Field(default_factory=lambda: [])
+    summary_key: str = ""
+    summary_params: dict[str, Any] = Field(default_factory=lambda: {})
 
 
 class SmartActionResult(BaseModel):
-    """Outcome of one free-form instruction over stored mail.
+    """Outcome of one free-form instruction executed as a tool-calling loop.
 
-    ``records`` are the mails the model matched (ranked for a search, the
-    acted-on set for an operation). ``scheduled`` are the schedule entries an
-    operation created; ``needs_review`` are proposals the operation could not
-    schedule on its own (no usable future time), left for explicit review.
+    ``tool_steps`` records what the model actually ran (``find_mail
+    {"contains": "seminar"}``), ``final_text`` is its closing summary, and
+    ``pending`` are the mutating operations awaiting the user's confirmation.
 
-    ``delete`` reports matches only: the caller removes them through
-    ``MailFlowService.delete_mails`` after confirming the real count, because
-    a destructive bulk action never runs straight from a model's judgement.
-    ``deleted`` records how many a confirmed call actually moved to the trash.
+    ``delete_mail``/``schedule_event``/``add_action``/``edit_action``/
+    ``delete_action`` never take effect here: the caller applies them through
+    the service once the user confirms, because a destructive or calendar
+    change never runs straight from a model's judgement. ``deleted`` records
+    how many a confirmed call actually moved to the trash.
     """
 
-    intent: SmartActionIntent = SmartActionIntent.SEARCH
     records: list[MailRecord] = Field(default_factory=lambda: [])
     total_mails: int = 0
     failed_mails: int = 0
     failed_batches: int = 0
+    failure_reasons: list[str] = Field(default_factory=lambda: [])
     scheduled: list[ActionItem] = Field(default_factory=lambda: [])
     needs_review: list[SeminarCandidate] = Field(default_factory=lambda: [])
+    pending: list[PendingOperation] = Field(default_factory=lambda: [])
+    tool_steps: list[str] = Field(default_factory=lambda: [])
+    final_text: str = ""
     deleted: int = 0
 
     @property
@@ -395,6 +414,9 @@ class SeminarDiscoveryResult(BaseModel):
     evaluated_mails: int = 0
     failed_mails: int = 0
     failed_batches: int = 0
+    failure_reasons: list[str] = Field(default_factory=lambda: [])
+    """One short phrase per failed batch, so a retry reads as the right fix
+    instead of the mail looking unreadable."""
 
     @property
     def is_complete(self) -> bool:
@@ -592,6 +614,7 @@ __all__ = [
     "MailAnalysis",
     "MailMessage",
     "MailRecord",
+    "PendingOperation",
     "PluginSnapshot",
     "ProcessorBindingSnapshot",
     "ProcessorNote",
@@ -601,7 +624,6 @@ __all__ = [
     "SeminarCandidate",
     "SeminarDiscoveryResult",
     "SeminarStatus",
-    "SmartActionIntent",
     "SmartActionResult",
     "SmartSearchResult",
     "StyleSpan",

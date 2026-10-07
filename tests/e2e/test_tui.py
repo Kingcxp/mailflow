@@ -162,12 +162,26 @@ def build_config(db_path: Path) -> MailFlowConfig:
     )
 
 
-@pytest.mark.asyncio
 def _find_status(app: Any) -> Any:
     try:
         return app.query_one("#settings-status", Static)
     except Exception:
         return None
+
+
+def _find_mail_ids(messages: list[Any]) -> list[str]:
+    """Mail ids the last ``find_mail`` tool result reported to the model."""
+    for message in reversed(messages):
+        if message.get("role") != "tool":
+            continue
+        text = str(message.get("content") or "")
+        index = text.rfind("ids: ")
+        if index == -1:
+            continue
+        return [
+            part.strip() for part in text[index + 5 :].splitlines()[0].split(",") if part.strip()
+        ]
+    return []
 
 
 async def set_select_value(pilot: Any, select: Any, value: str) -> None:
@@ -444,30 +458,47 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Path) -> None:
-    """Spinner frames must retain batch status until ranked results arrive."""
+    """The progress line names the running tool, and the ranking the model
+    asked for survives to the table (best match first)."""
     import asyncio
     import queue
 
-    from mailflow.contracts import LLMCompletion
+    from mailflow.contracts import LLMCompletion, ToolCall
     from mailflow.plugin_market import PluginMarket
     from mailflow_tui.app import MailPane
 
     class DelayedSearchRouter:
+        """Turn 1 asks for a semantic search; the ranking turn is held open
+        once so the test can read the in-flight progress line."""
+
         def __init__(self) -> None:
             self.started = asyncio.Event()
             self.release = asyncio.Event()
-            self.calls = 0
+            self.held = False
 
-        async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMCompletion:
-            system = messages[0]["content"]
-            user = messages[-1]["content"]
-            if system.startswith("You route one free-form"):
-                return LLMCompletion(text='{"intent":"search"}', model="smart")
-            if user.startswith("Reply with"):
-                return LLMCompletion(text="ok", model="smart")
-            self.calls += 1
+        async def chat(self, messages: list[Any], **kwargs: Any) -> LLMCompletion:
+            system = str(messages[0].get("content") or "")
+            # the ranking call carries its own system prompt; anything else is
+            # either the operator loop asking for a tool or the warm-up
+            if "smart mail finder" not in system and "shortlist" not in system:
+                if not any(m.get("role") == "tool" for m in messages):
+                    return LLMCompletion(
+                        text="",
+                        model="smart",
+                        tool_calls=[
+                            ToolCall(
+                                call_id="c1", name="find_mail", arguments={"query": "student ID"}
+                            )
+                        ],
+                    )
+                return LLMCompletion(text="Answered.", model="smart")
             self.started.set()
-            await self.release.wait()
+            if not self.held:
+                self.held = True
+                await self.release.wait()
+            user = next(
+                str(m.get("content") or "") for m in reversed(messages) if m.get("role") == "user"
+            )
 
             def candidate_for(subject: str) -> str:
                 before_subject = user.split(f"subject={subject}", maxsplit=1)[0]
@@ -509,17 +540,19 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
             button = app.query_one("#smart-action", Button)
             table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
             button.press()
-            for _ in range(40):
+            for _ in range(60):
                 if router.started.is_set():
                     break
                 await asyncio.sleep(0.05)
-            assert router.started.is_set(), "smart action batch did not start"
+            assert router.started.is_set(), "smart action did not reach the ranking turn"
             await asyncio.sleep(0.2)
             hint = app.query_one("#mail-empty-hint", Static)
-            assert "Smart action  0/3" in str(hint.render())
-            assert "scanning 3 mails" in str(hint.render())
+            # the progress line names the tool the model chose, not a batch index
+            assert "1/12" in str(hint.render())
+            assert "find_mail" in str(hint.render())
+            # cancelling restores the mailbox
             button.press()
-            for _ in range(40):
+            for _ in range(60):
                 if str(search.value) == "" and int(table.row_count) == 3:
                     break
                 await asyncio.sleep(0.05)
@@ -530,15 +563,7 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
             search.value = "the student ID invitation"
             await asyncio.sleep(0.05)
             button.press()
-            for _ in range(40):
-                if router.calls == 2:
-                    break
-                await asyncio.sleep(0.05)
-            assert router.calls == 2
-            await asyncio.sleep(0.2)
-            assert "Smart action  0/3" in str(hint.render())
-            router.release.set()
-            for _ in range(40):
+            for _ in range(80):
                 if int(table.row_count) == 1 and str(button.label) == "Smart action…":
                     break
                 await asyncio.sleep(0.05)
@@ -551,16 +576,20 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
         await service.stop()
 
 
-@pytest.mark.asyncio
 async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> None:
-    """One instruction on the Mail tab filters or acts: asking for the
-    schedule adds the matched seminar mail as a real schedule entry."""
+    """The model searches, inspects the schedule, then stages the seminar.
+
+    Everything it stages waits for the confirmation dialog; only after the
+    user accepts does the entry exist — and it carries the [SEMINAR] marker
+    and its source-mail backlink.
+    """
     import queue
 
-    from mailflow.contracts import LLMCompletion
+    from mailflow.contracts import LLMCompletion, ToolCall
     from mailflow.domain import ActionOrigin
     from mailflow.plugin_market import PluginMarket
     from mailflow_tui.app import MailPane
+    from mailflow_tui.confirm import ConfirmModal
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
@@ -575,44 +604,38 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
     CommandRouter(service)
 
     class ActingRouter:
-        """Routes each phase by its system prompt like a real endpoint.
+        """Searches by keyword, then stages the event it found."""
 
-        Candidate refs are opaque and per-call: each phase numbers the mails
-        it was given, so the extraction reply uses the extraction listing's
-        own ref rather than the matching phase's.
-        """
-
-        @staticmethod
-        def _candidate_for(user: str, subject: str) -> str:
-            before_subject = user.split(f"subject={subject}", maxsplit=1)[0]
-            return before_subject.rsplit("candidate=", maxsplit=1)[1].splitlines()[0]
-
-        @staticmethod
-        def _ref_of(user: str) -> str:
-            return next(
-                line.split("=", 1)[1] for line in user.splitlines() if line.startswith("id=")
-            )
-
-        async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMCompletion:
-            system = messages[0]["content"]
-            user = messages[-1]["content"]
-            if system.startswith("You route one free-form"):
-                return LLMCompletion(text='{"intent":"schedule_seminar"}', model="smart")
-            if system.startswith("You are MailFlow's smart mail finder and"):
-                candidate = self._candidate_for(user, "Optional Friday lecture")
-                return LLMCompletion(text=f'[{{"id":"{candidate}","relevance":96}}]', model="smart")
-            if system.startswith("You identify optional academic seminars"):
+        async def chat(self, messages: list[Any], **kwargs: Any) -> LLMCompletion:
+            tool_results = [
+                str(m.get("content") or "") for m in messages if m.get("role") == "tool"
+            ]
+            if not tool_results:
                 return LLMCompletion(
-                    text=(
-                        f'[{{"id":"{self._ref_of(user)}","title":"Research colloquium",'
-                        '"starts_at":"2099-10-15T14:00:00+08:00",'
-                        '"ends_at":"2099-10-15T15:30:00+08:00",'
-                        '"timezone":"Asia/Shanghai","location":"Room 201",'
-                        '"confidence":93,"evidence":"15 October, Room 201"}]'
-                    ),
+                    text="",
                     model="smart",
+                    tool_calls=[
+                        ToolCall(call_id="c1", name="find_mail", arguments={"contains": "lecture"})
+                    ],
                 )
-            return LLMCompletion(text="ok", model="smart")
+            if len(tool_results) == 1:
+                return LLMCompletion(
+                    text="",
+                    model="smart",
+                    tool_calls=[
+                        ToolCall(
+                            call_id="c2",
+                            name="schedule_event",
+                            arguments={
+                                "title": "Research colloquium",
+                                "starts_at": "2099-10-15T14:00:00+08:00",
+                                "ends_at": "2099-10-15T15:30:00+08:00",
+                                "location": "Room 201",
+                            },
+                        )
+                    ],
+                )
+            return LLMCompletion(text="Staged the colloquium for your schedule.", model="smart")
 
     service.router = cast(Any, ActingRouter())
     app = MailFlowApp(service, queue.Queue())
@@ -625,38 +648,38 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
             pane = app.query_one(MailPane)
             search = app.query_one("#mail-search", Input)
             search.value = "把研讨会邮件加入我的日程"
+
+            def modal() -> ConfirmModal | None:
+                screens = [s for s in app.screen_stack if isinstance(s, ConfirmModal)]
+                return screens[-1] if screens else None
+
             app.query_one("#smart-action", Button).press()
-            for _ in range(80):
-                if pane._smart_action_result is not None:  # pyright: ignore[reportPrivateUsage]
+            for _ in range(120):
+                if modal() is not None:
                     break
                 await pilot.pause(0.05)
+            prompt = modal()
+            assert prompt is not None, "a staged schedule entry must ask before it is added"
+            # nothing exists until the user confirms
+            assert await service.storage.list_custom_actions() == []
+            # the executed steps are visible while the dialog waits, and the
+            # literal condition the user stated went out as `contains`
             result = pane._smart_action_result  # pyright: ignore[reportPrivateUsage]
             assert result is not None
+            assert 'find_mail {"contains": "lecture"}' in result.tool_steps
+            assert result.pending and result.pending[0].tool == "schedule_event"
+            prompt.query_one("#confirm-run", Button).press()
+            for _ in range(120):
+                if await service.storage.list_custom_actions():
+                    break
+                await pilot.pause(0.05)
 
             scheduled = await service.storage.list_custom_actions()
             assert [item.summary for item in scheduled] == ["Research colloquium"]
-            assert scheduled[0].origin is ActionOrigin.SEMINAR
-            # the entry keeps its source-mail backlink and the event window
-            assert scheduled[0].mail_id == result.records[0].record_id
-            assert scheduled[0].action_type == "seminar"
-            assert scheduled[0].location == "Room 201"
-            # the matched mail is what the table shows for this instruction
-            table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
-            assert table.row_count == 1
-            assert "Optional Friday lecture" in str(table.get_row_at(0)[1])
-
-            hint = app.query_one("#mail-empty-hint", Static)
-            assert "Added 1 entry(ies) to the schedule." in str(hint.render())
-
-            # nothing is left for review, so the Actions tab shows no
-            # review control (discovery is not advertised as a feature)
-            tabs = app.query_one(TabbedContent)
-            tabs.active = "tab-actions"  # pyright: ignore[reportUnknownMemberType]
-            for _ in range(60):
-                if not app.query_one("#actions-review-seminars", Button).display:
-                    break
-                await pilot.pause(0.05)
-            assert not app.query_one("#actions-review-seminars", Button).display
+            assert scheduled[0].action_type == "other"
+            assert "2099-10-15T06:00:00+00:00" in scheduled[0].due_at.isoformat()
+            assert scheduled[0].mail_id == ""  # a plain event, not a mail import
+            assert scheduled[0].origin is not ActionOrigin.SEMINAR
             app.exit()
             await pilot.pause()
     finally:
@@ -665,11 +688,11 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> None:
-    """A delete instruction matches, states the real count, and removes the
-    mails only once the user confirms — with a recoverable trash move."""
+    """The model stages the deletion; the mails move only once the user
+    confirms — and the move is a recoverable trash move."""
     import queue
 
-    from mailflow.contracts import LLMCompletion
+    from mailflow.contracts import LLMCompletion, ToolCall
     from mailflow.plugin_market import PluginMarket
     from mailflow_tui.confirm import ConfirmModal
 
@@ -686,20 +709,35 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
     CommandRouter(service)
 
     class DeletingRouter:
-        """Routes the intent to delete and matches only the promotion."""
+        """Finds the promotion by keyword, then stages its deletion."""
 
-        async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> LLMCompletion:
-            system = messages[0]["content"]
-            user = messages[-1]["content"]
-            if system.startswith("You route one free-form"):
-                return LLMCompletion(text='{"intent":"delete"}', model="smart")
-            if user.startswith("Reply with"):
-                return LLMCompletion(text="ok", model="smart")
-            if system.startswith("You are MailFlow's smart mail finder and"):
-                before = user.split("subject=Huge promotion sale", maxsplit=1)[0]
-                candidate = before.rsplit("candidate=", maxsplit=1)[1].splitlines()[0]
-                return LLMCompletion(text=f'[{{"id":"{candidate}","relevance":92}}]', model="smart")
-            return LLMCompletion(text="ok", model="smart")
+        async def chat(self, messages: list[Any], **kwargs: Any) -> LLMCompletion:
+            tool_results = [
+                str(m.get("content") or "") for m in messages if m.get("role") == "tool"
+            ]
+            if not tool_results:
+                return LLMCompletion(
+                    text="",
+                    model="smart",
+                    tool_calls=[
+                        ToolCall(
+                            call_id="c1", name="find_mail", arguments={"contains": "promotion"}
+                        )
+                    ],
+                )
+            if len(tool_results) == 1:
+                return LLMCompletion(
+                    text="",
+                    model="smart",
+                    tool_calls=[
+                        ToolCall(
+                            call_id="c2",
+                            name="delete_mail",
+                            arguments={"record_ids": _find_mail_ids(messages)},
+                        )
+                    ],
+                )
+            return LLMCompletion(text="Staged the promotion mail for deletion.", model="smart")
 
     service.router = cast(Any, DeletingRouter())
     app = MailFlowApp(service, queue.Queue())
@@ -717,12 +755,12 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
                 return screens[-1] if screens else None
 
             app.query_one("#smart-action", Button).press()
-            for _ in range(80):
+            for _ in range(120):
                 if modal() is not None:
                     break
                 await pilot.pause(0.05)
             prompt = modal()
-            assert prompt is not None, "a delete match must ask before removing mail"
+            assert prompt is not None, "a staged delete must ask before removing mail"
             body = str(prompt.query_one("#confirm-body", Static).render())
             assert "1" in body  # the real matched count, not the mailbox size
 
@@ -734,19 +772,19 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
                 if modal() is None:
                     break
                 await pilot.pause(0.05)
+            assert modal() is None
             assert await service.count_mails() == 3
 
             # a second run, this time confirmed
-            search.value = "把广告邮件都删掉"
             app.query_one("#smart-action", Button).press()
-            for _ in range(80):
+            for _ in range(120):
                 if modal() is not None:
                     break
                 await pilot.pause(0.05)
             prompt = modal()
             assert prompt is not None
             prompt.query_one("#confirm-run", Button).press()
-            for _ in range(80):
+            for _ in range(120):
                 if await service.count_mails() == 2:
                     break
                 await pilot.pause(0.05)
@@ -754,9 +792,14 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
             # the deleted mail is recoverable, not destroyed
             trash = await service.list_trash()
             assert [item.mail.subject for item in trash] == ["Huge promotion sale"]
-            # the pane reports the real number moved
+            # the pane reports the real number moved (written after the
+            # deferred reload, so it survives the re-render)
             hint = app.query_one("#mail-empty-hint", Static)
-            assert "1" in str(hint.render())
+            for _ in range(60):
+                if "1" in str(hint.render()):
+                    break
+                await pilot.pause(0.05)
+            assert "1" in str(hint.render()), str(hint.render())
             app.exit()
             await pilot.pause()
     finally:

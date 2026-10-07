@@ -912,7 +912,8 @@ async def test_seminar_review_requires_explicit_import(tmp_path: Path) -> None:
             custom = await service.storage.list_custom_actions()
             assert len(custom) == 1
             imported = custom[0]
-            assert imported.summary == "Edited seminar"
+            # every imported seminar carries the marker prefix
+            assert imported.summary == "[SEMINAR] Edited seminar"
             assert imported.mail_id == "mail-1"
             assert imported.origin is ActionOrigin.SEMINAR
             assert imported.location == "Room 201"

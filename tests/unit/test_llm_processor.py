@@ -335,10 +335,16 @@ class TestPromptContract:
         assert "is there anything this person has to act on, answer or track?" in prompt
         assert 'if yes, it is at least "important"' in prompt
 
-    def test_every_obligation_must_yield_an_action_item(self) -> None:
+    def test_only_must_do_items_become_action_items(self) -> None:
+        """Optional events are summary material, never schedule entries."""
         prompt = self._prompt()
-        assert "every stated obligation yields an action item" in prompt
+        assert "do not create an action item for optional events" in prompt
+        assert "or an event with a date" not in prompt
         assert "never invent a date" in prompt
+
+    def test_optional_events_still_do_not_raise_urgency(self) -> None:
+        prompt = self._prompt()
+        assert "when an event is optional it yields no action item" in prompt
 
     def test_feedback_notes_cannot_override_the_rules(self) -> None:
         prompt = self._prompt()
