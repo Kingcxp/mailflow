@@ -297,6 +297,12 @@ class TestCommandRouter:
         commands, _ = router
         response = await commands.execute("help")
         assert response.ok
+        # the topic list is paged, so every topic is checked across its pages
+        pages = [response.text]
+        for page in (2, 3):
+            more = await commands.execute(f"help --page {page}")
+            if more.ok:
+                pages.append(more.text)
         for topic in (
             "mail",
             "action",
@@ -307,9 +313,10 @@ class TestCommandRouter:
             "reply",
             "lang",
             "trash",
+            "clean",
             "runtime",
         ):
-            assert topic in response.text
+            assert any(topic in text for text in pages), topic
 
     async def test_help_topic(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
         commands, _ = router
@@ -1070,6 +1077,98 @@ class TestMailWipe:
         assert response.ok
         assert len(storage.mails) == 0
         assert len(storage.trash) == 0
+
+
+class TestCleanCommands:
+    """`clean records` is the recoverable clear; `clean trash` destroys it."""
+
+    async def test_records_moves_mail_and_actions_to_the_trash(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        # a mail-derived entry and a user todo: both must leave the schedule
+        await commands.execute('action add --summary "Submit the form" --due "2099-05-01 09:00"')
+        assert len(storage.custom_actions) == 1
+
+        response = await commands.execute("clean records")
+
+        assert response.ok
+        assert len(storage.mails) == 0
+        assert len(storage.custom_actions) == 0
+        # nothing was destroyed: every mail is recoverable from the trash
+        assert len(storage.trash) == 3
+
+    async def test_records_clears_the_derived_state_it_orphaned(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        storage.preferences["actions.dismissed"] = '["stale|key|errand"]'
+        storage.preferences["seminars.candidates"] = '["something"]'
+
+        await commands.execute("clean records")
+
+        # a dismissal for a mail nobody can see any more would hide the entry
+        # forever if it survived
+        assert storage.preferences["actions.dismissed"] == "[]"
+        assert storage.preferences["seminars.candidates"] == "[]"
+
+    async def test_records_does_not_purge_the_trash(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        """The recoverable half must never destroy what it just moved."""
+        commands, storage = router
+        await commands.execute("mail delete m1")
+        assert len(storage.trash) == 1
+
+        await commands.execute("clean records")
+
+        # the pre-existing entry survives and the two remaining mails join it
+        assert len(storage.trash) == 3
+        assert len(storage.mails) == 0
+
+    async def test_records_is_idempotent(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
+        commands, storage = router
+        await commands.execute("clean records")
+        response = await commands.execute("clean records")
+
+        assert response.ok
+        assert len(storage.mails) == 0
+        assert len(storage.trash) == 3  # not double-counted
+
+    async def test_trash_requires_explicit_confirm(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        await commands.execute("mail delete m1")
+
+        response = await commands.execute("clean trash")
+
+        assert not response.ok
+        assert "CONFIRM" in response.text
+        assert len(storage.trash) == 1  # untouched
+
+    async def test_trash_confirmed_purges_everything(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        await commands.execute("clean records")
+        assert len(storage.trash) == 3
+
+        response = await commands.execute("clean trash CONFIRM")
+
+        assert response.ok
+        assert len(storage.trash) == 0
+        assert len(storage.mails) == 0
+
+    async def test_usage_is_reported_for_a_bare_or_unknown_subcommand(
+        self, router: tuple[CommandRouter, MemoryStorage]
+    ) -> None:
+        commands, storage = router
+        for line in ("clean", "clean nonsense", "clean records extra"):
+            response = await commands.execute(line)
+            assert not response.ok, line
+            assert "records" in response.text and "trash" in response.text, line
+        assert len(storage.mails) == 3  # nothing ran
 
 
 @pytest.mark.asyncio

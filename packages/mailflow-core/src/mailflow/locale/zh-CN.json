@@ -2,6 +2,14 @@
   "locale": "zh-CN",
   "name": "简体中文",
   "messages": {
+    "clean": {
+      "usage": "clean <records|trash [CONFIRM]>",
+      "records_done": "已将 {mails} 封邮件移入回收站，并移除 {actions} 条日程。执行 `clean trash CONFIRM` 可彻底清空回收站。",
+      "trash_warn_title": "这将彻底删除回收站中的全部内容。",
+      "trash_warn_body": "在未执行本命令前，已清理的邮件仍可恢复。",
+      "trash_confirm_hint": "执行请输入：`clean trash CONFIRM`",
+      "trash_done": "已从回收站彻底删除 {count} 封邮件。"
+    },
     "account": {
       "header_email": "邮箱",
       "header_id": "账户",

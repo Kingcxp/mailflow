@@ -39,3 +39,25 @@ run:
 
 Manual `service.run_cleanup()` performs the same work on demand; the
 `cleanup.done` event reports counts.
+
+## Clearing everything (manual reset)
+
+Two explicit, separate steps, exposed as chat commands and make targets:
+
+| Command | Make target | Effect |
+| ------- | ----------- | ------ |
+| `clean records` | `make clean-records` | `service.clear_all_records()`: every stored mail moves to the **trash**, every schedule entry is removed. Recoverable — the trash is left intact. |
+| `clean trash CONFIRM` | `make clean-trash` | `service.purge_trash_now()`: permanently deletes the entire trash. Irreversible. |
+
+The split is deliberate: the recoverable half can never destroy what it just
+moved. `clean records` is a reset, not a partial sweep — it also drops the
+derived state that described the cleared records (the `actions.dismissed`
+dismissal list and the stored `seminars.candidates` proposals), because a
+surviving dismissal would keep hiding an entry for a mail nobody can see any
+more. The in-memory dedup state is reset too, so a later re-sync can process
+the same mail again.
+
+Both are also reachable from the service API (`clear_all_records`,
+`purge_trash_now`) and emit `mailflow.records.cleared` /
+`mailflow.trash.purged`. The destructive half refuses to run without the
+literal word `CONFIRM` (a bare `clean trash` explains and exits non-zero).

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help sync test coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot docs clean clean-gateways clean-config
+.PHONY: help sync test coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot docs clean clean-records clean-trash clean-gateways clean-config
 
 PY ?= uv run
 
@@ -74,6 +74,12 @@ docs: ## Verify all mandatory documentation is present
 
 clean: ## Remove caches, build output and local runtime data (keeps .venv)
 	$(PY) python tools/clean.py
+
+clean-records: ## Move every stored mail + schedule entry to the trash (recoverable)
+	$(PY) mailflow command "clean records" -c configs/development.toml
+
+clean-trash: ## Permanently delete everything in the trash (destructive, irreversible)
+	$(PY) mailflow command "clean trash CONFIRM" -c configs/development.toml
 
 clean-gateways: ## Delete data/gateways/ (bot gateway installs; asks first, -y to skip)
 	$(PY) python tools/clean.py --gateways -y

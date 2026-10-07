@@ -50,6 +50,8 @@ class MemoryStorage:
         self.deleted: list[str] = []
         self.refresh_deleted_at_calls: list[bool] = []
         self.trashed: dict[str, MailRecord] = {}
+        # deletion time per trashed record: purge_trash compares against it
+        self.trash_deleted_at: dict[str, datetime] = {}
 
     async def initialize(self) -> None:
         pass
@@ -87,6 +89,7 @@ class MemoryStorage:
         record = self.mails.pop(record_id, None)
         if record is not None:
             self.trashed[record_id] = record
+            self.trash_deleted_at[record_id] = datetime.now(UTC)
 
     async def list_trash(self) -> list[TrashRecord]:
         now = datetime.now(UTC)
@@ -108,10 +111,19 @@ class MemoryStorage:
         return None
 
     async def purge_trash(self, before: datetime) -> int:
-        return 0
+        purged = [key for key, when in list(self.trash_deleted_at.items()) if when < before]
+        for key in purged:
+            self.trashed.pop(key, None)
+            self.trash_deleted_at.pop(key, None)
+        return len(purged)
 
     async def cleanup_mail(self, before: datetime) -> int:
-        return 0
+        moved = 0
+        for record_id in list(self.mails):
+            if self.mails[record_id].received_at < before:
+                await self.delete_mail(record_id)
+                moved += 1
+        return moved
 
     async def save_draft(self, draft: ReplyDraft) -> None:
         self.drafts[draft.draft_id] = draft
@@ -1012,6 +1024,101 @@ def _expired_record(
         manual_urgency=manual,
         analysis=MailAnalysis(summary="s", urgency=urgency, action_items=items),
     )
+
+
+class TestClearAllRecords:
+    """`make clean-records` moves everything to the trash and leaves it there."""
+
+    @staticmethod
+    def make_service() -> MailFlowService:
+        config = MailFlowConfig()
+        config.llms = [LLMConfig(llm_id="llm-1")]
+        return MailFlowService(
+            config=config,
+            registry=ComponentRegistry(),
+            plugin_manager=cast(Any, None),
+            storage=cast(Any, MemoryStorage()),
+            sources={},
+            router=cast(LLMRouter, None),
+            pipeline=PipelineEngine([]),
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            i18n=I18n(),
+        )
+
+    async def test_mail_and_actions_move_to_the_trash(self) -> None:
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
+        await service.add_action("Submit the form", datetime.now(UTC) + timedelta(days=2))
+
+        moved, actions = await service.clear_all_records()
+
+        assert moved == 1
+        assert actions == 1
+        assert await service.count_mails() == 0
+        assert await service.list_actions_all() == []
+        assert len(await service.list_trash()) == 1  # recoverable
+
+    async def test_the_trash_is_kept_for_the_separate_purge_step(self) -> None:
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
+        await service.delete_mail("m1")
+        assert len(await service.list_trash()) == 1
+
+        await service.clear_all_records()
+
+        assert len(await service.list_trash()) == 1  # untouched by the clear
+
+    async def test_purge_trash_now_empties_it(self) -> None:
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
+        await service.clear_all_records()
+
+        purged = await service.purge_trash_now()
+
+        assert purged == 1
+        assert await service.list_trash() == []
+
+    async def test_derived_state_is_reset_not_accumulated(self) -> None:
+        """A surviving dismissal would hide entries for invisible mail forever."""
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
+        await storage.set_preference("actions.dismissed", '["m1|2026-01-01T09:00:00+00:00|other"]')
+        await storage.set_preference("seminars.candidates", '[{"candidate_id": "x"}]')
+
+        await service.clear_all_records()
+
+        assert await storage.get_preference("actions.dismissed") == "[]"
+        assert await storage.get_preference("seminars.candidates") == "[]"
+
+    async def test_clearing_twice_is_idempotent(self) -> None:
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
+
+        first = await service.clear_all_records()
+        second = await service.clear_all_records()
+
+        assert first == (1, 0)
+        assert second == (0, 0)
+        assert len(await service.list_trash()) == 1  # not duplicated
+
+    async def test_a_reset_lets_the_same_mail_be_processed_again(self) -> None:
+        """The in-memory dedup state must be forgotten, or a re-sync would
+        silently skip everything just cleared."""
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
+        service.runtime._seen_ids.add("m1")  # pyright: ignore[reportPrivateUsage]
+
+        await service.clear_all_records()
+
+        assert "m1" not in service.runtime._seen_ids  # pyright: ignore[reportPrivateUsage]
 
 
 class TestExpiredMail:

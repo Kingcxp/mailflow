@@ -2,6 +2,14 @@
   "locale": "en",
   "name": "English",
   "messages": {
+    "clean": {
+      "usage": "clean <records|trash [CONFIRM]>",
+      "records_done": "Moved {mails} mail(s) to the trash and removed {actions} schedule entry(ies). Run `clean trash CONFIRM` to empty the trash for good.",
+      "trash_warn_title": "This will PERMANENTLY delete everything in the trash.",
+      "trash_warn_body": "Cleared mail stays recoverable until this runs.",
+      "trash_confirm_hint": "Run `clean trash CONFIRM` to execute.",
+      "trash_done": "Permanently deleted {count} mail(s) from the trash."
+    },
     "account": {
       "header_email": "EMAIL",
       "header_id": "ACCOUNT",

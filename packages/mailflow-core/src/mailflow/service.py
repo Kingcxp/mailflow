@@ -2237,6 +2237,55 @@ Return every candidate in this batch."""
         self.runtime.reset_dedup()
         return moved, purged
 
+    async def clear_all_records(self) -> tuple[int, int]:
+        """Move every stored mail and every schedule entry to the trash.
+
+        Returns ``(moved_mails, removed_actions)``. This is the "clear
+        everything" primitive behind ``make clean-records``: nothing is
+        destroyed here — mail goes to the **trash** (recoverable until
+        :meth:`purge_trash_now` runs) and schedule entries are removed so the
+        reminder scheduler stops firing on records that no longer exist.
+
+        It is a *reset*, not a partial sweep: user todos and imported seminars
+        are deleted for real, and the persisted state that describes the cleared
+        records (the dismissal list and the stored seminar proposals) is dropped
+        too — keeping them would leave the mailbox permanently hiding entries
+        for mails nobody can see any more.
+        """
+        actions = 0
+        for item in await self.storage.list_custom_actions():
+            if await self.storage.delete_custom_action(item.item_id):
+                actions += 1
+
+        # derived state: the proposals and dismissals all reference records that
+        # are about to leave the active mailbox
+        await self._save_seminar_candidates([])
+        await self._set_dismissed_keys(frozenset())
+
+        # a horizon past every stored mail moves them all; the trash itself is
+        # left alone (purging it is the separate, explicit step)
+        moved = await self.storage.cleanup_mail(utcnow() + timedelta(days=1))
+        # in-memory dedup state must be forgotten so a later re-sync that sees
+        # the same mail again can process it
+        self.runtime.reset_dedup()
+        logger.info(
+            "cleared %d mail(s) to the trash, removed %d schedule entry(ies)", moved, actions
+        )
+        await self.events.emit("mailflow.records.cleared", mails=moved, actions=actions)
+        return moved, actions
+
+    async def purge_trash_now(self) -> int:
+        """Permanently delete everything in the trash; returns how many went.
+
+        The counterpart to :meth:`clear_all_records` and the only destructive
+        collection path: until this runs, cleared mail is recoverable with
+        :meth:`restore_mail`.
+        """
+        purged = await self.storage.purge_trash(utcnow() + timedelta(days=36500))
+        logger.info("purged %d mail(s) from the trash", purged)
+        await self.events.emit("mailflow.trash.purged", count=purged)
+        return purged
+
     async def run_cleanup_wide(self) -> tuple[int, int]:
         """Move every active mail to trash and purge the trash permanently."""
         from mailflow.domain import utcnow

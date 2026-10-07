@@ -60,6 +60,7 @@ _TOPICS = (
     "reply",
     "lang",
     "trash",
+    "clean",
     "runtime",
     "config",
     "feedback",
@@ -246,6 +247,7 @@ class CommandRouter:
             "reply": self._cmd_reply,
             "lang": self._cmd_lang,
             "trash": self._cmd_trash,
+            "clean": self._cmd_clean,
             "runtime": self._cmd_runtime,
             "config": self._cmd_config,
             "feedback": self._cmd_feedback,
@@ -1553,6 +1555,44 @@ class CommandRouter:
             )
             return self._ok(self._t("command.lang.set", language=args[1], name=name))
         return self._err(self._t("command.lang.usage"))
+
+    # -- clean -------------------------------------------------------------------------------------------
+
+    async def _cmd_clean(self, args: list[str]) -> CommandResponse:
+        """``clean records`` / ``clean trash`` — the one-click cleanup pair.
+
+        ``records`` moves every stored mail and schedule entry to the trash
+        (recoverable), ``trash`` then destroys the trash for good. The
+        destructive half is guarded: a bare ``clean trash`` explains and
+        refuses, and only the literal word CONFIRM executes.
+        """
+        if not args:
+            return self._err(self._t("clean.usage"))
+        sub, rest = args[0], args[1:]
+        if sub == "records":
+            if rest:
+                return self._err(self._t("clean.usage"))
+            try:
+                mails, actions = await self.service.clear_all_records()
+            except Exception as exc:
+                return self._err(self._t("common.error", message=str(exc)))
+            return self._ok(self._t("clean.records_done", mails=mails, actions=actions))
+        if sub == "trash":
+            if rest != ["CONFIRM"]:
+                return CommandResponse.rich(
+                    [
+                        (self._t("clean.trash_warn_title"), _STYLE_ERROR),
+                        ("\n" + self._t("clean.trash_warn_body"), ""),
+                        (f"\n{self._t('clean.trash_confirm_hint')}\n", _STYLE_ACCENT),
+                    ],
+                    ok=False,
+                )
+            try:
+                purged = await self.service.purge_trash_now()
+            except Exception as exc:
+                return self._err(self._t("common.error", message=str(exc)))
+            return self._ok(self._t("clean.trash_done", count=purged))
+        return self._err(self._t("clean.usage"))
 
     # -- trash --------------------------------------------------------------------------------------------
 

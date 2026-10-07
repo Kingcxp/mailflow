@@ -7,6 +7,20 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **One-click reset: `make clean-records` and `make clean-trash`** — two new
+  chat commands (`clean records`, `clean trash CONFIRM`), service methods
+  (`clear_all_records`, `purge_trash_now`) and make targets. `clean-records`
+  moves every stored mail and every schedule entry to the **trash** and leaves
+  the trash intact, so the reset stays recoverable; `clean-trash` is the
+  separate irreversible step. `clean records` is a reset rather than a partial
+  sweep: it also drops the dismissal list and the stored seminar proposals that
+  described the cleared records (a surviving dismissal would keep hiding an
+  entry for a mail nobody can see any more) and resets the in-memory dedup state
+  so the same mail can be processed again. The destructive half refuses to run
+  without the literal word `CONFIRM`.
+
+### Added
+
 - **Smart action is a tool-calling loop, not three hardcoded intents** — the
   model now receives a tool set (`find_mail`, `delete_mail`, `schedule_event`,
   `schedule_seminar`, `list_actions`, `add_action`, `edit_action`,
