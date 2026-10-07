@@ -96,16 +96,35 @@ recipient profile (below) is authoritative for relevance, and the rolling
 feedback notes apply to mail of the same kind only — they may not be used to
 turn an announcement into `ad`.
 
-**Action items are only for what the recipient must do.** The prompt creates an
-`ActionItem` for a deadline, a registration, a submission, a payment, an
-appointment they must attend, an exam, an interview, a pickup, or a
-meeting/conference they are required to attend or must reply to. An *optional*
-event — a seminar, talk, lecture, workshop, club activity, or anything the
-recipient may freely skip — yields **no** action item (it belongs in `summary`
-and `reason` only), however concrete its date is. Urgency is unaffected by this
-rule: an optional event can still be `info`, and rule 2 keeps an announcement
+**Action items are only for what the recipient must do and cannot skip.** The
+prompt creates an `ActionItem` for a deadline the recipient is liable for (a
+fee, a required submission, an exam), an appointment they must attend, a
+pickup, or a meeting/conference they are required to attend or must reply to.
+An *optional* or self-selected matter yields **no** action item (it belongs in
+`summary` and `reason` only), however concrete its date is: that covers events
+they may freely skip (seminars, talks, lectures, workshops, club activities)
+and anything they may simply choose not to do — voluntary surveys, feedback
+forms, and optional sign-ups or registrations for events they are not required
+to attend. A registration is actionable **only** when failing to do it has a
+consequence for their standing (a compulsory enrolment, a graduation
+requirement, a mandatory submission), not when it merely books a place at
+something optional. One obligation yields one item: a single requirement is
+never split into several near-identical entries. Urgency is unaffected by this
+rule — an optional event can still be `info`, and rule 2 keeps an announcement
 at least `info`. Seminars that *should* end up on the schedule enter it through
 the explicit import path or the smart action's `schedule_seminar` tool.
+
+**Dates resolve against the mail, not against now.** The per-mail context
+carries the mail's own send time (`MailMessage.date`, rendered in both UTC and
+the configured local zone) and its age in days, because the body's relative
+wording — "tomorrow", "next Friday", "明天", "下周一" — refers to the day the
+mail was written, not to analysis time. Re-fetching an older mailbox therefore
+cannot turn a September "tomorrow" into a deadline today. As a second line of
+defence the processor drops any item whose parsed `due_at` is already in the
+past, so a historical mail's expired obligation never becomes a stored schedule
+entry (an explicitly stated *future* deadline in an old mail is still kept).
+The reminder scheduler independently selects only items with
+`day_start <= due_at`, and `purge_expired_actions` retires spent entries.
 
 When no processor supplies a non-empty summary, the pipeline stores the source
 subject only as a display fallback and marks `summary_is_fallback=True`.

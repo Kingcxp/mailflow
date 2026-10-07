@@ -5,6 +5,29 @@ All notable changes are recorded here; the format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Optional sign-ups no longer become todos** — the action-item rule listed
+  "a registration" as actionable, so surveys, feedback forms and optional
+  event sign-ups landed in the schedule. It now requires that skipping the
+  thing has a consequence for the recipient's standing (a compulsory
+  enrolment, a graduation requirement, a mandatory submission); voluntary
+  surveys, feedback forms and optional registrations are summary material
+  only, and one obligation can no longer be split into several near-identical
+  items. Verified against the live mailbox: the catering survey, library
+  workshops, an open lecture, a drop-in activity and a vaccination programme
+  now yield no action items, while a graduation seminar-report requirement
+  keeps its single absolute deadline.
+- **Relative dates now resolve against the mail, not against today** —
+  re-fetching an older mailbox used to turn a September mail saying "tomorrow"
+  into a deadline *today*: the per-mail prompt carried only the fetch time
+  plus the current time, so a relative phrase anchored to now. The context now
+  includes the mail's own send time (UTC and configured local zone) and its
+  age in days, the prompt states that "tomorrow"/"next Friday"/"明天"/"下周一"
+  mean the day after the mail was sent, and the processor drops any item whose
+  `due_at` is already past — so a historical mail's expired obligation never
+  becomes a schedule entry while an explicitly stated future deadline is kept.
+
 ### Added
 
 - **One-click reset: `make clean-records` and `make clean-trash`** — two new

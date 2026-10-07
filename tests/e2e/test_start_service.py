@@ -29,6 +29,9 @@ from mailflow_notify_console.plugin import plugin as notify_plugin
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import FakeMailSource, make_mail
 
+# The deadline is far in the future on purpose: the processor drops any action
+# item whose due_at has already passed, so a fixed past date would make this
+# flow assert on an item the pipeline is designed to discard.
 EXAM_JSON = """{
   "summary": "Final calculus exam on June 10 at 09:00, bring student ID",
   "urgency": "urgent",
@@ -39,8 +42,8 @@ EXAM_JSON = """{
     {
       "summary": "Attend final calculus exam",
       "action_type": "exam",
-      "due_at": "2026-06-10T09:00:00+00:00",
-      "due_end": "2026-06-10T11:00:00+00:00",
+      "due_at": "2036-06-10T09:00:00+00:00",
+      "due_end": "2036-06-10T11:00:00+00:00",
       "notes": "Bring student ID"
     }
   ],

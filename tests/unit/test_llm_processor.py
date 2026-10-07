@@ -123,6 +123,91 @@ class TestLLMImportanceProcessor:
         assert "important" in joined and "urgent" in joined
         assert "Final calculus exam" in joined
 
+    async def test_a_deadline_the_mail_dates_in_the_past_is_not_scheduled(self) -> None:
+        """Re-importing an old mailbox must not fill today's schedule.
+
+        A September mail analysed in October used to store its "tomorrow"
+        deadline as a live entry; the guard drops anything already past while
+        keeping the absolute future deadline the same mail states.
+        """
+        payload = """{
+          "summary": "Old reminder", "urgency": "important", "reason": "carries a deadline",
+          "reply_required": false, "suggested_reply": "",
+          "action_items": [
+            {"summary": "Attend the seminar", "action_type": "meeting",
+             "due_at": "2026-09-23T18:00:00+08:00"},
+            {"summary": "Submit the annual report", "action_type": "errand",
+             "due_at": "2026-12-02T09:00:00+08:00"}
+          ],
+          "notes": ""}"""
+        router = StubRouter(payload)
+        processor = make_processor(router)
+        mail = make_mail(subject="Reminder: seminar tomorrow").model_copy(
+            update={
+                "date": datetime(2026, 9, 22, 10, 0, tzinfo=UTC),
+                "received_at": datetime(2026, 9, 22, 10, 0, tzinfo=UTC),
+            }
+        )
+        # analysed today, weeks after the mail arrived
+        context = ProcessingContext(
+            account_id="acct-1",
+            timezone="Asia/Shanghai",
+            now=datetime(2026, 10, 8, 12, 0, tzinfo=UTC),
+        )
+
+        result = await processor.process(mail, context)
+
+        assert result.analysis is not None
+        summaries = [item.summary for item in result.analysis.action_items]
+        assert summaries == ["Submit the annual report"]
+        due = result.analysis.action_items[0].due_at
+        assert due == datetime(2026, 12, 2, 1, 0, tzinfo=UTC)
+
+    async def test_a_future_deadline_survives_an_old_mail(self) -> None:
+        """The guard drops past dates only; an explicit future one is kept."""
+        payload = """{
+          "summary": "Old notice", "urgency": "important", "reason": "deadline",
+          "reply_required": false, "suggested_reply": "",
+          "action_items": [
+            {"summary": "Submit the thesis", "action_type": "errand",
+             "due_at": "2027-01-15T17:00:00+08:00"}
+          ],
+          "notes": ""}"""
+        processor = make_processor(StubRouter(payload))
+        mail = make_mail().model_copy(
+            update={
+                "date": datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+                "received_at": datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+            }
+        )
+        context = ProcessingContext(
+            account_id="acct-1",
+            timezone="Asia/Shanghai",
+            now=datetime(2026, 10, 8, 12, 0, tzinfo=UTC),
+        )
+
+        result = await processor.process(mail, context)
+
+        assert result.analysis is not None
+        assert [item.summary for item in result.analysis.action_items] == ["Submit the thesis"]
+
+    async def test_an_item_due_today_is_kept(self) -> None:
+        """Only strictly-past deadlines go: one due later today still matters."""
+        payload = """{
+          "summary": "Due today", "urgency": "urgent", "reason": "deadline today",
+          "reply_required": false, "suggested_reply": "",
+          "action_items": [
+            {"summary": "Pay the fee", "action_type": "errand",
+             "due_at": "2026-06-01T23:00:00+00:00"}
+          ],
+          "notes": ""}"""
+        processor = make_processor(StubRouter(payload))
+
+        result = await processor.process(make_mail(), CONTEXT)  # CONTEXT is 09:00 UTC
+
+        assert result.analysis is not None
+        assert [item.summary for item in result.analysis.action_items] == ["Pay the fee"]
+
     async def test_urgency_case_and_synonym_normalized(self) -> None:
         payload = CRITICAL_EXAM_JSON.replace('"urgent"', '"Critical"')
         router = StubRouter(payload)
@@ -320,6 +405,26 @@ class TestPromptContract:
         # the prompt is wrapped for readability: compare on normalized spaces
         return " ".join(SYSTEM_PROMPT.lower().split())
 
+    @staticmethod
+    def _user_message(*, age_days: int = 0) -> str:
+        """The per-mail context the model actually receives."""
+        from mailflow.domain import MailAddress
+
+        processor = LLMImportanceProcessor(
+            ProcessorConfig(processor_id="llm-importance", provider="llm-importance", llm="l1"),
+            cast(Any, None),
+        )
+        mail = make_mail(message_id="anchor", subject="Seminar tomorrow")
+        sent = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
+        mail = mail.model_copy(update={"date": sent, "received_at": sent})
+        assert mail.sender.address == MailAddress(address="sender@example.com").address
+        context = ProcessingContext(
+            account_id="acct-1",
+            timezone="UTC",
+            now=sent,
+        )
+        return processor._build_messages(mail, context)[-1]["content"]  # pyright: ignore[reportPrivateUsage]
+
     def test_ad_is_reserved_for_unusable_mail(self) -> None:
         prompt = self._prompt()
         assert "any bulk mail" not in prompt
@@ -338,9 +443,26 @@ class TestPromptContract:
     def test_only_must_do_items_become_action_items(self) -> None:
         """Optional events are summary material, never schedule entries."""
         prompt = self._prompt()
-        assert "do not create an action item for optional events" in prompt
+        assert "do NOT create an action item" in prompt.lower().replace("not", "NOT")
         assert "or an event with a date" not in prompt
         assert "never invent a date" in prompt
+
+    def test_voluntary_signups_are_not_action_items(self) -> None:
+        """A survey you may skip books no obligation, even with a deadline."""
+        prompt = self._prompt().lower()
+        assert "voluntary surveys" in prompt
+        assert "optional" in prompt and "sign-ups" in prompt
+        assert "mandatory submission" in prompt
+
+    def test_relative_dates_anchor_to_the_mail_not_to_now(self) -> None:
+        """'tomorrow' in a September mail is not tomorrow today."""
+        prompt = self._prompt()
+        assert "against the mail's own send time, never against" in prompt
+        assert "tomorrow" in prompt and "明天" in prompt
+        # the rule is useless without the anchor it refers to
+        user = self._user_message()
+        assert "Mail sent:" in user
+        assert "Mail age:" in user
 
     def test_optional_events_still_do_not_raise_urgency(self) -> None:
         prompt = self._prompt()
@@ -349,7 +471,7 @@ class TestPromptContract:
     def test_feedback_notes_cannot_override_the_rules(self) -> None:
         prompt = self._prompt()
         assert "narrow, kind-scoped preferences" in prompt
-        assert "never override rules 1-6" in prompt
+        assert "never override rules 1-7" in prompt
 
     def test_profile_rules_are_stated(self) -> None:
         prompt = self._prompt()

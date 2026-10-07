@@ -14,7 +14,7 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -189,28 +189,46 @@ Rules:
    RSVP, submit) is demanded. When an event is optional it yields no action item
    (see rule 5).
 4. reply_required=true ONLY when the sender explicitly expects an answer.
-5. action_items are ONLY for what the recipient MUST do: a deadline, a
-   registration, a submission, a payment, an appointment they have to attend,
-   an exam, an interview, a pickup, or a meeting/conference they are required
-   to attend or must reply to. Do NOT create an action item for optional
-   events — seminars, talks, lectures, workshops, club activities, or any
-   event they may freely skip; those belong in the summary and reason only.
+5. action_items are ONLY for what the recipient MUST do and CANNOT skip: a
+   deadline they are liable for (a fee, a required submission, an exam), an
+   appointment they have to attend, a pickup, or a meeting/conference they are
+   required to attend or must reply to. Do NOT create an action item for
+   optional or self-selected matters — events they may freely skip (seminars,
+   talks, lectures, workshops, club activities), and also anything they may
+   simply choose not to do: voluntary surveys, feedback forms, optional
+   sign-ups and registrations for events they are not required to attend.
+   Those belong in the summary and reason only. A registration is actionable
+   ONLY when failing to do it has a consequence for the recipient's standing —
+   a compulsory course enrolment, a graduation requirement, a mandatory
+   submission — not when it merely books them a place at something optional.
    Parse due_at from the mail (ISO-8601 with offset); with only a date use
    09:00 in the mail's timezone and say so in the notes; never invent a date
    (leave action_items empty instead).
    action_type ∈ {"exam","meeting","errand","other"}: exam = tests/quizzes;
    meeting = a required meeting, call, defense or interview; errand = pickups,
-   payments, registrations, applications, submissions; other only when none fit.
-6. reason must agree with urgency: never describe an obligation inside an "info"
+   payments, required registrations, applications, submissions; other only when
+   none fit.
+   ONE obligation yields ONE action item. Never split a single requirement into
+   several near-identical entries (the same deadline described three ways is
+   one item), and never restate an obligation the mail mentions repeatedly.
+6. Resolve every relative date against the mail's own send time, never against
+   the current time: "tomorrow", "next Friday", "明天", "下周一" mean the day
+   after / week after the mail was sent. The send time, its local rendering and
+   the mail's age are given above. A past mail therefore describes a past
+   event: if the mail is old and its deadline already passed, emit NO action
+   item for it (the summary and reason already carry the information). Keep
+   absolute future deadlines that the mail states explicitly, even in an old
+   mail, and never shift a date forward to make it "current".
+7. reason must agree with urgency: never describe an obligation inside an "info"
    or "ad" reason — raise the level instead.
-7. If a recipient profile is given, it decides relevance: mail matching what they
+8. If a recipient profile is given, it decides relevance: mail matching what they
    care about is at least "info" (important/urgent when it carries action or a
    deadline), mail in the categories they ignore is "ad".
-8. Feedback notes are narrow, kind-scoped preferences for re-ranking similar
-   mail; they never override rules 1-6 and may never turn a mail with an action,
+9. Feedback notes are narrow, kind-scoped preferences for re-ranking similar
+   mail; they never override rules 1-7 and may never turn a mail with an action,
    deadline or obligation into "ad" or "info".
-9. urgency is exactly one of the English tokens ad, info, important, urgent.
-10. Output ONLY one JSON object, no prose or fences:
+10. urgency is exactly one of the English tokens ad, info, important, urgent.
+11. Output ONLY one JSON object, no prose or fences:
 {
   "summary": "one or two sentences",
   "urgency": "ad|info|important|urgent",
@@ -330,6 +348,11 @@ def extract_json(text: str) -> dict[str, Any]:
     return result
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Normalize a possibly-naive datetime to UTC-aware (providers vary)."""
+    return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+
+
 def parse_due_at(value: str, timezone: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
@@ -362,7 +385,7 @@ class LLMImportanceProcessor:
     def _build_messages(
         self, mail: MailMessage, context: ProcessingContext
     ) -> list[dict[str, str]]:
-        now = context.now or datetime.now()
+        now = context.now or datetime.now(tz=UTC)
         body = _plain_body(mail)
         if len(body) > self._max_body_chars:
             # the config knob exists but was never applied: oversized
@@ -371,10 +394,20 @@ class LLMImportanceProcessor:
             # answers 400 — non-retryable, so the mail can never be
             # analysed. Truncate here so the request always fits.
             body = body[: self._max_body_chars]
+        # The mail's own Date header is what relative wording ("tomorrow",
+        # "next Friday", "明天") refers to. Sending only the analysis time made
+        # the model resolve such phrasing against *now*: a September mail
+        # saying "tomorrow" produced a deadline today, weeks after the event.
+        sent_at = mail.date if mail.date.tzinfo else mail.date.replace(tzinfo=UTC)
+        local_sent = sent_at.astimezone(ZoneInfo(context.timezone))
+        age_days = (now.astimezone(UTC) - sent_at.astimezone(UTC)).days
         user = (
-            f"Current time (UTC): {now.isoformat()}\n"
+            f"Current time (UTC): {now.astimezone(UTC).isoformat()}\n"
             f"Timezone: {context.timezone}\n"
-            f"Mail received: {mail.received_at.isoformat()}\n"
+            f"Mail sent: {sent_at.astimezone(UTC).isoformat()} "
+            f"({local_sent.isoformat()}, local {context.timezone})\n"
+            f"Mail age: {age_days} day(s) before now\n"
+            f"Mail fetched: {mail.received_at.astimezone(UTC).isoformat()}\n"
             f"From: {mail.sender.display}\n"
             f"To: {', '.join(r.display for r in mail.recipients)}\n"
             f"Subject: {mail.subject}\n"
@@ -451,15 +484,32 @@ class LLMImportanceProcessor:
             )
             raise
         action_items: list[ActionItem] = []
+        now = (context.now or datetime.now(tz=UTC)).astimezone(UTC)
         for position, item in enumerate(payload.action_items):
             try:
+                due_at = parse_due_at(item.due_at, context.timezone)
+                if due_at <= now:
+                    # The mail dates this in the past. That happens for two
+                    # reasons, and both mean it must not become a schedule
+                    # entry: a historical mail whose deadline has long gone
+                    # (re-imported when the user re-fetched their mailbox), or
+                    # a relative date the model resolved wrongly. Dropping it
+                    # here is what keeps a re-imported September mailbox from
+                    # filling today's schedule with expired obligations.
+                    logger.info(
+                        "dropping past due_at %s from %r (mail age %s day(s))",
+                        due_at.isoformat(),
+                        mail.message_id,
+                        (now - _as_utc(mail.date)).days,
+                    )
+                    continue
                 action_items.append(
                     ActionItem(
                         item_id=uuid.uuid4().hex[:16],
                         mail_id=mail.message_id,
                         summary=item.summary[:200],
                         action_type=item.action_type,
-                        due_at=parse_due_at(item.due_at, context.timezone),
+                        due_at=due_at,
                         due_end=(
                             parse_due_at(item.due_end, context.timezone) if item.due_end else None
                         ),
