@@ -855,6 +855,12 @@ class MailPane(Vertical):
             title = str(arguments.get("title") or "").strip()
             await self._service.import_seminar(str(arguments["candidate_id"]), title=title or None)
             return 1
+        if tool == "schedule_seminars":
+            applied = 0
+            for candidate_id in cast("list[str]", arguments["candidate_ids"]):
+                await self._service.import_seminar(str(candidate_id))
+                applied += 1
+            return applied
         if tool == "schedule_event":
             await self._service.add_action(
                 str(arguments["title"]),

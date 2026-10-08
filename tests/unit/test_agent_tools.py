@@ -521,6 +521,7 @@ class TestMiscTools:
             "delete_action",
             "check_seminars",
             "schedule_seminar",
+            "schedule_seminars",
         }
         for spec in specs:
             assert spec["type"] == "function"
@@ -631,4 +632,86 @@ class TestCheckSeminarsScope:
 
         assert text.startswith("error:")
         assert "retry" in text
+        assert staged is None
+
+
+class TestBulkSeminarStaging:
+    """Many candidates must be stageable in one call, not one step each.
+
+    The loop has a 12-step budget, so staging one candidate per call put a hard
+    ceiling on how many seminars could ever reach the schedule — a scan of a
+    few hundred mails yields dozens.
+    """
+
+    async def test_many_candidates_stage_in_a_single_call(self) -> None:
+        from mailflow.domain import SeminarCandidate
+
+        service = make_service()
+        await seed(service)
+        storage = cast(Any, service.storage)
+        import json
+
+        soon = datetime(2099, 5, 1, 9, tzinfo=UTC)
+        candidates = [
+            SeminarCandidate(
+                candidate_id=f"sem-{index}",
+                mail_id="a",
+                title=f"Seminar {index}",
+                starts_at=soon,
+                timezone="UTC",
+            )
+            for index in range(25)
+        ]
+        await storage.set_preference(
+            "seminars.candidates",
+            json.dumps([candidate.model_dump(mode="json") for candidate in candidates]),
+        )
+        registry = ToolRegistry(service)
+
+        text, staged = await registry.call(
+            "schedule_seminars", {"candidate_ids": [f"sem-{i}" for i in range(25)]}
+        )
+
+        assert staged is not None
+        assert len(staged.arguments["candidate_ids"]) == 25
+        assert "25 seminar(s)" in text
+        assert await service.storage.list_custom_actions() == []  # type: ignore[attr-defined]
+
+    async def test_unknown_and_untimed_ids_are_skipped_not_fatal(self) -> None:
+        from mailflow.domain import SeminarCandidate
+
+        service = make_service()
+        await seed(service)
+        storage = cast(Any, service.storage)
+        import json
+
+        good = SeminarCandidate(
+            candidate_id="good",
+            mail_id="a",
+            title="Timed",
+            starts_at=datetime(2099, 5, 1, tzinfo=UTC),
+        )
+        untimed = SeminarCandidate(candidate_id="untimed", mail_id="a", title="No time")
+        await storage.set_preference(
+            "seminars.candidates",
+            json.dumps([c.model_dump(mode="json") for c in (good, untimed)]),
+        )
+        registry = ToolRegistry(service)
+
+        text, staged = await registry.call(
+            "schedule_seminars", {"candidate_ids": ["good", "untimed", "ghost"]}
+        )
+
+        assert staged is not None
+        assert staged.arguments["candidate_ids"] == ["good"]
+        assert "2 skipped" in text
+
+    async def test_a_fully_unusable_set_is_rejected(self) -> None:
+        service = make_service()
+        await seed(service)
+        registry = ToolRegistry(service)
+
+        text, staged = await registry.call("schedule_seminars", {"candidate_ids": ["ghost"]})
+
+        assert text.startswith("error:")
         assert staged is None

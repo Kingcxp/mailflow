@@ -1650,3 +1650,94 @@ class TestSalvageScope:
 
         assert _salvage_json_objects('Sure: [{"id": "m1"}]') == []  # pyright: ignore[reportPrivateUsage]
         assert _salvage_json_objects('[{"id": "m1"}]') == [{"id": "m1"}]  # pyright: ignore[reportPrivateUsage]
+
+
+class TestSeminarCandidateDedupe:
+    """One event announced by several mails must read as one candidate."""
+
+    @staticmethod
+    def _candidate(
+        candidate_id: str,
+        title: str,
+        *,
+        mail_id: str,
+        starts: Any = None,
+        confidence: int = 50,
+        status: Any = None,
+    ):
+        from mailflow.domain import SeminarCandidate, SeminarStatus
+
+        return SeminarCandidate(
+            candidate_id=candidate_id,
+            mail_id=mail_id,
+            title=title,
+            starts_at=starts,
+            confidence=confidence,
+            status=status or SeminarStatus.PENDING,
+        )
+
+    def test_the_same_event_from_two_mails_collapses(self) -> None:
+        from mailflow.service import MailFlowService
+
+        soon = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
+        listed = MailFlowService._dedupe_candidates(  # pyright: ignore[reportPrivateUsage]
+            [
+                self._candidate("a1", "Quantum Seminar", mail_id="m1", starts=soon, confidence=70),
+                self._candidate(
+                    "a2", "  quantum   seminar ", mail_id="m2", starts=soon, confidence=95
+                ),
+            ]
+        )
+
+        assert [item.candidate_id for item in listed] == ["a2"]  # the better description wins
+
+    def test_the_same_title_at_different_times_stays_separate(self) -> None:
+        from mailflow.service import MailFlowService
+
+        listed = MailFlowService._dedupe_candidates(  # pyright: ignore[reportPrivateUsage]
+            [
+                self._candidate(
+                    "b1", "Weekly Lab", mail_id="m1", starts=datetime(2026, 11, 2, 6, tzinfo=UTC)
+                ),
+                self._candidate(
+                    "b2", "Weekly Lab", mail_id="m2", starts=datetime(2026, 11, 9, 6, tzinfo=UTC)
+                ),
+            ]
+        )
+
+        assert [item.candidate_id for item in listed] == ["b1", "b2"]
+
+    def test_untimed_duplicates_collapse_on_the_title(self) -> None:
+        from mailflow.service import MailFlowService
+
+        listed = MailFlowService._dedupe_candidates(  # pyright: ignore[reportPrivateUsage]
+            [
+                self._candidate("c1", "Timeless Talk", mail_id="m1"),
+                self._candidate("c2", "Timeless Talk", mail_id="m2"),
+            ]
+        )
+
+        assert len(listed) == 1
+
+    def test_a_resolved_candidate_beats_a_pending_duplicate(self) -> None:
+        """Import/reject state must never be lost to a newer duplicate."""
+        from mailflow.domain import SeminarStatus
+        from mailflow.service import MailFlowService
+
+        soon = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
+        listed = MailFlowService._dedupe_candidates(  # pyright: ignore[reportPrivateUsage]
+            [
+                self._candidate(
+                    "d1",
+                    "Already Imported",
+                    mail_id="m1",
+                    starts=soon,
+                    confidence=10,
+                    status=SeminarStatus.IMPORTED,
+                ),
+                self._candidate("d2", "Already Imported", mail_id="m2", starts=soon, confidence=99),
+            ]
+        )
+
+        assert [item.candidate_id for item in listed] == ["d1"]
+        assert listed[0].status is SeminarStatus.IMPORTED

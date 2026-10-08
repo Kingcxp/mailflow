@@ -67,7 +67,11 @@ def service() -> MailFlowService:
     return svc
 
 
-_DUE = datetime.now(UTC) + timedelta(days=2)
+# An exact instant, not now+N days: the dedupe keys on a two-hour bucket of
+# the start time, so a wall-clock base made a 30-minute gap straddle a bucket
+# boundary whenever the suite happened to run near one (a flaky failure having
+# nothing to do with the behaviour under test).
+_DUE = datetime(2097, 11, 2, 6, 0, tzinfo=UTC)
 
 
 def _mail_item(item_id: str) -> ActionItem:

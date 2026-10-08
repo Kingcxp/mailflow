@@ -204,8 +204,19 @@ later scans; expired proposals can only be imported after the user corrects them
 to a future time.
 
 The **Smart action** tool loop reaches this same path through the
-`schedule_seminar` tool, so a seminar the model found is staged, confirmed and
-imported exactly like one the user reviewed by hand.
+`schedule_seminar` / `schedule_seminars` tools, so a seminar the model found is
+staged, confirmed and imported exactly like one the user reviewed by hand.
+`schedule_seminars` takes a whole list of candidate ids in one call: the loop
+has a bounded number of steps, so staging one candidate per call would cap how
+many seminars could ever reach the schedule however many the scan found.
+
+`list_seminar_candidates()` collapses candidates that describe the same event
+(the same normalized title at the same start instant, or two untimed notices
+with the same title) — a seminar and its later reminder are separate mails, so
+without this the same talk appears once per announcement. The survivor is the
+most confident description, unless a duplicate is already imported or rejected,
+in which case that state wins; the folded-away candidate ids remain importable
+through `import_seminar`.
 
 ## MailRecord
 

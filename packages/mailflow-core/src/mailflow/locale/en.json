@@ -882,6 +882,7 @@
       "agent_pending_delete": "Move {count} mail(s) to the trash",
       "agent_pending_schedule": "Add the event “{title}” at {starts_at} to the schedule",
       "agent_pending_seminar": "Add the seminar “{title}” at {starts_at} to the schedule",
+      "agent_pending_seminars": "Add {count} seminar(s) to the schedule ({titles}…)",
       "agent_pending_seminar_review": "“{title}” states no time — you will fill it in",
       "agent_pending_action": "Add “{summary}”, due {due_at}",
       "agent_pending_edit": "Change schedule entry {item_id} ({changes})",

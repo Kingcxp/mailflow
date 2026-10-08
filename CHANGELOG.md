@@ -7,6 +7,20 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **Seminar candidates can be staged in bulk, and one event reads as one
+  candidate** — two causes for "only 6 seminars found" on a large mailbox. The
+  model had to call `schedule_seminar` once per candidate, so the loop's
+  12-step budget was the real ceiling on how many could ever be added: a scan
+  of a few hundred mails yields dozens of candidates, and the run staged zero
+  because it ran out of steps while working through them one at a time. There
+  is now a `schedule_seminars` tool that takes the whole id list in one call
+  (like `delete_mail`), and `check_seminars` tells the model to use it instead
+  of looping. Separately, one event advertised by several mails (a seminar and
+  its later reminder are different records) produced one candidate per mail, so
+  the review list showed the same talk three times and inflated the count;
+  `list_seminar_candidates` now collapses them onto the most confident
+  description, while an already imported/rejected candidate keeps its state and
+  every candidate id stays importable.
 - **The staged-change dialog has a visible Apply and Enter applies it** —
   two defects made confirming look broken. The dialog body was unbounded, so a
   dozen staged changes pushed the buttons tens of rows below the visible area

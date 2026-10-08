@@ -882,6 +882,7 @@
       "agent_pending_delete": "将 {count} 封邮件移入回收站",
       "agent_pending_schedule": "把活动「{title}」（{starts_at}）加入日程",
       "agent_pending_seminar": "把研讨会「{title}」（{starts_at}）加入日程",
+      "agent_pending_seminars": "把 {count} 个研讨会加入日程（{titles}…）",
       "agent_pending_seminar_review": "「{title}」没有写明时间——需要你补全",
       "agent_pending_action": "添加待办「{summary}」，截止 {due_at}",
       "agent_pending_edit": "修改日程项 {item_id}（{changes}）",

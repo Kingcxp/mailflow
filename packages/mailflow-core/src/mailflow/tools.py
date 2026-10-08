@@ -363,6 +363,24 @@ class ToolRegistry:
                 },
                 ["candidate_id"],
             ),
+            _tool_schema(
+                "schedule_seminars",
+                (
+                    "Stage adding MANY candidates from check_seminars to the user's "
+                    "schedule in one call. Prefer this whenever more than one candidate "
+                    "should be added: each entry still goes through the seminar import "
+                    "path, so it is marked as a seminar automatically — never add the "
+                    "marker to the title yourself."
+                ),
+                {
+                    "candidate_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Candidate ids reported by check_seminars.",
+                    }
+                },
+                ["candidate_ids"],
+            ),
         ]
 
     # -- execution -------------------------------------------------------------
@@ -533,8 +551,10 @@ class ToolRegistry:
                 "schedule_seminar hands those to the user to complete."
             )
         lines.append(
-            "Note: add a candidate to the schedule with `schedule_seminar`, which "
-            "marks the entry as a seminar automatically."
+            "Note: add candidates to the schedule with `schedule_seminars` (pass all "
+            "the ids you want added in ONE call — never call `schedule_seminar` once "
+            "per candidate, the operation has a limited number of steps). The entry "
+            "is marked as a seminar automatically."
         )
         return "\n".join(lines), None
 
@@ -652,6 +672,62 @@ class ToolRegistry:
                     "title": title or candidate.title,
                     "starts_at": to_utc(candidate.starts_at).isoformat(),
                 },
+            ),
+        )
+
+    async def _tool_schedule_seminars(
+        self, arguments: dict[str, Any]
+    ) -> tuple[str, PendingOperation | None]:
+        """Stage several candidates at once.
+
+        Staging them one per call made the step budget the real limit on how
+        many seminars could ever be added: a scan of a few hundred mails yields
+        dozens of candidates, and 12 round trips cannot cover them. This tool
+        takes the whole set in one call, exactly like ``delete_mail`` takes a
+        list of ids.
+        """
+        candidate_ids = _as_str_list(arguments, "candidate_ids", required=True)
+        staged: list[str] = []
+        skipped: list[str] = []
+        titles: list[str] = []
+        available = {
+            item.candidate_id: item for item in await self._service.list_seminar_candidates()
+        }
+        for candidate_id in candidate_ids:
+            candidate = available.get(candidate_id)
+            if candidate is None:
+                # a narrowed scan can produce candidates that were not saved:
+                # fall back to a full scan so a fresh id still resolves
+                discovery = await self._service.discover_seminars()
+                available = {item.candidate_id: item for item in discovery.candidates}
+                candidate = available.get(candidate_id)
+            if candidate is None or candidate.starts_at is None:
+                skipped.append(candidate_id)
+                continue
+            if to_utc(candidate.starts_at) <= datetime.now(UTC):
+                skipped.append(candidate_id)
+                continue
+            staged.append(candidate_id)
+            titles.append(candidate.title[:60])
+        if not staged:
+            raise ToolError(
+                "none of those candidates can be scheduled (unknown id, already "
+                "started, or no stated time); run check_seminars again"
+            )
+        note = ""
+        if skipped:
+            note = (
+                f" ({len(skipped)} skipped: unknown, already started, or no time "
+                "in the mail — those need the user to complete them)"
+            )
+        return (
+            f"staged: {len(staged)} seminar(s) will be added to the schedule on confirmation{note}",
+            PendingOperation(
+                tool="schedule_seminars",
+                arguments={"candidate_ids": staged},
+                record_ids=[],
+                summary_key="tui.agent_pending_seminars",
+                summary_params={"count": len(staged), "titles": "; ".join(titles[:4])},
             ),
         )
 

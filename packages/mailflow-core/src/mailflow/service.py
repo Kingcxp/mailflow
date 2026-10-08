@@ -1371,7 +1371,14 @@ class MailFlowService:
     async def list_seminar_candidates(
         self, *, include_resolved: bool = False
     ) -> list[SeminarCandidate]:
-        """Return reviewable candidates and durably expire events that passed."""
+        """Return reviewable candidates and durably expire events that passed.
+
+        One event advertised by several mails collapses onto a single candidate
+        (a seminar is routinely announced, then reminded): the same normalized
+        title at the same start instant is one event, whichever mail carried it.
+        Without this the review list shows the same talk three times and the
+        count a host reports to the user is inflated.
+        """
         now = datetime.now(UTC)
         async with self._seminar_lock:
             candidates = await self._load_seminar_candidates()
@@ -1395,6 +1402,7 @@ class MailFlowService:
                 if candidate.status in {SeminarStatus.PENDING, SeminarStatus.EXPIRED}
             ]
         )
+        visible = self._dedupe_candidates(visible)
         return sorted(
             visible,
             key=lambda candidate: (
@@ -1403,6 +1411,32 @@ class MailFlowService:
                 candidate.title.casefold(),
             ),
         )
+
+    @staticmethod
+    def _dedupe_candidates(candidates: list[SeminarCandidate]) -> list[SeminarCandidate]:
+        """One candidate per event, preferring the most confident description.
+
+        Identity is the normalized title plus the start instant when the mail
+        stated one; two untimed announcements with the same title are also the
+        same event. A candidate already resolved (imported or rejected) wins
+        over a pending duplicate so its state is not lost.
+        """
+        best: dict[str, SeminarCandidate] = {}
+        order: list[str] = []
+        for candidate in candidates:
+            starts = to_utc(candidate.starts_at).isoformat() if candidate.starts_at else "untimed"
+            key = f"{' '.join(candidate.title.casefold().split())}|{starts}"
+            previous = best.get(key)
+            if previous is None:
+                best[key] = candidate
+                order.append(key)
+                continue
+            if previous.status is SeminarStatus.PENDING and (
+                candidate.status is not SeminarStatus.PENDING
+                or candidate.confidence > previous.confidence
+            ):
+                best[key] = candidate
+        return [best[key] for key in order]
 
     async def reject_seminar(self, candidate_id: str) -> bool:
         """Reject one proposal so repeated scans cannot offer it again."""
