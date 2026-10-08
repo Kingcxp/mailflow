@@ -30,6 +30,12 @@ EN: dict[str, str] = {
         "Base URL of a Carbonyl-compatible terminal render service (e.g. http://127.0.0.1:8080); "
         "required when browser_mode = graphical."
     ),
+    "general.ocr_images": (
+        "Read the text out of images attached to mail (event posters) and feed it to the "
+        "analysis and to literal search. Off by default: it costs a local model pass per "
+        "poster. Needs the optional rapidocr-onnxruntime package and quietly does nothing "
+        "without it."
+    ),
     "general.command_prefix": (
         "Command prefix for chat-platform messages (e.g. /mail list); messages "
         "without it are ignored."
@@ -193,6 +199,10 @@ ZH: dict[str, str] = {
     ),
     "general.browser_render_url": (
         "Carbonyl 兼容终端渲染服务地址（如 http://127.0.0.1:8080），browser_mode=graphical 时必填。"
+    ),
+    "general.ocr_images": (
+        "识别邮件所附图片（活动海报）中的文字，并交给分析与关键词搜索使用。默认关闭："
+        "每张海报都要跑一次本地模型。需要可选依赖 rapidocr-onnxruntime，未安装时静默跳过。"
     ),
     "general.command_prefix": (
         "聊天平台消息的命令前缀（如 /mail list）；不以它开头的消息会被忽略。"

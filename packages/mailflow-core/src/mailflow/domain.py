@@ -159,6 +159,11 @@ class MailMessage(BaseModel):
     in_reply_to: str | None = None
     provider: str = ""  # source plugin id that produced this message
     provider_message_id: str = ""  # provider-specific stable id
+    # Text read out of the mail's own images (a poster usually carries the
+    # title, date and room the body only alludes to). Kept apart from
+    # body_text/body_html because those are the original contents; this is
+    # derived, optional, and only produced when the user enabled OCR.
+    image_text: str = ""
     # Sources set this only when they emit a best-effort fallback after an
     # otherwise unparseable transport message. The pipeline records it as a
     # visible failed source note while preserving the message record.

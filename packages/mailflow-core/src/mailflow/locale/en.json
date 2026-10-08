@@ -121,6 +121,7 @@
         "general.hourly_summary": "Every hour the LLM summarizes all mail received in that hour into a briefing pushed through the notifiers that opted in (options.hourly_summary = true); silent when the hour had no mail.",
         "general.language": "Default display language code (en, zh-CN, or an external pack).",
         "general.mail_retention_days": "Mail older than this many days is moved to trash by the daily cleanup. 0 keeps everything.",
+        "general.ocr_images": "Read the text out of images attached to mail (event posters) and feed it to the analysis and to literal search. Off by default: it costs a local model pass per poster. Needs the optional rapidocr-onnxruntime package and quietly does nothing without it.",
         "general.queue_size": "Maximum number of fetched mails waiting to be analyzed; sources pause when it is full.",
         "general.reminder_days_before": "How many days before a timed action's due date the early reminder fires.",
         "general.reminder_hour": "Local-time hour (0-23) of the early reminder and of the daily digest.",

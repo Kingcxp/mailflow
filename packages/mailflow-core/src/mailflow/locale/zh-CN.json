@@ -121,6 +121,7 @@
         "general.hourly_summary": "每小时由 LLM 将该小时内收到的所有邮件汇总为简报，并推送给启用了此项的通知（options.hourly_summary = true）；该小时没有邮件则不发送。",
         "general.language": "默认界面语言代码（en、zh-CN 或外部语言包）。",
         "general.mail_retention_days": "超过该天数的邮件会被每日清理移入回收站；填 0 表示不移动。",
+        "general.ocr_images": "识别邮件所附图片（活动海报）中的文字，并交给分析与关键词搜索使用。默认关闭：每张海报都要跑一次本地模型。需要可选依赖 rapidocr-onnxruntime，未安装时静默跳过。",
         "general.queue_size": "等待分析的邮件队列上限；队列满时邮件源会暂停拉取。",
         "general.reminder_days_before": "在定时事项到期前多少天触发提前提醒。",
         "general.reminder_hour": "提前提醒与每日摘要的本地时间小时（0-23）。",

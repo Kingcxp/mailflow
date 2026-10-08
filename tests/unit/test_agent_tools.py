@@ -760,3 +760,39 @@ class TestAttachmentNameSearch:
 
         assert "ids: p1" in text
         assert "p2" not in text
+
+
+class TestImageTextSearch:
+    """A poster-only mail must be findable by the word printed on the poster."""
+
+    async def test_a_gap_split_word_on_a_poster_is_found(self) -> None:
+        service = make_service()
+        storage = cast(Any, service.storage)
+        mail = make_mail("poster-1", subject="Invitation", body="See the poster attached.")
+        mail = mail.model_copy(update={"image_text": "PAIR Research Se minar\n15 October 2026"})
+        await storage.save_mail(MailRecord(record_id="poster-1", mail=mail))
+        registry = ToolRegistry(service)
+
+        text, _ = await registry.call("find_mail", {"contains": "seminar"})
+
+        assert "ids: poster-1" in text, text
+
+    async def test_plain_text_search_still_works_alongside(self) -> None:
+        """The gap-closed form must not break ordinary matching."""
+        service = make_service()
+        await seed(service)
+        registry = ToolRegistry(service)
+
+        text, _ = await registry.call("find_mail", {"contains": "research seminar"})
+
+        assert "ids: a" in text
+
+    async def test_a_mail_without_image_text_is_unaffected(self) -> None:
+        service = make_service()
+        await seed(service)
+        registry = ToolRegistry(service)
+
+        text, _ = await registry.call("find_mail", {"contains": "seminar"})
+
+        assert "ids: a, c" in text
+        assert "poster" not in text

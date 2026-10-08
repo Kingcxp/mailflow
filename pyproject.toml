@@ -33,6 +33,14 @@ mailflow-export-astrbot = { workspace = true }
 mailflow-llm-google-generative-ai = { workspace = true }
 mailflow-llm-google-vertex = { workspace = true }
 
+[project.optional-dependencies]
+# Reading text out of mail images (event posters). Kept optional: the models
+# are committed with the package, so this pulls a sizeable download, and the
+# feature is off unless general.ocr_images = true. Install with:
+#     uv pip install -e ".[ocr]"
+# or just:  uv pip install rapidocr-onnxruntime
+ocr = ["rapidocr-onnxruntime>=1.4"]
+
 [dependency-groups]
 dev = [
   "pytest>=8.3",

@@ -45,6 +45,13 @@ sender/subject/date/body — it is the record identity in storage and is
 through several accounts deduplicate to one record (the runtime skips
 already-known ids before processing/notifying).
 
+`MailMessage.image_text` carries text recognised from the mail's own images
+(an event poster usually holds the title, date and room the body omits). It is
+empty unless `general.ocr_images` is on and the optional OCR package is
+installed; it is kept apart from the bodies because it is derived data, and
+`_plain_body` appends it (labelled) so every prompt and every literal search
+sees it without further wiring. See `docs/architecture/pipeline.md`.
+
 ## Mail sources and the optional history capability
 
 `MailSource` (in `mailflow/contracts.py`) owns the live stream: `run(emit,

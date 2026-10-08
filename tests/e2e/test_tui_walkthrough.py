@@ -185,12 +185,16 @@ async def test_full_tui_walkthrough(tmp_path: Path) -> None:
             bulk = app.query_one("#btn-reparse-all", Button)
             bulk.press()
             assert await _wait_for(pilot, lambda: isinstance(app.screen, ConfirmModal))
+            # the modal exists before its children compose: waiting on the
+            # screen alone raced the button query
+            assert await _wait_for(pilot, lambda: bool(app.screen.query("#confirm-cancel")))
             app.screen.query_one("#confirm-cancel", Button).press()
             assert await _wait_for(pilot, lambda: not isinstance(app.screen, ConfirmModal))
             assert not bulk.disabled, "a cancelled dialog must leave the button usable"
 
             bulk.press()
             assert await _wait_for(pilot, lambda: isinstance(app.screen, ConfirmModal))
+            assert await _wait_for(pilot, lambda: bool(app.screen.query("#confirm-run")))
             app.screen.query_one("#confirm-run", Button).press()
             assert await _wait_for(pilot, lambda: "Re-analyze" in str(bulk.label), budget=20.0)
             assert not app.query_one("#btn-reparse-failed", Button).disabled
@@ -200,6 +204,7 @@ async def test_full_tui_walkthrough(tmp_path: Path) -> None:
             before = await service.count_mails()
             app.query_one("#btn-purge-expired", Button).press()
             assert await _wait_for(pilot, lambda: isinstance(app.screen, ConfirmModal))
+            assert await _wait_for(pilot, lambda: bool(app.screen.query("#confirm-cancel")))
             app.screen.query_one("#confirm-cancel", Button).press()
             assert await _wait_for(pilot, lambda: not isinstance(app.screen, ConfirmModal))
             assert await service.count_mails() == before, "cancel must not delete anything"
@@ -236,6 +241,7 @@ async def test_full_tui_walkthrough(tmp_path: Path) -> None:
             search.value = "delete the ads"
             app.query_one("#smart-action", Button).press()
             assert await _wait_for(pilot, lambda: isinstance(app.screen, ConfirmModal))
+            assert await _wait_for(pilot, lambda: bool(app.screen.query("#confirm-cancel")))
             app.screen.query_one("#confirm-cancel", Button).press()
             assert await _wait_for(pilot, lambda: not isinstance(app.screen, ConfirmModal))
             assert await service.count_mails() == before_delete, "cancel must not delete anything"

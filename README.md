@@ -212,6 +212,31 @@ See [docs/development/embedding.md](docs/development/embedding.md).
 
 Manual overrides win while set; reset restores the automatic value.
 
+## Optional: reading text from event posters
+
+Many event notices put the title, date and room only in the attached poster.
+With this enabled MailFlow reads that text and feeds it to the analysis and to
+keyword search, so a mail whose body only says "see the attached poster" is
+still found by the name of the event.
+
+It needs one extra package (the models ship with it, hence the size) and one
+setting:
+
+```bash
+uv pip install -e ".[ocr]"     # or: uv pip install rapidocr-onnxruntime
+```
+
+```toml
+[general]
+ocr_images = true
+```
+
+Off by default: recognition is a local model pass per poster. Without the
+package everything else behaves exactly as before. Chrome images (logos, QR
+codes, signatures, tracking pixels) are skipped, and because recognition
+sometimes splits a word at a glyph gap ("Se minar"), search matches both the
+text as read and a gap-closed form.
+
 ## Quality gates
 
 ```bash

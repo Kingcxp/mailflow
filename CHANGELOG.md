@@ -5,6 +5,23 @@ All notable changes are recorded here; the format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Optional OCR: read the text printed on event posters** — a large share of
+  event notices state the title, date and room only inside the attached poster,
+  so a search for the event's own name found nothing and the analyser saw no
+  date at all. With `general.ocr_images = true` and the optional
+  `rapidocr-onnxruntime` package installed, MailFlow reads that text at sync
+  time (the only point where the image bytes exist, since storage deliberately
+  strips attachment payloads) and carries it as `MailMessage.image_text`. It
+  then reaches the analysis prompt labelled as derived content, and literal
+  search matches it too. Off by default — it costs one local model pass per
+  poster — and entirely optional: without the package everything degrades to
+  "no text" and nothing else changes. Only poster-like images are read
+  (chrome such as logos, QR codes, signatures and tracking pixels is skipped),
+  and recognition splits words at glyph gaps ("Se minar" for "Seminar"), so
+  search tests both the as-read and a gap-closed form.
+
 ### Fixed
 
 - **A literal search now also looks at attachment file names** — an

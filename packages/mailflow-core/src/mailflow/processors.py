@@ -56,12 +56,24 @@ _DEFAULT_KEYWORDS = (*_STRONG_KEYWORDS, *_WEAK_KEYWORDS)
 
 def _plain_body(mail: MailMessage) -> str:
     """Best-effort text body; HTML-only mails are tag-stripped so keyword
-    scanning and the LLM prompt both see usable content."""
+    scanning and the LLM prompt both see usable content.
+
+    Text read from the mail's own images (``image_text``, filled by the source
+    when OCR is enabled) is appended: a poster usually carries the event's
+    title, date and room, which is exactly what the body omits and what the
+    analyser and the literal search need. It is labelled so the model treats it
+    as derived content rather than as prose the sender wrote.
+    """
     if mail.body_text:
-        return mail.body_text
-    if mail.body_html:
-        return re.sub(r"<[^>]+>", " ", mail.body_html)
-    return ""
+        body = mail.body_text
+    elif mail.body_html:
+        body = re.sub(r"<[^>]+>", " ", mail.body_html)
+    else:
+        body = ""
+    if mail.image_text.strip():
+        labelled = f"[text read from images attached to this mail]\n{mail.image_text.strip()}"
+        return f"{body}\n\n{labelled}" if body else labelled
+    return body
 
 
 def _prompt_guidelines(text: str, *, limit: int = 20) -> str:

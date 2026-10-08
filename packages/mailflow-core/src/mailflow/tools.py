@@ -443,7 +443,7 @@ class ToolRegistry:
         """
         records = await self._service.list_mails()
         if contains:
-            records = [record for record in records if contains in _haystack(record)]
+            records = [record for record in records if _matches_literal(record, contains)]
         if not query:
             records.sort(key=lambda record: record.mail.received_at, reverse=True)
             return SmartSearchResult(records=records, total_mails=len(records))
@@ -822,6 +822,25 @@ class ToolRegistry:
         return target
 
 
+def _matches_literal(record: MailRecord, needle: str) -> bool:
+    """Whether a record contains the user's literal substring.
+
+    Tested against every searchable form of the record's text. The extra forms
+    matter only for recognised image text, where the engine splits words at
+    glyph gaps ("PAIR Research Se minar" for "… Seminar"): matching the
+    as-read text keeps ordinary phrases working, and matching the gap-closed
+    form finds a word the user typed that OCR broke in two.
+    """
+    from mailflow import ocr as ocr_module
+
+    haystack = _haystack(record)
+    if needle in haystack:
+        return True
+    if not record.mail.image_text:
+        return False
+    return any(needle in form for form in ocr_module.searchable_forms(haystack))
+
+
 def _haystack(record: MailRecord) -> str:
     """Fold one record's searchable text for a literal, case-insensitive match.
 
@@ -829,10 +848,13 @@ def _haystack(record: MailRecord) -> str:
     in the poster's file name ("...-Seminar-15Oct.jpg") while the body carries
     only the logistics, so searching text alone misses a mail whose whole
     subject is in the attachment.
+
     """
     from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
 
     names = " ".join(str(item.filename or "") for item in (record.mail.attachments or []))
+    # subject/body/html are searched as written; only the recognised image text
+    # needs the extra gap-closed form, because OCR splits words ("Se minar")
     return "\n".join(
         (record.mail.subject, _plain_body(record.mail), record.mail.body_html or "", names)
     ).casefold()

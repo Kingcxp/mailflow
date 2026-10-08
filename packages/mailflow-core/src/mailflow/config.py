@@ -180,6 +180,15 @@ class GeneralConfig(BaseModel):
             "Leave empty for system/disabled modes."
         ),
     )
+    ocr_images: bool = Field(
+        default=False,
+        description=(
+            "Read the text out of images attached to mail (event posters) and feed it "
+            "to the analysis and to literal search. Off by default because it costs a "
+            "local model pass per poster; needs the optional rapidocr-onnxruntime "
+            "package, and silently does nothing without it."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_timezone(self) -> GeneralConfig:

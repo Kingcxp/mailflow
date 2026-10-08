@@ -14,6 +14,7 @@
 | `llm.py` | LLMRouterImpl (named routing, fallback, de-dup, secret redaction) |
 | `pipeline.py` | ProcessorBinding, PipelineEngine (ordering, retries, timeout, policy), fallback summary, merge_analysis |
 | `processors.py` | the built-in `rules` and `llm-importance` processors, SYSTEM_PROMPT, JSON extraction, `register_builtin_processors` (registered as plugin id `mailflow-core`) |
+| `ocr.py` | optional text extraction from mail images (posters): engine resolution, which images are worth reading, and the as-read/gap-closed search forms |
 | `logging.py` | QueueHandler/Listener, rich console/file/jsonl sinks, SecretRedactionFilter, LoggingRuntime |
 | `i18n.py` | builtin + external JSON packs, English fallback, language switch |
 | `runtime.py` | bounded queue, per-account source tasks, workers, notifier thresholds, cleanup scheduler, wait_idle |

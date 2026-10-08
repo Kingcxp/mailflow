@@ -16,6 +16,7 @@ import contextlib
 import hashlib
 import html as html_lib
 import imaplib
+import importlib
 import logging
 import re
 import smtplib
@@ -178,7 +179,41 @@ def _unparseable_mail(raw: bytes, account_id: str, provider: str, error: Excepti
     )
 
 
-def _parse_mime(raw: bytes, account_id: str, provider: str) -> MailMessage:
+def _apply_image_text(mail: MailMessage, *, enabled: bool) -> MailMessage:
+    """Fill ``image_text`` from the mail's own posters when OCR is enabled.
+
+    Done here, in the parsing thread, because this is the only point where the
+    image bytes exist: the storage backend deliberately strips attachment
+    payloads, so a later stage has nothing to read. The work is optional and
+    failure-tolerant — a mail is always returned, with an empty ``image_text``
+    when OCR is off, unavailable, or cannot read the image.
+    """
+    if not enabled:
+        return mail
+    core_ocr: Any = importlib.import_module("mailflow.ocr")
+    if not core_ocr.is_available():
+        return mail
+    images = [
+        attachment
+        for attachment in mail.attachments
+        if core_ocr.should_attempt(
+            str(attachment.content_type),
+            int(attachment.size),
+            filename=str(attachment.filename),
+        )
+    ]
+    if not images:
+        return mail
+    text = core_ocr.extract_mail_images(images)
+    if not text.strip():
+        return mail
+    logger.debug("read %d char(s) of poster text from %r", len(text), mail.subject[:40])
+    return mail.model_copy(update={"image_text": text})
+
+
+def _parse_mime(
+    raw: bytes, account_id: str, provider: str, *, ocr_enabled: bool = False
+) -> MailMessage:
     """Convert one raw RFC-822 message into a normalized MailMessage."""
     message = message_from_bytes(raw)
     subject = _decode(message.get("Subject")) or "(no subject)"
@@ -194,26 +229,31 @@ def _parse_mime(raw: bytes, account_id: str, provider: str) -> MailMessage:
     if date.tzinfo is None:
         date = date.replace(tzinfo=UTC)
     body_text, body_html, attachments = _extract_body(message)
-    return MailMessage(
-        message_id=message_id,
-        account_id=account_id,
-        subject=subject,
-        sender=sender,
-        recipients=recipients,
-        cc=cc,
-        date=date,
-        received_at=datetime.now(UTC),
-        body_text=body_text,
-        body_html=body_html,
-        attachments=attachments,
-        provider=provider,
+    return _apply_image_text(
+        MailMessage(
+            message_id=message_id,
+            account_id=account_id,
+            subject=subject,
+            sender=sender,
+            recipients=recipients,
+            cc=cc,
+            date=date,
+            received_at=datetime.now(UTC),
+            body_text=body_text,
+            body_html=body_html,
+            attachments=attachments,
+            provider=provider,
+        ),
+        enabled=ocr_enabled,
     )
 
 
-def parse_mime(raw: bytes, account_id: str, provider: str = "imap") -> MailMessage:
+def parse_mime(
+    raw: bytes, account_id: str, provider: str = "imap", *, ocr_enabled: bool = False
+) -> MailMessage:
     """Normalize raw RFC-822 data, retaining unexpected parser failures."""
     try:
-        return _parse_mime(raw, account_id, provider)
+        return _parse_mime(raw, account_id, provider, ocr_enabled=ocr_enabled)
     except Exception as exc:
         # Never log raw RFC-822 data: headers and bodies can contain secrets.
         logger.warning("MIME parse fallback for account %r: %s", account_id, type(exc).__name__)
@@ -253,6 +293,9 @@ class IMAPSource:
         # Set options.analyze_backlog = true to restore legacy full-backlog
         # ingestion on the first poll.
         self._analyze_backlog = bool(account.options.get("analyze_backlog", False))
+        # posters carry the title/date/room a body often omits; opt-in because
+        # it costs a local model pass per image
+        self._ocr_images = bool(account.options.get("ocr_images", False))
         self._username = str(account.options.get("username") or account.email)
         self._password = str(account.options.get("password") or "")
 
@@ -324,7 +367,12 @@ class IMAPSource:
                     # server error does not drop the mail permanently.
                     break
                 raw = fetch[0][1]
-                mail = parse_mime(bytes(raw), self._account.account_id, provider="imap")
+                mail = parse_mime(
+                    bytes(raw),
+                    self._account.account_id,
+                    provider="imap",
+                    ocr_enabled=self._ocr_images,
+                )
                 # Advance only once the mail is in hand: an exception above
                 # retries the same uid on the next poll instead of skipping it.
                 self._last_uid = uid_int
@@ -365,7 +413,12 @@ class IMAPSource:
                 if not fetch or fetch[0] is None:
                     continue
                 messages.append(
-                    parse_mime(bytes(fetch[0][1]), self._account.account_id, provider="imap")
+                    parse_mime(
+                        bytes(fetch[0][1]),
+                        self._account.account_id,
+                        provider="imap",
+                        ocr_enabled=self._ocr_images,
+                    )
                 )
             return messages
         finally:

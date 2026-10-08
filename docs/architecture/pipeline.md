@@ -80,3 +80,37 @@ start summarizes in the language the user last selected — not the `[i18n]`
 bootstrap default. Switching `general.language` in the TUI hot-rebuilds
 the pipeline so the next analysis follows immediately. An explicit
 `general.summary_language` entry always wins over the UI language.
+
+
+## Reading text out of images (optional)
+
+Many event notices put the title, date and room only in an attached poster. The
+body then carries the greeting, so the analyser sees no date and a search for
+the event's own name finds nothing.
+
+`mailflow/ocr.py` reads that text. It is **opt-in twice** — `general.ocr_images
+= true` *and* the optional `rapidocr-onnxruntime` package — and every entry
+point degrades to "no text" rather than raising, so a mailbox without the
+package behaves exactly as before. The engine ships its own ONNX models, which
+is why it is preferred over `pytesseract` (that one needs a separately
+installed Tesseract binary).
+
+The work happens inside `parse_mime` in the mail source, on the parsing
+thread, because that is the only point where the image bytes exist: the storage
+backend strips attachment payloads by design. The result travels as
+`MailMessage.image_text`, kept apart from `body_text`/`body_html` because those
+are the original contents and this is derived, optional data.
+
+Only images that look like posters are attempted (`ocr.should_attempt`): images
+within a size budget, with a name, and without chrome tokens such as `logo`,
+`qr` or `signature`. `banner` and `header` are deliberately *not* in that list
+— a real observed poster was named `..._leadership_talk_series_banner_2000x1050
+_....jpg`, so skipping those names would drop exactly the mails this feature
+exists for.
+
+Recognition splits words at glyph gaps ("PAIR Research Se minar" is a real
+result for "… Seminar"), so `ocr.searchable_forms` returns both the text
+as-read and a gap-closed variant. A literal search matches either one: the
+as-read form keeps ordinary phrases working, and the closed form finds a word
+the engine broke in two. The closed form alone is never used — it also glues
+legitimate word boundaries ("Room Y908 and Zoom" becomes "roomy908 andzoom").
