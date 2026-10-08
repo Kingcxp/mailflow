@@ -1271,6 +1271,13 @@ UserProfileModal {
     height: auto;
     margin-bottom: 1;
 }
+/* the body scrolls: a dozen staged changes must not grow the box until the
+   buttons are off-screen on a short terminal */
+#confirm-body-scroll {
+    height: auto;
+    max-height: 60%;
+    scrollbar-size-vertical: 1;
+}
 #confirm-buttons {
     height: auto;
     align-vertical: middle;

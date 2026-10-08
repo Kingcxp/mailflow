@@ -157,6 +157,7 @@ async def test_confirm_modal_starts_on_cancel(tmp_path: Path) -> None:
                     body="This would delete things.",
                     confirm_label="Delete",
                     variant="error",
+                    focus_confirm=False,
                 ),
                 lambda value: results.append(bool(value)),
             )
@@ -200,6 +201,87 @@ async def test_confirm_modal_confirm_button_still_works(tmp_path: Path) -> None:
             await _wait_until(pilot, lambda: bool(results))
 
             assert results == [True]
+    finally:
+        await service.stop()
+
+
+async def test_a_plan_dialog_accepts_on_enter(tmp_path: Path) -> None:
+    """The staged-change dialog is the opposite default: Enter applies it.
+
+    The user asked for these changes; a dialog whose Enter cancels made the
+    confirm step look broken — the work was planned, Enter was pressed, and
+    nothing happened.
+    """
+    service = await start_service_quiet(tmp_path)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            results: list[bool] = []
+            app.push_screen(
+                ConfirmModal(
+                    service,
+                    title="Apply the planned changes?",
+                    body="2 change(s) are ready to apply.",
+                    confirm_label="Apply",
+                    variant="warning",
+                ),
+                lambda value: results.append(bool(value)),
+            )
+            await _wait_until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+            await _wait_until(pilot, lambda: app.focused is not None)
+
+            focused = app.focused
+            assert focused is not None
+            assert focused.id == "confirm-run", f"plan dialog focused {focused.id}"
+
+            await pilot.press("enter")
+            await _wait_until(pilot, lambda: bool(results))
+
+            assert results == [True], "Enter must apply the planned changes"
+    finally:
+        await service.stop()
+
+
+async def test_a_long_plan_keeps_its_buttons_on_screen(tmp_path: Path) -> None:
+    """A dozen staged changes must not push the buttons off a short terminal.
+
+    The body used to be unbounded, so on a 24-row terminal the buttons landed
+    tens of rows below the visible area and there was no way to confirm.
+    """
+    service = await start_service_quiet(tmp_path)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(120, 24)) as pilot:
+            await pilot.pause()
+            body = "12 change(s) are ready to apply.\n\n" + "\n".join(
+                f"• Add the seminar “Proceedings of the {i}th international colloquium "
+                "on linguistics and applied language studies” at 2026-11-"
+                f"{10 + i}T14:00:00+08:00 to the schedule"
+                for i in range(1, 13)
+            )
+            app.push_screen(
+                ConfirmModal(
+                    service,
+                    title="Apply the planned changes?",
+                    body=body,
+                    confirm_label="Apply",
+                    variant="warning",
+                )
+            )
+            await _wait_until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+            await _wait_until(pilot, lambda: bool(app.screen.query("#confirm-run")))
+
+            screen_height = app.size.height
+            run = app.screen.query_one("#confirm-run", Button)
+            cancel = app.screen.query_one("#confirm-cancel", Button)
+            assert run.region.y < screen_height, (
+                f"confirm button is off-screen at y={run.region.y} (screen {screen_height})"
+            )
+            assert cancel.region.y < screen_height
+            # and the long body is scrollable rather than overflowing
+            scroll = app.screen.query_one("#confirm-body-scroll")
+            assert scroll.region.height < screen_height
     finally:
         await service.stop()
 

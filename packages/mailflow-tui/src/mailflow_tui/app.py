@@ -1762,9 +1762,20 @@ class MailPane(Vertical):
         self._set_operation_status(f"[green]{self._service.t('tui.profile_saved')}[/green]")
 
     async def _confirm(self, *, title: str, body: str, confirm_label: str) -> bool:
-        """Ask before a destructive or expensive bulk action."""
+        """Ask before a destructive or expensive bulk action.
+
+        Focus starts on Cancel: these are the buttons whose Enter would
+        destroy data (clear expired mail, wipe the mailbox), so the safe
+        default has to be the one that does nothing.
+        """
         result = await self._ask_screen(
-            ConfirmModal(self._service, title=title, body=body, confirm_label=confirm_label)
+            ConfirmModal(
+                self._service,
+                title=title,
+                body=body,
+                confirm_label=confirm_label,
+                focus_confirm=False,
+            )
         )
         return bool(result)
 

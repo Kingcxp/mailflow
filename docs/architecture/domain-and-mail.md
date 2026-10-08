@@ -184,7 +184,15 @@ the model per-batch opaque aliases rather than raw record ids, validates the
 model JSON, and persists review proposals; it never creates reminders directly.
 `SeminarDiscoveryResult` reports total, successfully evaluated, and failed mail
 counts plus failed batches, so a host can expose partial work honestly. A
-malformed or unavailable batch is incomplete work, not an empty result.
+malformed or unavailable batch is incomplete work, not an empty result. Each
+mail travels with its own `sent_at` (the mail's `Date` header), because a notice
+is routinely fetched weeks after it was written and a year-less date in its body
+("15 September") can only be resolved against the mail's own send time — never
+against the current time, which used to make such notices look undated. The
+reply budget is sized for a whole batch of event objects, and a reply cut short
+by it is salvaged object-by-object: the complete candidates are kept while the
+batch is still reported as incomplete, so a token limit cannot silently discard
+an entire batch's findings.
 
 `service.import_seminar()` is the only import path. It accepts user edits,
 requires a title and future start time, validates timezone and end-after-start,

@@ -7,6 +7,26 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **The staged-change dialog has a visible Apply and Enter applies it** —
+  two defects made confirming look broken. The dialog body was unbounded, so a
+  dozen staged changes pushed the buttons tens of rows below the visible area
+  on a short terminal and there was nothing to click; the body now scrolls
+  inside a bounded box. And the dialog focused **Cancel** on mount (a safety
+  default meant for destructive actions), so the Enter users naturally press
+  *cancelled* the plan. The destructive dialogs still start on Cancel
+  (`focus_confirm=False`); the plan dialog — the changes the user just asked
+  for — starts on Apply.
+- **Seminar discovery no longer loses whole batches, and can date the mail** —
+  two causes for "fewer seminars than expected". The reply budget was 1800
+  tokens, which cut the JSON array off mid-object on any batch with a few
+  events; the reply then failed to parse and every candidate in that batch was
+  written off as unreadable. The budget is now 4000, and a truncated reply is
+  salvaged object-by-object (the complete ones are kept, while the batch is
+  still reported as incomplete). Separately, the per-mail context sent only
+  `received_at`, so a notice fetched weeks after it was written could not be
+  dated by the "15 September" in its body and came back with no time at all;
+  `sent_at` now travels with each mail and the prompt resolves a year-less date
+  against it, never against the current time.
 - **Optional sign-ups no longer become todos** — the action-item rule listed
   "a registration" as actionable, so surveys, feedback forms and optional
   event sign-ups landed in the schedule. It now requires that skipping the

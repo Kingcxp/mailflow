@@ -845,6 +845,36 @@ class TestSeminarDiscovery:
         saved = await service.list_seminar_candidates(include_resolved=True)
         assert saved[0].status is SeminarStatus.REJECTED
 
+    async def test_an_unparseable_reply_still_retries_once(self) -> None:
+        """An empty salvage must not be mistaken for a parse.
+
+        ``_salvage_json_objects`` returns ``[]`` for a reply it cannot mine,
+        and ``[]`` *is* a list — so a caller that only checked
+        ``isinstance(raw, list)`` treated prose as a valid empty answer and
+        skipped the retry, turning a recoverable unreadable reply into a
+        silently empty scan.
+        """
+
+        class ProseRouter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                self.calls += 1
+                return _reply("I found a seminar but cannot format it.")
+
+        router = ProseRouter()
+        service = self.make_service(router)
+        storage = cast(Any, service.storage)
+        mail = make_mail("m1", minute=10)
+        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+
+        result = await service.discover_seminars()
+
+        assert router.calls == 2, "an unreadable reply must be retried"
+        assert result.failed_batches == 1
+        assert not result.is_complete
+
 
 class TestSmartAction:
     """One instruction is executed by letting the model call tools."""
@@ -1515,3 +1545,108 @@ class TestLLMFallbackBinding:
         await service.update_config_entry("llms", 0, {"model": "changed"})
 
         assert self._processor(service.config).fallback_llms == ["backup"]
+
+
+class TestTruncatedReplySalvage:
+    """A reply the token budget cut short must not discard the whole batch."""
+
+    def test_complete_objects_are_recovered_from_a_cut_off_array(self) -> None:
+        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
+
+        truncated = (
+            '[{"id":"m1","title":"First","confidence":90},'
+            '{"id":"m2","title":"Second","confidence":80},'
+            '{"id":"m3","title":"Cut off mid-obj'
+        )
+
+        salvaged = _salvage_json_objects(truncated)  # pyright: ignore[reportPrivateUsage]
+
+        assert [item["id"] for item in salvaged] == ["m1", "m2"]
+
+    def test_nested_objects_inside_a_candidate_stay_intact(self) -> None:
+        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
+
+        truncated = '[{"id":"m1","meta":{"a":{"b":1}},"t":"ok"},{"id":"m2","x"'
+
+        salvaged = _salvage_json_objects(truncated)  # pyright: ignore[reportPrivateUsage]
+
+        assert salvaged == [{"id": "m1", "meta": {"a": {"b": 1}}, "t": "ok"}]
+
+    def test_a_fenced_truncated_reply_is_also_salvaged(self) -> None:
+        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
+
+        truncated = 'Here you go:\n```json\n[{"id":"m1","title":"Kept"},\n{"id":"m2"'
+
+        salvaged = _salvage_json_objects(truncated)  # pyright: ignore[reportPrivateUsage]
+
+        assert salvaged == [{"id": "m1", "title": "Kept"}]
+
+    def test_a_reply_with_no_objects_returns_nothing(self) -> None:
+        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
+
+        assert _salvage_json_objects("I could not find anything.") == []
+        assert _salvage_json_objects('[{"broken": ') == []
+
+
+class TestSeminarEventDedupe:
+    """One event the model describes twice must not become two candidates."""
+
+    @staticmethod
+    def _candidate(candidate_id: str, title: str, *, mail_id: str = "m1", starts: Any = None):
+        from mailflow.domain import SeminarCandidate
+
+        return SeminarCandidate(
+            candidate_id=candidate_id, mail_id=mail_id, title=title, starts_at=starts
+        )
+
+    def test_the_same_event_worded_identically_collapses(self) -> None:
+        from mailflow.service import _event_dedupe_key  # pyright: ignore[reportPrivateUsage]
+
+        first = self._candidate("a", "Research Seminar on Batteries")
+        second = self._candidate("b", "  research   seminar on batteries ")
+
+        assert _event_dedupe_key(first) == _event_dedupe_key(second)  # pyright: ignore[reportPrivateUsage]
+
+    def test_different_mails_never_collapse(self) -> None:
+        from mailflow.service import _event_dedupe_key  # pyright: ignore[reportPrivateUsage]
+
+        first = self._candidate("a", "Shared title", mail_id="m1")
+        second = self._candidate("b", "Shared title", mail_id="m2")
+
+        assert _event_dedupe_key(first) != _event_dedupe_key(second)  # pyright: ignore[reportPrivateUsage]
+
+    def test_different_start_times_never_collapse(self) -> None:
+        from mailflow.service import _event_dedupe_key  # pyright: ignore[reportPrivateUsage]
+
+        first = self._candidate(
+            "a", "Weekly lab meeting", starts=datetime(2026, 11, 2, 9, tzinfo=UTC)
+        )
+        second = self._candidate(
+            "b", "Weekly lab meeting", starts=datetime(2026, 11, 9, 9, tzinfo=UTC)
+        )
+
+        assert _event_dedupe_key(first) != _event_dedupe_key(second)  # pyright: ignore[reportPrivateUsage]
+
+    def test_an_untimed_event_keys_on_its_title(self) -> None:
+        from mailflow.service import _event_dedupe_key  # pyright: ignore[reportPrivateUsage]
+
+        assert _event_dedupe_key(self._candidate("a", "Timeless talk")) == (  # pyright: ignore[reportPrivateUsage]
+            _event_dedupe_key(self._candidate("b", "Timeless talk"))  # pyright: ignore[reportPrivateUsage]
+        )
+
+
+class TestSalvageScope:
+    """Salvage must never turn prose into candidates (it would skip the retry)."""
+
+    def test_prose_containing_braces_is_not_mined(self) -> None:
+        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
+
+        prose = 'I found a seminar but cannot format it. Here: {"id": "m1"} maybe?'
+
+        assert _salvage_json_objects(prose) == []  # pyright: ignore[reportPrivateUsage]
+
+    def test_an_unfenced_reply_must_start_with_the_array(self) -> None:
+        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
+
+        assert _salvage_json_objects('Sure: [{"id": "m1"}]') == []  # pyright: ignore[reportPrivateUsage]
+        assert _salvage_json_objects('[{"id": "m1"}]') == [{"id": "m1"}]  # pyright: ignore[reportPrivateUsage]
