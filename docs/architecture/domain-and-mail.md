@@ -260,7 +260,7 @@ JSON-schema definitions):
 
 | Tool | Kind | What it does |
 | ---- | ---- | ------------ |
-| `find_mail` | read | `contains` (literal, case-insensitive substring over subject/body) and/or `query` (semantic ranking). A literal condition decides membership and is never filtered out; with both given, the semantic pass only *orders* the literal matches. |
+| `find_mail` | read | `contains` (literal, case-insensitive substring over subject, body and attachment file names) and/or `query` (semantic ranking). A literal condition decides membership and is never filtered out; with both given, the semantic pass only *orders* the literal matches. |
 | `delete_mail` | staged | Validates the mail ids and stages a trash move. |
 | `schedule_event` | staged | Validates an absolute future ISO-8601 start and stages a plain schedule entry. |
 | `schedule_seminar` | staged | Stages the seminar import path for a `check_seminars` candidate, so the `[SEMINAR]` marker is applied by the service rather than by the model. A candidate whose mail states no time becomes a review item instead. |

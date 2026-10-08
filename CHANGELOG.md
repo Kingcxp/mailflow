@@ -7,6 +7,13 @@ All notable changes are recorded here; the format follows
 
 ### Fixed
 
+- **A literal search now also looks at attachment file names** — an
+  announcement routinely states its topic in the attached poster's file name
+  ("PAIR-Seminar-15Oct2026.jpg") while the body carries only the logistics, so
+  a search that folded subject/body/html missed mails that plainly concern the
+  word the user typed. `find_mail`'s literal filter now includes the names of
+  the mail's attachments.
+
 - **Seminar candidates can be staged in bulk, and one event reads as one
   candidate** — two causes for "only 6 seminars found" on a large mailbox. The
   model had to call `schedule_seminar` once per candidate, so the loop's

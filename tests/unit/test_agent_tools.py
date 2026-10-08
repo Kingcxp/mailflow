@@ -715,3 +715,48 @@ class TestBulkSeminarStaging:
 
         assert text.startswith("error:")
         assert staged is None
+
+
+class TestAttachmentNameSearch:
+    """An announcement often names its topic only in the attached poster's file.
+
+    The body carries the logistics while the subject line of the event lives in
+    the image's file name ("...-Seminar-15Oct.jpg"), so a literal search that
+    only folded subject/body/html missed mails that plainly concern the word
+    the user typed.
+    """
+
+    async def test_a_filename_hit_is_found(self) -> None:
+        from mailflow.domain import Attachment
+
+        service = make_service()
+        storage = cast(Any, service.storage)
+        mail = make_mail("p1", subject="Invitation", body="See the poster attached.")
+        mail.attachments.append(
+            Attachment(filename="PAIR-Seminar-15Oct2026.jpg", content_type="image/jpeg", size=1234)
+        )
+        await storage.save_mail(MailRecord(record_id="p1", mail=mail))
+        registry = ToolRegistry(service)
+
+        text, _ = await registry.call("find_mail", {"contains": "seminar"})
+
+        assert "ids: p1" in text
+
+    async def test_a_filename_hit_alone_does_not_leak_other_mails(self) -> None:
+        from mailflow.domain import Attachment
+
+        service = make_service()
+        storage = cast(Any, service.storage)
+        with_poster = make_mail("p1", subject="Invitation", body="See attached.")
+        with_poster.attachments.append(
+            Attachment(filename="Research-Seminar.jpg", content_type="image/jpeg", size=99)
+        )
+        without = make_mail("p2", subject="Newsletter", body="Nothing of the sort here.")
+        await storage.save_mail(MailRecord(record_id="p1", mail=with_poster))
+        await storage.save_mail(MailRecord(record_id="p2", mail=without))
+        registry = ToolRegistry(service)
+
+        text, _ = await registry.call("find_mail", {"contains": "seminar"})
+
+        assert "ids: p1" in text
+        assert "p2" not in text

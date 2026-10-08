@@ -823,11 +823,18 @@ class ToolRegistry:
 
 
 def _haystack(record: MailRecord) -> str:
-    """Fold one record's searchable text for a literal, case-insensitive match."""
+    """Fold one record's searchable text for a literal, case-insensitive match.
+
+    Attachment filenames are included: an announcement often states its topic
+    in the poster's file name ("...-Seminar-15Oct.jpg") while the body carries
+    only the logistics, so searching text alone misses a mail whose whole
+    subject is in the attachment.
+    """
     from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
 
+    names = " ".join(str(item.filename or "") for item in (record.mail.attachments or []))
     return "\n".join(
-        (record.mail.subject, _plain_body(record.mail), record.mail.body_html or "")
+        (record.mail.subject, _plain_body(record.mail), record.mail.body_html or "", names)
     ).casefold()
 
 
