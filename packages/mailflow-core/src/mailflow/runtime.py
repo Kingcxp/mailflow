@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 from mailflow.config import GeneralConfig, MailAccountConfig, MailFlowConfig, NotifierConfig
 from mailflow.contracts import MailSource, Notifier, StorageBackend
-from mailflow.domain import ActionItem, MailMessage, MailRecord, to_utc
+from mailflow.domain import ActionItem, MailMessage, MailRecord, dedupe_actions, to_utc
 from mailflow.events import EventBus
 from mailflow.pipeline import PipelineEngine
 
@@ -439,6 +439,25 @@ class MailFlowRuntime:
                 await self._persist_with_retry(record)
                 logger.warning("re-analysis of %r failed; kept the previous analysis", record_id)
             else:
+                previous_records = await self._storage.list_mails()
+                existing_actions = [
+                    item
+                    for stored in previous_records
+                    if stored.record_id != record_id
+                    for item in stored.action_items
+                ]
+                custom_actions = await self._storage.list_custom_actions()
+                kept_object_ids = {
+                    id(item)
+                    for item in dedupe_actions(
+                        [*existing_actions, *custom_actions, *analysis.action_items]
+                    )
+                }
+                retained_actions = [
+                    item for item in analysis.action_items if id(item) in kept_object_ids
+                ]
+                if len(retained_actions) != len(analysis.action_items):
+                    analysis = analysis.model_copy(update={"action_items": retained_actions})
                 record = MailRecord(
                     record_id=record_id,
                     mail=mail,
@@ -447,7 +466,7 @@ class MailFlowRuntime:
                     processor_notes=notes,
                     received_at=mail.received_at,
                 )
-                await self._persist_with_retry(record)
+            await self._persist_with_retry(record)
         except Exception:
             # Not stored: release the dedup mark so a retry this session is
             # possible instead of silently dropping the mail forever.
@@ -557,11 +576,13 @@ class MailFlowRuntime:
         now = datetime.now(UTC)
         fired = 0
         config = self._config.general
-        for record in await self._storage.list_mails():
-            for item in record.action_items:
-                fired += await self._fire_reminder(item, record, now, config)
-        for item in await self._storage.list_custom_actions():
-            fired += await self._fire_reminder(item, None, now, config)
+        records = await self._storage.list_mails()
+        items = [item for record in records for item in record.action_items]
+        record_by_object = {id(item): record for record in records for item in record.action_items}
+        custom = await self._storage.list_custom_actions()
+        items.extend(custom)
+        for item in dedupe_actions(items):
+            fired += await self._fire_reminder(item, record_by_object.get(id(item)), now, config)
         await self._fire_daily_digest(now, config)
         await self._fire_hourly_summary(now, config)
         return fired
@@ -763,16 +784,18 @@ class MailFlowRuntime:
     async def _approaching_actions(self, day_start: datetime, days_before: int) -> list[ActionItem]:
         """Actions due within ``days_before`` days from ``day_start``, soonest first."""
         horizon = day_start + timedelta(days=days_before)
-        items: list[ActionItem] = []
-        for record in await self._storage.list_mails():
-            items.extend(item for item in record.action_items if day_start <= item.due_at < horizon)
+        items: list[ActionItem] = [
+            item
+            for record in await self._storage.list_mails()
+            for item in record.action_items
+            if day_start <= item.due_at < horizon
+        ]
         items.extend(
             item
             for item in await self._storage.list_custom_actions()
             if day_start <= item.due_at < horizon
         )
-        items.sort(key=lambda item: item.due_at)
-        return items
+        return dedupe_actions(items)
 
     async def _fire_reminder(
         self,

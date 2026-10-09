@@ -30,6 +30,7 @@ CRITICAL_EXAM_JSON = """{
   "action_items": [
     {
       "summary": "Attend the final calculus exam",
+      "must_do": true,
       "action_type": "exam",
       "due_at": "2026-06-10T09:00:00+08:00",
       "due_end": "2026-06-10T11:00:00+08:00",
@@ -134,9 +135,9 @@ class TestLLMImportanceProcessor:
           "summary": "Old reminder", "urgency": "important", "reason": "carries a deadline",
           "reply_required": false, "suggested_reply": "",
           "action_items": [
-            {"summary": "Attend the seminar", "action_type": "meeting",
+            {"summary": "Attend the seminar", "action_type": "meeting", "must_do": false,
              "due_at": "2026-09-23T18:00:00+08:00"},
-            {"summary": "Submit the annual report", "action_type": "errand",
+            {"summary": "Submit the annual report", "action_type": "errand", "must_do": true,
              "due_at": "2026-12-02T09:00:00+08:00"}
           ],
           "notes": ""}"""
@@ -169,7 +170,7 @@ class TestLLMImportanceProcessor:
           "summary": "Old notice", "urgency": "important", "reason": "deadline",
           "reply_required": false, "suggested_reply": "",
           "action_items": [
-            {"summary": "Submit the thesis", "action_type": "errand",
+            {"summary": "Submit the thesis", "action_type": "errand", "must_do": true,
              "due_at": "2027-01-15T17:00:00+08:00"}
           ],
           "notes": ""}"""
@@ -197,7 +198,7 @@ class TestLLMImportanceProcessor:
           "summary": "Due today", "urgency": "urgent", "reason": "deadline today",
           "reply_required": false, "suggested_reply": "",
           "action_items": [
-            {"summary": "Pay the fee", "action_type": "errand",
+            {"summary": "Pay the fee", "action_type": "errand", "must_do": true,
              "due_at": "2026-06-01T23:00:00+00:00"}
           ],
           "notes": ""}"""
@@ -207,6 +208,29 @@ class TestLLMImportanceProcessor:
 
         assert result.analysis is not None
         assert [item.summary for item in result.analysis.action_items] == ["Pay the fee"]
+
+    async def test_missing_optional_and_invalid_window_actions_are_dropped(self) -> None:
+        payload = """{
+          "summary": "Obligations", "urgency": "important", "reason": "required",
+          "action_items": [
+            {"summary": "Missing flag", "action_type": "errand",
+             "due_at": "2026-06-02T09:00:00+00:00"},
+            {"summary": "Optional event", "action_type": "meeting", "must_do": false,
+             "due_at": "2026-06-02T09:00:00+00:00"},
+            {"summary": "Invalid window", "action_type": "errand", "must_do": true,
+             "due_at": "2026-06-02T09:00:00+00:00", "due_end": "2026-06-02T09:00:00+00:00"},
+            {"summary": "Renew registration", "action_type": "registration", "must_do": "yes",
+             "due_at": "2026-06-02T09:00:00+00:00", "due_end": "2026-06-02T10:00:00+00:00"}
+          ]
+        }"""
+        processor = make_processor(StubRouter(payload))
+
+        result = await processor.process(make_mail(), CONTEXT)
+
+        assert result.analysis is not None
+        assert [item.summary for item in result.analysis.action_items] == ["Renew registration"]
+        assert result.analysis.action_items[0].action_type == "registration"
+        assert result.analysis.action_items[0].due_end == datetime(2026, 6, 2, 10, tzinfo=UTC)
 
     async def test_urgency_case_and_synonym_normalized(self) -> None:
         payload = CRITICAL_EXAM_JSON.replace('"urgent"', '"Critical"')
@@ -446,6 +470,8 @@ class TestPromptContract:
         assert "do NOT create an action item" in prompt.lower().replace("not", "NOT")
         assert "or an event with a date" not in prompt
         assert "never invent a date" in prompt
+        assert '"must_do": true' in prompt
+        assert "user-defined label" in prompt
 
     def test_voluntary_signups_are_not_action_items(self) -> None:
         """A survey you may skip books no obligation, even with a deadline."""

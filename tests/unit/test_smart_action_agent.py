@@ -21,7 +21,11 @@ from mailflow.i18n import I18n
 from mailflow.pipeline import PipelineEngine
 from mailflow.registry import ComponentRegistry
 from mailflow.service import MailFlowService
-from mailflow.tools import _MAX_TOOL_STEPS, run_agent  # pyright: ignore[reportPrivateUsage]
+from mailflow.tools import (  # pyright: ignore[reportPrivateUsage]
+    _MAX_TOOL_STEPS,  # pyright: ignore[reportPrivateUsage]
+    _explicit_delete_intent,  # pyright: ignore[reportPrivateUsage]
+    run_agent,
+)
 
 ADDRESS = MailAddress(name="Sender", address="sender@example.com")
 
@@ -181,6 +185,41 @@ class TestReadLoop:
         # and every turn was offered the tool schemas
         assert all(specs for specs in router.tool_arguments)
 
+    async def test_results_include_every_match_in_source_order(self) -> None:
+        router = ScriptedRouter([call("find_mail", {"contains": "seminar"}), text("Found all.")])
+        service = make_service(router)
+        storage = cast(Any, service.storage)
+        for index in range(45):
+            when = datetime(2026, 1, 1, 9, index, tzinfo=UTC)
+            mail = _mail(f"seminar-{index}", subject=f"Seminar {index}", body="Event")
+            mail = mail.model_copy(update={"date": when, "received_at": when})
+            await storage.save_mail(
+                MailRecord(record_id=f"seminar-{index}", mail=mail, auto_urgency=Urgency.INFO)
+            )
+
+        result = await run_agent(service, cast(Any, router), "show all seminar mail")
+
+        assert len(result.records) == 45
+        assert [record.record_id for record in result.records] == [
+            f"seminar-{index}" for index in reversed(range(45))
+        ]
+        assert "matched: 45 mail(s)" in router.calls[1][-1]["content"]
+
+    async def test_delete_tool_attempt_without_explicit_intent_is_rejected(self) -> None:
+        router = ScriptedRouter(
+            [call("delete_mail", {"record_ids": ["invoice-1"]}), text("No deletion staged.")]
+        )
+        service = make_service(router)
+        await seed(service)
+
+        result = await run_agent(service, cast(Any, router), "show me every invoice email")
+
+        assert result.pending == []
+        assert await service.count_mails() == 2
+        assert router.calls[1][-1]["content"] == (
+            "error: mail deletion requires an explicit delete request"
+        )
+
     async def test_several_tool_calls_in_one_turn_all_run(self) -> None:
         router = ScriptedRouter(
             [
@@ -237,6 +276,23 @@ class TestReadLoop:
         assert router.calls[1][-1]["content"] == "unknown tool: teleport"
 
 
+@pytest.mark.parametrize(
+    ("instruction", "allowed"),
+    [
+        ("find all seminar emails", False),
+        ("clean up old email", False),
+        ("move the invoice to trash", True),
+        ("删除匹配的邮件", True),
+        ("把邮件删掉", True),
+        ("把邮件移入回收站", True),
+        ("do not delete these messages", False),
+        ("不要删除这些邮件", False),
+    ],
+)
+def test_explicit_delete_intent_uses_only_approved_terms(instruction: str, allowed: bool) -> None:
+    assert _explicit_delete_intent(instruction) is allowed
+
+
 class TestStagedWrites:
     async def test_delete_is_only_staged_and_storage_is_untouched(self) -> None:
         router = ScriptedRouter(
@@ -256,6 +312,26 @@ class TestStagedWrites:
         assert result.pending[0].summary_key
         assert await service.count_mails() == 2  # the model never deleted anything
         assert await service.list_actions_all() == []
+
+    async def test_non_delete_instruction_cannot_stage_mail_deletion(self) -> None:
+        router = ScriptedRouter(
+            [
+                call("find_mail", {"contains": "invoice"}),
+                call("delete_mail", {"record_ids": ["invoice-1"]}, call_id="c2"),
+                text("I found the invoice mail."),
+            ]
+        )
+        service = make_service(router)
+        await seed(service)
+
+        result = await run_agent(service, cast(Any, router), "find the invoice mail")
+
+        assert result.pending == []
+        assert await service.count_mails() == 2
+        assert (
+            "error: mail deletion requires an explicit delete request"
+            in router.calls[2][-1]["content"]
+        )
 
     async def test_schedule_event_is_staged_with_a_future_time(self) -> None:
         router = ScriptedRouter(
@@ -289,7 +365,7 @@ class TestLoopBounds:
         # the user is told the loop stopped rather than shown an empty answer
         assert "12" in result.final_text
 
-    async def test_progress_reports_each_step_by_tool_name(self) -> None:
+    async def test_progress_reports_ordered_bounded_phases(self) -> None:
         router = ScriptedRouter([call("find_mail", {"contains": "seminar"}), text("Done.")])
         service = make_service(router)
         await seed(service)
@@ -300,12 +376,24 @@ class TestLoopBounds:
 
         await run_agent(service, cast(Any, router), "seminar mail", progress=record)
 
-        assert reports[0][0] == "tool"
-        assert reports[0][1] == 1
-        assert reports[0][2] == _MAX_TOOL_STEPS
-        key, params = reports[0][3]
+        assert [stage for stage, *_ in reports] == [
+            "llm",
+            "tool",
+            "tool_done",
+            "llm",
+            "finalizing",
+        ]
+        assert all(total == _MAX_TOOL_STEPS for _, _, total, _ in reports)
+        assert reports[0][3] == ("smart_llm", {"step": 1})
+        key, params = reports[1][3]
         assert key == "smart_tool"
         assert params["tool"] == "find_mail"
+        assert len(params["args"]) <= 240
+        key, params = reports[2][3]
+        assert key == "smart_tool_done"
+        assert params["tool"] == "find_mail"
+        assert len(params["result"]) <= 240
+        assert reports[-1][3] == ("smart_action_finalizing", {})
 
     async def test_a_failing_progress_callback_does_not_abort_the_work(self) -> None:
         router = ScriptedRouter([call("find_mail", {"contains": "seminar"}), text("Done.")])

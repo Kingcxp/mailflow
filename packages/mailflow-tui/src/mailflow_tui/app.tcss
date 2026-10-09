@@ -73,6 +73,18 @@ Button:focus {
     margin-left: 1;
 }
 
+#actions-search-row,
+#market-search-row {
+    height: auto;
+    padding: 0 1;
+    align-vertical: middle;
+}
+
+#actions-search,
+#market-search {
+    width: 1fr;
+}
+
 #smart-search {
     height: 100%;
     margin: 0 1 0 1;
@@ -82,6 +94,98 @@ Button:focus {
     margin: 0 1 1 1;
     color: $text-muted;
     text-style: italic;
+}
+
+#mail-search-row Checkbox,
+#actions-search-row Checkbox,
+#market-search-row Checkbox,
+#log-search-row Checkbox,
+#settings-search-row Checkbox {
+    width: auto;
+    min-width: 9;
+    margin-left: 1;
+}
+
+#smart-action-progress {
+    height: auto;
+    max-height: 8;
+    min-height: 0;
+    margin: 0 1;
+    color: $text-muted;
+    overflow-y: auto;
+}
+
+#history-count {
+    width: 10;
+    min-width: 8;
+}
+
+#history-count-label {
+    width: auto;
+    margin-left: 1;
+    color: $text-muted;
+}
+
+#logs-search-status {
+    height: auto;
+    color: $text-muted;
+}
+
+SmartActionReviewModal,
+SmartOperationEditModal {
+    align: center middle;
+}
+
+#smart-review-dialog,
+#smart-review-edit-dialog {
+    width: 78;
+    height: 90%;
+    max-height: 90%;
+    border: round $accent;
+    background: $surface;
+    padding: 1 2;
+}
+
+#smart-review-title,
+#smart-review-edit-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#smart-review-operations,
+#smart-review-edit-fields {
+    height: 1fr;
+    border: round $secondary;
+    padding: 0 1;
+}
+
+.smart-review-row {
+    height: auto;
+    margin-bottom: 1;
+    align-vertical: middle;
+}
+
+.smart-review-row Static {
+    width: 1fr;
+}
+
+#smart-review-notice,
+#smart-review-error,
+#smart-review-edit-error {
+    height: auto;
+    margin-top: 1;
+    color: $text-muted;
+}
+
+#smart-review-buttons,
+#smart-review-edit-buttons {
+    height: auto;
+    margin-top: 1;
+}
+
+#smart-review-buttons Button,
+#smart-review-edit-buttons Button {
+    margin-right: 1;
 }
 
 Header {
@@ -1324,4 +1428,62 @@ UserProfileModal {
     width: 1fr;
     min-width: 0;
     margin-right: 1;
+}
+
+/* Keep search controls usable in narrow terminals by separating query rows
+   from category/level selectors and letting the query input absorb space. */
+#settings-search-row {
+    dock: top;
+    height: auto;
+    margin: 0 1 1 1;
+    align-vertical: middle;
+}
+
+#settings-search {
+    width: 1fr;
+}
+
+#log-controls,
+#log-filters,
+#log-search-row {
+    height: auto;
+    align-vertical: middle;
+}
+
+#log-filters {
+    padding: 0 1;
+}
+
+#log-search-row {
+    padding: 0 1;
+}
+
+#log-search {
+    width: 1fr;
+}
+
+#logs-export {
+    min-width: 10;
+    height: 3;
+    margin-left: 1;
+}
+
+#actions-search-row,
+#market-search-row {
+    height: auto;
+    align-vertical: middle;
+}
+
+#actions-search-row {
+    padding: 0 1;
+}
+
+#market-search-row {
+    padding: 0 1;
+}
+
+#smart-review-dialog,
+#smart-review-edit-dialog {
+    width: 96%;
+    max-width: 78;
 }

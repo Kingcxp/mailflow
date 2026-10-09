@@ -63,6 +63,7 @@ URGENT_JSON = """{
   "suggested_reply": "I will come before 17:00.",
   "action_items": [
     {"summary": "Collect student ID", "action_type": "errand",
+     "must_do": true,
      "due_at": "@DUE@", "due_end": null,
      "notes": "Bring your own ID photo"}
   ],
@@ -290,18 +291,18 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             # search filters the table
             search = app.query_one("#mail-search", Input)
             search.value = "promotion"
-            await pilot.pause(0.05)
+            await pilot.pause(0.35)
             assert table.row_count == 1
 
             # search matches the BODY too: "before 17:00" only appears in
             # the ID-card mail's body_text, never in its subject/summary
             search.value = "before 17:00"
-            await pilot.pause(0.05)
+            await pilot.pause(0.35)
             assert table.row_count == 1
             assert "student ID" in " ".join(str(cell) for cell in table.get_row_at(0))
 
             search.value = ""
-            await pilot.pause(0.05)
+            await pilot.pause(0.35)
             assert table.row_count == 3
             # select the urgent mail row: its urgency cell carries the contract color
             urgent_index = next(
@@ -589,7 +590,7 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
     from mailflow.domain import ActionOrigin
     from mailflow.plugin_market import PluginMarket
     from mailflow_tui.app import MailPane
-    from mailflow_tui.confirm import ConfirmModal
+    from mailflow_tui.smart_action_review import SmartActionReviewModal
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
@@ -649,8 +650,8 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
             search = app.query_one("#mail-search", Input)
             search.value = "把研讨会邮件加入我的日程"
 
-            def modal() -> ConfirmModal | None:
-                screens = [s for s in app.screen_stack if isinstance(s, ConfirmModal)]
+            def modal() -> SmartActionReviewModal | None:
+                screens = [s for s in app.screen_stack if isinstance(s, SmartActionReviewModal)]
                 return screens[-1] if screens else None
 
             app.query_one("#smart-action", Button).press()
@@ -668,7 +669,7 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
             assert result is not None
             assert 'find_mail {"contains": "lecture"}' in result.tool_steps
             assert result.pending and result.pending[0].tool == "schedule_event"
-            prompt.query_one("#confirm-run", Button).press()
+            prompt.query_one("#smart-review-apply", Button).press()
             for _ in range(120):
                 if await service.storage.list_custom_actions():
                     break

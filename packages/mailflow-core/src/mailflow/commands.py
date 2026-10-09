@@ -973,7 +973,11 @@ class CommandRouter:
             positionals, flags = _split_flags(args[1:])
             category = positionals[0] if positionals else ""
             page = _page_number(flags)
-            entries = await asyncio.to_thread(market.list_plugins)
+            try:
+                report = await self.service.market_fetch_report()
+            except Exception as exc:
+                return self._err(str(exc))
+            entries = list(report.entries)
             if category:
                 entries = [entry for entry in entries if category in entry[1].categories]
             page_entries, pages, page = _paginate(entries, page)
@@ -983,11 +987,19 @@ class CommandRouter:
                     style=_STYLE_TITLE,
                 ),
             ]
+            if report.failures:
+                detail = "; ".join(f"{repo.name}: {reason}" for repo, reason in report.failures)
+                spans.append(
+                    StyleSpan(
+                        text=f"\n{self._t('tui.market_stale')}: {detail}",
+                        style=_STYLE_MUTED,
+                    )
+                )
             start_index = (page - 1) * _PAGE_SIZE + 1
             for index, (_repo, plugin) in enumerate(page_entries, start=start_index):
                 installed = (
                     f" [{self._t('plugin.installed')}]"
-                    if market.is_installed(plugin.id, package=plugin.package)
+                    if self.service.market.is_installed(plugin.id, package=plugin.package)
                     else ""
                 )
                 categories = ", ".join(plugin.categories) or "-"
@@ -1004,7 +1016,11 @@ class CommandRouter:
                 )
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         if args[0] == "show" and len(args) == 2:
-            found = await asyncio.to_thread(market.find, args[1])
+            try:
+                report = await self.service.market_fetch_report()
+            except Exception as exc:
+                return self._err(str(exc))
+            found = next((entry for entry in report.entries if entry[1].id == args[1]), None)
             if found is None:
                 return self._err(self._t("plugin.market_not_found", plugin_id=args[1]))
             repo, plugin = found
@@ -1046,9 +1062,29 @@ class CommandRouter:
         query = positionals[0]
         category = positionals[1] if len(positionals) > 1 else ""
         page = _page_number(flags)
-        entries = await asyncio.to_thread(
-            self.service.market.search, query, category, self.service.i18n.language
-        )
+        try:
+            report = await self.service.market_fetch_report()
+        except Exception as exc:
+            return self._err(str(exc))
+        language = self.service.i18n.language
+        needle = query.strip().casefold()
+        entries = [
+            entry
+            for entry in report.entries
+            if (not category or category in entry[1].categories)
+            and (
+                not needle
+                or needle
+                in " ".join(
+                    (
+                        entry[1].id,
+                        entry[1].name,
+                        entry[1].description,
+                        entry[1].description_for(language),
+                    )
+                ).casefold()
+            )
+        ]
         page_entries, pages, page = _paginate(entries, page)
         spans: list[StyleSpan] = [
             StyleSpan(
@@ -1080,9 +1116,10 @@ class CommandRouter:
             return self._err(self._t("plugin.uninstall_usage"))
         try:
             output = await self.service.plugin_uninstall(args[0])
-        except (KeyError, ValueError, RuntimeError) as exc:
+        except KeyError as exc:
+            return self._err(str(exc.args[0]) if exc.args else str(exc))
+        except (ValueError, RuntimeError) as exc:
             return self._err(str(exc))
-        await self.service.clear_plugin_source(args[0])
         return self._ok(
             self._t("plugin.uninstalled_ok", plugin_id=args[0]) + (f"\n{output}" if output else "")
         )
@@ -1113,82 +1150,29 @@ class CommandRouter:
     async def _cmd_plugin_install(self, args: list[str]) -> CommandResponse:
         if len(args) != 1:
             return self._err(self._t("plugin.install_usage"))
-        import os
-
         local = Path(args[0])
-        if await asyncio.to_thread(os.path.exists, str(local)):
-            return await self._install_local(local)
-        market = self.service.market
-        found = await asyncio.to_thread(market.find, args[0])
-        if found is None:
-            return self._err(self._t("plugin.market_not_found", plugin_id=args[0]))
-        _repo, plugin = found
-        if market.is_installed(plugin.id, package=plugin.package):
-            return self._ok(self._t("plugin.already_installed", plugin_id=plugin.id))
+        if await asyncio.to_thread(local.exists):
+            try:
+                output = await self.service.plugin_install_local(local)
+            except KeyError as exc:
+                return self._err(str(exc.args[0]) if exc.args else str(exc))
+            except (ValueError, RuntimeError) as exc:
+                return self._err(str(exc))
+            return self._ok(output)
         try:
-            output = await market.install(plugin)
+            output = await self.service.plugin_install(args[0])
+        except KeyError as exc:
+            return self._err(str(exc.args[0]) if exc.args else str(exc))
         except (ValueError, RuntimeError) as exc:
             return self._err(str(exc))
-        await self.service.record_plugin_source(plugin.id, plugin.source)
+        already = self._t("plugin.already_installed", plugin_id=args[0])
+        if output == already:
+            return self._ok(output)
         return self._ok(
-            self._t("plugin.installed_ok", plugin_id=plugin.id)
+            self._t("plugin.installed_ok", plugin_id=args[0])
             + f" ({self._t('plugin.restart_note')})"
             + (f"\n{output}" if output else "")
         )
-
-    async def _install_local(self, root: Path) -> CommandResponse:
-        """Install plugins found under a local folder: the folder itself when
-        it is one plugin, otherwise each of its plugin subfolders."""
-        from mailflow.plugin_market import MarketPlugin, detect_plugin_folders
-
-        folders = detect_plugin_folders(root)
-        if not folders:
-            return self._err(self._t("plugin.local_none_found", path=str(root)))
-        installed: list[str] = []
-        failed: list[str] = []
-        for folder in folders:
-            plugin_id = self._plugin_id_of(folder)
-            try:
-                await self.service.market.install(
-                    MarketPlugin(
-                        id=plugin_id,
-                        name=folder.name,
-                        version="",
-                        categories=[],
-                        package=plugin_id,
-                        source=str(folder),
-                    )
-                )
-            except (ValueError, RuntimeError) as exc:
-                failed.append(f"{plugin_id}: {exc}")
-                continue
-            # local installs keep their source recorded so update checks can
-            # see it is not a remote source (and skip auto updates)
-            await self.service.record_plugin_source(plugin_id, str(folder))
-            installed.append(plugin_id)
-        if not installed:
-            return self._err(self._t("plugin.local_failed", detail="; ".join(failed)))
-        return self._ok(
-            self._t("plugin.local_installed", count=len(installed), plugins=", ".join(installed))
-            + (f"\n{self._t('plugin.restart_note')}" if not failed else "")
-            + (f"\n{self._t('plugin.local_failed', detail='; '.join(failed))}" if failed else "")
-        )
-
-    @staticmethod
-    def _plugin_id_of(folder: Path) -> str:
-        """Plugin id: plugin.json id when present, else the folder name."""
-        import json as jsonlib
-
-        metadata_path = folder / "plugin.json"
-        if metadata_path.is_file():
-            try:
-                payload = jsonlib.loads(metadata_path.read_text(encoding="utf-8"))
-                plugin_id = payload.get("id")
-                if isinstance(plugin_id, str) and plugin_id:
-                    return plugin_id
-            except (jsonlib.JSONDecodeError, OSError):
-                pass
-        return folder.name
 
     # -- plugins / adapters / accounts / llms -----------------------------------------------------
 

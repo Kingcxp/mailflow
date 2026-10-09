@@ -103,74 +103,84 @@ class ListEditor(Widget):
         id: str | None = None,
     ) -> None:
         super().__init__(id=id)
-        # an empty list still shows one empty input row so the user can type
-        # straight away; "" items are dropped from value()
         self.items = [item for item in items if item]
         self._placeholder = placeholder
         self._add_label = add_label
         self._remove_label = remove_label
+        self._row_tokens: list[str] = []
+        self._row_refs: dict[str, Horizontal] = {}
+        self._input_refs: dict[str, CenteredInput] = {}
+        self._next_token = 0
 
-    def _row(self, index: int, item: str) -> Horizontal:
-        return Horizontal(
-            CenteredInput(
-                value=item, id=f"list-editor-input-{index}", placeholder=self._placeholder
-            ),
-            Button(self._remove_label, id=f"list-editor-del-{index}", variant="error"),
+    def _row(self, token: str, item: str) -> Horizontal:
+        input_widget = CenteredInput(
+            value=item, id=f"list-editor-input-{token}", placeholder=self._placeholder
+        )
+        row = Horizontal(
+            input_widget,
+            Button(self._remove_label, id=f"list-editor-del-{token}", variant="error"),
             classes="list-editor-row",
         )
+        self._row_refs[token] = row
+        self._input_refs[token] = input_widget
+        return row
+
+    def _token(self) -> str:
+        token = str(self._next_token)
+        self._next_token += 1
+        self._row_tokens.append(token)
+        return token
 
     def compose(self) -> ComposeResult:
         with Vertical(id="list-editor-rows"):
             rows = self.items if self.items else [""]
-            for index, item in enumerate(rows):
-                yield self._row(index, item)
+            for item in rows:
+                yield self._row(self._token(), item)
         yield Button(self._add_label, id="list-editor-add", variant="success")
-
-    async def _render_rows(self) -> None:
-        container = self.query_one("#list-editor-rows", Vertical)
-        await container.remove_children()
-        rows = self.items if self.items else [""]
-        for index, item in enumerate(rows):
-            await container.mount(self._row(index, item))
 
     def _all_row_values(self) -> list[str]:
         """Every row's typed value (empty rows included)."""
-        return [row.value for row in self.query(Input)]
+        return [self._input_refs[token].value for token in self._row_tokens]
 
     def _current_values(self) -> list[str]:
-        """Non-empty typed values across all rows."""
         return [value.strip() for value in self._all_row_values() if value.strip()]
 
+    async def _append_row(self, value: str = "") -> CenteredInput:
+        token = self._token()
+        row = self._row(token, value)
+        await self.query_one("#list-editor-rows", Vertical).mount(row)
+        return self._input_refs[token]
+
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Enter in a row adds a new empty row below and focuses it."""
-        input_id = event.input.id or ""
-        if not input_id.startswith("list-editor-input-"):
+        if (event.input.id or "") not in {
+            f"list-editor-input-{token}" for token in self._row_tokens
+        }:
             return
-        # commit what is in this row, then open a fresh row beneath
-        self.items = self._all_row_values()
-        self.items.append("")
-        await self._render_rows()
-        new_index = len(self.items) - 1
-        new_input = self.query_one(f"#list-editor-input-{new_index}", CenteredInput)
-        new_input.focus()  # pyright: ignore[reportUnknownMemberType]
+        self.items = self._current_values()
+        (await self._append_row()).focus()  # pyright: ignore[reportUnknownMemberType]
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "list-editor-add":
-            self.items = self._all_row_values()
-            self.items.append("")
-            await self._render_rows()
-            new_index = len(self.items) - 1
-            new_input = self.query_one(f"#list-editor-input-{new_index}", CenteredInput)
-            new_input.focus()  # pyright: ignore[reportUnknownMemberType]
+            self.items = self._current_values()
+            (await self._append_row()).focus()  # pyright: ignore[reportUnknownMemberType]
             return
-        if button_id.startswith("list-editor-del-"):
-            index = int(button_id[len("list-editor-del-") :])
-            rows = self._all_row_values()
-            if 0 <= index < len(rows):
-                rows.pop(index)
-                self.items = rows if rows else [""]
-                await self._render_rows()
+        if not button_id.startswith("list-editor-del-"):
+            return
+        token = button_id[len("list-editor-del-") :]
+        if token not in self._row_tokens:
+            return
+        index = self._row_tokens.index(token)
+        row = self._row_refs.pop(token)
+        self._input_refs.pop(token)
+        self._row_tokens.pop(index)
+        await row.remove()
+        if not self._row_tokens:
+            new_input = await self._append_row()
+        else:
+            new_input = self._input_refs[self._row_tokens[min(index, len(self._row_tokens) - 1)]]
+        self.items = self._current_values()
+        new_input.focus()  # pyright: ignore[reportUnknownMemberType]
 
     def value(self) -> list[str]:
         """Current non-empty items (what is typed in the rows)."""

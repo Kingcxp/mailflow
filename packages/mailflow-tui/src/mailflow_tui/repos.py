@@ -3,7 +3,6 @@ connections from the TUI (the same surface as `plugin repo add|remove`)."""
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any, ClassVar
 
 from mailflow.service import MailFlowService
@@ -24,7 +23,7 @@ class ReposScreen(ModalScreen[bool | None]):
         super().__init__()
         self._service = service
         self._editing_name: str | None = None
-        self._original_url: str = ""
+        self._status_by_name: dict[str, str] = {}
         self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -50,13 +49,43 @@ class ReposScreen(ModalScreen[bool | None]):
         table: DataTable[Any] = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         table.add_column(self._t("plugin.header_name"), key="name")  # pyright: ignore[reportUnknownMemberType]
         table.add_column(self._t("tui.repos_url_header"), key="url")  # pyright: ignore[reportUnknownMemberType]
+        table.add_column(self._t("tui.repos_status_header"), key="status")  # pyright: ignore[reportUnknownMemberType]
         self._reload()
+        self.run_worker(
+            self._refresh_status(), exclusive=True, group="repo-status", exit_on_error=False
+        )
 
     def _reload(self) -> None:
         table: DataTable[Any] = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         table.clear()  # pyright: ignore[reportUnknownMemberType]
+        checking = self._t("tui.repo_status_checking")
         for repo in self._service.config.plugins.repositories:
-            table.add_row(repo.name, repo.url, key=repo.name)  # pyright: ignore[reportUnknownMemberType]
+            table.add_row(
+                repo.name,
+                repo.url,
+                self._status_by_name.get(repo.name, checking),
+                key=repo.name,
+            )  # pyright: ignore[reportUnknownMemberType]
+
+    async def _refresh_status(self) -> None:
+        try:
+            statuses = await self._service.market_repository_statuses()
+        except Exception as exc:
+            message = error_message(self._service, exc)
+            self._status_by_name = {
+                repo.name: self._t("tui.repo_status_failed", error=message)
+                for repo in self._service.config.plugins.repositories
+            }
+        else:
+            self._status_by_name = {
+                status.repository.name: (
+                    self._t("tui.repo_status_ok", count=status.plugin_count)
+                    if status.ok
+                    else self._t("tui.repo_status_failed", error=status.error)
+                )
+                for status in statuses
+            }
+        self._reload()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -76,18 +105,15 @@ class ReposScreen(ModalScreen[bool | None]):
             row_values = table.get_row_at(table.cursor_row)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         except Exception:
             return
-        name, url = str(row_values[0]), str(row_values[1])
+        name = str(row_values[0])
         self._editing_name = name
-        self._original_url = url
         self.query_one("#repos-name", Input).value = name
-        self.query_one("#repos-url", Input).value = url
         add_button = self.query_one("#repos-add", Button)
         add_button.label = self._t("tui.repos_update")
         add_button.variant = "primary"
 
     def _reset_edit_state(self) -> None:
         self._editing_name = None
-        self._original_url = ""
         self.query_one("#repos-name", Input).value = ""
         self.query_one("#repos-url", Input).value = ""
         add_button = self.query_one("#repos-add", Button)
@@ -101,24 +127,19 @@ class ReposScreen(ModalScreen[bool | None]):
             self.notify(self._t("tui.repos_missing_fields"), severity="error", timeout=6)
             return
         editing = self._editing_name
-        original_url = self._original_url or url
         try:
             if editing is not None:
-                # editing an existing entry: drop the old row first, then add
-                # the replacement (covers both rename and same-name edits)
-                await self._service.plugin_repo_remove(editing)
-            await self._service.plugin_repo_add(name, url)
+                await self._service.plugin_repo_edit(editing, name, url)
+            else:
+                await self._service.plugin_repo_add(name, url)
         except (KeyError, ValueError) as exc:
-            # restore the original entry so an edit cannot lose a repo; the
-            # restore uses the URL captured when the row was selected, not
-            # the (possibly half-typed) edited URL
-            if editing is not None:
-                with contextlib.suppress(Exception):
-                    await self._service.plugin_repo_add(editing, original_url)
             self.notify(error_message(self._service, exc), severity="error", timeout=6)
             return
         self._reset_edit_state()
         self._reload()
+        self.run_worker(
+            self._refresh_status(), exclusive=True, group="repo-status", exit_on_error=False
+        )
         self.notify(self._t("plugin.repo_added", name=name), timeout=5)
 
     async def _remove_repo(self) -> None:
@@ -135,4 +156,7 @@ class ReposScreen(ModalScreen[bool | None]):
             self.notify(error_message(self._service, exc), severity="error", timeout=6)
             return
         self._reload()
+        self.run_worker(
+            self._refresh_status(), exclusive=True, group="repo-status", exit_on_error=False
+        )
         self.notify(self._t("plugin.repo_removed", name=name), timeout=5)

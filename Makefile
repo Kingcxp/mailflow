@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help sync test coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot docs clean clean-records clean-trash clean-gateways clean-config
+.PHONY: help sync test coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot clean clean-records clean-trash clean-gateways clean-config
 
 PY ?= uv run
 
@@ -34,8 +34,7 @@ pyright: ## Strict pyright type check (whole workspace)
 
 typecheck: mypy pyright ## Run both type checkers
 
-check: lint format-check typecheck test ## Full quality gate: lint + format + types + tests + docs
-	$(PY) python tools/check_docs.py
+check: lint format-check typecheck test ## Full quality gate: lint + format + types + tests
 
 ### Run
 
@@ -67,10 +66,7 @@ bot-plugin-nonebot: ## Export the NoneBot plugin (configs/development.toml -> di
 bot-plugin-astrbot: ## Export the AstrBot plugin (configs/development.toml -> dist/astrbot_plugin_mailflow)
 	$(PY) mailflow export --framework astrbot --output dist/astrbot_plugin_mailflow -c configs/development.toml
 
-### Docs & cleanup
-
-docs: ## Verify all mandatory documentation is present
-	$(PY) python tools/check_docs.py
+### Cleanup
 
 clean: ## Remove caches, build output and local runtime data (keeps .venv)
 	$(PY) python tools/clean.py

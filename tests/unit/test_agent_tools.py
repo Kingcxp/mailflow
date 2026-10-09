@@ -311,28 +311,63 @@ class TestFindMail:
 
         assert "could not be checked" in text
         assert "retry" in text
+        assert "search_id:" not in text
+        assert "incomplete" in text
+
+    async def test_search_token_stages_every_match_beyond_preview_limit(self) -> None:
+        service = make_service()
+        storage = cast(Any, service.storage)
+        for index in range(45):
+            mail = make_mail(f"mail-{index}", subject=f"Seminar {index}", minute=index)
+            await storage.save_mail(MailRecord(record_id=f"mail-{index}", mail=mail))
+        registry = ToolRegistry(service, allow_mail_delete=True)
+
+        text, staged = await registry.call("find_mail", {"contains": "seminar", "limit": 2})
+
+        assert staged is None
+        assert "matched: 45 mail(s); showing 2" in text
+        assert text.count("- id=") == 2
+        token_line = next(line for line in text.splitlines() if line.startswith("search_id: "))
+        search_id = token_line.removeprefix("search_id: ")
+        _, pending = await registry.call("delete_mail", {"search_id": search_id})
+
+        expected_ids = [f"mail-{index}" for index in reversed(range(45))]
+        assert pending is not None
+        assert pending.record_ids == expected_ids
+        assert pending.arguments["record_ids"] == expected_ids
+        assert await service.count_mails() == 45
+        repeated, no_pending = await registry.call("delete_mail", {"search_id": search_id})
+        assert repeated.startswith("error:")
+        assert no_pending is None
+        assert await service.count_mails() == 45
 
 
 class TestStagingTools:
     """Mutating tools describe what would happen and change nothing."""
 
-    async def test_delete_mail_stages_and_leaves_storage_alone(self) -> None:
+    async def test_delete_mail_stages_only_with_explicit_authorization(self) -> None:
         service = make_service()
         await seed(service)
-        registry = ToolRegistry(service)
+        denied = ToolRegistry(service)
 
-        text, staged = await registry.call("delete_mail", {"record_ids": ["a"]})
+        text, staged = await denied.call("delete_mail", {"record_ids": ["a"]})
 
+        assert text == "error: mail deletion requires an explicit delete request"
+        assert staged is None
+        assert await service.count_mails() == 3
+
+        allowed = ToolRegistry(service, allow_mail_delete=True)
+        text, staged = await allowed.call("delete_mail", {"record_ids": ["a"]})
         assert "staged" in text
         assert staged is not None
         assert staged.tool == "delete_mail"
         assert staged.record_ids == ["a"]
-        assert await service.count_mails() == 3  # nothing moved
+        assert await service.count_mails() == 3  # only confirmation may write
 
     async def test_delete_mail_rejects_an_unknown_id(self) -> None:
         service = make_service()
         await seed(service)
-        registry = ToolRegistry(service)
+        registry = ToolRegistry(service, allow_mail_delete=True)
 
         text, staged = await registry.call("delete_mail", {"record_ids": ["nope"]})
 
@@ -343,7 +378,7 @@ class TestStagingTools:
     async def test_delete_mail_accepts_a_comma_string(self) -> None:
         service = make_service()
         await seed(service)
-        registry = ToolRegistry(service)
+        registry = ToolRegistry(service, allow_mail_delete=True)
 
         _, staged = await registry.call("delete_mail", {"record_ids": "a, c"})
 
@@ -359,13 +394,22 @@ class TestStagingTools:
             {
                 "title": "Colloquium",
                 "starts_at": "2099-10-15T14:00:00+08:00",
+                "due_end": "2099-10-15T16:00:00+08:00",
+                "action_type": "registration",
                 "location": "Room 201",
+                "url": "https://example.com/event",
+                "notes": "Bring the signed form",
             },
         )
 
         assert "staged" in text
         assert staged is not None
         assert staged.tool == "schedule_event"
+        assert staged.arguments["due_end"] == "2099-10-15T08:00:00+00:00"
+        assert staged.arguments["action_type"] == "registration"
+        assert staged.arguments["location"] == "Room 201"
+        assert staged.arguments["url"] == "https://example.com/event"
+        assert staged.arguments["notes"] == "Bring the signed form"
         assert await service.storage.list_custom_actions() == []  # type: ignore[attr-defined]
 
     async def test_schedule_event_rejects_a_past_time(self) -> None:
@@ -397,14 +441,41 @@ class TestStagingTools:
 
         _, add = await registry.call(
             "add_action",
-            {"summary": "Submit the form", "due_at": "2099-05-01T09:00:00+00:00"},
+            {
+                "summary": "Submit the form",
+                "due_at": "2099-05-01T09:00:00+00:00",
+                "due_end": "2099-05-01T10:00:00+00:00",
+                "action_type": "registration",
+                "notes": "Sign page 2",
+                "location": "Office 4",
+                "url": "https://example.com/form",
+            },
         )
         assert add is not None and add.tool == "add_action"
+        assert add.arguments["due_end"] == "2099-05-01T10:00:00+00:00"
+        assert add.arguments["action_type"] == "registration"
+        assert add.arguments["notes"] == "Sign page 2"
+        assert add.arguments["location"] == "Office 4"
+        assert add.arguments["url"] == "https://example.com/form"
         assert await service.list_actions_all() == []
 
         item = await service.add_action("Existing", datetime(2099, 6, 1, 9, tzinfo=UTC))
-        _, edit = await registry.call("edit_action", {"item_id": item.item_id, "summary": "New"})
+        _, edit = await registry.call(
+            "edit_action",
+            {
+                "item_id": item.item_id,
+                "summary": "New",
+                "action_type": "committee",
+                "due_end": "2099-06-01T11:00:00+00:00",
+                "location": "Room 7",
+                "url": "https://example.com/updated",
+            },
+        )
         assert edit is not None
+        assert edit.arguments["action_type"] == "committee"
+        assert edit.arguments["due_end"] == "2099-06-01T11:00:00+00:00"
+        assert edit.arguments["location"] == "Room 7"
+        assert edit.arguments["url"] == "https://example.com/updated"
         assert edit.arguments["summary"] == "New"
         assert (await service.list_actions_all())[0].summary == "Existing"
 
@@ -523,6 +594,15 @@ class TestMiscTools:
             "schedule_seminar",
             "schedule_seminars",
         }
+        by_name = {spec["function"]["name"]: spec["function"]["parameters"] for spec in specs}
+        delete_properties = by_name["delete_mail"]["properties"]
+        assert {"record_ids", "search_id"} <= delete_properties.keys()
+        for name, fields in {
+            "schedule_event": {"due_end", "action_type", "location", "url", "notes"},
+            "add_action": {"due_end", "location", "url"},
+            "edit_action": {"due_end", "clear_end", "location", "url"},
+        }.items():
+            assert fields <= by_name[name]["properties"].keys()
         for spec in specs:
             assert spec["type"] == "function"
             assert spec["function"]["description"]

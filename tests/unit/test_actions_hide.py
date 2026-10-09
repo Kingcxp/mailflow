@@ -12,7 +12,13 @@ if TYPE_CHECKING:
 
 import pytest
 from mailflow.config import MailFlowConfig
-from mailflow.domain import ActionItem, ActionOrigin
+from mailflow.domain import (
+    ActionItem,
+    ActionOrigin,
+    action_time_window,
+    actions_duplicate,
+    dedupe_actions,
+)
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.pipeline import PipelineEngine
@@ -67,10 +73,6 @@ def service() -> MailFlowService:
     return svc
 
 
-# An exact instant, not now+N days: the dedupe keys on a two-hour bucket of
-# the start time, so a wall-clock base made a 30-minute gap straddle a bucket
-# boundary whenever the suite happened to run near one (a flaky failure having
-# nothing to do with the behaviour under test).
 _DUE = datetime(2097, 11, 2, 6, 0, tzinfo=UTC)
 
 
@@ -290,7 +292,7 @@ async def test_imported_seminar_delete_is_real(service: MailFlowService) -> None
 
 
 class TestEventDedupe:
-    """Two mails reminding of one event must not become two schedule entries."""
+    """Schedule visibility uses normalized summaries and exact overlap."""
 
     @staticmethod
     def _item(
@@ -299,71 +301,100 @@ class TestEventDedupe:
         mail_id: str,
         summary: str = "毕业论文答辩",
         due_at: datetime | None = None,
+        due_end: datetime | None = None,
+        action_type: str = "meeting",
     ) -> ActionItem:
         return ActionItem(
             item_id=item_id,
             mail_id=mail_id,
             summary=summary,
-            action_type="meeting",
+            action_type=action_type,
             due_at=due_at or _DUE,
+            due_end=due_end,
         )
 
-    async def test_two_mails_reminding_the_same_event_collapse(
+    async def test_duplicate_points_collapse_but_audit_list_keeps_both(
         self, service: MailFlowService
     ) -> None:
         store = cast(Any, service.storage)
         first = self._item("a", mail_id="mail-1", due_at=_DUE)
-        # the reminder arrives 30 minutes after the original notice
-        second = self._item("b", mail_id="mail-2", due_at=_DUE + timedelta(minutes=30))
+        second = self._item("b", mail_id="mail-2", due_at=_DUE, action_type="exam")
         store.mails["mail-1"] = cast(Any, type("R", (), {"action_items": [first]}))
         store.mails["mail-2"] = cast(Any, type("R", (), {"action_items": [second]}))
 
         listed = await service.list_actions()
 
-        assert len(listed) == 1
-        assert listed[0].item_id == "a"  # the earliest statement of the event
-        # the unfiltered list keeps both, because the delete path addresses one
+        assert [item.item_id for item in listed] == ["a"]
         assert len(await service.list_actions_all()) == 2
 
-    async def test_events_five_hours_apart_stay_separate(self, service: MailFlowService) -> None:
-        store = cast(Any, service.storage)
-        first = self._item("a", mail_id="mail-1", due_at=_DUE)
-        second = self._item("b", mail_id="mail-2", due_at=_DUE + timedelta(hours=5))
-        store.mails["mail-1"] = cast(Any, type("R", (), {"action_items": [first]}))
-        store.mails["mail-2"] = cast(Any, type("R", (), {"action_items": [second]}))
-
-        assert len(await service.list_actions()) == 2
-
-    async def test_different_events_at_the_same_time_stay_separate(
+    async def test_points_at_different_times_remain_distinct(
         self, service: MailFlowService
     ) -> None:
+        first = self._item("a", mail_id="mail-1", due_at=_DUE)
+        second = self._item("b", mail_id="mail-2", due_at=_DUE + timedelta(minutes=30))
         store = cast(Any, service.storage)
-        first = self._item("a", mail_id="mail-1", summary="线性代数考试")
-        second = self._item("b", mail_id="mail-2", summary="小组会议")
         store.mails["mail-1"] = cast(Any, type("R", (), {"action_items": [first]}))
         store.mails["mail-2"] = cast(Any, type("R", (), {"action_items": [second]}))
 
         assert len(await service.list_actions()) == 2
 
-    async def test_a_seminar_marker_does_not_break_identity(self, service: MailFlowService) -> None:
-        """An imported seminar and a mail-derived reminder for it are one event."""
-        store = cast(Any, service.storage)
-        derived = self._item("a", mail_id="mail-1", summary="人工智能前沿讲座")
-        imported = self._item(
-            "b", mail_id="mail-2", summary="[SEMINAR] 人工智能前沿讲座", due_at=_DUE
-        )
-        store.mails["mail-1"] = cast(Any, type("R", (), {"action_items": [derived]}))
-        store.mails["mail-2"] = cast(Any, type("R", (), {"action_items": [imported]}))
+    async def test_point_inside_window_duplicates_but_end_boundary_does_not(self) -> None:
+        window = self._item("w", mail_id="m1", due_at=_DUE, due_end=_DUE + timedelta(hours=1))
+        inside = self._item("p", mail_id="m2", due_at=_DUE + timedelta(minutes=30))
+        boundary = self._item("b", mail_id="m3", due_at=_DUE + timedelta(hours=1))
 
-        assert len(await service.list_actions()) == 1
+        assert actions_duplicate(window, inside)
+        assert not actions_duplicate(window, boundary)
 
-    async def test_an_empty_summary_is_never_collapsed(self, service: MailFlowService) -> None:
-        store = cast(Any, service.storage)
-        store.mails["mail-1"] = cast(
-            Any, type("R", (), {"action_items": [self._item("a", mail_id="m1", summary="  ")]})
+    async def test_windows_require_positive_overlap(self) -> None:
+        first = self._item("a", mail_id="m1", due_at=_DUE, due_end=_DUE + timedelta(hours=1))
+        overlap = self._item(
+            "b",
+            mail_id="m2",
+            due_at=_DUE + timedelta(minutes=30),
+            due_end=_DUE + timedelta(hours=2),
         )
-        store.mails["mail-2"] = cast(
-            Any, type("R", (), {"action_items": [self._item("b", mail_id="m2", summary="")]})
+        boundary = self._item(
+            "c",
+            mail_id="m3",
+            due_at=_DUE + timedelta(hours=1),
+            due_end=_DUE + timedelta(hours=2),
         )
 
-        assert len(await service.list_actions()) == 2
+        assert actions_duplicate(first, overlap)
+        assert not actions_duplicate(first, boundary)
+
+    async def test_whitespace_casefold_and_type_normalization(self) -> None:
+        left = self._item(
+            "a",
+            mail_id="m1",
+            summary="  Final   EXAM ",
+            due_at=_DUE,
+        )
+        right = self._item(
+            "b",
+            mail_id="m2",
+            summary="final exam",
+            due_at=_DUE,
+            action_type="exam",
+        )
+
+        assert actions_duplicate(left, right)
+        assert dedupe_actions([left, right]) == [left]
+
+        equal_time_later_input = right.model_copy(update={"item_id": "c"})
+        assert dedupe_actions([equal_time_later_input, right]) == [equal_time_later_input]
+
+    async def test_blank_summaries_and_seminar_markers_are_not_rewritten(self) -> None:
+        blank_left = self._item("a", mail_id="m1", summary="  ")
+        blank_right = self._item("b", mail_id="m2", summary="")
+        plain = self._item("c", mail_id="m3", summary="人工智能前沿讲座")
+        marked = self._item("d", mail_id="m4", summary="[SEMINAR] 人工智能前沿讲座")
+
+        assert not actions_duplicate(blank_left, blank_right)
+        assert not actions_duplicate(plain, marked)
+
+    async def test_nonpositive_window_end_is_treated_as_a_point(self) -> None:
+        point = self._item("a", mail_id="m1", due_at=_DUE, due_end=_DUE)
+
+        assert action_time_window(point) == (_DUE, _DUE)

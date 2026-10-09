@@ -77,7 +77,7 @@ notifiers, storage — installed from a plugin marketplace.
   pick; picked mails take the same pipeline path as live mail, and
   already-analyzed mail is skipped.
 - **Quality gates** — 318 unit/integration/e2e tests, mypy & pyright strict,
-  ruff lint + format, Nuitka standalone/onefile executables, docs gate.
+  ruff lint + format, Nuitka standalone/onefile executables.
 
 ## Install
 
@@ -241,7 +241,7 @@ text as read and a gap-closed form.
 
 ```bash
 make help           # grouped, colored list of every target
-make check          # lint + format + mypy + pyright + pytest + docs gate
+make check          # lint + format + mypy + pyright + pytest
 make coverage       # per-package coverage report
 make build          # wheels for every package
 make bot-plugin-nonebot | bot-plugin-astrbot   # export the NoneBot / AstrBot plugin
@@ -257,8 +257,6 @@ make exe-onefile
 | Architecture | [overview](docs/architecture/overview.md) · [domain & mail](docs/architecture/domain-and-mail.md) · [plugins](docs/architecture/plugin-system.md) · [pipeline](docs/architecture/pipeline.md) · [LLM](docs/architecture/llm.md) · [logging](docs/architecture/logging.md) · [storage & retention](docs/architecture/storage-and-retention.md) · [replies](docs/architecture/replies.md) · [TUI](docs/architecture/tui.md) · [bot export](docs/architecture/bot-export.md) · [bot login](docs/architecture/bot-login.md) · [notifications & plugins](docs/architecture/tui-notifications-and-plugin-ecosystem.md) |
 | Development | [setup](docs/development/setup.md) · [deployment](docs/development/deployment.md) · [embedding](docs/development/embedding.md) · [tests](docs/development/tests.md) · [quality](docs/development/quality.md) · [packaging](docs/development/packaging.md) |
 | Plugin development | [overview](docs/plugin-development/overview.md) · [mail source](docs/plugin-development/mail-source.md) · [processor](docs/plugin-development/processor.md) · [LLM backend](docs/plugin-development/llm-backend.md) · [notifier](docs/plugin-development/notifier.md) · [storage](docs/plugin-development/storage.md) · [bot exporter](docs/plugin-development/bot-exporter.md) |
-| Configuration | [overview](docs/configuration/overview.md) · [i18n](docs/configuration/i18n.md) |
-| For AI agents | [invariants](docs/agent/invariants.md) · [module map](docs/agent/module-map.md) · [change playbook](docs/agent/change-playbook.md) |
 | Decisions | [ADRs](docs/adr/0001-uv-workspace.md) · [0002-pluggy-pipeline](docs/adr/0002-pluggy-pipeline.md) · [0003-host-independent-core](docs/adr/0003-host-independent-core.md) |
 | Build history | [BUILD_LOG](docs/build-log/BUILD_LOG.md) · [简体中文 README](README.zh-CN.md) |
 
@@ -278,6 +276,12 @@ hosts the marketplace: one folder per plugin, grouped by category, so adding
 a plugin is a single pull request that never touches other plugins' files.
 Its docs/ folder is the plugin-development guide, and a pull-request
 workflow validates exactly the plugins each PR changes.
+
+Marketplace refreshes report each repository independently. If a repository is
+offline, the TUI and commands keep its last repository-aware cache marked as
+stale; successful empty repositories clear their old entries. Remote and local
+installs share the same provenance bookkeeping, while bundled plugins can be
+disabled but never uninstalled.
 
 **Write your own plugin** — the TUI has a new-plugin wizard (Market tab →
 New): pick a folder in the directory tree, optionally create a subfolder,

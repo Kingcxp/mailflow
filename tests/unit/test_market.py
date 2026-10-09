@@ -7,7 +7,15 @@ import json
 from pathlib import Path
 
 import pytest
-from mailflow.plugin_market import MarketPlugin, PluginMarket, Repository
+from mailflow.plugin_market import (
+    MarketFetchReport,
+    MarketPlugin,
+    PluginMarket,
+    Repository,
+    deserialize_market_cache,
+    merge_market_cache,
+    serialize_market_cache,
+)
 
 INDEX = {
     "name": "test-market",
@@ -69,6 +77,98 @@ class TestPluginMarket:
         assert plugin.description == "A plugin used in tests"
         assert plugin.readme.startswith("## Test Plugin")
 
+    def test_report_deduplicates_plugin_id_across_categories(self, tmp_path: Path) -> None:
+        repository_root = tmp_path / "duplicate"
+        plugin_second = {**PLUGIN_A, "name": "Second category copy"}
+        (repository_root / "processor" / "mailflow-test-plugin").mkdir(parents=True)
+        (repository_root / "storage" / "mailflow-test-plugin").mkdir(parents=True)
+        (repository_root / "index.json").write_text(json.dumps(INDEX), encoding="utf-8")
+        (repository_root / "processor" / "mailflow-test-plugin" / "plugin.json").write_text(
+            json.dumps(PLUGIN_A), encoding="utf-8"
+        )
+        (repository_root / "storage" / "mailflow-test-plugin" / "plugin.json").write_text(
+            json.dumps(plugin_second), encoding="utf-8"
+        )
+        market = PluginMarket([Repository("duplicate", repository_root.as_uri())])
+
+        report = market.list_plugins_report()
+
+        assert report.failures == []
+        assert len(report.entries) == 1
+        assert report.entries[0][1].name == "Test Plugin"
+        assert market.list_plugins() == report.entries
+
+    def test_report_keeps_configured_order_and_first_duplicate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        broken = Repository("broken", "https://broken.invalid")
+        first = Repository("first", "https://first.invalid")
+        second = Repository("second", "https://second.invalid")
+        market = PluginMarket([broken, first, second])
+        first_plugin = MarketPlugin.model_validate(PLUGIN_A)
+        duplicate_plugin = MarketPlugin.model_validate({**PLUGIN_A, "name": "Duplicate"})
+        second_plugin = MarketPlugin.model_validate(PLUGIN_B)
+
+        def fetch(repository: Repository, _timeout: float) -> list[MarketPlugin]:
+            if repository == broken:
+                raise RuntimeError(
+                    "access_token=private-token Authorization: Bearer auth-secret "
+                    "https://user:password@host.invalid"
+                )
+            if repository == first:
+                return [first_plugin]
+            return [duplicate_plugin, second_plugin]
+
+        monkeypatch.setattr(market, "fetch_index", fetch)
+        report = market.list_plugins_report()
+
+        assert [repository.name for repository, _plugin in report.entries] == ["first", "second"]
+        assert report.entries[0][1].name == first_plugin.name
+        assert len(report.failures) == 1
+        failed_repository, reason = report.failures[0]
+        assert failed_repository == broken
+        assert "private-token" not in reason
+        assert "user:password" not in reason
+        assert "auth-secret" not in reason
+
+    def test_report_contains_status_for_every_repository(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        good = Repository("good", "https://good.invalid")
+        broken = Repository("broken", "https://broken.invalid")
+        market = PluginMarket([good, broken])
+        plugin = MarketPlugin.model_validate(PLUGIN_A)
+
+        def fetch(repository: Repository, _timeout: float) -> list[MarketPlugin]:
+            if repository == broken:
+                raise RuntimeError("offline")
+            return [plugin]
+
+        monkeypatch.setattr(market, "fetch_index", fetch)
+        report = market.list_plugins_report()
+
+        assert [
+            (status.repository.name, status.ok, status.plugin_count)
+            for status in report.repositories
+        ] == [
+            ("good", True, 1),
+            ("broken", False, 0),
+        ]
+        assert report.repositories[1].error == "offline"
+
+    def test_find_and_search_use_deduplicated_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        first = Repository("first", "https://first.invalid")
+        market = PluginMarket([first])
+        plugin = MarketPlugin.model_validate(PLUGIN_A)
+
+        def duplicate_fetch(_repository: Repository, _timeout: float) -> list[MarketPlugin]:
+            return [plugin, plugin]
+
+        monkeypatch.setattr(market, "fetch_index", duplicate_fetch)
+
+        assert market.find(plugin.id) == (first, plugin)
+        assert market.search("tests") == [(first, plugin)]
+
     def test_find(self, market: PluginMarket) -> None:
         found = market.find("mailflow-test-plugin")
         assert found is not None
@@ -126,3 +226,64 @@ class TestPluginMetadata:
         _repo, entry = plugin
         assert entry.author == "tester"
         assert entry.updated == "2026-07-15"
+
+
+class TestMarketCache:
+    def test_versioned_cache_preserves_source_and_skips_bad_entries(self) -> None:
+        source = Repository("origin", "https://example.invalid/index")
+        raw = serialize_market_cache([(source, MarketPlugin.model_validate(PLUGIN_A))])
+        payload = json.loads(raw)
+        assert payload["version"] == 1
+        assert payload["entries"][0]["repository"] == {
+            "name": source.name,
+            "url": source.url,
+        }
+        payload["entries"].extend(
+            [
+                {"repository": {"name": "broken", "url": ""}, "plugin": {"name": "missing id"}},
+                None,
+            ]
+        )
+
+        loaded = deserialize_market_cache(json.dumps(payload))
+
+        assert len(loaded) == 1
+        repository, plugin = loaded[0]
+        assert (repository.name, repository.url) == (source.name, source.url)
+        assert repository.stale is True
+        assert plugin.id == PLUGIN_A["id"]
+
+    def test_legacy_cache_uses_unknown_stale_source_and_skips_bad_items(self) -> None:
+        loaded = deserialize_market_cache(json.dumps([PLUGIN_A, {"name": "missing id"}, None]))
+
+        assert len(loaded) == 1
+        repository, plugin = loaded[0]
+        assert (repository.name, repository.url) == ("cache", "")
+        assert repository.stale is True
+        assert plugin.id == PLUGIN_A["id"]
+
+    def test_merge_cache_only_for_failed_sources_and_deduplicates(self) -> None:
+        fresh_repo = Repository("fresh", "https://fresh.invalid")
+        failed_repo = Repository("failed", "https://failed.invalid")
+        fresh = MarketPlugin.model_validate(PLUGIN_A)
+        cached_failed = MarketPlugin(id="cached-failed", name="Cached failed")
+        cached_fresh = MarketPlugin(id="cached-fresh", name="Stale fresh")
+        report = MarketFetchReport(
+            entries=[(fresh_repo, fresh)],
+            failures=[(failed_repo, "offline")],
+        )
+        merged = merge_market_cache(
+            report,
+            [
+                (failed_repo, cached_failed),
+                (fresh_repo, cached_fresh),
+                (failed_repo, fresh),
+            ],
+        )
+
+        assert [plugin.id for _repo, plugin in merged.entries] == [fresh.id, cached_failed.id]
+        assert merged.used_cache is True
+
+    def test_invalid_cache_payload_is_empty(self) -> None:
+        assert deserialize_market_cache("not json") == []
+        assert deserialize_market_cache('{"version":99,"entries":[]}') == []

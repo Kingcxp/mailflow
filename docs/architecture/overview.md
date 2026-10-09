@@ -52,8 +52,9 @@ Everything a host needs lives on `MailFlowService`:
 - Mailbox history — `history_accounts`, `fetch_history` (browse mail that
   arrived before MailFlow was configured), `is_mail_known`, `process_mail`
   (analyze a user-picked mail through the normal pipeline path).
-- Marketplace — `service.market` (fetch indexes, browse, install) and
-  `plugin_repo_add/remove`.
+- Marketplace — `service.market` (fetch indexes, browse, install),
+  `market_fetch_report` (isolated repository outcomes plus stale-cache fallback),
+  `market_repository_statuses`, and `plugin_repo_add/remove`.
 - Updates — `check_updates`, `apply_updates`, `installed_plugin_versions`.
 - Events — `service.on("mailflow.mail.processed" | "mailflow.action.reminder"
   | "mail.deleted" | ...)`; runtime events are `mailflow.`-prefixed. The full

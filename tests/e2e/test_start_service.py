@@ -41,6 +41,7 @@ EXAM_JSON = """{
   "action_items": [
     {
       "summary": "Attend final calculus exam",
+      "must_do": true,
       "action_type": "exam",
       "due_at": "2036-06-10T09:00:00+00:00",
       "due_end": "2036-06-10T11:00:00+00:00",

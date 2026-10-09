@@ -19,6 +19,7 @@ from mailflow.domain import (
     ActionItem,
     ActionOrigin,
     MailRecord,
+    PendingOperation,
     ReplyDraft,
     SmartActionResult,
     Urgency,
@@ -35,6 +36,7 @@ from textual.screen import ModalScreen
 from textual.widget import MountError
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -57,8 +59,10 @@ from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.profile import UserProfileModal
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
+from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.seminars import SeminarReviewModal
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
+from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 
 logger = logging.getLogger("mailflow.tui")
@@ -95,20 +99,6 @@ def _action_time_range(service: MailFlowService, item: ActionItem) -> str:
     if item.due_end is None or item.due_end == item.due_at:
         return start
     return f"{start} ~ {_localize(service, item.due_end)}"
-
-
-def _event_notes(arguments: dict[str, Any]) -> str:
-    """Fold a staged schedule_event's optional fields into one notes string.
-
-    ``add_action`` stores a single notes text, so the location/url/end time the
-    model supplied are kept there rather than dropped on the way in.
-    """
-    parts: list[str] = []
-    for key in ("ends_at", "location", "url", "notes"):
-        value = str(arguments.get(key) or "").strip()
-        if value:
-            parts.append(f"{key}: {value}")
-    return "\n".join(parts)
 
 
 def _remove_column(table: DataTable[Any], key: str) -> None:
@@ -495,6 +485,9 @@ class MailPane(Vertical):
         # changes, reload-all); concurrent clear+add_row passes interleave
         # into DuplicateKeys — serialize them
         self._refresh_lock = asyncio.Lock()
+        self._mail_filter_generation = 0
+        self._mail_matcher = SearchMatcher("")
+        self._smart_progress_started = False
         # smart search: while active, the table shows ONLY the LLM-picked
         # results; cancel restores the previous view. The snapshot is the
         # full record list taken when the search started.
@@ -502,6 +495,7 @@ class MailPane(Vertical):
         self._smart_action_task: asyncio.Task[SmartActionResult] | None = None
         self._smart_spinner_task: asyncio.Task[None] | None = None
         self._smart_action_result: SmartActionResult | None = None
+        self._smart_review_result: SmartActionResult | None = None
         # one-shot status line for the next mail render (e.g. what a confirmed
         # operation applied); cleared as soon as it has been shown
         self._pending_status_hint = ""
@@ -526,7 +520,10 @@ class MailPane(Vertical):
             yield Input(
                 placeholder=self._service.t("tui.smart_action_placeholder"), id="mail-search"
             )
+            yield Checkbox(self._service.t("tui.search_regex"), id="mail-search-regex")
+            yield Checkbox(self._service.t("tui.search_case"), id="mail-search-case")
             yield Button(self._service.t("tui.smart_action"), id="smart-action", variant="primary")
+        yield RichLog(id="smart-action-progress", max_lines=8, wrap=True)
         yield Static("", id="mail-empty-hint")
         with Horizontal():
             yield DataTable(id="mail-table")
@@ -746,54 +743,184 @@ class MailPane(Vertical):
                     reasons="; ".join(result.failure_reasons) or "?",
                 )
             )
+        progress_log = self.query_one_optional("#smart-action-progress", RichLog)
+        if progress_log is not None:
+            progress_log.write(
+                "; ".join(hints) if hints else self._service.t("tui.smart_action_done")
+            )
         status_hint = f"[yellow]{'; '.join(hints)}[/yellow]" if hints else ""
         await self._render_records(
             result.records,
             empty_hint_key="tui.mail_no_match",
             status_hint=status_hint,
         )
-        if result.pending:
+        if result.pending and self._smart_review_result is not result:
+            self._smart_review_result = result
             self._ask_pending_operations(result)
 
     def _ask_pending_operations(self, result: SmartActionResult) -> None:
-        """Confirm the staged operations, then apply exactly those.
+        async def _review() -> None:
+            await self._prepare_and_review_pending(result)
 
-        The model only planned; this is the single point where a write can
-        happen, and the user's yes is what authorizes it.
-        """
-        lines = [
-            self._service.t(
-                line.summary_key,
-                **line.summary_params,
-            )
-            for line in result.pending
-            if line.summary_key
-        ]
-        body = self._service.t("tui.agent_pending_body", count=len(result.pending))
-        if lines:
-            body = f"{body}\n\n" + "\n".join(f"• {line}" for line in lines)
-        cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-            ConfirmModal(
-                self._service,
-                title=self._service.t("tui.agent_pending_title"),
-                body=body,
-                confirm_label=self._service.t("tui.btn_apply"),
-                variant="warning",
-            ),
-            lambda confirmed: self._apply_pending(result, bool(confirmed)),
-        )
-
-    def _apply_pending(self, result: SmartActionResult, confirmed: bool) -> None:
-        if not confirmed:
-            return
-        cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
-            self._apply_pending_unlocked(result),
+        self.run_worker(
+            cast(Any, _review),
             exclusive=True,
-            group="smart-apply",
+            group="smart-review",
             exit_on_error=False,
         )
 
-    async def _apply_pending_unlocked(self, result: SmartActionResult) -> None:
+    async def _prepare_and_review_pending(self, result: SmartActionResult) -> None:
+        """Normalize pending schedules, review them, then confirm mail writes."""
+        pending = list(result.pending)
+        wanted_candidates = {
+            str(candidate_id)
+            for operation in pending
+            for candidate_id in (
+                operation.arguments.get("candidate_ids", [])
+                if operation.tool == "schedule_seminars"
+                else [operation.arguments.get("candidate_id")]
+            )
+            if candidate_id
+        }
+        candidates = await self._service.list_seminar_candidates() if wanted_candidates else []
+        candidate_map = {candidate.candidate_id: candidate for candidate in candidates}
+        actions = (
+            await self._service.list_actions()
+            if any(op.tool in {"edit_action", "delete_action"} for op in pending)
+            else []
+        )
+        action_map = {item.item_id: item for item in actions}
+        operations: list[PendingOperation] = []
+        review_ids: list[str] = []
+
+        def _iso(value: Any) -> Any:
+            return value.isoformat() if isinstance(value, datetime) else value
+
+        def _candidate_operation(candidate_id: str) -> PendingOperation:
+            candidate = candidate_map.get(candidate_id)
+            if candidate is None:
+                return PendingOperation(
+                    tool="schedule_seminar", arguments={"candidate_id": candidate_id}
+                )
+            if candidate.starts_at is None:
+                review_ids.append(candidate_id)
+                return PendingOperation(
+                    tool="review_seminar", arguments={"candidate_id": candidate_id}
+                )
+            return PendingOperation(
+                tool="schedule_seminar",
+                arguments={
+                    "candidate_id": candidate_id,
+                    "title": candidate.title,
+                    "starts_at": _iso(candidate.starts_at),
+                    "ends_at": _iso(candidate.ends_at),
+                    "timezone": candidate.timezone,
+                    "location": candidate.location,
+                    "url": candidate.url,
+                    "description": candidate.description,
+                    "clear_end": candidate.ends_at is None,
+                },
+            )
+
+        for operation in pending:
+            tool = operation.tool
+            args = dict(operation.arguments)
+            if tool == "review_seminar":
+                candidate_id = str(args.get("candidate_id") or "")
+                if candidate_id:
+                    review_ids.append(candidate_id)
+                continue
+            if tool == "schedule_seminars":
+                for candidate_id in cast("list[str]", args.get("candidate_ids") or []):
+                    candidate_operation = _candidate_operation(str(candidate_id))
+                    if candidate_operation.tool != "review_seminar":
+                        operations.append(candidate_operation)
+                continue
+            if tool == "schedule_seminar":
+                operation = _candidate_operation(str(args.get("candidate_id") or ""))
+                if operation.tool == "review_seminar":
+                    continue
+                operations.append(operation)
+                continue
+            if tool == "schedule_event":
+                args = {
+                    "summary": args.get("title") or args.get("summary") or "",
+                    "due_at": _iso(args.get("starts_at") or args.get("due_at")),
+                    "due_end": _iso(args.get("ends_at") or args.get("due_end")),
+                    "action_type": args.get("action_type") or "other",
+                    "notes": args.get("notes") or "",
+                    "location": args.get("location") or "",
+                    "url": args.get("url") or "",
+                }
+                operation = PendingOperation(
+                    tool="add_action",
+                    arguments=args,
+                    summary_key=operation.summary_key,
+                    summary_params=operation.summary_params,
+                )
+            elif tool in {"edit_action", "delete_action"}:
+                item = action_map.get(str(args.get("item_id") or ""))
+                if item is not None:
+                    args = {
+                        "item_id": item.item_id,
+                        "summary": item.summary,
+                        "due_at": _iso(item.due_at),
+                        "due_end": _iso(item.due_end),
+                        "action_type": item.action_type,
+                        "notes": item.notes,
+                        "location": item.location,
+                        "url": item.url,
+                        "origin": item.origin.value,
+                        **args,
+                    }
+                operation = PendingOperation(
+                    tool=tool,
+                    arguments=args,
+                    summary_key=operation.summary_key,
+                    summary_params=operation.summary_params,
+                )
+            operations.append(operation)
+
+        reviewed_tools = {"add_action", "edit_action", "delete_action", "schedule_seminar"}
+        review_operations = [
+            operation for operation in operations if operation.tool in reviewed_tools
+        ]
+        remaining = [operation for operation in operations if operation.tool not in reviewed_tools]
+        if review_operations:
+            reviewed = await self._ask_screen(
+                SmartActionReviewModal(self._service, review_operations, candidate_map)
+            )
+            if reviewed is None:
+                return
+            review_operations = cast(list[PendingOperation], reviewed)
+        if remaining:
+            lines = [
+                self._service.t(op.summary_key, **op.summary_params)
+                for op in remaining
+                if op.summary_key
+            ]
+            body = self._service.t("tui.agent_pending_body", count=len(remaining))
+            if lines:
+                body += "\n\n" + "\n".join(f"• {line}" for line in lines)
+            confirmed = await self._ask_screen(
+                ConfirmModal(
+                    self._service,
+                    title=self._service.t("tui.agent_pending_title"),
+                    body=body,
+                    confirm_label=self._service.t("tui.btn_apply"),
+                    variant="warning",
+                )
+            )
+            if not confirmed:
+                return
+        await self._apply_pending_unlocked(result, [*review_operations, *remaining], review_ids)
+
+    async def _apply_pending_unlocked(
+        self,
+        result: SmartActionResult,
+        operations: list[PendingOperation] | None = None,
+        review_ids: list[str] | None = None,
+    ) -> None:
         """Apply every staged operation, reporting what really happened.
 
         A staged operation that fails (record already gone, invalid time) is
@@ -805,15 +932,18 @@ class MailPane(Vertical):
         applied = 0
         failed = 0
         deleted = 0
-        for_review: list[str] = []
-        for operation in result.pending:
+        for_review = list(review_ids or [])
+        for operation in operations if operations is not None else result.pending:
             if operation.tool == "review_seminar":
-                for_review.append(str(operation.arguments.get("candidate_id") or ""))
+                candidate_id = str(operation.arguments.get("candidate_id") or "")
+                if candidate_id:
+                    for_review.append(candidate_id)
                 continue
             try:
-                applied += await self._apply_operation(operation.tool, operation.arguments)
+                changed = await self._apply_operation(operation.tool, operation.arguments)
+                applied += changed
                 if operation.tool == "delete_mail":
-                    deleted += len(operation.record_ids)
+                    deleted += changed
             except Exception as exc:
                 failed += 1
                 logger.warning("staged %r failed: %s", operation.tool, exc)
@@ -821,25 +951,22 @@ class MailPane(Vertical):
         self._clear_smart_action_result()
         await self.refresh_mail()
         cast(MailFlowApp, self.app).schedule_reload()  # pyright: ignore[reportUnknownMemberType]
+        key = "tui.agent_applied" if not failed else "tui.agent_applied_partial"
+        self._pending_status_hint = (
+            f"[green]{self._service.t(key, applied=applied, failed=failed)}[/green]"
+        )
         if for_review:
+            review_set = set(for_review)
             candidates = [
                 candidate
                 for candidate in await self._service.list_seminar_candidates()
-                if candidate.candidate_id in set(for_review)
+                if candidate.candidate_id in review_set
             ]
             if candidates:
                 cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
                     SeminarReviewModal(self._service, candidates),
                     callback=self._refresh_after_review,
                 )
-                return
-        # the deferred reload re-renders this hint, so the summary of what was
-        # applied rides along with the next render instead of being written
-        # once and immediately overwritten
-        key = "tui.agent_applied" if not failed else "tui.agent_applied_partial"
-        self._pending_status_hint = (
-            f"[green]{self._service.t(key, applied=applied, failed=failed)}[/green]"
-        )
 
     def _refresh_after_review(self, changed: bool | None) -> None:
         if changed:
@@ -853,7 +980,21 @@ class MailPane(Vertical):
             return await self._service.delete_mails(cast("list[str]", arguments["record_ids"]))
         if tool == "schedule_seminar":
             title = str(arguments.get("title") or "").strip()
-            await self._service.import_seminar(str(arguments["candidate_id"]), title=title or None)
+            await self._service.import_seminar(
+                str(arguments["candidate_id"]),
+                title=title or None,
+                starts_at=_datetime.fromisoformat(str(arguments["starts_at"]))
+                if arguments.get("starts_at")
+                else None,
+                ends_at=_datetime.fromisoformat(str(arguments["ends_at"]))
+                if arguments.get("ends_at")
+                else None,
+                clear_end=bool(arguments.get("clear_end", False)),
+                timezone=str(arguments["timezone"]) if arguments.get("timezone") else None,
+                location=str(arguments["location"]) if "location" in arguments else None,
+                url=str(arguments["url"]) if "url" in arguments else None,
+                description=str(arguments["description"]) if "description" in arguments else None,
+            )
             return 1
         if tool == "schedule_seminars":
             applied = 0
@@ -861,31 +1002,37 @@ class MailPane(Vertical):
                 await self._service.import_seminar(str(candidate_id))
                 applied += 1
             return applied
-        if tool == "schedule_event":
+        if tool in {"schedule_event", "add_action"}:
+            due_raw = arguments.get("due_at") or arguments.get("starts_at")
+            end_raw = arguments.get("due_end") or arguments.get("ends_at")
             await self._service.add_action(
-                str(arguments["title"]),
-                _datetime.fromisoformat(str(arguments["starts_at"])),
-                action_type="other",
-                notes=_event_notes(arguments),
-            )
-            return 1
-        if tool == "add_action":
-            await self._service.add_action(
-                str(arguments["summary"]),
-                _datetime.fromisoformat(str(arguments["due_at"])),
-                action_type=str(arguments.get("action_type") or "errand"),
+                str(arguments.get("summary") or arguments.get("title") or ""),
+                _datetime.fromisoformat(str(due_raw)),
+                action_type=str(
+                    arguments.get("action_type") or "other"
+                    if tool == "schedule_event"
+                    else arguments.get("action_type") or "errand"
+                ),
+                due_end=_datetime.fromisoformat(str(end_raw)) if end_raw else None,
                 notes=str(arguments.get("notes") or ""),
+                location=str(arguments.get("location") or ""),
+                url=str(arguments.get("url") or ""),
             )
             return 1
         if tool == "edit_action":
             item_id = str(arguments["item_id"])
             due_raw = arguments.get("due_at")
+            end_raw = arguments.get("due_end")
             await self._service.edit_action(
                 item_id,
                 summary=str(arguments["summary"]) if "summary" in arguments else None,
                 due_at=_datetime.fromisoformat(str(due_raw)) if due_raw else None,
                 action_type=str(arguments["action_type"]) if "action_type" in arguments else None,
                 notes=str(arguments["notes"]) if "notes" in arguments else None,
+                due_end=_datetime.fromisoformat(str(end_raw)) if end_raw else None,
+                clear_end=bool(arguments.get("clear_end", False)),
+                location=str(arguments["location"]) if "location" in arguments else None,
+                url=str(arguments["url"]) if "url" in arguments else None,
             )
             return 1
         if tool == "delete_action":
@@ -934,17 +1081,27 @@ class MailPane(Vertical):
         table = self._mail_table()
         if table is None:
             return
-        table.clear()
         self._ensure_columns()
         self._refresh_view_options()
         search = self.query_one_optional("#mail-search", Input)
-        query = search.value.strip().lower() if search is not None else ""
+        query = search.value.strip() if search is not None else ""
+        regex_control = self.query_one_optional("#mail-search-regex", Checkbox)
+        case_control = self.query_one_optional("#mail-search-case", Checkbox)
+        matcher = build_search_matcher(
+            query,
+            regex=bool(regex_control.value) if regex_control is not None else False,
+            case_sensitive=bool(case_control.value) if case_control is not None else False,
+        )
+        if matcher.error:
+            self._set_static(
+                "#mail-empty-hint",
+                f"[red]{self._service.t('tui.invalid_regex')}: {escape(matcher.error)}[/red]",
+            )
+            return
+        self._mail_matcher = matcher
+        table.clear()
         if query and self._records:
-            # while searching, filter the in-memory cache synchronously —
-            # no storage round-trip on every keystroke (a full
-            # list_mails() deserializes every mail and stalls typing on
-            # big mailboxes). The re-read below runs in the background so
-            # new mail still lands without blocking the render.
+            # while searching, filter the in-memory cache synchronously
             records = list(self._records)
             if not getattr(self, "_cache_reread_running", False):
                 self._cache_reread_running = True
@@ -964,7 +1121,7 @@ class MailPane(Vertical):
             # table now — a late render here would wipe them
             return
         if query:
-            records = [record for record in records if self._matches(record, query)]
+            records = [record for record in records if self._matches(record, matcher)]
         urgency_filter = self._select_value("#mail-urgency-filter")
         if urgency_filter != "all":
             records = [
@@ -1047,21 +1204,46 @@ class MailPane(Vertical):
             ],
         )
 
-    def _matches(self, record: MailRecord, query: str) -> bool:
-        """Search subject, sender, summary AND the body — users remember
-        phrases from the mail text, not just the subject line."""
-        if query in f"{record.mail.subject} {record.mail.sender.address} {record.summary}".lower():
+    def _matches(self, record: MailRecord, matcher: SearchMatcher) -> bool:
+        """Search subject, sender, summary and body through one matcher."""
+        blob = f"{record.mail.subject} {record.mail.sender.address} {record.summary}"
+        if matcher.matches(blob):
             return True
         body = record.mail.body_text
         if not body and record.mail.body_html:
-            body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", record.mail.body_html)
+            body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\\1>", " ", record.mail.body_html)
             body = re.sub(r"<[^>]+>", " ", body)
-        return query in body.lower()
+        return matcher.matches(body)
+
+    def _schedule_mail_filter(self) -> None:
+        self._mail_filter_generation += 1
+        generation = self._mail_filter_generation
+
+        async def _filter() -> None:
+            await asyncio.sleep(0.3)
+            if generation != self._mail_filter_generation:
+                return
+            await self.refresh_mail()
+
+        self.run_worker(
+            cast(Any, _filter), exclusive=True, group="mail-filter", exit_on_error=False
+        )
 
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "mail-search":
+            progress = self.query_one_optional("#smart-action-progress", RichLog)
+            if progress is not None:
+                progress.clear()
             self._clear_smart_action_result()
-            await self.refresh_mail()
+            self._schedule_mail_filter()
+
+    async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id in {"mail-search-regex", "mail-search-case"}:
+            progress = self.query_one_optional("#smart-action-progress", RichLog)
+            if progress is not None:
+                progress.clear()
+            self._clear_smart_action_result()
+            self._schedule_mail_filter()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self._selected_id = event.row_key.value
@@ -1098,6 +1280,7 @@ class MailPane(Vertical):
 
     def _clear_smart_action_result(self) -> None:
         """Return to the ordinary mailbox view after an explicit user action."""
+        self._smart_review_result = None
         if self._smart_action_result is not None:
             self._smart_action_result = None
             # Do not apply a literal text filter to the ranked subset while a
@@ -1119,12 +1302,16 @@ class MailPane(Vertical):
         if self._smart_action_running:
             # Cancellation restores the full mailbox rather than a stale
             # pre-search cache, so mail arriving during the search remains visible.
+            self._mail_filter_generation += 1
             self._smart_action_running = False
             task = self._smart_action_task
             self._smart_action_task = None
             if task is not None and not task.done():
                 task.cancel()
             await self._stop_smart_spinner()
+            progress = self.query_one_optional("#smart-action-progress", RichLog)
+            if progress is not None:
+                progress.clear()
             self._clear_smart_action_result()
             if search is not None:
                 search.value = ""
@@ -1133,10 +1320,14 @@ class MailPane(Vertical):
             return
         if not query:
             return
-        self._smart_action_running = True
         self._clear_smart_action_result()
-        self._set_smart_label("tui.smart_action_cancel")
+        self._mail_filter_generation += 1
+        self._smart_action_running = True
         hint = self.query_one_optional("#mail-empty-hint", Static)
+        progress_log = self.query_one_optional("#smart-action-progress", RichLog)
+        if progress_log is not None:
+            progress_log.clear()
+        self._smart_progress_started = False
         table = self._mail_table()
         SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         spinner_state: dict[str, Any] = {
@@ -1147,9 +1338,13 @@ class MailPane(Vertical):
 
         async def _spin() -> None:
             while bool(spinner_state["running"]):
-                frame = SPINNER[int(spinner_state["frame"]) % len(SPINNER)]
-                spinner_state["frame"] = int(spinner_state["frame"]) + 1
-                if hint is not None and self._smart_action_running:
+                if (
+                    not self._smart_progress_started
+                    and hint is not None
+                    and self._smart_action_running
+                ):
+                    frame = SPINNER[int(spinner_state["frame"]) % len(SPINNER)]
+                    spinner_state["frame"] = int(spinner_state["frame"]) + 1
                     hint.update(f"{frame} {spinner_state['message']}")
                     hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
                 await asyncio.sleep(0.12)
@@ -1160,8 +1355,9 @@ class MailPane(Vertical):
         def _show_progress(
             stage: str, done: int, total: int, detail: str | tuple[str, dict[str, Any]]
         ) -> None:
-            if hint is None or not self._smart_action_running:
+            if not self._smart_action_running:
                 return
+            self._smart_progress_started = True
             detail_key = ""
             detail_params: dict[str, Any] = {}
             if isinstance(detail, tuple):
@@ -1176,9 +1372,12 @@ class MailPane(Vertical):
                 total=total,
                 detail=detail_text,
             )
+            if progress_log is not None:
+                progress_log.write(message)
+            if hint is not None:
+                hint.update(message)
+                hint.display = "none"  # pyright: ignore[reportUnknownMemberType]
             spinner_state["message"] = message
-            hint.update(message)
-            hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
             if detail_key == "smart_batch" and table is not None:
                 match_ids = set(detail_params.get("mails") or [])
                 known = [
@@ -1186,16 +1385,12 @@ class MailPane(Vertical):
                 ]
                 if known:
                     self.run_worker(
-                        self._append_records(known),
-                        exclusive=False,
-                        group="smart-preview",
+                        self._append_records(known), exclusive=False, group="smart-preview"
                     )
                 missing = match_ids - set(record_map)
                 if missing:
                     self.run_worker(
-                        self._preview_matches(missing),
-                        exclusive=False,
-                        group="smart-preview",
+                        self._preview_matches(missing), exclusive=False, group="smart-preview"
                     )
 
         if table is not None:
@@ -1419,9 +1614,11 @@ class MailPane(Vertical):
         button_id = event.button.id
         if button_id == "smart-action":
             # The search itself awaits network I/O. Keep the message handler
-            # free so a second press can cancel it and progress updates can
-            # be rendered while the model is working.
-            self.run_worker(self._toggle_smart_action(), exclusive=False, group="smart-action")
+            # free so a second press can cancel it and progress updates can be
+            # rendered while the model is working.
+            self.run_worker(
+                cast(Any, self._toggle_smart_action), exclusive=False, group="smart-action"
+            )
             return
         if button_id == "btn-refresh":
             self._clear_smart_action_result()
@@ -1822,8 +2019,16 @@ class ActionsPane(Vertical):
         # reload-all; concurrent clear+add_row passes interleave into
         # DuplicateKeys — serialize them
         self._refresh_lock = asyncio.Lock()
+        self._actions_filter_generation = 0
+        self._actions_matcher = SearchMatcher("")
 
     def compose(self) -> ComposeResult:
+        with Horizontal(id="actions-search-row"):
+            yield Input(
+                placeholder=self._service.t("tui.actions_search_placeholder"), id="actions-search"
+            )
+            yield Checkbox(self._service.t("tui.search_regex"), id="actions-search-regex")
+            yield Checkbox(self._service.t("tui.search_case"), id="actions-search-case")
         with Horizontal(id="actions-controls"):
             yield Select(
                 [
@@ -1897,9 +2102,25 @@ class ActionsPane(Vertical):
         table = self._actions_table()
         if table is None:
             return
+        search = self.query_one_optional("#actions-search", Input)
+        regex = self.query_one_optional("#actions-search-regex", Checkbox)
+        case = self.query_one_optional("#actions-search-case", Checkbox)
+        matcher = build_search_matcher(
+            search.value if search is not None else "",
+            regex=bool(regex.value) if regex is not None else False,
+            case_sensitive=bool(case.value) if case is not None else False,
+        )
+        if matcher.error:
+            hint = self.query_one_optional("#actions-hint", Static)
+            if hint is not None:
+                hint.update(
+                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(matcher.error)}[/red]"
+                )
+            return
+        self._actions_matcher = matcher
         # a refresh must not throw the user out of the list they were reading:
         # remember the cursor row and scroll offset, restore them below when
-        # the row still exists (it may have been deleted or filtered out)
+        # the row still exists
         previous_scroll_y = int(table.scroll_y)
         previous_row_key = self._cursor_row_key()
         table.clear()
@@ -1911,15 +2132,29 @@ class ActionsPane(Vertical):
             items = [item for item in items if item.action_type == type_filter]
         range_mode = self._select_value("#actions-range")
         if range_mode != "all":
-            from datetime import UTC, datetime, timedelta
+            from datetime import timedelta
+            from zoneinfo import ZoneInfo
 
             now = datetime.now(UTC)
-            horizon = (
-                now.replace(hour=23, minute=59, second=59, microsecond=0)
-                if range_mode == "today"
-                else now + timedelta(days=7)
-            )
-            items = [item for item in items if item.due_at <= horizon]
+            if range_mode == "today":
+                zone = ZoneInfo(self._service.config.general.timezone)
+                local_start = now.astimezone(zone).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                lower = local_start.astimezone(UTC)
+                upper = (local_start + timedelta(days=1)).astimezone(UTC)
+            else:
+                lower = now
+                upper = now + timedelta(days=7)
+            items = [item for item in items if lower <= item.due_at < upper]
+        if matcher.query:
+            items = [
+                item
+                for item in items
+                if matcher.matches(
+                    f"{item.summary} {item.action_type} {item.notes} {item.location} {item.url}"
+                )
+            ]
         types = sorted({item.action_type for item in self._items})
         _apply_options(
             self,
@@ -1941,7 +2176,7 @@ class ActionsPane(Vertical):
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
-        for item in items:
+        for position, item in enumerate(items, start=1):
             # an entry that is over is styled dim instead of being hidden: the
             # user still needs to see what happened, but must not mistake it
             # for something still ahead
@@ -1954,6 +2189,8 @@ class ActionsPane(Vertical):
                 RichText(escape(item.mail_id), style=style),
                 key=item.item_id,
             )
+            if position % 50 == 0:
+                await asyncio.sleep(0)
         self._restore_actions_view(table, previous_row_key, previous_scroll_y)
 
     def _restore_actions_view(
@@ -1990,6 +2227,27 @@ class ActionsPane(Vertical):
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id in ("actions-type-filter", "actions-range"):
             await self.refresh_actions()
+
+    def _schedule_actions_filter(self) -> None:
+        self._actions_filter_generation += 1
+        generation = self._actions_filter_generation
+
+        async def _filter() -> None:
+            await asyncio.sleep(0.3)
+            if generation == self._actions_filter_generation:
+                await self.refresh_actions()
+
+        self.run_worker(
+            cast(Any, _filter), exclusive=True, group="actions-filter", exit_on_error=False
+        )
+
+    async def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "actions-search":
+            self._schedule_actions_filter()
+
+    async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id in {"actions-search-regex", "actions-search-case"}:
+            self._schedule_actions_filter()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         item = next((i for i in self._items if i.item_id == event.row_key.value), None)
@@ -2399,8 +2657,12 @@ class LogsPane(Vertical):
         self._buffer: deque[str] = deque(maxlen=self._MAX_LINES)
         self._min_level = self._DEFAULT_MIN_LEVEL
         self._source = ""
-        self._query = ""
         self._seen_sources: set[str] = set()
+        self._source_signature = ""
+        self._query = ""
+        self._log_filter_generation = 0
+        self._log_matcher = SearchMatcher("")
+        self._rendered_logs: list[Any] = []
         # incremental rendering: newly pulled lines are appended to the
         # RichLog (capped by its own max_lines) instead of re-rendering the
         # whole 2000-line buffer every second — on slow terminals full
@@ -2408,36 +2670,43 @@ class LogsPane(Vertical):
         # filter changes or the pane (re)mounts.
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="log-controls"):
-            yield Select(
-                [
-                    (self._service.t("tui.logs_level_warning"), "WARNING"),
-                    (self._service.t("tui.logs_level_info"), "INFO"),
-                    (self._service.t("tui.logs_level_debug"), "DEBUG"),
-                ],
-                value=self._min_level,
-                id="log-level",
-                allow_blank=False,
-            )
-            yield Select(
-                [(self._service.t("tui.logs_all_sources"), "")],
-                id="log-source",
-                allow_blank=False,
-            )
-            yield Input(
-                placeholder=self._service.t("tui.logs_search_placeholder"),
-                id="log-search",
-            )
-            yield Button(
-                self._service.t("tui.logs_export"),
-                id="logs-export",
-                variant="default",
-            )
+        with Vertical(id="log-controls"):
+            with Horizontal(id="log-filters"):
+                yield Select(
+                    [
+                        (self._service.t("tui.logs_level_warning"), "WARNING"),
+                        (self._service.t("tui.logs_level_info"), "INFO"),
+                        (self._service.t("tui.logs_level_debug"), "DEBUG"),
+                    ],
+                    value=self._min_level,
+                    id="log-level",
+                    allow_blank=False,
+                )
+                yield Select(
+                    [(self._service.t("tui.logs_all_sources"), "")],
+                    id="log-source",
+                    allow_blank=False,
+                )
+            with Horizontal(id="log-search-row"):
+                yield Input(
+                    placeholder=self._service.t("tui.logs_search_placeholder"),
+                    id="log-search",
+                )
+                yield Checkbox(self._service.t("tui.search_regex"), id="log-search-regex")
+                yield Checkbox(self._service.t("tui.search_case"), id="log-search-case")
+                yield Button(
+                    self._service.t("tui.logs_export"),
+                    id="logs-export",
+                    variant="default",
+                )
+        yield Static("", id="logs-search-status")
         with ScrollableContainer(id="log-scroll"):
             yield RichLog(id="log-view", wrap=True, highlight=True, max_lines=2000)
 
     async def on_mount(self) -> None:
-        self._render_logs()
+        self.run_worker(
+            cast(Any, self._render_logs), exclusive=True, group="logs-filter", exit_on_error=False
+        )
 
     def relabel(self) -> None:
         # language switches refresh the control labels without clearing
@@ -2451,7 +2720,7 @@ class LogsPane(Vertical):
         search = self.query_one_optional("#log-search", Input)
         if search is not None:
             search.placeholder = self._service.t("tui.logs_search_placeholder")
-        self._render_logs()
+        self._schedule_log_filter()
 
     def _set_level_options(self, level: Select[str]) -> None:
         current = level.value
@@ -2525,16 +2794,64 @@ class LogsPane(Vertical):
         self._refresh_source_options()
         self._append_new_lines(pulled)
 
-    def _render_logs(self) -> None:
+    def _current_log_matcher(self) -> SearchMatcher:
+        regex = self.query_one_optional("#log-search-regex", Checkbox)
+        case = self.query_one_optional("#log-search-case", Checkbox)
+        return build_search_matcher(
+            self._query,
+            regex=bool(regex.value) if regex is not None else False,
+            case_sensitive=bool(case.value) if case is not None else False,
+        )
+
+    async def _restore_rendered_logs(self) -> None:
         log_view = self.query_one_optional("#log-view", RichLog)
         if log_view is None:
             return
         log_view.clear()
-        for line in self._buffer:
+        for index, line in enumerate(self._rendered_logs, start=1):
+            log_view.write(line)
+            if index % 50 == 0:
+                await asyncio.sleep(0)
+
+    async def _render_logs(self, generation: int | None = None) -> None:
+        generation = self._log_filter_generation if generation is None else generation
+        matcher = self._current_log_matcher()
+        status = self.query_one_optional("#logs-search-status", Static)
+        if matcher.error:
+            if status is not None:
+                status.update(
+                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(matcher.error)}[/red]"
+                )
+            await self._restore_rendered_logs()
+            return
+        self._log_matcher = matcher
+        if status is not None:
+            status.update("")
+        log_view = self.query_one_optional("#log-view", RichLog)
+        if log_view is None:
+            return
+        rendered: list[Any] = []
+        for index, line in enumerate(self._buffer, start=1):
             text = self._line_to_text(line)
-            if text is None:
-                continue
-            log_view.write(text)
+            if text is not None:
+                rendered.append(text)
+            if index % 50 == 0:
+                await asyncio.sleep(0)
+                if generation != self._log_filter_generation:
+                    return
+        if generation != self._log_filter_generation:
+            return
+        previous = list(self._rendered_logs)
+        log_view.clear()
+        for index, line in enumerate(rendered, start=1):
+            log_view.write(line)
+            if index % 50 == 0:
+                await asyncio.sleep(0)
+                if generation != self._log_filter_generation:
+                    self._rendered_logs = previous
+                    await self._restore_rendered_logs()
+                    return
+        self._rendered_logs = rendered
 
     def _line_to_text(self, line: str) -> Any:
         """Format one buffered line under the current filters; '' means the
@@ -2547,9 +2864,7 @@ class LogsPane(Vertical):
             self._min_level, self._LEVEL_RANK[self._DEFAULT_MIN_LEVEL]
         ):
             return None
-        if self._source and self._category_of(logger_name) != self._source:
-            return None
-        if self._query and self._query.lower() not in message.lower():
+        if self._query and not self._log_matcher.matches(message):
             return None
         from rich.text import Text
 
@@ -2585,18 +2900,69 @@ class LogsPane(Vertical):
                 continue
             log_view.write(text)
 
+    def _schedule_log_filter(self) -> None:
+        self._log_filter_generation += 1
+        generation = self._log_filter_generation
+        matcher = self._current_log_matcher()
+        if matcher.error:
+            status = self.query_one_optional("#logs-search-status", Static)
+            if status is not None:
+                status.update(
+                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(matcher.error)}[/red]"
+                )
+            self.run_worker(
+                cast(Any, self._restore_rendered_logs),
+                exclusive=True,
+                group="logs-render",
+                exit_on_error=False,
+            )
+            return
+
+        async def _filter() -> None:
+            await asyncio.sleep(0.3)
+            if generation == self._log_filter_generation:
+
+                async def _render() -> None:
+                    await self._render_logs(generation)
+
+                self.run_worker(
+                    cast(Any, _render),
+                    exclusive=True,
+                    group="logs-render",
+                    exit_on_error=False,
+                )
+
+        self.run_worker(
+            cast(Any, _filter), exclusive=True, group="logs-filter", exit_on_error=False
+        )
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id in {"log-search-regex", "log-search-case"}:
+            self._schedule_log_filter()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "log-search":
+            self._query = str(event.input.value)
+            self._schedule_log_filter()
+
     def on_select_changed(self, event: Any) -> None:
         if event.select.id == "log-level":
             self._min_level = _event_select_value(event)
-            self._render_logs()
         elif event.select.id == "log-source":
             self._source = _event_select_value(event)
-            self._render_logs()
+        else:
+            return
+        generation = self._log_filter_generation
 
-    def on_input_changed(self, event: Any) -> None:
-        if event.input.id == "log-search":
-            self._query = str(event.input.value)
-            self._render_logs()
+        async def _render() -> None:
+            await self._render_logs(generation)
+
+        self.run_worker(
+            cast(Any, _render),
+            exclusive=True,
+            group="logs-render",
+            exit_on_error=False,
+        )
 
 
 def plugin_doc_readme(info: Any) -> str:
@@ -2799,20 +3165,12 @@ class MarketDetailScreen(ModalScreen[Any]):
             self.dismiss(None)
             return
         plugin = self._plugin
-        market = self._service.market
         try:
             if button_id == "detail-install":
-                if market.is_installed(plugin.id, package=plugin.package):
-                    self._set_status(
-                        self._service.t("plugin.already_installed", plugin_id=plugin.id)
-                    )
-                    return
-                await market.install(plugin)
+                await self._service.plugin_install(plugin.id)
                 message_key = "plugin.installed_ok"
             elif button_id == "detail-uninstall":
-                if not plugin.package:
-                    raise ValueError(f"plugin {plugin.id!r} has no pip package to uninstall")
-                await market.uninstall(plugin)
+                await self._service.plugin_uninstall(plugin.id)
                 message_key = "plugin.uninstalled_ok"
             elif button_id == "detail-enable":
                 await self._service.plugin_enable(plugin.id)
@@ -2845,14 +3203,20 @@ class MarketPane(Vertical):
         self._installed: dict[str, bool] = {}
         self._loading = False
         self._detail_open_for: str | None = None
+        self._market_filter_generation = 0
+        self._market_matcher = SearchMatcher("")
+        self._market_stale_status = ""
 
     def compose(self) -> ComposeResult:
         with Vertical(id="market-controls"):
-            with Horizontal(id="market-controls-top"):
+            with Horizontal(id="market-search-row"):
                 yield Input(
                     placeholder=self._service.t("tui.market_search_placeholder"),
                     id="market-search",
                 )
+                yield Checkbox(self._service.t("tui.search_regex"), id="market-search-regex")
+                yield Checkbox(self._service.t("tui.search_case"), id="market-search-case")
+            with Horizontal(id="market-controls-top"):
                 yield Select([], id="market-category")
                 yield Select(
                     [
@@ -2902,6 +3266,23 @@ class MarketPane(Vertical):
                 )
 
     async def on_mount(self) -> None:
+        try:
+            cached = await self._service.market_cache_load()
+        except Exception:
+            cached = []
+        if cached:
+            self._entries = list(cached)
+            self._installed = {}
+            stale_names = sorted(
+                {
+                    repo.name
+                    for repo, _plugin in self._entries
+                    if repo.name != "local" and (repo.stale or not repo.url)
+                }
+            )
+            if stale_names:
+                self._market_stale_status = f"[yellow]{self._service.t('tui.market_stale')}: {escape(', '.join(stale_names))}[/yellow]"
+            await self._render_entries()
         await self.refresh_market()
 
     def _market_table(self) -> DataTable[Any] | None:
@@ -2935,7 +3316,7 @@ class MarketPane(Vertical):
 
     async def relabel(self) -> None:
         self._columns_done = False
-        self._render_entries()
+        await self._render_entries()
 
     def _category_label(self, category: str) -> str:
         """Localized label for a known plugin category id; unknown ids stay
@@ -2974,50 +3355,70 @@ class MarketPane(Vertical):
     async def _fetch_entries(self) -> None:
         market = self._service.market
         try:
-            entries = await asyncio.to_thread(market.list_plugins)
+            report = await self._service.market_fetch_report()
+            fresh = list(report.entries)
+            failures = list(report.failures)
+        except AttributeError:
+            try:
+                fresh = await asyncio.to_thread(market.list_plugins)
+                failures = []
+            except Exception as exc:
+                self._loading = False
+                self._set_status(escape(error_message(self._service, exc)))
+                return
         except Exception as exc:
             self._loading = False
             self._set_status(escape(error_message(self._service, exc)))
             return
-        # locally installed plugins (bundled + local folders) are market
-        # entries too: they get a detail view with the plugin's own
-        # documentation, so providers can ship config docs
+        app = cast(MailFlowApp, cast(Any, self).app)
         local_repo = Repository("local", "")
         local_entries: list[tuple[Repository, MarketPlugin]] = []
-        seen = {plugin.id for _repo, plugin in entries}
+        seen = {plugin.id for _repo, plugin in fresh}
         for info in self._service.plugin_manager.enabled_infos():
             if info.plugin_id in seen:
                 continue
-            local = cast(MailFlowApp, self.app).local_plugin_entry(info.plugin_id)  # pyright: ignore[reportUnknownMemberType]
+            local = app.local_plugin_entry(info.plugin_id)
             if local is not None:
-                # fill the docstring here (this whole method runs in the
-                # market-fetch worker): the market pane's inline preview
-                # needs it synchronously, and the shared app cache then
-                # carries it to the Runtime tab as well
                 local.readme = plugin_doc_readme(info)
                 local_entries.append((local_repo, local))
-        self._entries = [*entries, *local_entries]
-        self._installed = {}  # re-derive install state for the new metadata
+                seen.add(info.plugin_id)
+        self._entries = [*fresh, *local_entries]
+        self._installed = {}
         self._loading = False
-        # share with the Runtime tab: both tabs now resolve the detail from
-        # the same entries (market readme + translations for remote plugins,
-        # docstring for local-only ones); persist them so a later session
-        # keeps the translations without a fresh network fetch
-        cast(MailFlowApp, self.app).set_plugin_entries(self._entries)  # pyright: ignore[reportUnknownMemberType]
+        app.set_plugin_entries(self._entries)
         await self._service.market_cache_save(self._entries)
-        self._render_entries()
+        if failures:
+            detail = "; ".join(f"{repo.name}: {reason}" for repo, reason in failures)
+            self._market_stale_status = (
+                f"[yellow]{self._service.t('tui.market_stale')}: {escape(detail)}[/yellow]"
+            )
+        else:
+            self._market_stale_status = ""
+        await self._render_entries()
 
-    def _render_entries(self) -> None:
+    async def _render_entries(self) -> None:
         """Render the cached entries through the current search/category."""
         table = self._market_table()
         if table is None:
             return
-        table.clear()
         self._ensure_columns()
         category = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
         filter_value = cast(str, category.value or "all") if category is not None else "all"  # pyright: ignore[reportUnknownMemberType]
         search = self.query_one_optional("#market-search", Input)
-        query = search.value.strip().lower() if search is not None else ""
+        regex = self.query_one_optional("#market-search-regex", Checkbox)
+        case = self.query_one_optional("#market-search-case", Checkbox)
+        matcher = build_search_matcher(
+            search.value if search is not None else "",
+            regex=bool(regex.value) if regex is not None else False,
+            case_sensitive=bool(case.value) if case is not None else False,
+        )
+        if matcher.error:
+            self._set_status(
+                f"[red]{self._service.t('tui.invalid_regex')}: {escape(matcher.error)}[/red]"
+            )
+            return
+        table.clear()
+        self._market_matcher = matcher
         language = self._service.i18n.language
         sort_mode = self._select_value("#market-sort")
         ordered = list(self._entries)
@@ -3048,13 +3449,12 @@ class MarketPane(Vertical):
                     (item[1].name or item[1].id).lower(),
                 )
             )
-        for _repo, plugin in ordered:
+        for position, (_repo, plugin) in enumerate(ordered, start=1):
             if filter_value and filter_value != "all" and filter_value not in plugin.categories:
                 continue
-            if query:
-                blob = f"{plugin.id} {plugin.name} {plugin.description}".lower()
-                blob += f" {plugin.description_for(language)}".lower()
-                if query not in blob:
+            if matcher.query:
+                blob = f"{plugin.id} {plugin.name} {plugin.description} {plugin.description_for(language)}"
+                if not matcher.matches(blob):
                     continue
             table.add_row(
                 escape(plugin.name or plugin.id),
@@ -3063,6 +3463,8 @@ class MarketPane(Vertical):
                 self._market_status_of(plugin),
                 key=plugin.id,
             )
+            if position % 50 == 0:
+                await asyncio.sleep(0)
         categories = sorted({c for _r, p in self._entries for c in p.categories})
         if categories != getattr(self, "_categories", None):
             select = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
@@ -3075,7 +3477,7 @@ class MarketPane(Vertical):
         desired = filter_value if filter_value in {*categories, "all"} else "all"
         if select is not None and _select_ready(select) and select.value != desired:  # pyright: ignore[reportUnknownMemberType]
             select.value = desired
-        self._set_status("")
+        self._set_status(self._market_stale_status)
         if self._selected is not None:
             self._show_detail(self._selected)
 
@@ -3098,10 +3500,26 @@ class MarketPane(Vertical):
             f"{self._service.t('plugin.header_id')}: {plugin.id} — {self._market_status_of(plugin)}"
         )
 
+    def _schedule_market_filter(self) -> None:
+        self._market_filter_generation += 1
+        generation = self._market_filter_generation
+
+        async def _filter() -> None:
+            await asyncio.sleep(0.3)
+            if generation == self._market_filter_generation:
+                await self._render_entries()
+
+        self.run_worker(
+            cast(Any, _filter), exclusive=True, group="market-filter", exit_on_error=False
+        )
+
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "market-search":
-            # filter the cached entries; no network round-trip per keystroke
-            self._render_entries()
+            self._schedule_market_filter()
+
+    async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id in {"market-search-regex", "market-search-case"}:
+            self._schedule_market_filter()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         plugin = next((p for _r, p in self._entries if p.id == event.row_key.value), None)
@@ -3128,7 +3546,7 @@ class MarketPane(Vertical):
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id in ("market-category", "market-sort"):
-            self._render_entries()
+            await self._render_entries()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -3178,10 +3596,13 @@ class MarketPane(Vertical):
                     )
                     return
                 status_node.update(self._service.t("tui.loading"))
-                await market.install(plugin)
+                result = await self._service.plugin_install(plugin.id)
+                if "already" in result.lower():
+                    status_node.update(escape(result))
+                    return
                 message_key = "plugin.installed_ok"
             elif button_id == "market-uninstall":
-                await self.service_uninstall(plugin)
+                await self._service.plugin_uninstall(plugin.id)
                 message_key = "plugin.uninstalled_ok"
             elif button_id == "market-enable":
                 await self._service.plugin_enable(plugin.id)
@@ -3194,17 +3615,11 @@ class MarketPane(Vertical):
         except (KeyError, ValueError, RuntimeError) as exc:
             status_node.update(escape(error_message(self._service, exc)))
             return
-        self._installed.pop(plugin.id, None)  # install state changed
-        self._render_entries()
+        await self._render_entries()
         status_node.update(
             self._service.t(message_key, plugin_id=plugin.id)
             + f" ({self._service.t('plugin.restart_note')})"
         )
-
-    async def service_uninstall(self, plugin: MarketPlugin) -> str:
-        if not plugin.package:
-            raise ValueError(f"plugin {plugin.id!r} has no pip package to uninstall")
-        return await self._service.market.uninstall(plugin)
 
 
 async def pilot_pause_if_possible(app: Any, seconds: float = 0.05) -> None:
@@ -3366,13 +3781,11 @@ class MailFlowApp(App[None]):
     async def _preload_market_cache(self) -> None:
         """Load persisted marketplace entries into the shared cache."""
         try:
-            entries = await self._service.market_cache_load()
+            entries: list[tuple[Repository, MarketPlugin]] = await self._service.market_cache_load()
         except Exception:
             entries = []
         if entries:
-            self.set_plugin_entries(
-                [(Repository("cache", ""), cast("MarketPlugin", entry)) for entry in entries]  # pyright: ignore[reportUnknownVariableType]
-            )
+            self.set_plugin_entries(entries)
 
     async def _eager_market_fetch(self) -> None:
         """Background marketplace fetch at startup: fills the shared cache

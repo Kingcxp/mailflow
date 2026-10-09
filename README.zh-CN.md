@@ -55,7 +55,7 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
 - **浏览并解析已有邮件** —— 新用户可以分页浏览 MailFlow 配置之前就已收到的邮件，只
   勾选需要的进行解析；被选中的邮件走与实时邮件完全相同的处理流程，已解析过的会跳过。
 - **质量门槛** —— 318 项单元/集成/端到端测试，mypy 与 pyright 严格模式，ruff 检查 + 格式化，
-  Nuitka standalone/onefile 可执行文件，文档门槛。
+  Nuitka standalone/onefile 可执行文件。
 
 ## 安装
 
@@ -192,7 +192,7 @@ await service.stop()
 
 ```bash
 make help           # 分组、带色的目标列表
-make check          # lint + format + mypy + pyright + pytest + docs 门槛
+make check          # lint + format + mypy + pyright + pytest
 make coverage       # 每包覆盖率报告
 make build          # 为每个包构建 wheel
 make bot-plugin-nonebot | bot-plugin-astrbot   # 导出 NoneBot / AstrBot 插件
@@ -208,8 +208,6 @@ make exe-onefile
 | 架构 | [总览](docs/architecture/overview.md) · [领域与邮件](docs/architecture/domain-and-mail.md) · [插件](docs/architecture/plugin-system.md) · [流水线](docs/architecture/pipeline.md) · [LLM](docs/architecture/llm.md) · [日志](docs/architecture/logging.md) · [存储与保留](docs/architecture/storage-and-retention.md) · [回复](docs/architecture/replies.md) · [TUI](docs/architecture/tui.md) · [机器人导出](docs/architecture/bot-export.md) · [平台登录](docs/architecture/bot-login.md) · [通知与插件](docs/architecture/tui-notifications-and-plugin-ecosystem.md) |
 | 开发 | [环境搭建](docs/development/setup.md) · [部署](docs/development/deployment.md) · [内嵌](docs/development/embedding.md) · [测试](docs/development/tests.md) · [质量](docs/development/quality.md) · [打包](docs/development/packaging.md) |
 | 插件开发 | [总览](docs/plugin-development/overview.md) · [邮件源](docs/plugin-development/mail-source.md) · [处理器](docs/plugin-development/processor.md) · [LLM 后端](docs/plugin-development/llm-backend.md) · [通知器](docs/plugin-development/notifier.md) · [存储](docs/plugin-development/storage.md) · [机器人导出器](docs/plugin-development/bot-exporter.md) |
-| 配置 | [总览](docs/configuration/overview.md) · [i18n](docs/configuration/i18n.md) |
-| 给 AI 代理 | [不变量](docs/agent/invariants.md) · [模块地图](docs/agent/module-map.md) · [变更手册](docs/agent/change-playbook.md) |
 | 决策 | [ADRs](docs/adr/0001-uv-workspace.md) · [0002-pluggy-pipeline](docs/adr/0002-pluggy-pipeline.md) · [0003-host-independent-core](docs/adr/0003-host-independent-core.md) |
 | 构建历史 | [BUILD_LOG](docs/build-log/BUILD_LOG.md) · [English README](README.md) |
 
@@ -227,6 +225,10 @@ uv run mailflow plugin install mailflow-notify-ntfy     # 重启后加载
 [mailflow-repo](https://github.com/Kingcxp/mailflow-repo) 仓库承载商城：每个插件一个文件夹，
 按类别分组，添加插件只需一个 pull request，绝不触碰其他插件的文件。
 其 docs/ 目录是插件开发指南，pull request 工作流只校验每个 PR 改动的插件。
+
+商城刷新会分别报告每个仓库的状态。仓库离线时，TUI 与命令会保留该仓库
+带来源标记的旧缓存并显示为过期；成功但为空的仓库会清除旧条目。本地与
+远程安装共用同一套来源记录流程；内置插件可以禁用，但不能卸载。
 
 **写你自己的插件** —— TUI 提供新插件向导（Market 标签 → New）：在目录树中选择文件夹，
 可选创建子文件夹，选择模板类别（邮件源 / 处理器 / LLM 后端 / 通知器 / 存储 / 机器人导出器 / LLM 增强器 / 网关），

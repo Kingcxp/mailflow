@@ -32,7 +32,7 @@ import re
 import shutil
 import subprocess
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 from typing import Any, cast
@@ -87,6 +87,159 @@ class MarketIndex(BaseModel):
 class Repository:
     name: str
     url: str
+    # Cache-loaded repositories are known to be stale until refreshed. This
+    # presentation hint is not part of configured repository identity.
+    stale: bool = field(default=False, compare=False, repr=False)
+
+
+@dataclass(frozen=True)
+class MarketFetchReport:
+    entries: list[tuple[Repository, MarketPlugin]]
+    failures: list[tuple[Repository, str]]
+    repositories: list[MarketRepositoryStatus] = field(default_factory=lambda: [])
+    used_cache: bool = False
+
+
+@dataclass(frozen=True)
+class MarketRepositoryStatus:
+    """Result for one configured repository fetch."""
+
+    repository: Repository
+    ok: bool
+    plugin_count: int = 0
+    error: str = ""
+
+
+MARKET_CACHE_VERSION = 1
+_UNKNOWN_CACHE_REPOSITORY = Repository("cache", "", stale=True)
+
+
+def serialize_market_cache(entries: list[tuple[Repository, MarketPlugin]]) -> str:
+    """Serialize marketplace entries with repository provenance and version."""
+    payload = {
+        "version": MARKET_CACHE_VERSION,
+        "entries": [
+            {
+                "repository": {"name": repository.name, "url": repository.url},
+                "plugin": plugin.model_dump(mode="json"),
+            }
+            for repository, plugin in entries
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def deserialize_market_cache(raw: str) -> list[tuple[Repository, MarketPlugin]]:
+    """Load current or legacy cache data, skipping malformed entries.
+
+    Cache entries are stale by definition until a live fetch replaces them.
+    The legacy list contained plugins only, so its source is represented by
+    the stable ``cache`` sentinel with an empty URL.
+    """
+    try:
+        payload: Any = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+    if isinstance(payload, list):
+        legacy_entries: list[tuple[Repository, MarketPlugin]] = []
+        for item in cast(list[Any], payload):
+            try:
+                legacy_entries.append(
+                    (_UNKNOWN_CACHE_REPOSITORY, MarketPlugin.model_validate(item))
+                )
+            except Exception:
+                continue
+        return legacy_entries
+
+    if not isinstance(payload, dict):
+        return []
+    payload_map = cast(dict[str, Any], payload)
+    if payload_map.get("version") != MARKET_CACHE_VERSION:
+        return []
+    entries = payload_map.get("entries")
+    if not isinstance(entries, list):
+        return []
+
+    cached_entries: list[tuple[Repository, MarketPlugin]] = []
+    for raw_item in cast(list[Any], entries):
+        if not isinstance(raw_item, dict):
+            continue
+        item = cast(dict[str, Any], raw_item)
+        try:
+            plugin = MarketPlugin.model_validate(item.get("plugin"))
+        except Exception:
+            continue
+        source = item.get("repository")
+        if isinstance(source, dict):
+            source_map = cast(dict[str, Any], source)
+            name, url = source_map.get("name"), source_map.get("url")
+        else:
+            name, url = None, None
+        repository = (
+            Repository(name, url, stale=True)
+            if isinstance(name, str) and isinstance(url, str)
+            else _UNKNOWN_CACHE_REPOSITORY
+        )
+        cached_entries.append((repository, plugin))
+    return cached_entries
+
+
+def merge_market_cache(
+    report: MarketFetchReport,
+    cached: list[tuple[Repository, MarketPlugin]],
+) -> MarketFetchReport:
+    """Retain cached entries only for repositories that failed to refresh.
+
+    A successful empty repository is authoritative and must clear old entries;
+    cache data is a fallback for transport/index failures, never a second
+    source of duplicate marketplace rows.
+    """
+    entries = list(report.entries)
+    seen_ids = {plugin.id for _repository, plugin in entries}
+    added = False
+    for cached_repository, cached_plugin in cached:
+        if cached_plugin.id in seen_ids:
+            continue
+        failed_source = any(
+            repository.name == cached_repository.name and repository.url == cached_repository.url
+            for repository, _reason in report.failures
+        )
+        unknown_source = (
+            cached_repository.name == "cache"
+            and not cached_repository.url
+            and bool(report.failures)
+        )
+        if not (failed_source or unknown_source):
+            continue
+        entries.append((cached_repository, cached_plugin))
+        seen_ids.add(cached_plugin.id)
+        added = True
+    return MarketFetchReport(
+        entries=entries,
+        failures=list(report.failures),
+        repositories=list(report.repositories),
+        used_cache=report.used_cache or added,
+    )
+
+
+def safe_failure_reason(exc: Exception) -> str:
+    """Bound and redact transport errors before exposing them in a report."""
+    reason = str(exc).strip() or type(exc).__name__
+    reason = re.sub(r"(?i)(https?://)[^/@\s]+@", r"\1[redacted]@", reason)
+    reason = re.sub(
+        r"(?i)([?&](?:[^=&#]*(?:api[_-]?key|access[_-]?token|token|password|secret|authorization|signature))=)[^&#\s]*",
+        r"\1[redacted]",
+        reason,
+    )
+    reason = re.sub(
+        r"(?i)(api[_-]?key|access[_-]?token|token|password|secret|authorization)(\s*[=:]\s*)(?:(?:bearer|basic)\s+)?[^\s,;&]+",
+        r"\1\2[redacted]",
+        reason,
+    )
+    reason = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1[redacted]", reason)
+    reason = "".join(char if char.isprintable() else " " for char in reason)
+    return reason[:300] or type(exc).__name__
 
 
 def _fetch_json(url: str, timeout: float = _FETCH_TIMEOUT) -> Any:
@@ -191,20 +344,51 @@ class PluginMarket:
                     continue
         return plugins
 
-    def list_plugins(
-        self, timeout: float = _FETCH_TIMEOUT
-    ) -> list[tuple[Repository, MarketPlugin]]:
-        """Fetch every repository; a failing repo is logged and skipped."""
-        results: list[tuple[Repository, MarketPlugin]] = []
+    def list_plugins_report(self, timeout: float = _FETCH_TIMEOUT) -> MarketFetchReport:
+        """Fetch configured repositories in order and report isolated failures.
+
+        The first valid metadata for an id wins. This also collapses duplicate
+        category references inside one repository, preserving repository priority.
+        """
+        entries: list[tuple[Repository, MarketPlugin]] = []
+        failures: list[tuple[Repository, str]] = []
+        repositories: list[MarketRepositoryStatus] = []
+        seen_ids: set[str] = set()
         for repository in self._repositories:
             try:
                 index = self.fetch_index(repository, timeout)
-            except (URLError, ValueError, json.JSONDecodeError) as exc:
-                logger.error("marketplace %r unreachable: %s", repository.name, exc)
+            except Exception as exc:
+                reason = safe_failure_reason(exc)
+                logger.error("marketplace %r unreachable: %s", repository.name, reason)
+                failures.append((repository, reason))
+                repositories.append(
+                    MarketRepositoryStatus(repository=repository, ok=False, error=reason)
+                )
                 continue
+            repositories.append(
+                MarketRepositoryStatus(repository=repository, ok=True, plugin_count=len(index))
+            )
             for plugin in index:
-                results.append((repository, plugin))
-        return results
+                if plugin.id in seen_ids:
+                    logger.warning(
+                        "duplicate marketplace plugin id %r in repository %r; keeping first metadata",
+                        plugin.id,
+                        repository.name,
+                    )
+                    continue
+                seen_ids.add(plugin.id)
+                entries.append((repository, plugin))
+        return MarketFetchReport(
+            entries=entries,
+            failures=failures,
+            repositories=repositories,
+        )
+
+    def list_plugins(
+        self, timeout: float = _FETCH_TIMEOUT
+    ) -> list[tuple[Repository, MarketPlugin]]:
+        """Compatibility convenience returning only deduplicated entries."""
+        return self.list_plugins_report(timeout).entries
 
     def find(
         self, plugin_id: str, timeout: float = _FETCH_TIMEOUT
@@ -303,7 +487,19 @@ class PluginMarket:
         return (result.stdout or result.stderr or "").strip()
 
 
-__all__ = ["MarketIndex", "MarketPlugin", "PluginMarket", "Repository"]
+__all__ = [
+    "MARKET_CACHE_VERSION",
+    "MarketFetchReport",
+    "MarketIndex",
+    "MarketPlugin",
+    "MarketRepositoryStatus",
+    "PluginMarket",
+    "Repository",
+    "deserialize_market_cache",
+    "detect_plugin_folders",
+    "merge_market_cache",
+    "serialize_market_cache",
+]
 
 
 def detect_plugin_folders(root: str | Path) -> list[Path]:

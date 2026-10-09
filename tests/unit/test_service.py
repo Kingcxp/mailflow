@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -25,6 +26,7 @@ from mailflow.domain import (
     MailRecord,
     ProcessorNote,
     ReplyState,
+    SeminarCandidate,
     SeminarStatus,
     TrashRecord,
     Urgency,
@@ -407,6 +409,13 @@ class TestMailboxHistory:
             await service.fetch_history("ghost")
         with pytest.raises(NotImplementedError):
             await service.fetch_history("acct-1")
+
+    async def test_fetch_history_rejects_invalid_pagination(self) -> None:
+        service = self._service(HistorySource([make_mail("h1", minute=0)]))
+        with pytest.raises(ValueError, match="limit"):
+            await service.fetch_history("acct-1", limit=0)
+        with pytest.raises(ValueError, match="offset"):
+            await service.fetch_history("acct-1", offset=-1)
 
     async def test_process_mail_stores_and_dedups(self) -> None:
         mail = make_mail("h1", minute=0)
@@ -874,6 +883,150 @@ class TestSeminarDiscovery:
         assert router.calls == 2, "an unreadable reply must be retried"
         assert result.failed_batches == 1
         assert not result.is_complete
+
+
+class TestActionMutations:
+    @staticmethod
+    def make_service() -> MailFlowService:
+        return TestSeminarDiscovery.make_service(None)
+
+    async def test_add_and_edit_preserve_free_type_and_metadata(self) -> None:
+        service = self.make_service()
+        start = datetime(2099, 6, 1, 9, tzinfo=UTC)
+        end = start + timedelta(hours=2)
+        item = await service.add_action(
+            "Submit the form",
+            start,
+            action_type="registration",
+            due_end=end,
+            notes="Bring the signed copy",
+            location="Office 4",
+            url="https://example.com/form",
+        )
+
+        assert item.action_type == "registration"
+        assert item.due_at == start and item.due_end == end
+        assert item.notes == "Bring the signed copy"
+        assert item.location == "Office 4" and item.url == "https://example.com/form"
+
+        updated = await service.edit_action(
+            item.item_id,
+            action_type="committee",
+            due_end=end + timedelta(hours=1),
+            notes="Updated notes",
+            location="Office 5",
+            url="https://example.com/updated",
+        )
+
+        assert updated.action_type == "committee"
+        assert updated.due_end == end + timedelta(hours=1)
+        assert updated.notes == "Updated notes"
+        assert updated.location == "Office 5" and updated.url == "https://example.com/updated"
+        cleared = await service.edit_action(item.item_id, clear_end=True)
+        assert cleared.due_end is None
+
+    async def test_action_times_must_be_aware_and_end_after_start(self) -> None:
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        start = datetime(2099, 6, 1, 9, tzinfo=UTC)
+
+        with pytest.raises(ValueError):
+            await service.add_action("Naive", datetime(2099, 6, 1, 9))
+        with pytest.raises(ValueError):
+            await service.add_action("Zero window", start, due_end=start)
+        item = await service.add_action("Window", start, due_end=start + timedelta(hours=2))
+        with pytest.raises(ValueError):
+            await service.edit_action(item.item_id, due_end=start)
+        with pytest.raises(ValueError):
+            await service.edit_action(item.item_id, due_at=start + timedelta(hours=2))
+
+        assert await storage.list_custom_actions() == [item]
+
+    async def test_add_and_edit_conflicts_leave_existing_actions_unchanged(self) -> None:
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        start = datetime(2099, 6, 1, 9, tzinfo=UTC)
+        end = start + timedelta(hours=2)
+        existing = await service.add_action("Pay the fee", start, due_end=end, action_type="errand")
+
+        with pytest.raises(ValueError) as add_error:
+            await service.add_action(
+                "  PAY   THE FEE  ", start + timedelta(minutes=30), action_type="meeting"
+            )
+        assert existing.summary in str(add_error.value)
+        assert existing.time_range in str(add_error.value)
+
+        other = await service.add_action("Submit the form", start, action_type="errand")
+        with pytest.raises(ValueError) as edit_error:
+            await service.edit_action(other.item_id, summary="pay the fee")
+        assert existing.summary in str(edit_error.value)
+        assert existing.time_range in str(edit_error.value)
+
+        stored = {item.item_id: item for item in await storage.list_custom_actions()}
+        assert stored[other.item_id].summary == "Submit the form"
+        assert len(stored) == 2
+
+    async def test_analysis_actions_cannot_be_edited(self) -> None:
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        record = make_record()
+        source_action = ActionItem(
+            item_id="analysis-action",
+            mail_id=record.mail.message_id,
+            summary="Pay the fee",
+            action_type="errand",
+            due_at=datetime(2099, 6, 1, 9, tzinfo=UTC),
+            origin=ActionOrigin.ANALYSIS,
+        )
+        await storage.save_mail(
+            record.model_copy(
+                update={
+                    "analysis": MailAnalysis(
+                        summary="notice",
+                        urgency=Urgency.IMPORTANT,
+                        action_items=[source_action],
+                    )
+                }
+            )
+        )
+
+        with pytest.raises(ValueError, match="analysis-action"):
+            await service.edit_action("analysis-action", summary="Changed")
+
+        assert (await storage.list_mails())[0].action_items == [source_action]
+        assert await storage.list_custom_actions() == []
+
+    async def test_seminar_import_conflicts_do_not_write(self) -> None:
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        start = datetime(2099, 6, 1, 9, tzinfo=UTC)
+        candidate = SeminarCandidate(
+            candidate_id="seminar-1",
+            mail_id="m1",
+            title="Research colloquium",
+            starts_at=start,
+            ends_at=start + timedelta(hours=1),
+        )
+        await storage.set_preference("seminars.candidates", f"[{candidate.model_dump_json()}]")
+        existing = ActionItem(
+            item_id="custom-1",
+            mail_id="",
+            summary="[SEMINAR] Research colloquium",
+            action_type="meeting",
+            due_at=start,
+            due_end=start + timedelta(hours=1),
+            origin=ActionOrigin.CUSTOM,
+        )
+        await storage.save_custom_action(existing)
+
+        with pytest.raises(ValueError) as error:
+            await service.import_seminar(candidate.candidate_id)
+
+        assert existing.summary in str(error.value)
+        assert existing.time_range in str(error.value)
+        assert await storage.list_custom_actions() == [existing]
+        saved_candidate = await service.list_seminar_candidates(include_resolved=True)
+        assert saved_candidate[0].status is SeminarStatus.PENDING
 
 
 class TestSmartAction:
@@ -1741,3 +1894,205 @@ class TestSeminarCandidateDedupe:
 
         assert [item.candidate_id for item in listed] == ["d1"]
         assert listed[0].status is SeminarStatus.IMPORTED
+
+
+class TestMarketplaceService:
+    @staticmethod
+    def _service(
+        storage: MemoryStorage, *, config: MailFlowConfig | None = None
+    ) -> MailFlowService:
+        return MailFlowService(
+            config=config or MailFlowConfig(),
+            registry=ComponentRegistry(),
+            plugin_manager=cast(Any, None),
+            storage=cast(Any, storage),
+            sources={},
+            router=cast(LLMRouter, None),
+            pipeline=PipelineEngine([]),
+            notifiers=[],
+            notifier_configs=[],
+            events=EventBus(),
+            i18n=I18n(),
+        )
+
+    async def test_remote_install_records_source_only_after_install(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mailflow.plugin_market import MarketPlugin, PluginMarket, Repository
+
+        storage = MemoryStorage()
+        service = self._service(storage)
+        plugin = MarketPlugin(
+            id="market-service-test", package="", source="https://example.invalid/plugin"
+        )
+        calls: list[str] = []
+
+        class FakeMarket:
+            def find(self, plugin_id: str) -> tuple[Repository, MarketPlugin] | None:
+                return (
+                    (Repository("test", "https://example.invalid"), plugin)
+                    if plugin_id == plugin.id
+                    else None
+                )
+
+            async def install(self, item: MarketPlugin) -> str:
+                calls.append(item.id)
+                return "installed"
+
+        monkeypatch.setattr(
+            PluginMarket, "is_installed", staticmethod(lambda *args, **kwargs: False)
+        )
+        service.market = cast(Any, FakeMarket())
+
+        assert await service.plugin_install(plugin.id) == "installed"
+        assert calls == [plugin.id]
+        assert storage.preferences["plugin.source.market-service-test"] == plugin.source
+
+    async def test_local_install_aggregates_partial_failures(self, tmp_path: Path) -> None:
+        from mailflow.plugin_market import MarketPlugin
+
+        storage = MemoryStorage()
+        service = self._service(storage)
+        root = tmp_path / "plugins"
+        for plugin_id in ("alpha-local", "beta-local"):
+            folder = root / plugin_id
+            folder.mkdir(parents=True)
+            (folder / "plugin.json").write_text(json.dumps({"id": plugin_id}), encoding="utf-8")
+
+        class FakeMarket:
+            async def install(self, item: MarketPlugin) -> str:
+                if item.id == "beta-local":
+                    raise RuntimeError("broken package")
+                return "installed"
+
+        service.market = cast(Any, FakeMarket())
+        result = await service.plugin_install_local(root)
+        assert "alpha-local" in result
+        assert "beta-local" in result
+        assert storage.preferences["plugin.source.alpha-local"] == str(root / "alpha-local")
+        assert "plugin.source.beta-local" not in storage.preferences
+
+    async def test_uninstall_clears_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mailflow.plugin_market import MarketPlugin, PluginMarket, Repository
+
+        storage = MemoryStorage()
+        service = self._service(storage)
+        plugin = MarketPlugin(
+            id="uninstall-service-test", package="", source="https://example.invalid/plugin"
+        )
+        storage.preferences[f"plugin.source.{plugin.id}"] = plugin.source
+
+        class FakeMarket:
+            def find(self, plugin_id: str) -> tuple[Repository, MarketPlugin] | None:
+                return Repository("test", "https://example.invalid"), plugin
+
+            async def uninstall(self, item: MarketPlugin) -> str:
+                return "removed"
+
+        monkeypatch.setattr(
+            PluginMarket, "is_installed", staticmethod(lambda *args, **kwargs: True)
+        )
+        service.market = cast(Any, FakeMarket())
+        assert await service.plugin_uninstall(plugin.id) == "removed"
+        assert storage.preferences[f"plugin.source.{plugin.id}"] == ""
+
+    async def test_market_cache_is_versioned_and_legacy_entries_are_stale(self) -> None:
+        from mailflow.plugin_market import MarketPlugin, Repository
+
+        storage = MemoryStorage()
+        service = self._service(storage)
+        plugin = MarketPlugin(id="cache-service-test", name="Cache test")
+        repository = Repository("offline", "https://example.invalid")
+        await service.market_cache_save([(repository, plugin)])
+        payload = json.loads(storage.preferences[service._MARKET_CACHE_PREF])  # pyright: ignore[reportPrivateUsage]
+        assert payload["version"] == 1
+        loaded = await service.market_cache_load()
+        assert loaded[0][0].name == "offline"
+        assert loaded[0][0].stale is True
+
+        storage.preferences[service._MARKET_CACHE_PREF] = json.dumps(  # pyright: ignore[reportPrivateUsage]
+            [plugin.model_dump(mode="json"), {"malformed": True}]
+        )
+        legacy = await service.market_cache_load()
+        assert len(legacy) == 1
+        assert legacy[0][0].name == "cache"
+        assert legacy[0][0].stale is True
+
+    async def test_market_fetch_report_merges_failed_repository_cache(self) -> None:
+        from mailflow.plugin_market import MarketFetchReport, MarketPlugin, Repository
+
+        storage = MemoryStorage()
+        service = self._service(storage)
+        failed = Repository("offline", "https://example.invalid")
+        cached = MarketPlugin(id="cached-plugin", name="Cached")
+        await service.market_cache_save([(failed, cached)])
+
+        class OfflineMarket:
+            def list_plugins_report(self) -> MarketFetchReport:
+                return MarketFetchReport(entries=[], failures=[(failed, "offline")])
+
+        service.market = cast(Any, OfflineMarket())
+        report = await service.market_fetch_report()
+
+        assert report.used_cache is True
+        assert [plugin.id for _repo, plugin in report.entries] == ["cached-plugin"]
+        assert report.repositories == []
+
+    async def test_uninstall_uses_cached_metadata_when_repository_is_offline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mailflow.plugin_market import MarketPlugin, PluginMarket, Repository
+
+        storage = MemoryStorage()
+        service = self._service(storage)
+        plugin = MarketPlugin(
+            id="cached-uninstall",
+            package="cached-uninstall-package",
+            source="https://example.invalid/plugin",
+        )
+        await service.market_cache_save(
+            [(Repository("offline", "https://example.invalid"), plugin)]
+        )
+        calls: list[str] = []
+
+        class OfflineMarket:
+            def find(self, _plugin_id: str) -> None:
+                raise OSError("offline")
+
+            async def uninstall(self, item: MarketPlugin) -> str:
+                calls.append(item.package)
+                return "removed"
+
+        monkeypatch.setattr(
+            PluginMarket,
+            "is_installed",
+            staticmethod(lambda *_args, **_kwargs: True),
+        )
+        service.market = cast(Any, OfflineMarket())
+
+        assert await service.plugin_uninstall(plugin.id) == "removed"
+        assert calls == [plugin.package]
+
+    async def test_bundled_plugin_cannot_be_uninstalled(self) -> None:
+        from types import SimpleNamespace
+
+        service = self._service(MemoryStorage())
+        service.plugin_manager = cast(
+            Any, SimpleNamespace(bundled_plugin_ids={"mailflow-bundled-test"})
+        )
+        with pytest.raises(ValueError, match="cannot be uninstalled"):
+            await service.plugin_uninstall("mailflow-bundled-test")
+
+    async def test_repository_edit_is_atomic_and_offline(self, tmp_path: Path) -> None:
+        service = self._service(MemoryStorage())
+        service.config_path = tmp_path / "config.toml"
+        await service.plugin_repo_add("offline", "https://example.invalid/repo")
+        names_before = [repo.name for repo in service.config.plugins.repositories]
+        with pytest.raises(ValueError, match="already configured"):
+            await service.plugin_repo_edit("offline", "mailflow-repo", "https://other.invalid")
+        assert [repo.name for repo in service.config.plugins.repositories] == names_before
+        await service.plugin_repo_edit("offline", "renamed", "file:///tmp/repo")
+        assert any(
+            repo.name == "renamed" and repo.url == "file:///tmp/repo"
+            for repo in service.config.plugins.repositories
+        )

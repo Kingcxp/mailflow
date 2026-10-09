@@ -10,6 +10,7 @@ without importing plugin packages.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -246,7 +247,7 @@ class ActionItem(BaseModel):
     item_id: str
     mail_id: str
     summary: str
-    action_type: str  # exam | meeting | errand | seminar | other
+    action_type: str  # built-in category or user-defined non-empty label
     due_at: datetime
     due_end: datetime | None = None
     notes: str = ""
@@ -273,6 +274,58 @@ class ActionItem(BaseModel):
     def time_range(self) -> str:
         """Format the stored instant as UTC for provider-neutral callers."""
         return self.time_range_in("UTC")
+
+
+def action_time_window(item: ActionItem) -> tuple[datetime, datetime]:
+    """Return an action's UTC point/window, treating invalid ends as points."""
+    start = to_utc(item.due_at)
+    end = to_utc(item.due_end) if item.due_end is not None else start
+    return (start, end) if end > start else (start, start)
+
+
+def actions_duplicate(left: ActionItem, right: ActionItem) -> bool:
+    """Whether two normalized summaries identify the same overlapping event.
+
+    Windows are half-open. Point actions match only an equal point or a point
+    inside a window; windows match only when their overlap has positive length.
+    """
+    left_summary = " ".join(left.summary.split()).casefold()
+    right_summary = " ".join(right.summary.split()).casefold()
+    if not left_summary or left_summary != right_summary:
+        return False
+    left_start, left_end = action_time_window(left)
+    right_start, right_end = action_time_window(right)
+    left_point = left_start == left_end
+    right_point = right_start == right_end
+    if left_point and right_point:
+        return left_start == right_start
+    if left_point:
+        return right_start <= left_start < right_end
+    if right_point:
+        return left_start <= right_start < left_end
+    return max(left_start, right_start) < min(left_end, right_end)
+
+
+def dedupe_actions(items: Iterable[ActionItem]) -> list[ActionItem]:
+    """Keep the earliest item per overlapping normalized-summary identity.
+
+    Sorting is stable, so equal start times keep input order. Empty summaries
+    are not identities and therefore never collapse.
+    """
+    ordered = sorted(items, key=lambda item: to_utc(item.due_at))
+    kept: list[ActionItem] = []
+    by_summary: dict[str, list[ActionItem]] = {}
+    for item in ordered:
+        summary = " ".join(item.summary.split()).casefold()
+        if not summary:
+            kept.append(item)
+            continue
+        siblings = by_summary.setdefault(summary, [])
+        if any(actions_duplicate(item, prior) for prior in siblings):
+            continue
+        siblings.append(item)
+        kept.append(item)
+    return kept
 
 
 class MailAnalysis(BaseModel):
@@ -634,6 +687,9 @@ __all__ = [
     "StyleSpan",
     "TrashRecord",
     "Urgency",
+    "action_time_window",
+    "actions_duplicate",
+    "dedupe_actions",
     "parse_urgency",
     "to_utc",
     "utcnow",

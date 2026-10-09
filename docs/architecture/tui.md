@@ -101,7 +101,9 @@ tears them down with the screen — nothing keeps ticking after it closes.
   row opens the edit form**, same for the LLM and notifier tables) plus the
   **history browser** —
   Load history pages a mailbox newest-first through
-  `service.fetch_history(account_id, limit=, offset=)`, rows are toggled with
+  `service.fetch_history(account_id, limit=, offset=)`. The **History batch
+  size** field defaults to 25 and accepts any positive integer; **Load more**
+  reuses that value while advancing the offset. Rows are toggled with
   Enter/click, and *Analyze selected* runs only the picked mails through
   `service.process_mail`. Already-stored mail is marked and skipped, so
   re-analyzing is a no-op instead of a duplicate. Sources that do not
@@ -187,10 +189,12 @@ tears them down with the screen — nothing keeps ticking after it closes.
   route through `general.browser_mode`) with Install / Uninstall / Enable /
   Disable buttons. **Locally installed and bundled plugins appear as entries
   too**, their docstrings becoming the detail readme, so chat providers can
-  ship setup docs. The repository fetch runs in an exclusive worker and
-  filtering renders from the cached entries. **New** opens the plugin wizard
-  (`scaffold.py`); **Export** opens the bot-framework export wizard
-  (`export.py`).
+  ship setup docs. Repository refreshes run in an exclusive worker and return
+  an isolated status per configured repository; a failed repository retains
+  only its stale cached entries, while a successful empty repository removes
+  its old rows. Filtering renders from the cached entries. **New** opens the
+  plugin wizard (`scaffold.py`); **Export** opens the bot-framework export
+  wizard (`export.py`).
 - **Export wizard** (`BotExportScreen`): framework `Select` (every
   registered `BOT_EXPORTER` plugin), `DirectoryTree` folder pick, optional
   subfolder checkbox + input, and a Generate button running

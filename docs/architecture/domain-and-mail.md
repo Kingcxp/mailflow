@@ -104,22 +104,19 @@ feedback notes apply to mail of the same kind only — they may not be used to
 turn an announcement into `ad`.
 
 **Action items are only for what the recipient must do and cannot skip.** The
-prompt creates an `ActionItem` for a deadline the recipient is liable for (a
-fee, a required submission, an exam), an appointment they must attend, a
+prompt creates an `ActionItem` only for a deadline the recipient is liable for
+(a fee, a required submission, an exam), an appointment they must attend, a
 pickup, or a meeting/conference they are required to attend or must reply to.
-An *optional* or self-selected matter yields **no** action item (it belongs in
-`summary` and `reason` only), however concrete its date is: that covers events
-they may freely skip (seminars, talks, lectures, workshops, club activities)
-and anything they may simply choose not to do — voluntary surveys, feedback
-forms, and optional sign-ups or registrations for events they are not required
-to attend. A registration is actionable **only** when failing to do it has a
-consequence for their standing (a compulsory enrolment, a graduation
-requirement, a mandatory submission), not when it merely books a place at
-something optional. One obligation yields one item: a single requirement is
-never split into several near-identical entries. Urgency is unaffected by this
-rule — an optional event can still be `info`, and rule 2 keeps an announcement
-at least `info`. Seminars that *should* end up on the schedule enter it through
-the explicit import path or the smart action's `schedule_seminar` tool.
+Optional or self-selected matters yield no action item however concrete their
+date is: they remain in `summary` and `reason`. A registration is actionable
+only when failing to do it has a consequence for the recipient's standing.
+Every emitted item must explicitly include `must_do: true`; the payload field
+defaults to false and Core drops missing, false, or malformed flags. This is an
+enforced gate, not just prompt guidance. One obligation yields one item. The
+`action_type` is any non-empty label; `exam`, `meeting`, `errand`, and `other`
+are built-in labels, not an exhaustive vocabulary. Urgency is unaffected by
+this rule. Seminars that should enter the schedule use the explicit import path
+or the smart action's `schedule_seminar` tool.
 
 **Dates resolve against the mail, not against now.** The per-mail context
 carries the mail's own send time (`MailMessage.date`, rendered in both UTC and
@@ -149,13 +146,13 @@ read `failed: ` with nothing after it.
 
 `ActionItem` is a provider-neutral timed entry in the reminder schedule. Every
 item retains its `mail_id` source field (empty only for a user-created todo),
-and has `summary`, `action_type`, `due_at`/`due_end`, `notes`, optional
-`location`/`url`, and an `origin`: `analysis`, `custom`, or `seminar`.
-Pipeline-derived action items use `analysis`; user todos use `custom`; an
-explicitly confirmed seminar uses `seminar`. The origin makes deletion safe:
-analysis output is dismissed by its stable natural key so re-analysis keeps it
-hidden, while custom and seminar entries are deleted from the custom-action
-store for real.
+and has `summary`, a non-empty `action_type`, `due_at`/optional `due_end`,
+`notes`, optional `location`/`url`, and an `origin`: `analysis`, `custom`, or
+`seminar`. Analysis creates items only when the model explicitly marks an
+obligation `must_do: true`; user todos use `custom`; confirmed seminars use
+`seminar`. The origin makes mutation safe: analysis output is dismissed by its
+stable natural key so re-analysis keeps it hidden, while custom and seminar
+entries are edited or removed from the custom-action store.
 
 `service.purge_expired_actions()` retires spent entries on a periodic sweep
 (hourly, plus once at startup). "Spent" means the entry ended more than a day
@@ -168,15 +165,18 @@ reminder just fired, must survive long enough to be acted on.
 `service.is_action_expired()` exposes the same "already over" judgement for the
 TUI, which dims such a row instead of hiding it.
 
-**One event, one entry.** Two mails frequently remind of the same thing (a week
-ahead, and again on the day) and each analysis produces its own entry.
-`service.event_dedupe_key()` gives an entry a cross-mail identity: the summary
-with the `[SEMINAR] ` marker stripped and whitespace/case normalized, plus a
-two-hour bucket of its start time. `list_actions()` keeps the earliest entry per
-identity; `list_actions_all()` deliberately keeps every stored entry, because
-the delete path must still be able to address a duplicate by its id. That is a
-different identity from `action_natural_key()` (mail id + due time + type),
-which encodes the *user's* delete intent and is preserved across re-analysis.
+**One overlapping event, one visible entry.** `actions_duplicate()` normalizes
+only the summary (Unicode case-folding plus collapsed whitespace); action type,
+mail id, and seminar title markers do not affect identity. Time windows are
+half-open `[start, end)`: equal point events match; a point matches a window
+only inside its bounds; two windows match only when their overlap has positive
+duration. Touching endpoints are not duplicates. A malformed/non-positive
+stored window is treated as a point. `dedupe_actions()` keeps the earliest
+start, preserving input order for ties. `list_actions()` and the reminder
+scheduler use this same rule; `list_actions_all()` retains all stored rows for
+id-based mutation. `add_action()` and `edit_action()` reject a conflicting item
+with the same predicate rather than creating a second visible event. Analysis
+results are deduped against existing mail-derived and custom actions when saved.
 
 ## SeminarCandidate and SeminarDiscoveryResult
 
@@ -267,34 +267,38 @@ JSON-schema definitions):
 
 | Tool | Kind | What it does |
 | ---- | ---- | ------------ |
-| `find_mail` | read | `contains` (literal, case-insensitive substring over subject, body and attachment file names) and/or `query` (semantic ranking). A literal condition decides membership and is never filtered out; with both given, the semantic pass only *orders* the literal matches. |
-| `delete_mail` | staged | Validates the mail ids and stages a trash move. |
-| `schedule_event` | staged | Validates an absolute future ISO-8601 start and stages a plain schedule entry. |
-| `schedule_seminar` | staged | Stages the seminar import path for a `check_seminars` candidate, so the `[SEMINAR]` marker is applied by the service rather than by the model. A candidate whose mail states no time becomes a review item instead. |
-| `list_actions` | read | The current schedule with item ids. |
-| `add_action` / `edit_action` / `delete_action` | staged | Validate a todo/entry and stage the change. |
+| `find_mail` | read | `contains` is a literal, case-insensitive substring over subject, body/HTML, attachment file names, and recognized image text; `query` is semantic ranking. A literal condition decides membership; the optional semantic pass only orders those matches. The response shows up to `limit` rows (capped at 40), reports the total match count, and returns every matching mail in `SmartActionResult.records`. A `search_id` is issued only for a complete non-empty result and covers every match, not just the preview. |
+| `delete_mail` | staged | Available only when the original user instruction explicitly requests deletion; search/filter/cleanup language alone is not authorization. Give exactly one of `record_ids` or a complete `find_mail` `search_id`. The one-use token stages every match, including rows beyond the preview; incomplete searches issue no token. |
+| `schedule_event` | staged | Validates an absolute future ISO-8601 start, optional end-after-start, a non-empty built-in or custom type, notes, location, and URL; stages a plain schedule entry. |
+| `schedule_seminar` / `schedule_seminars` | staged | Stages the seminar import path for `check_seminars` candidates, so the `[SEMINAR]` marker is applied by the service rather than the model. A candidate whose mail states no time becomes a review item instead. |
+| `list_actions` | read | The visible deduplicated schedule with item ids. |
+| `add_action` / `edit_action` / `delete_action` | staged | Validate a user-owned entry and stage the change. Mail-analysis entries cannot be edited because their source owns the content; deleting one records the stable dismissal key. |
 | `check_seminars` | read | `discover_seminars` over an optional mail subset; reports only candidates that have not started, plus their candidate ids. |
 
 **Staged means nothing happened.** A mutating tool returns a
 `PendingOperation` (`tool`, `arguments`, `record_ids`, `summary_key`,
-`summary_params`) and touches no storage; the host shows one confirmation
-dialog and only then applies exactly those operations through the service
-(`delete_mails`, `import_seminar`, `add_action`, `edit_action`,
-`delete_action`). A model's judgement is never on its own enough to delete mail
-or edit the schedule, and deletion stays recoverable (trash).
+`summary_params`) and touches no storage. The TUI presents schedule and seminar
+operations in an editable review modal, with Apply and Cancel paths; mail
+deletion gets a separate confirmation. Only after confirmation does the host
+apply the reviewed operations through the service (`delete_mails`,
+`import_seminar`, `add_action`, `edit_action`, `delete_action`). A model's
+judgement is never enough to delete mail or edit the schedule, and mail
+deletion stays recoverable (trash).
 
 Loop mechanics: at most `_MAX_TOOL_STEPS` (12) model↔tool round trips; each tool
 result is fed back as a `role: "tool"` message keyed by `tool_call_id`; an
 unknown tool, a rejected call or a tool exception becomes an `error: …` text
 for the model instead of aborting the operation. `progress(stage, done, total,
-detail)` reports each step (`smart_tool` with the tool name) so the TUI can
-show what is running, and the whole loop is cancellable.
+detail)` reports `llm`, `tool`, `tool_done`, and `finalizing` phases; tool
+arguments and results are bounded snippets. The TUI records these phases in a
+progress log, and the whole loop is cancellable.
 
-`SmartActionResult` reports `records` (the union `find_mail` returned),
+`SmartActionResult` reports `records` (all matches returned by `find_mail`),
 `pending` (the staged operations), `tool_steps` (what actually ran, e.g.
 `find_mail {"contains": "seminar"}`), `final_text` (the model's closing
 summary), and the `total_mails`/`failed_mails`/`failed_batches`/
 `failure_reasons` completeness counters.
+
 
 ## Recipient profile
 

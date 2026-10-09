@@ -634,6 +634,112 @@ class TestDeduplication:
         assert len(storage.saved) == 1
         assert notifiers[0].notified == []
 
+    async def test_new_analysis_is_deduped_against_existing_and_custom_actions(self) -> None:
+        storage = FakeStorage()
+        old_mail = make_mail(subject="Old notice")
+        due = datetime(2099, 5, 1, 9, tzinfo=UTC)
+        old_action = ActionItem(
+            item_id="old-action",
+            mail_id=old_mail.message_id,
+            summary="Pay the fee",
+            action_type="errand",
+            due_at=due,
+        )
+        old_record = MailRecord(
+            record_id=old_mail.normalized_message_id(),
+            mail=old_mail,
+            auto_urgency=Urgency.IMPORTANT,
+            analysis=MailAnalysis(
+                summary="old", urgency=Urgency.IMPORTANT, action_items=[old_action]
+            ),
+        )
+        await storage.save_mail(old_record)
+        custom_action = ActionItem(
+            item_id="custom-action",
+            mail_id="",
+            summary="Submit report",
+            action_type="errand",
+            due_at=due,
+        )
+        await storage.save_custom_action(custom_action)
+        new_mail = make_mail(subject="Another notice")
+        new_analysis = MailAnalysis(
+            summary="new",
+            urgency=Urgency.IMPORTANT,
+            action_items=[
+                ActionItem(
+                    item_id="new-old-duplicate",
+                    mail_id=new_mail.message_id,
+                    summary="  PAY   THE FEE ",
+                    action_type="meeting",
+                    due_at=due,
+                ),
+                ActionItem(
+                    item_id="new-custom-duplicate",
+                    mail_id=new_mail.message_id,
+                    summary="submit report",
+                    action_type="other",
+                    due_at=due,
+                ),
+            ],
+        )
+        runtime, _, _ = build_runtime({}, analysis=new_analysis, storage=storage)
+
+        stored = await runtime.process_mail_now(new_mail)
+
+        assert stored is not None
+        assert stored.action_items == []
+        assert stored.analysis is not None and stored.analysis.action_items == []
+
+    async def test_duplicate_record_and_custom_actions_remind_only_once(self) -> None:
+        storage = FakeStorage()
+        due = datetime(2099, 5, 2, 9, tzinfo=UTC)
+        first = ActionItem(
+            item_id="record-action",
+            mail_id="mail-1",
+            summary="  Prepare   slides ",
+            action_type="meeting",
+            due_at=due,
+        )
+        record_mail = make_mail()
+        await storage.save_mail(
+            MailRecord(
+                record_id=record_mail.normalized_message_id(),
+                mail=record_mail,
+                auto_urgency=Urgency.INFO,
+                analysis=MailAnalysis(summary="s", urgency=Urgency.INFO, action_items=[first]),
+            )
+        )
+        duplicate = ActionItem(
+            item_id="custom-action",
+            mail_id="",
+            summary="prepare slides",
+            action_type="errand",
+            due_at=due,
+        )
+        await storage.save_custom_action(duplicate)
+        runtime, _, _ = build_runtime({}, storage=storage)
+
+        approaching = await runtime._approaching_actions(  # pyright: ignore[reportPrivateUsage]
+            due - timedelta(days=1), 3
+        )
+        reminders: list[tuple[ActionItem, MailRecord | None]] = []
+
+        async def capture(
+            item: ActionItem, record: MailRecord | None, now: datetime, config: Any
+        ) -> int:
+            reminders.append((item, record))
+            return 1
+
+        runtime._fire_reminder = capture  # type: ignore[method-assign]
+        fired = await runtime.run_reminder_tick()
+
+        assert [item.item_id for item in approaching] == ["record-action"]
+        assert fired == 1
+        assert [(item.item_id, record is not None) for item, record in reminders] == [
+            ("record-action", True)
+        ]
+
 
 class TestDailyDigest:
     async def test_digest_fires_once_after_reminder_hour(self) -> None:

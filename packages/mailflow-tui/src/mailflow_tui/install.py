@@ -7,14 +7,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, ClassVar
 
-from mailflow.plugin_market import MarketPlugin, detect_plugin_folders
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DirectoryTree, Static
 
-from mailflow_tui.labels import error_detail, error_message
+from mailflow_tui.labels import error_message
 
 
 class InstallScreen(ModalScreen[list[str] | None]):
@@ -65,63 +64,9 @@ class InstallScreen(ModalScreen[list[str] | None]):
 
     async def _install(self, base: Path) -> None:
         try:
-            folders = detect_plugin_folders(base)
-            if not folders:
-                self.notify(
-                    self._t("plugin.local_none_found", path=str(base)),
-                    severity="error",
-                    timeout=6,
-                )
-                return
-            installed: list[str] = []
-            failed: list[str] = []
-            for folder in folders:
-                plugin_id = self._plugin_id_of(folder)
-                try:
-                    await self._service.market.install(
-                        MarketPlugin(
-                            id=plugin_id,
-                            name=folder.name,
-                            version="",
-                            categories=[],
-                            package=plugin_id,
-                            source=str(folder),
-                        )
-                    )
-                except Exception as exc:
-                    failed.append(f"{plugin_id}: {error_detail(self._service, exc)}")
-                    continue
-                await self._service.record_plugin_source(plugin_id, str(folder))
-                installed.append(plugin_id)
-            if installed:
-                self.notify(
-                    self._t(
-                        "plugin.local_installed", count=len(installed), plugins=", ".join(installed)
-                    ),
-                    timeout=6,
-                )
-            if failed:
-                self.notify(
-                    self._t("plugin.local_failed", detail="; ".join(failed)),
-                    severity="error",
-                    timeout=8,
-                )
-            self.dismiss(installed or None)
+            output = await self._service.plugin_install_local(base)
+            self.notify(output, timeout=8)
+            self.dismiss([])
         except Exception as exc:
             self.notify(error_message(self._service, exc), severity="error", timeout=8)
             self.dismiss(None)
-
-    @staticmethod
-    def _plugin_id_of(folder: Path) -> str:
-        import json as jsonlib
-
-        metadata_path = folder / "plugin.json"
-        if metadata_path.is_file():
-            try:
-                payload = jsonlib.loads(metadata_path.read_text(encoding="utf-8"))
-                plugin_id = payload.get("id")
-                if isinstance(plugin_id, str) and plugin_id:
-                    return plugin_id
-            except (jsonlib.JSONDecodeError, OSError):
-                pass
-        return folder.name

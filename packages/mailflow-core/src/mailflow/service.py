@@ -64,6 +64,8 @@ from mailflow.domain import (
     SmartSearchResult,
     TrashRecord,
     Urgency,
+    actions_duplicate,
+    dedupe_actions,
     to_utc,
     utcnow,
 )
@@ -74,6 +76,13 @@ from mailflow.letters import build_letter
 from mailflow.llm import LLMRouterImpl
 from mailflow.logging import LoggingRuntime, configure_logging
 from mailflow.pipeline import PipelineEngine, build_bindings
+from mailflow.plugin_market import (
+    MarketFetchReport,
+    MarketPlugin,
+    MarketRepositoryStatus,
+    Repository,
+    safe_failure_reason,
+)
 from mailflow.plugins import PluginManager
 from mailflow.processors import LLMImportanceProcessor as _BUILTIN_LLM_IMPORTANCE
 from mailflow.processors import register_builtin_processors
@@ -360,10 +369,6 @@ _EXPIRED_ACTION_AGE = timedelta(days=1)
 """A schedule entry is dropped a day after it stopped being actionable, not at
 the moment it passed: the entry the user is looking at right now — and the one
 whose reminder just fired — must survive until they have had a chance to act."""
-_EVENT_DEDUPE_WINDOW = timedelta(hours=2)
-"""Two mails reminding of one event rarely state the same minute; entries whose
-summary normalizes identically and whose start falls in the same window are
-the same event."""
 _EXPIRED_AD_AGE = timedelta(hours=24)
 """Ads only count as expired once they are a day old: the mail the user is
 reading right now must never be swept away by a single click."""
@@ -696,6 +701,7 @@ class MailFlowService:
         self.market = PluginMarket(
             [Repository(repo.name, repo.url) for repo in config.plugins.repositories]
         )
+        self._market_fetch_report: MarketFetchReport | None = None
         self.gateways = GatewayManager(config, registry, storage)
         self.gateways._service_ref = self  # pyright: ignore[reportPrivateUsage]
         from mailflow.subscriptions import Subscriptions
@@ -1046,6 +1052,10 @@ class MailFlowService:
         for an unknown account and ``NotImplementedError`` when the adapter
         has no history capability.
         """
+        if limit <= 0:
+            raise ValueError("history limit must be positive")
+        if offset < 0:
+            raise ValueError("history offset must not be negative")
         source = self.sources.get(account_id)
         if source is None:
             raise KeyError(f"no mail source for account {account_id!r}")
@@ -1114,7 +1124,7 @@ class MailFlowService:
             )
         custom = await self.storage.list_custom_actions()
         items.extend(item for item in custom if self.action_natural_key(item) not in dismissed)
-        return sorted(self._dedupe_events(items), key=lambda item: item.due_at)
+        return dedupe_actions(items)
 
     async def delete_action(self, item_id: str) -> bool:
         """Delete an action item.
@@ -1155,48 +1165,16 @@ class MailFlowService:
         """
         return self._action_has_ended(item, datetime.now(UTC))
 
-    @staticmethod
-    def event_dedupe_key(item: ActionItem) -> str | None:
-        """Cross-mail identity of one schedule entry, or None when not dedupable.
-
-        Two mails frequently remind of the *same* event (a week ahead and
-        again on the day) and each analysis produces its own entry. Identity
-        is the normalized summary plus a two-hour time bucket: entries whose
-        text folds together and whose start falls in the same window are the
-        same event. A ``[SEMINAR] `` prefix never participates, so an imported
-        seminar and a mail-derived reminder for it still collapse.
-        """
-        summary = item.summary.strip()
-        if summary.startswith(_SEMINAR_TITLE_MARKER):
-            summary = summary[len(_SEMINAR_TITLE_MARKER) :]
-        normalized = " ".join(summary.split()).casefold()
-        if not normalized:
-            return None
-        bucket = int(to_utc(item.due_at).timestamp() // _EVENT_DEDUPE_WINDOW.total_seconds())
-        return f"{normalized}|{bucket}"
-
-    @staticmethod
-    def _dedupe_events(items: list[ActionItem]) -> list[ActionItem]:
-        """Keep the earliest entry per event; order is otherwise preserved.
-
-        ``list_actions`` collapses cross-mail duplicates; ``list_actions_all``
-        deliberately does not, because the delete path must still see every
-        stored entry.
-        """
-        kept: list[ActionItem] = []
-        positions: dict[str, int] = {}
-        for item in items:
-            key = MailFlowService.event_dedupe_key(item)
-            if key is None:
-                kept.append(item)
+    async def _find_duplicate_action(
+        self, candidate: ActionItem, *, exclude_item_id: str = ""
+    ) -> ActionItem | None:
+        """Return the first stored action conflicting with ``candidate``."""
+        for item in await self.list_actions_all():
+            if item.item_id == exclude_item_id:
                 continue
-            position = positions.get(key)
-            if position is None:
-                positions[key] = len(kept)
-                kept.append(item)
-            elif item.due_at < kept[position].due_at:
-                kept[position] = item
-        return kept
+            if actions_duplicate(candidate, item):
+                return item
+        return None
 
     async def purge_expired_actions(self) -> int:
         """Retire schedule entries that stopped being actionable over a day ago.
@@ -1251,24 +1229,50 @@ class MailFlowService:
         due_at: datetime,
         *,
         action_type: str = "errand",
+        due_end: datetime | None = None,
         notes: str = "",
+        location: str = "",
+        url: str = "",
     ) -> ActionItem:
-        """Create a user-created timed action item (mail_id stays empty); it
-        participates in the reminder scheduler like mail-derived items."""
-        if not summary.strip():
-            raise ValueError("action summary must not be empty")
-        if due_at.tzinfo is None:
-            raise ValueError("due_at must be timezone-aware")
+        """Create a user-owned timed action and add it to the reminder schedule."""
+        final_summary = summary.strip()
+        final_type = action_type.strip()
+        if not final_summary:
+            raise ValueError(self.t("action.missing_summary"))
+        if not final_type:
+            raise ValueError(self.t("action.missing_type"))
+        if due_at.tzinfo is None or due_at.utcoffset() is None:
+            raise ValueError(self.t("action.invalid_due_edit"))
+        final_due = to_utc(due_at)
+        if due_end is not None:
+            if due_end.tzinfo is None or due_end.utcoffset() is None:
+                raise ValueError(self.t("action.invalid_due_edit"))
+            final_end = to_utc(due_end)
+            if final_end <= final_due:
+                raise ValueError(self.t("action.invalid_end"))
+        else:
+            final_end = None
         item = ActionItem(
             item_id=uuid4().hex,
             mail_id="",
-            summary=summary.strip(),
-            action_type=action_type.strip() or "errand",
-            due_at=to_utc(due_at),
-            due_end=None,
+            summary=final_summary,
+            action_type=final_type,
+            due_at=final_due,
+            due_end=final_end,
             notes=notes.strip(),
+            location=location.strip(),
+            url=url.strip(),
             origin=ActionOrigin.CUSTOM,
         )
+        duplicate = await self._find_duplicate_action(item)
+        if duplicate is not None:
+            raise ValueError(
+                self.t(
+                    "action.duplicate",
+                    summary=duplicate.summary,
+                    time=duplicate.time_range,
+                )
+            )
         await self.storage.save_custom_action(item)
         return item
 
@@ -1279,40 +1283,71 @@ class MailFlowService:
         summary: str | None = None,
         due_at: datetime | None = None,
         action_type: str | None = None,
+        due_end: datetime | None = None,
+        clear_end: bool = False,
         notes: str | None = None,
+        location: str | None = None,
+        url: str | None = None,
     ) -> ActionItem:
         """Edit a user-owned or imported seminar action in place.
 
         Mail-analysis actions remain source-owned and are intentionally not
         mutable here; re-analysis would otherwise silently undo the edit.
         """
+        source = next(
+            (
+                candidate
+                for candidate in await self.list_actions_all()
+                if candidate.item_id == item_id
+            ),
+            None,
+        )
+        if source is not None and source.origin is ActionOrigin.ANALYSIS:
+            raise ValueError(self.t("action.not_editable", item_id=item_id))
         custom = await self.storage.list_custom_actions()
         item = next((candidate for candidate in custom if candidate.item_id == item_id), None)
         if item is None:
             raise ValueError(self.t("action.not_found", item_id=item_id))
-        if item.origin is ActionOrigin.ANALYSIS and item.mail_id:
+        if item.origin is ActionOrigin.ANALYSIS:
             raise ValueError(self.t("action.not_editable", item_id=item_id))
+        if clear_end and due_end is not None:
+            raise ValueError(self.t("action.invalid_end"))
         final_summary = item.summary if summary is None else summary.strip()
         if not final_summary:
             raise ValueError(self.t("action.missing_summary"))
-        if due_at is not None and due_at.tzinfo is None:
-            raise ValueError(self.t("action.invalid_due_edit"))
-        final_due = item.due_at if due_at is None else to_utc(due_at)
         final_type = item.action_type if action_type is None else action_type.strip()
         if not final_type:
-            final_type = "other"
-        final_notes = item.notes if notes is None else notes.strip()
+            raise ValueError(self.t("action.missing_type"))
+        if due_at is not None and (due_at.tzinfo is None or due_at.utcoffset() is None):
+            raise ValueError(self.t("action.invalid_due_edit"))
+        if due_end is not None and (due_end.tzinfo is None or due_end.utcoffset() is None):
+            raise ValueError(self.t("action.invalid_due_edit"))
+        final_due = item.due_at if due_at is None else to_utc(due_at)
+        final_end = (
+            None if clear_end else (to_utc(due_end) if due_end is not None else item.due_end)
+        )
+        if final_end is not None and to_utc(final_end) <= final_due:
+            raise ValueError(self.t("action.invalid_end"))
         updated = item.model_copy(
             update={
                 "summary": final_summary,
                 "due_at": final_due,
+                "due_end": to_utc(final_end) if final_end is not None else None,
                 "action_type": final_type,
-                "notes": final_notes,
-                "origin": item.origin
-                if item.origin is not ActionOrigin.ANALYSIS
-                else ActionOrigin.CUSTOM,
+                "notes": item.notes if notes is None else notes.strip(),
+                "location": item.location if location is None else location.strip(),
+                "url": item.url if url is None else url.strip(),
             }
         )
+        duplicate = await self._find_duplicate_action(updated, exclude_item_id=item.item_id)
+        if duplicate is not None:
+            raise ValueError(
+                self.t(
+                    "action.duplicate",
+                    summary=duplicate.summary,
+                    time=duplicate.time_range,
+                )
+            )
         await self.storage.save_custom_action(updated)
         if updated.origin is ActionOrigin.SEMINAR:
             async with self._seminar_lock:
@@ -1326,6 +1361,8 @@ class MailFlowService:
                             "starts_at": updated.due_at,
                             "ends_at": updated.due_end,
                             "description": updated.notes,
+                            "location": updated.location,
+                            "url": updated.url,
                         }
                     )
                     await self._save_seminar_candidates(candidates)
@@ -1775,6 +1812,15 @@ class MailFlowService:
                 url=final_url,
                 origin=ActionOrigin.SEMINAR,
             )
+            duplicate = await self._find_duplicate_action(item)
+            if duplicate is not None:
+                raise ValueError(
+                    self.t(
+                        "action.duplicate",
+                        summary=duplicate.summary,
+                        time=duplicate.time_range,
+                    )
+                )
             await self.storage.save_custom_action(item)
             candidates[index] = candidate.model_copy(
                 update={
@@ -2710,20 +2756,58 @@ Return every candidate in this batch."""
     # -- plugin marketplace ------------------------------------------------------------
 
     async def plugin_repo_add(self, name: str, url: str) -> None:
-        """Register a marketplace repository (persisted to the config file)."""
+        """Register a marketplace repository without requiring network access."""
         if self.config_path is None:
             raise ValueError("no config file loaded; start with --config to persist changes")
+        name = name.strip()
+        url = url.strip()
+        if not name or not url:
+            raise ValueError("repository name and URL must not be empty")
         from mailflow.config import PluginRepositoryConfig, write_config
 
         repos = list(self.config.plugins.repositories)
         if any(repo.name == name for repo in repos):
             raise ValueError(f"repository {name!r} already configured")
-        repos.append(PluginRepositoryConfig(name=name, url=url))
-        self.config.plugins.repositories = repos
-        write_config(self.config, self.config_path)
+        updated = self.config.model_copy(deep=True)
+        updated.plugins.repositories = [*repos, PluginRepositoryConfig(name=name, url=url)]
+        write_config(updated, self.config_path)
+        self.config = updated
         from mailflow.plugin_market import PluginMarket, Repository
 
-        self.market = PluginMarket([Repository(r.name, r.url) for r in repos])
+        self.market = PluginMarket(
+            [Repository(r.name, r.url) for r in updated.plugins.repositories]
+        )
+        self._market_fetch_report = None
+
+    async def plugin_repo_edit(self, original_name: str, name: str, url: str) -> None:
+        """Atomically replace one repository configuration entry."""
+        if self.config_path is None:
+            raise ValueError("no config file loaded; start with --config to persist changes")
+        original_name = original_name.strip()
+        name = name.strip()
+        url = url.strip()
+        if not original_name or not name or not url:
+            raise ValueError("repository name and URL must not be empty")
+        from mailflow.config import PluginRepositoryConfig, write_config
+
+        repos = list(self.config.plugins.repositories)
+        if not any(repo.name == original_name for repo in repos):
+            raise KeyError(f"repository {original_name!r} not configured")
+        if name != original_name and any(repo.name == name for repo in repos):
+            raise ValueError(f"repository {name!r} already configured")
+        updated = self.config.model_copy(deep=True)
+        updated.plugins.repositories = [
+            PluginRepositoryConfig(name=name, url=url) if repo.name == original_name else repo
+            for repo in repos
+        ]
+        write_config(updated, self.config_path)
+        self.config = updated
+        from mailflow.plugin_market import PluginMarket, Repository
+
+        self.market = PluginMarket(
+            [Repository(r.name, r.url) for r in updated.plugins.repositories]
+        )
+        self._market_fetch_report = None
 
     async def plugin_repo_remove(self, name: str) -> None:
         if self.config_path is None:
@@ -2734,41 +2818,176 @@ Return every candidate in this batch."""
         remaining = [repo for repo in repos if repo.name != name]
         if len(remaining) == len(repos):
             raise KeyError(f"repository {name!r} not configured")
-        self.config.plugins.repositories = remaining
-        write_config(self.config, self.config_path)
+        updated = self.config.model_copy(deep=True)
+        updated.plugins.repositories = remaining
+        write_config(updated, self.config_path)
+        self.config = updated
         from mailflow.plugin_market import PluginMarket, Repository
 
         self.market = PluginMarket([Repository(r.name, r.url) for r in remaining])
+        self._market_fetch_report = None
 
     # -- marketplace cache (offline translations for the detail dialog) -----------
 
     _MARKET_CACHE_PREF = "market.cache.entries"
 
     async def market_cache_save(self, entries: list[Any]) -> None:
-        """Persist the fetched marketplace entries so the plugin detail
-        dialog keeps its translations even before (or without) a fresh
-        network fetch on the next run."""
+        """Persist repository-aware marketplace entries for offline browsing."""
         try:
-            payload = [entry.model_dump(mode="json") for _repo, entry in entries]
+            from mailflow.plugin_market import (
+                MarketPlugin,
+                Repository,
+                serialize_market_cache,
+            )
+
+            normalized: list[tuple[Repository, MarketPlugin]] = []
+            for item in entries:
+                try:
+                    if isinstance(item, (tuple, list)):
+                        pair = cast(Sequence[Any], item)
+                        if len(pair) != 2:
+                            continue
+                        repository, plugin = pair
+                        if not isinstance(repository, Repository):
+                            continue
+                        if not isinstance(plugin, MarketPlugin):
+                            plugin = MarketPlugin.model_validate(plugin)
+                        normalized.append((repository, plugin))
+                    else:
+                        plugin = (
+                            item
+                            if isinstance(item, MarketPlugin)
+                            else MarketPlugin.model_validate(item)
+                        )
+                        normalized.append((Repository("cache", "", stale=True), plugin))
+                except Exception:
+                    logger.debug("skipping malformed marketplace cache entry")
             await self.storage.set_preference(
-                self._MARKET_CACHE_PREF, json.dumps(payload, ensure_ascii=False)
+                self._MARKET_CACHE_PREF, serialize_market_cache(normalized)
             )
         except Exception as exc:
             logger.debug("market cache save failed: %s", exc)
 
-    async def market_cache_load(self) -> list[Any]:
-        """Previously fetched marketplace entries ('' when none)."""
+    async def market_cache_load(self) -> list[tuple[Repository, MarketPlugin]]:
+        """Load repository-aware cached entries, skipping malformed records."""
         raw = await self.storage.get_preference(self._MARKET_CACHE_PREF)
         if not raw:
             return []
         try:
-            from mailflow.plugin_market import MarketPlugin
+            from mailflow.plugin_market import deserialize_market_cache
 
-            payload = json.loads(raw)
-            return [MarketPlugin.model_validate(item) for item in payload]
+            return deserialize_market_cache(raw)
         except Exception as exc:
             logger.debug("market cache load failed: %s", exc)
             return []
+
+    async def market_fetch_report(self) -> MarketFetchReport:
+        """Fetch marketplace entries with stale-cache fallback.
+
+        Network work runs off the event loop. A successful repository refresh
+        replaces its old rows; cached rows survive only for repositories whose
+        refresh failed, and duplicate plugin ids are removed by the market
+        report before the cache is persisted.
+        """
+        from mailflow.plugin_market import merge_market_cache
+
+        report = await asyncio.to_thread(self.market.list_plugins_report)
+        cached = await self.market_cache_load()
+        merged = merge_market_cache(report, cached)
+        self._market_fetch_report = merged
+        await self.market_cache_save(merged.entries)
+        return merged
+
+    async def market_repository_statuses(self) -> list[MarketRepositoryStatus]:
+        """Return the latest repository outcomes, fetching when none exist."""
+        if self._market_fetch_report is None:
+            await self.market_fetch_report()
+        return self._market_fetch_report.repositories if self._market_fetch_report else []
+
+    async def _install_plugin(self, plugin: Any, *, source: str) -> tuple[str, bool]:
+        """Install one plugin and record provenance only after success."""
+        from mailflow.plugin_market import PluginMarket
+
+        if PluginMarket.is_installed(plugin.id, package=plugin.package):
+            return self.t("plugin.already_installed", plugin_id=plugin.id), True
+        try:
+            output = await self.market.install(plugin)
+        except Exception as exc:
+            raise RuntimeError(safe_failure_reason(exc)) from exc
+        if str(output or "").strip() == f"{plugin.id} is already installed":
+            return self.t("plugin.already_installed", plugin_id=plugin.id), True
+        await self.record_plugin_source(plugin.id, source)
+        await self.storage.set_preference(f"plugin.package.{plugin.id}", plugin.package)
+        return str(output or ""), False
+
+    async def plugin_install(self, plugin_id: str) -> str:
+        """Look up and install one remote plugin, recording source on success."""
+
+        try:
+            found = await asyncio.to_thread(self.market.find, plugin_id)
+        except Exception as exc:
+            raise RuntimeError(safe_failure_reason(exc)) from exc
+        if found is None:
+            raise KeyError(self.t("plugin.market_not_found", plugin_id=plugin_id))
+        _repo, plugin = found
+        output, _already = await self._install_plugin(plugin, source=plugin.source)
+        return output
+
+    async def plugin_install_local(self, root: Path) -> str:
+        """Install local plugin folders, retaining successful installs on partial failure."""
+        from mailflow.plugin_market import MarketPlugin, detect_plugin_folders
+
+        folders = await asyncio.to_thread(detect_plugin_folders, root)
+        if not folders:
+            raise ValueError(self.t("plugin.local_none_found", path=str(root)))
+        installed: list[str] = []
+        failed: list[str] = []
+        for folder in folders:
+            plugin_id = self._plugin_id_of(folder)
+            plugin = MarketPlugin(
+                id=plugin_id,
+                name=folder.name,
+                version="",
+                categories=[],
+                package=plugin_id,
+                source=str(folder),
+            )
+            try:
+                _output, already = await self._install_plugin(plugin, source=str(folder))
+                if already:
+                    failed.append(
+                        f"{plugin_id}: {self.t('plugin.already_installed', plugin_id=plugin_id)}"
+                    )
+                    continue
+            except Exception as exc:
+                failed.append(f"{plugin_id}: {exc!s}")
+                continue
+            installed.append(plugin_id)
+        if not installed:
+            raise ValueError(self.t("plugin.local_failed", detail="; ".join(failed)))
+        result = self.t(
+            "plugin.local_installed", count=len(installed), plugins=", ".join(installed)
+        )
+        if not failed:
+            result += f"\n{self.t('plugin.restart_note')}"
+        else:
+            result += f"\n{self.t('plugin.local_failed', detail='; '.join(failed))}"
+        return result
+
+    @staticmethod
+    def _plugin_id_of(folder: Path) -> str:
+        metadata_path = folder / "plugin.json"
+        if metadata_path.is_file():
+            try:
+                payload: Any = json.loads(metadata_path.read_text(encoding="utf-8"))
+                plugin_id = (
+                    cast(dict[str, Any], payload).get("id") if isinstance(payload, dict) else None
+                )
+                if isinstance(plugin_id, str) and plugin_id:
+                    return plugin_id
+            except (json.JSONDecodeError, OSError):
+                pass
+        return folder.name
 
     # -- plugin lifecycle: enable / disable / uninstall -----------------------------
 
@@ -2868,23 +3087,60 @@ Return every candidate in this batch."""
         loaded = {p.plugin_id for p in self.plugin_manager.enabled_infos()}
         return "enabled" if plugin_id in loaded else "not_loaded"
 
-    async def plugin_uninstall(self, plugin_id: str) -> str:
-        """Uninstall a marketplace plugin (uv pip uninstall of its package).
+    async def _find_market_plugin(self, plugin_id: str) -> MarketPlugin | None:
+        """Resolve plugin metadata without making uninstall depend on network."""
+        from mailflow.plugin_market import MarketPlugin
 
-        Config entries that referenced the plugin's components are removed
-        too: accounts/LLMs/processors/notifiers whose provider belonged to
-        this plugin would otherwise be silently skipped on every reload
-        after the package is gone.
-        """
+        lookup_error: Exception | None = None
+        try:
+            found = await asyncio.to_thread(self.market.find, plugin_id)
+        except Exception as exc:
+            lookup_error = exc
+            found = None
+        if found is not None:
+            return found[1]
+        for _repository, cached_plugin in await self.market_cache_load():
+            if cached_plugin.id == plugin_id:
+                return cached_plugin
+        source = await self.storage.get_preference(f"plugin.source.{plugin_id}")
+        if source:
+            return MarketPlugin(id=plugin_id, package=plugin_id, source=source)
+        if lookup_error is not None:
+            raise RuntimeError(safe_failure_reason(lookup_error)) from lookup_error
+        return None
+
+    async def plugin_uninstall(self, plugin_id: str) -> str:
+        """Uninstall one marketplace plugin and clean its configuration."""
         from mailflow.plugin_market import PluginMarket
 
-        found = await asyncio.to_thread(self.market.find, plugin_id)
-        plugin = found[1] if found else None
+        bundled_ids: set[str] = cast(
+            set[str], getattr(self.plugin_manager, "bundled_plugin_ids", set[str]())
+        )
+        if plugin_id in bundled_ids:
+            raise ValueError(self.t("plugin.bundled_uninstall_forbidden", plugin_id=plugin_id))
+        plugin = await self._find_market_plugin(plugin_id)
         if plugin is None:
-            raise KeyError(f"plugin {plugin_id!r} not found in any repository")
-        if not PluginMarket.is_installed(plugin_id, package=plugin.package):
+            raise KeyError(self.t("plugin.market_not_found", plugin_id=plugin_id))
+        package = (
+            plugin.package
+            or await self.storage.get_preference(f"plugin.package.{plugin_id}")
+            or plugin_id
+        )
+        if package != plugin.package:
+            plugin = plugin.model_copy(update={"package": package})
+        if not PluginMarket.is_installed(plugin_id, package=package):
+            await self.clear_plugin_source(plugin_id)
+            await self.storage.set_preference(f"plugin.package.{plugin_id}", "")
+            removed = await self._drop_config_entries_for(plugin_id)
+            if removed:
+                await self._persist_config(self.config, f"plugin.{plugin_id}")
             return f"{plugin_id} is not installed"
-        output = await self.market.uninstall(plugin)
+        try:
+            output = await self.market.uninstall(plugin)
+        except Exception as exc:
+            raise RuntimeError(safe_failure_reason(exc)) from exc
+        await self.clear_plugin_source(plugin_id)
+        await self.storage.set_preference(f"plugin.package.{plugin_id}", "")
         removed = await self._drop_config_entries_for(plugin_id)
         if removed:
             await self._persist_config(self.config, f"plugin.{plugin_id}")
@@ -2897,9 +3153,11 @@ Return every candidate in this batch."""
         return output
 
     async def _drop_config_entries_for(self, plugin_id: str) -> list[str]:
-        """Remove accounts/llms/processors/notifiers whose provider component
-        belongs to ``plugin_id``; returns the removed entry ids."""
+        """Remove config entries owned by an uninstalled plugin."""
         owned = {c.component_id for c in self.registry.snapshots() if c.plugin_id == plugin_id}
+        component_ids_for = getattr(self.plugin_manager, "component_ids_for", None)
+        if callable(component_ids_for):
+            owned.update(cast(Sequence[str], component_ids_for(plugin_id)))
         removed: list[str] = []
         for group in ("accounts", "llms", "processors", "notifiers"):
             entries = getattr(self.config, group)
@@ -2909,6 +3167,13 @@ Return every candidate in this batch."""
                     f"{group}:{entry.provider}" for entry in entries if entry not in kept
                 )
                 setattr(self.config, group, kept)
+        plugins = self.config.plugins
+        for field in ("enabled", "disabled"):
+            values = list(getattr(plugins, field))
+            filtered = [value for value in values if value != plugin_id]
+            if len(filtered) != len(values):
+                removed.append(f"plugins:{field}")
+                setattr(plugins, field, filtered)
         return removed
 
     # -- gateway provisioning (Bots tab) ----------------------------------------------

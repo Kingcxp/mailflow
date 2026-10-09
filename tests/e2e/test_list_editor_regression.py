@@ -64,22 +64,26 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
             rendered = row0.render_line(0).text
             assert rendered.strip() == "10001"
             assert rendered.find("10001") > 0, f"value not centered: {rendered!r}"
-            # Enter appends a new row and keeps the typed value
+            # Enter appends a stable-token row, preserves the value and moves focus.
             row0.focus()  # pyright: ignore[reportUnknownMemberType]
             await pilot.press("enter")
             await pilot.pause(0.2)
             assert editor.value() == ["10001"]
-            assert editor.query_one("#list-editor-input-1", Input) is not None
-            # bottom add button appends another row
+            row1 = editor.query(".list-editor-row")[1].query_one(Input)
+            assert row1.has_focus
+            # bottom add appends another row and focuses it without rebuilding prior rows
             add_btn: Button = editor.query_one("#list-editor-add", Button)
             add_btn.press()
             await pilot.pause(0.2)
-            assert editor.query_one("#list-editor-input-2", Input) is not None
-            # per-row delete removes that row's value
-            del0: Button = editor.query_one("#list-editor-del-0", Button)
+            row2 = editor.query(".list-editor-row")[2].query_one(Input)
+            assert row2.has_focus
+            # Delete the original row by its stable token, then focus the next surviving row.
+            token = (row0.id or "").removeprefix("list-editor-input-")
+            del0: Button = editor.query_one(f"#list-editor-del-{token}", Button)
             del0.press()
             await pilot.pause(0.2)
             assert editor.value() == []
+            assert row1.has_focus
 
             # collection passes required with a typed value, and the value
             # lands in options.admins (the napcat gateway field)
@@ -90,7 +94,7 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
             # the admins extra (otherwise the core validation fails first)
             id_field: Input = form.query_one("#field-notifier-id", Input)
             id_field.value = "bot-1"
-            row_a: Input = form.query_one("#extra-admins #list-editor-input-0", Input)
+            row_a: Input = editor.query(".list-editor-row")[0].query_one(Input)
             row_a.value = "123456"
             collected = form._collect()
             assert collected["options"]["admins"] == ["123456"]

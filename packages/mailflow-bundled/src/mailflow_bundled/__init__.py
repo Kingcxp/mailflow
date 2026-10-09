@@ -54,7 +54,7 @@ def create_plugin_manager(
     """The standard manager: bundled set first, optional external discovery."""
     manager = PluginManager(config)
     for plugin in BUNDLED_PLUGINS:
-        manager.register(plugin)
+        manager.register(plugin, bundled=True)
     if discover_external:
         manager.discover()
     return manager

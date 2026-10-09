@@ -45,6 +45,7 @@ from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Input,
     Label,
@@ -58,6 +59,7 @@ from textual.widgets import (
 )
 
 from mailflow_tui.labels import error_detail, error_message, urgency_label
+from mailflow_tui.search import SearchMatcher, build_search_matcher
 
 _SECTION_LABELS = {
     "general": "tui.settings_section_general",
@@ -1152,6 +1154,8 @@ class SettingsPane(Vertical):
         self._sections: list[SettingsSection] = []
         self._active = ""
         self._query = ""
+        self._settings_filter_generation = 0
+        self._settings_matcher = SearchMatcher("")
         self._render_lock = asyncio.Lock()
         self._reload_lock = asyncio.Lock()
 
@@ -1159,7 +1163,12 @@ class SettingsPane(Vertical):
         return self._service.t(key, **params)
 
     def compose(self) -> ComposeResult:
-        yield Input(placeholder=self._t("tui.settings_search_placeholder"), id="settings-search")
+        with Horizontal(id="settings-search-row"):
+            yield Input(
+                placeholder=self._t("tui.settings_search_placeholder"), id="settings-search"
+            )
+            yield Checkbox(self._t("tui.search_regex"), id="settings-search-regex")
+            yield Checkbox(self._t("tui.search_case"), id="settings-search-case")
         with Horizontal(id="settings-body"):
             with Vertical(id="settings-sidebar"):
                 yield Static(self._t("tui.settings_sections"), id="settings-sidebar-title")
@@ -1241,47 +1250,79 @@ class SettingsPane(Vertical):
                 listing.index = index
         await self._render_options()
 
-    def _visible_options(self) -> list[OptionSpec]:
-        query = self._query.strip().lower()
-        if query:
+    def _current_matcher(self) -> SearchMatcher:
+        regex = self.query_one_optional("#settings-search-regex", Checkbox)
+        case = self.query_one_optional("#settings-search-case", Checkbox)
+        return build_search_matcher(
+            self._query,
+            regex=bool(regex.value) if regex is not None else False,
+            case_sensitive=bool(case.value) if case is not None else False,
+        )
+
+    def _visible_options(self, matcher: SearchMatcher) -> list[OptionSpec]:
+        if matcher.query:
             return [
                 spec
                 for section in self._sections
                 for spec in section.options
-                if query in f"{spec.key} {self._describe(spec)}".lower()
+                if matcher.matches(f"{spec.key} {self._describe(spec)}")
             ]
         section = next((s for s in self._sections if s.section_id == self._active), None)
         return list(section.options) if section is not None else []
 
     async def _render_options(self) -> None:
-        """Replace the option cards; serialized so overlapping renders (a
-        search keystroke landing during a reload) cannot mount duplicate ids."""
+        matcher = self._current_matcher()
+        if matcher.error:
+            self._set_status(f"[red]{self._t('tui.invalid_regex')}: {escape(matcher.error)}[/red]")
+            return
+        self._settings_matcher = matcher
+        self._set_status("")
         async with self._render_lock:
             container = self.query_one_optional("#settings-options", ScrollableContainer)
             if container is None:
                 return
+            options = self._visible_options(matcher)
             await container.remove_children()
-            options = self._visible_options()
             if not options:
                 await container.mount(
                     Static(self._t("tui.settings_no_matches"), classes="settings-empty")
                 )
                 return
-            await container.mount_all(
-                [OptionCard(self._service, spec, self._describe(spec)) for spec in options]
-            )
+            for offset in range(0, len(options), 50):
+                batch = [
+                    OptionCard(self._service, spec, self._describe(spec))
+                    for spec in options[offset : offset + 50]
+                ]
+                await container.mount_all(batch)
+                if offset + 50 < len(options):
+                    await asyncio.sleep(0)
+
+    def _schedule_settings_filter(self) -> None:
+        self._settings_filter_generation += 1
+        generation = self._settings_filter_generation
+
+        async def _filter() -> None:
+            await asyncio.sleep(0.3)
+            if generation == self._settings_filter_generation:
+                await self._render_options()
+
+        self.run_worker(
+            cast(Any, _filter), exclusive=True, group="settings-filter", exit_on_error=False
+        )
 
     def _set_status(self, text: str) -> None:
         node = self.query_one_optional("#settings-status", Static)
         if node is not None:
             node.update(text)
 
-    # -- events ------------------------------------------------------------
-
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "settings-search":
             self._query = event.value
-            await self._render_options()
+            self._schedule_settings_filter()
+
+    async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id in {"settings-search-regex", "settings-search-case"}:
+            self._schedule_settings_filter()
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id != "settings-sections":
@@ -1663,7 +1704,7 @@ class LLMPane(Vertical):
 class AccountsPane(Vertical):
     """Mailboxes plus the history browser (select mail, run the pipeline)."""
 
-    _PAGE = 25
+    _DEFAULT_HISTORY_BATCH_SIZE = 25
 
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
@@ -1695,6 +1736,10 @@ class AccountsPane(Vertical):
                 self._t("tui.history_select_all"), id="history-select-all", variant="primary"
             )
             yield Button(self._t("tui.history_more"), id="history-more", variant="primary")
+            yield Static(self._t("tui.history_count_label"), id="history-count-label")
+            yield Input(
+                value=str(self._DEFAULT_HISTORY_BATCH_SIZE), type="integer", id="history-count"
+            )
         yield Static("", id="accounts-status")
 
     async def on_mount(self) -> None:
@@ -1864,7 +1909,13 @@ class AccountsPane(Vertical):
             self._history = []
             self._picked.clear()
             self._history_account = self._service.config.accounts[index].account_id
-            await self._load_history(offset=0)
+            self._render_history()
+            self.run_worker(
+                self._load_history(offset=0),
+                exclusive=True,
+                group="history-load",
+                exit_on_error=False,
+            )
 
     def _open_form(self, index: int | None) -> None:
         values = self._service.config.accounts[index].model_dump() if index is not None else None
@@ -1911,21 +1962,36 @@ class AccountsPane(Vertical):
 
     # -- history -----------------------------------------------------------
 
+    def _history_limit(self) -> int | None:
+        node = self.query_one_optional("#history-count", Input)
+        raw = str(node.value).strip() if node is not None else str(self._DEFAULT_HISTORY_BATCH_SIZE)
+        try:
+            count = int(raw)
+        except ValueError:
+            count = 0
+        if count <= 0:
+            self._set_status(f"[yellow]{self._t('tui.history_count_invalid')}[/yellow]")
+            return None
+        return count
+
     async def _load_history(self, *, offset: int) -> None:
         account_id = self._history_account
         if not account_id:
             self._set_status(f"[yellow]{self._t('tui.entry_pick_first')}[/yellow]")
             return
+        limit = self._history_limit()
+        if limit is None:
+            return
         self._set_status(self._t("tui.history_loading", account=account_id))
         try:
-            page = await self._service.fetch_history(account_id, limit=self._PAGE, offset=offset)
+            page = await self._service.fetch_history(account_id, limit=limit, offset=offset)
         except NotImplementedError:
             self._set_status(f"[yellow]{self._t('tui.history_unsupported')}[/yellow]")
             return
         except KeyError as exc:
             self._set_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
             return
-        except Exception as exc:  # provider/transport failures stay in the pane
+        except Exception as exc:
             self._set_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
             return
         known: set[str] = set(self._known)
@@ -1933,9 +1999,6 @@ class AccountsPane(Vertical):
         seen_ids = {m.normalized_message_id() for m in self._history}
         for mail in page:
             record_id = mail.normalized_message_id()
-            # servers resend the same message across windows (and duplicate
-            # message-ids exist in the wild); a repeated DataTable row key
-            # would crash the table, so keep exactly one row per mail
             if record_id in seen_ids:
                 continue
             seen_ids.add(record_id)
@@ -1948,7 +2011,14 @@ class AccountsPane(Vertical):
         if not self._history:
             self._set_status(self._t("tui.history_empty"))
         else:
-            self._set_status(self._t("tui.history_loaded", count=len(self._history)))
+            self._set_status(
+                self._t(
+                    "tui.history_batch_loaded",
+                    requested=limit,
+                    added=len(fresh),
+                    count=len(self._history),
+                )
+            )
 
     def _displayed_history_ids(self) -> list[str]:
         table = self._history_table()

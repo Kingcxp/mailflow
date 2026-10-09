@@ -678,6 +678,43 @@ async def test_account_form_test_button_probes_imap_not_llm(tmp_path: Path) -> N
         await service.stop()
 
 
+async def test_history_count_controls_page_size_across_pages(tmp_path: Path) -> None:
+    from textual.widgets import Button, DataTable, Input, TabbedContent
+
+    service = await start_service_quiet(tmp_path)
+    service.config.accounts = [
+        _fake_account(
+            mails=[{"message_id": f"count-{i}", "subject": f"mail {i}"} for i in range(12)]
+        )
+    ]
+    await service.reload_runtime()
+    CommandRouter(service)
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
+    try:
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            app.query_one(TabbedContent).active = "tab-mailboxes"
+            await _wait_until(pilot, lambda: bool(app.query("#history-more")))
+            pane = _accounts_pane(app)
+            pane._selected = 0
+            pane._history_account = "acct-1"
+            count = app.query_one("#history-count", Input)
+            more = app.query_one("#history-more", Button)
+            count.value = "4"
+            more.press()
+            await _wait_until(pilot, lambda: len(pane._history) == 4)
+            count.value = "3"
+            more.press()
+            await _wait_until(pilot, lambda: len(pane._history) == 7)
+            assert app.query_one("#history-table", DataTable).row_count == 7
+            count.value = "0"
+            more.press()
+            await pilot.pause(0.1)
+            assert len(pane._history) == 7
+    finally:
+        await service.stop()
+
+
 async def test_history_bulk_load_beyond_hundred_mails(tmp_path: Path) -> None:
     """Loading 5+ consecutive pages (125 mails) must not crash the app:
     regression for the >100-mails report."""

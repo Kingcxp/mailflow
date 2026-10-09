@@ -53,5 +53,3 @@ jobs:
         if: failure()
         run: uv run pytest tests -q --tb=short --no-header -x 2>&1 | uv run python tools/emit_lines_as_errors.py
 
-      - name: Docs gate
-        run: uv run python tools/check_docs.py

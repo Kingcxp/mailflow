@@ -145,7 +145,7 @@ digest are paginated into separate messages.
 ## 8. Verify
 
 ```bash
-make check        # lint + format + mypy + pyright + pytest + docs gate
+make check        # lint + format + mypy + pyright + pytest
 uv run mailflow doctor -c configs/local.toml   # registrations and configuration summary
 ```
 

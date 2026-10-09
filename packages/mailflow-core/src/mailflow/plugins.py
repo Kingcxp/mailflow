@@ -82,10 +82,11 @@ class PluginManager:
         self._pm.add_hookspecs(MailFlowHookSpecs)
         self._infos: dict[str, PluginInfo] = {}
         self._plugin_objects: dict[str, Any] = {}
+        self._bundled_plugin_ids: set[str] = set()
 
     # -- registration ----------------------------------------------------------
 
-    def register(self, plugin: Any) -> str | None:
+    def register(self, plugin: Any, *, bundled: bool = False) -> str | None:
         """Register one plugin object (module or instance); returns its id."""
         try:
             info = plugin.mailflow_plugin_info()
@@ -101,6 +102,8 @@ class PluginManager:
         self._plugin_objects[plugin_id] = plugin
         self._infos[plugin_id] = info
         self._pm.register(plugin, name=plugin_id)
+        if bundled:
+            self._bundled_plugin_ids.add(plugin_id)
         logger.debug("registered plugin %r (%s)", plugin_id, info.name)
         return plugin_id
 
@@ -149,6 +152,24 @@ class PluginManager:
                 logger.error("plugin %r failed to register: %s", plugin_id, exc)
         return registry
 
+    def component_ids_for(self, plugin_id: str) -> list[str]:
+        """Return component ids declared by a plugin, even when disabled."""
+        plugin = self._plugin_objects.get(plugin_id)
+        if plugin is None:
+            return []
+        config = self._config.model_copy(deep=True)
+        config.plugins.disabled = [item for item in config.plugins.disabled if item != plugin_id]
+        if config.plugins.enabled and plugin_id not in config.plugins.enabled:
+            config.plugins.enabled.append(plugin_id)
+        registry = ComponentRegistry()
+        registrar = PluginRegistrar(registry, config, plugin_id)
+        try:
+            plugin.mailflow_register(registrar, config)
+        except Exception as exc:
+            logger.error("plugin %r ownership lookup failed: %s", plugin_id, exc)
+            return []
+        return [snapshot.component_id for snapshot in registry.snapshots()]
+
     # -- snapshots ------------------------------------------------------------------
 
     def snapshots(self, registry: ComponentRegistry) -> list[PluginSnapshot]:
@@ -162,6 +183,11 @@ class PluginManager:
     @property
     def plugin_ids(self) -> list[str]:
         return list(self._plugin_objects)
+
+    @property
+    def bundled_plugin_ids(self) -> set[str]:
+        """Plugin ids supplied by the application distribution."""
+        return set(self._bundled_plugin_ids)
 
     def kind_label(self, kind: ComponentKind) -> str:
         return kind.value

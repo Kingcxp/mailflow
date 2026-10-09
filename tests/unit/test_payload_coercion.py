@@ -48,3 +48,17 @@ def test_non_list_action_items_become_empty() -> None:
     raw = {"summary": "s", "urgency": "info", "action_items": {"oops": 1}}
     payload = AnalysisPayload.model_validate(_coerce_analysis_payload(raw))
     assert payload.action_items == []
+
+
+def test_action_must_do_is_explicit_and_coerced_to_boolean() -> None:
+    raw: dict[str, Any] = {
+        "action_items": [
+            {"summary": "required", "due_at": "tomorrow", "must_do": "yes"},
+            {"summary": "missing", "due_at": "tomorrow"},
+            {"summary": "optional", "due_at": "tomorrow", "must_do": "false"},
+        ]
+    }
+
+    payload = AnalysisPayload.model_validate(_coerce_analysis_payload(raw))
+
+    assert [item.must_do for item in payload.action_items] == [True, False, False]

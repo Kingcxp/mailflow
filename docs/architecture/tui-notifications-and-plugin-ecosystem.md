@@ -289,13 +289,14 @@ frozen for review before Phase 1 starts.
   built-in providers' extras to FormField. *Verify:* unit + e2e.
 - **Phase 3 — Categories & templates**: `gateway` category in repo docs;
   gateway scaffold template; update Market/Runtime category filters and the
-  repo `index.json` + docs. *Verify:* docs gate + validate_plugin.
+  repo `index.json` + docs. *Verify:* validate_plugin.
 - **Phase 4 — New plugins**: author the confirmed backlog (Gmail/Outlook
   sources, 6 notifiers, 4 LLM presets, 3 processors) in `mailflow-repo`,
   each with plugin.json (en + zh-CN descriptions/readmes). *Verify:*
   `validate_plugin.py` per plugin.
 - **Phase 5 — Docs**: update `tui.md`, `bot-login.md` (supersede), plugin
-  docs in `mailflow-repo`, README en/zh-CN, CHANGELOG. *Verify:* docs gate.
+  docs in `mailflow-repo`, README en/zh-CN, CHANGELOG; keep documentation
+  changes alongside the feature that requires them.
 
 ## Risks & open items
 

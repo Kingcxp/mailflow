@@ -67,6 +67,10 @@ class MySource:
         """Up to `limit` already-received messages, newest first, skipping `offset`."""
 ```
 
+The service rejects non-positive limits and negative offsets. Hosts may choose
+the page size at runtime; the TUI exposes a positive **History batch size**
+field and reuses it for each subsequent page.
+
 Rules that make the capability safe:
 
 - **Never emit** from `fetch_history` — return the messages and let the caller

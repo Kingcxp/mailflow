@@ -7,6 +7,18 @@ All notable changes are recorded here; the format follows
 
 ### Added
 
+- **History browsing now uses a configurable batch size** — Mailboxes defaults
+  to 25 messages per page, lets the user enter any positive size, and reuses
+  that size for **Load more** while the service validates the offset and limit.
+
+- **Marketplace refreshes are reportable and offline-safe** — each configured
+  repository now returns an isolated success/failure status; duplicate plugin
+  ids keep the first repository's metadata, failed repositories fall back to
+  repository-aware stale cache entries, and successful empty repositories clear
+  old rows. Remote and local installs share provenance bookkeeping, while
+  bundled plugins reject uninstall and stale component configuration is cleaned
+  when a marketplace plugin is removed.
+
 - **Optional OCR: read the text printed on event posters** — a large share of
   event notices state the title, date and room only inside the attached poster,
   so a search for the event's own name found nothing and the analyser saw no

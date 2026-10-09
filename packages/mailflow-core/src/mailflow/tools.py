@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import secrets
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
@@ -24,6 +26,7 @@ from mailflow.config import MailFlowConfig
 from mailflow.contracts import LLMCompletion, LLMRouter
 from mailflow.domain import (
     ActionItem,
+    ActionOrigin,
     MailRecord,
     PendingOperation,
     SeminarCandidate,
@@ -44,6 +47,25 @@ _MAX_RESULT_ROWS = 40
 and tell the model nothing new after the first screen."""
 
 _SNIPPET_CHARS = 160
+_DELETE_INTENT_ENGLISH = re.compile(r"\b(?:delete|remove|trash|discard)\b", re.IGNORECASE)
+_DELETE_INTENT_CHINESE = ("删除", "删掉", "移除", "移入回收站", "清空邮件", "清空邮箱")
+_NEGATED_DELETE_INTENT_ENGLISH = re.compile(
+    r"\b(?:do not|don't|never|not)\s+(?:delete|remove|trash|discard)\b|"
+    r"\bwithout\s+(?:deleting|removing|trashing|discarding)\b",
+    re.IGNORECASE,
+)
+_NEGATED_DELETE_INTENT_CHINESE = re.compile(
+    r"(?:不要|别|切勿|不得|不必|无需|不需要|不用)\s*(?:删除|删掉|移除|移入回收站|清空邮件|清空邮箱)"
+)
+
+
+def _explicit_delete_intent(instruction: str) -> bool:
+    """Whether the raw user instruction explicitly asks to delete mail."""
+    english = _NEGATED_DELETE_INTENT_ENGLISH.sub("", instruction)
+    chinese = _NEGATED_DELETE_INTENT_CHINESE.sub("", instruction)
+    return bool(_DELETE_INTENT_ENGLISH.search(english)) or any(
+        phrase in chinese for phrase in _DELETE_INTENT_CHINESE
+    )
 
 
 class ToolService(Protocol):
@@ -103,6 +125,12 @@ How to work:
 - Mutating tools (`delete_mail`, `schedule_event`, `add_action`, `edit_action`,
   `delete_action`) only *stage* the change; the user confirms afterwards and it
   is applied for them. Plan freely, but never submit the same change twice.
+- Call `delete_mail` ONLY when the user's original instruction explicitly says
+  to delete, remove, trash or discard mail (or uses the explicit Chinese
+  deletion terms 删除/删掉/移除/移入回收站/清空邮件/清空邮箱). Searching, filtering,
+  reviewing, cleaning up or processing mail is not permission to delete it.
+  When a complete `find_mail` result provides a `search_id`, use that token to
+  stage deletion of every match instead of the truncated preview ids.
 - A malformed or rejected call answers with `error: ...`. Read the reason and
   either fix the arguments or try another approach; never repeat the identical
   call.
@@ -201,7 +229,7 @@ def _snippet(text: str, limit: int = _SNIPPET_CHARS) -> str:
 
 def _arguments_text(arguments: dict[str, Any]) -> str:
     """Compact, stable rendering of tool arguments for the progress display."""
-    return json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+    return _snippet(json.dumps(arguments, ensure_ascii=False, sort_keys=True), 240)
 
 
 class ToolRegistry:
@@ -212,8 +240,11 @@ class ToolRegistry:
     code that ever writes is the host's confirmation handler.
     """
 
-    def __init__(self, service: ToolService) -> None:
+    def __init__(self, service: ToolService, *, allow_mail_delete: bool = False) -> None:
         self._service = service
+        self._allow_mail_delete = allow_mail_delete
+        self._searches: dict[str, list[MailRecord]] = {}
+        self.matched_record_ids: list[str] = []
 
     # -- definitions -----------------------------------------------------------
 
@@ -249,22 +280,28 @@ class ToolRegistry:
                 "delete_mail",
                 (
                     "Stage moving mail to the trash. Nothing is deleted until the "
-                    "user confirms. Pass the mail ids find_mail returned."
+                    "user confirms. Give exactly one of record_ids or search_id; "
+                    "use a complete find_mail search_id to include every match."
                 ),
                 {
                     "record_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Mail record ids to remove.",
-                    }
+                    },
+                    "search_id": {
+                        "type": "string",
+                        "description": "One-use token for the complete result of find_mail.",
+                    },
                 },
-                ["record_ids"],
+                [],
             ),
             _tool_schema(
                 "schedule_event",
                 (
                     "Stage adding one event to the user's schedule. Provide an "
-                    "absolute ISO-8601 start time with an offset."
+                    "absolute ISO-8601 start time with an offset. action_type may "
+                    "be a built-in or any concise non-empty custom label."
                 ),
                 {
                     "title": {"type": "string", "description": "Schedule entry title."},
@@ -272,9 +309,17 @@ class ToolRegistry:
                         "type": "string",
                         "description": "ISO-8601 start with offset, e.g. 2026-10-15T14:00:00+08:00.",
                     },
-                    "ends_at": {
+                    "due_end": {
                         "type": "string",
                         "description": "Optional ISO-8601 end with offset.",
+                    },
+                    "ends_at": {
+                        "type": "string",
+                        "description": "Legacy name for the optional end time.",
+                    },
+                    "action_type": {
+                        "type": "string",
+                        "description": "Built-in type or concise non-empty custom label.",
                     },
                     "location": {"type": "string", "description": "Optional place."},
                     "url": {"type": "string", "description": "Optional link."},
@@ -292,31 +337,42 @@ class ToolRegistry:
                 "add_action",
                 (
                     "Stage a new schedule entry (something the user must do). "
-                    "Requires an absolute ISO-8601 `due_at` with offset."
+                    "Requires an absolute ISO-8601 `due_at` with offset. "
+                    "action_type may be a built-in or any concise non-empty custom label."
                 ),
                 {
                     "summary": {"type": "string", "description": "What has to be done."},
-                    "due_at": {
+                    "due_at": {"type": "string", "description": "ISO-8601 deadline with offset."},
+                    "due_end": {
                         "type": "string",
-                        "description": "ISO-8601 deadline with offset.",
+                        "description": "Optional ISO-8601 end with offset.",
                     },
                     "action_type": {
                         "type": "string",
-                        "description": "One of exam, meeting, errand, other.",
+                        "description": "Built-in type or concise non-empty custom label.",
                     },
                     "notes": {"type": "string", "description": "Optional notes."},
+                    "location": {"type": "string", "description": "Optional place."},
+                    "url": {"type": "string", "description": "Optional link."},
                 },
                 ["summary", "due_at"],
             ),
             _tool_schema(
                 "edit_action",
-                "Stage an edit of one schedule entry; give the item id and the fields to change.",
+                "Stage an edit of one schedule entry; give the item id and fields to change.",
                 {
                     "item_id": {"type": "string", "description": "Schedule entry id."},
                     "summary": {"type": "string", "description": "New title."},
-                    "due_at": {"type": "string", "description": "New ISO-8601 due time."},
-                    "action_type": {"type": "string", "description": "New type."},
+                    "due_at": {"type": "string", "description": "New ISO-8601 start time."},
+                    "due_end": {"type": "string", "description": "New ISO-8601 end time."},
+                    "clear_end": {"type": "boolean", "description": "Remove the current end time."},
+                    "action_type": {
+                        "type": "string",
+                        "description": "Built-in type or concise non-empty custom label.",
+                    },
                     "notes": {"type": "string", "description": "New notes."},
+                    "location": {"type": "string", "description": "New place."},
+                    "url": {"type": "string", "description": "New link."},
                 },
                 ["item_id"],
             ),
@@ -420,17 +476,35 @@ class ToolRegistry:
         if isinstance(raw_limit, (int, float)) and not isinstance(raw_limit, bool):
             limit = max(1, min(_MAX_RESULT_ROWS, int(raw_limit)))
         result = await self._find(contains=contains, query=query)
-        records = result.records[:limit]
         note = self._failure_note(result)
-        if not records:
+        for record in result.records:
+            if record.record_id not in self.matched_record_ids:
+                self.matched_record_ids.append(record.record_id)
+        if not result.records:
+            if not result.is_complete:
+                return (
+                    f"error: find_mail search is incomplete; no deletion token was created{note}",
+                    None,
+                )
             return (
-                f"no mail matched (checked {result.total_mails} stored mail(s)){note}",
+                f"no mail matched (checked {result.total_mails} stored mail(s))",
                 None,
             )
-        lines = [f"{len(records)} mail(s) matched:"]
+        records = result.records[:limit]
+        lines = [
+            f"{len(result.records)} mail(s) matched:",
+            f"matched: {len(result.records)} mail(s); showing {len(records)}",
+        ]
         lines.extend(_mail_line(record) for record in records)
         lines.append("ids: " + ", ".join(record.record_id for record in records))
-        return "\n".join(lines) + note, None
+        if result.is_complete:
+            search_id = secrets.token_urlsafe(24)
+            self._searches[search_id] = list(result.records)
+            lines.append(f"search_id: {search_id}")
+            lines.append("Use this search_id to stage deletion of every match.")
+        else:
+            lines.append(f"incomplete search; no deletion token was created{note}")
+        return "\n".join(lines), None
 
     async def _find(self, *, contains: str, query: str) -> SmartSearchResult:
         """Literal pre-filter, then optional semantic ranking of what is left.
@@ -563,7 +637,21 @@ class ToolRegistry:
     async def _tool_delete_mail(
         self, arguments: dict[str, Any]
     ) -> tuple[str, PendingOperation | None]:
-        requested = _as_str_list(arguments, "record_ids", required=True)
+        if not self._allow_mail_delete:
+            raise ToolError(self._service.t("tui.smart_action_delete_requires_explicit"))
+        ids_supplied = "record_ids" in arguments
+        search_supplied = "search_id" in arguments
+        if ids_supplied == search_supplied:
+            raise ToolError("give exactly one of `record_ids` or `search_id`")
+        search_id: str | None = None
+        if search_supplied:
+            search_id = _as_str(arguments, "search_id")
+            records = self._searches.get(search_id)
+            if records is None:
+                raise ToolError("unknown or already-used search_id; run find_mail again")
+            requested = [record.record_id for record in records]
+        else:
+            requested = _as_str_list(arguments, "record_ids", required=True)
         known: list[str] = []
         subjects: list[str] = []
         for record_id in requested:
@@ -575,6 +663,8 @@ class ToolRegistry:
             known.append(record_id)
             if len(subjects) < 5:
                 subjects.append(record.mail.subject)
+        if search_id is not None:
+            self._searches.pop(search_id, None)
         listing = "; ".join(subjects) + ("…" if len(known) > 5 else "")
         return (
             f"staged: {len(known)} mail(s) will move to the trash on confirmation ({listing})",
@@ -596,10 +686,15 @@ class ToolRegistry:
         starts_at = _parse_instant(_as_str(arguments, "starts_at"), "starts_at")
         if starts_at <= datetime.now(UTC):
             raise ToolError(f"`starts_at` {starts_at.isoformat()} is in the past")
-        ends_raw = _as_optional_str(arguments, "ends_at")
-        ends_at = _parse_instant(ends_raw, "ends_at") if ends_raw else None
+        end_field = "due_end" if "due_end" in arguments else "ends_at"
+        ends_raw = _as_optional_str(arguments, end_field)
+        ends_at = _parse_instant(ends_raw, end_field) if ends_raw else None
         if ends_at is not None and ends_at <= starts_at:
-            raise ToolError("`ends_at` must be after `starts_at`")
+            raise ToolError(f"`{end_field}` must be after `starts_at`")
+        action_type = _as_str(arguments, "action_type", default="other")
+        if not action_type:
+            raise ToolError("`action_type` must not be empty")
+        end_text = ends_at.isoformat() if ends_at else ""
         return (
             f"staged: schedule entry {title!r} at {starts_at.isoformat()} "
             "will be added on confirmation",
@@ -608,7 +703,9 @@ class ToolRegistry:
                 arguments={
                     "title": title,
                     "starts_at": starts_at.isoformat(),
-                    "ends_at": ends_at.isoformat() if ends_at else "",
+                    "ends_at": end_text,
+                    "due_end": end_text,
+                    "action_type": action_type,
                     "location": _as_str(arguments, "location"),
                     "url": _as_str(arguments, "url"),
                     "notes": _as_str(arguments, "notes"),
@@ -738,6 +835,13 @@ class ToolRegistry:
         if not summary:
             raise ToolError("`summary` is required")
         due_at = _parse_instant(_as_str(arguments, "due_at"), "due_at")
+        due_raw = _as_optional_str(arguments, "due_end")
+        due_end = _parse_instant(due_raw, "due_end") if due_raw else None
+        if due_end is not None and due_end <= due_at:
+            raise ToolError("`due_end` must be after `due_at`")
+        action_type = _as_str(arguments, "action_type", default="errand")
+        if not action_type:
+            raise ToolError("`action_type` must not be empty")
         return (
             f"staged: schedule entry {summary!r} due {due_at.isoformat()} "
             "will be added on confirmation",
@@ -746,8 +850,11 @@ class ToolRegistry:
                 arguments={
                     "summary": summary,
                     "due_at": due_at.isoformat(),
-                    "action_type": _as_str(arguments, "action_type", default="errand") or "errand",
+                    "due_end": due_end.isoformat() if due_end else "",
+                    "action_type": action_type,
                     "notes": _as_str(arguments, "notes"),
+                    "location": _as_str(arguments, "location"),
+                    "url": _as_str(arguments, "url"),
                 },
                 record_ids=[],
                 summary_key="tui.agent_pending_action",
@@ -759,20 +866,45 @@ class ToolRegistry:
         self, arguments: dict[str, Any]
     ) -> tuple[str, PendingOperation | None]:
         target = await self._find_action(_as_str(arguments, "item_id"))
-        changes: dict[str, str] = {}
-        for field in ("summary", "action_type", "notes"):
+        if target.origin is ActionOrigin.ANALYSIS:
+            raise ToolError(self._service.t("action.not_editable", item_id=target.item_id))
+        changes: dict[str, Any] = {}
+        for field in ("summary", "action_type", "notes", "location", "url"):
+            if field not in arguments:
+                continue
             value = _as_optional_str(arguments, field)
             if value is None:
                 continue
-            if not value:
+            if field in {"summary", "action_type"} and not value:
                 raise ToolError(f"`{field}` must not be empty")
             changes[field] = value
-        due_raw = _as_optional_str(arguments, "due_at")
-        if due_raw:
-            changes["due_at"] = _parse_instant(due_raw, "due_at").isoformat()
+        new_start = target.due_at
+        if "due_at" in arguments:
+            due_raw = _as_optional_str(arguments, "due_at")
+            if not due_raw:
+                raise ToolError("`due_at` must be an ISO-8601 timestamp")
+            new_start = _parse_instant(due_raw, "due_at")
+            changes["due_at"] = new_start.isoformat()
+        new_end = target.due_end
+        if "due_end" in arguments:
+            due_end_raw = _as_optional_str(arguments, "due_end")
+            if not due_end_raw:
+                raise ToolError("`due_end` must be an ISO-8601 timestamp")
+            new_end = _parse_instant(due_end_raw, "due_end")
+            changes["due_end"] = new_end.isoformat()
+        clear_end = arguments.get("clear_end", False)
+        if not isinstance(clear_end, bool):
+            raise ToolError("`clear_end` must be a boolean")
+        if clear_end and "due_end" in changes:
+            raise ToolError("give `due_end` or `clear_end`, not both")
+        if clear_end:
+            new_end = None
+            changes["clear_end"] = True
+        if new_end is not None and to_utc(new_end) <= to_utc(new_start):
+            raise ToolError("`due_end` must be after `due_at`")
         if not changes:
             raise ToolError("give at least one field to change")
-        described = ", ".join(f"{key}={value}" for key, value in changes.items())
+        described = _snippet(_arguments_text(changes), 240)
         return (
             f"staged: schedule entry {target.item_id} will change ({described}) on confirmation",
             PendingOperation(
@@ -870,18 +1002,6 @@ def _mail_line(record: MailRecord) -> str:
     )
 
 
-def _collect_mails(text: str, seen: list[str]) -> None:
-    """Read the ``ids: a, b`` trailer of a find_mail result into ``seen``."""
-    marker = "ids: "
-    index = text.rfind(marker)
-    if index == -1:
-        return
-    for record_id in text[index + len(marker) :].splitlines()[0].split(","):
-        candidate = record_id.strip()
-        if candidate and candidate not in seen:
-            seen.append(candidate)
-
-
 def _assistant_turn(completion: LLMCompletion) -> dict[str, Any]:
     """The assistant message to replay, in the OpenAI wire shape."""
     return {
@@ -919,16 +1039,17 @@ async def run_agent(
     show what is happening; a failing progress callback never aborts the work.
     """
 
-    def _report(done: int, detail: Any) -> None:
+    def _report(stage: str, done: int, detail: Any) -> None:
         if progress is None:
             return
         try:
-            progress("tool", done, _MAX_TOOL_STEPS, detail)
+            progress(stage, done, _MAX_TOOL_STEPS, detail)
         except Exception:
             logger.exception("tool progress callback failed")
 
     result = SmartActionResult()
-    registry = ToolRegistry(service)
+    step = 0
+    registry = ToolRegistry(service, allow_mail_delete=_explicit_delete_intent(instruction))
     specs = registry.specs()
     llm_ids = [llm.llm_id for llm in service.config.llms]
     if not llm_ids:
@@ -940,9 +1061,8 @@ async def run_agent(
             "content": _with_profile(await service.user_profile(), instruction),
         },
     ]
-    seen_mail_ids: list[str] = []
-
     for step in range(1, _MAX_TOOL_STEPS + 1):
+        _report("llm", step, ("smart_llm", {"step": step}))
         completion = await router.chat(
             messages,
             primary=llm_ids[0],
@@ -955,9 +1075,12 @@ async def run_agent(
             break
         messages.append(_assistant_turn(completion))
         for call in completion.tool_calls:
-            result.tool_steps.append(f"{call.name} {_arguments_text(call.arguments)}")
+            arguments_text = _arguments_text(call.arguments)
+            result.tool_steps.append(f"{call.name} {arguments_text}")
             _report(
-                step, ("smart_tool", {"tool": call.name, "args": _arguments_text(call.arguments)})
+                "tool",
+                step,
+                ("smart_tool", {"tool": call.name, "args": arguments_text}),
             )
             try:
                 text, staged = await registry.call(call.name, call.arguments)
@@ -966,8 +1089,11 @@ async def run_agent(
                 text, staged = f"error: {type(exc).__name__}: {exc}", None
             if staged is not None:
                 result.pending.append(staged)
-            if call.name == "find_mail":
-                _collect_mails(text, seen_mail_ids)
+            _report(
+                "tool_done",
+                step,
+                ("smart_tool_done", {"tool": call.name, "result": _snippet(text, 240)}),
+            )
             messages.append(
                 {
                     "role": "tool",
@@ -981,11 +1107,14 @@ async def run_agent(
         # say so rather than looping forever
         logger.warning("tool loop hit its %d-step bound", _MAX_TOOL_STEPS)
         result.final_text = service.t("tui.agent_step_limit", steps=_MAX_TOOL_STEPS)
-    if seen_mail_ids:
-        # find_mail may have run several times; show the union it found, in the
-        # order the tools returned it
-        by_id = {record.record_id: record for record in await service.list_mails()}
-        result.records = [by_id[record_id] for record_id in seen_mail_ids if record_id in by_id]
+    _report("finalizing", min(step, _MAX_TOOL_STEPS), ("smart_action_finalizing", {}))
+    if registry.matched_record_ids:
+        # Search results are complete independently of the capped tool preview;
+        # restore mailbox source order for the host's selected-record surface.
+        matched = set(registry.matched_record_ids)
+        result.records = [
+            record for record in await service.list_mails() if record.record_id in matched
+        ]
     result.total_mails = await service.count_mails()
     return result
 

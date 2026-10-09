@@ -213,13 +213,15 @@ Rules:
    ONLY when failing to do it has a consequence for the recipient's standing —
    a compulsory course enrolment, a graduation requirement, a mandatory
    submission — not when it merely books them a place at something optional.
-   Parse due_at from the mail (ISO-8601 with offset); with only a date use
-   09:00 in the mail's timezone and say so in the notes; never invent a date
-   (leave action_items empty instead).
-   action_type ∈ {"exam","meeting","errand","other"}: exam = tests/quizzes;
-   meeting = a required meeting, call, defense or interview; errand = pickups,
-   payments, required registrations, applications, submissions; other only when
-   none fit.
+   Every emitted action item MUST include `must_do: true`; if an item is
+   optional, set `must_do: false` (or omit it from action_items). The system
+   drops missing and false flags. Parse due_at from the mail (ISO-8601 with
+   offset); with only a date use 09:00 in the mail's timezone and say so in
+   the notes; never invent a date (leave action_items empty instead).
+   action_type is a built-in type or any concise, non-empty user-defined label.
+   Built-ins: exam = tests/quizzes; meeting = a required meeting, call, defense
+   or interview; errand = pickups, payments, applications or submissions;
+   other only when none fit.
    ONE obligation yields ONE action item. Never split a single requirement into
    several near-identical entries (the same deadline described three ways is
    one item), and never restate an obligation the mail mentions repeatedly.
@@ -248,7 +250,8 @@ Rules:
   "reply_required": true,
   "suggested_reply": "draft if reply_required else empty",
   "action_items": [
-    {"summary": "what must be done", "action_type": "exam|meeting|errand|other",
+    {"summary": "what must be done", "must_do": true,
+     "action_type": "exam|meeting|errand|other|a concise custom label",
      "due_at": "ISO-8601 with offset", "due_end": "ISO-8601 or null",
      "notes": "what to bring or prepare"}
   ],
@@ -308,7 +311,7 @@ def _coerce_analysis_payload(raw: dict[str, Any]) -> dict[str, Any]:
             if key in entry:
                 value = entry[key]
                 entry[key] = "" if value is None else _as_str(value)
-        # models routinely omit the action item's summary while filling
+        entry["must_do"] = _as_bool(entry.get("must_do"))
         # notes ("填写提名表格…"); without a fallback one missing field
         # would scrap the whole analysis. Derive a readable summary from
         # the notes or the action type so the item survives validation.
@@ -328,6 +331,7 @@ class ActionPayload(BaseModel):
     due_at: str
     due_end: str | None = None
     notes: str = ""
+    must_do: bool = False
 
 
 class AnalysisPayload(BaseModel):
@@ -498,6 +502,13 @@ class LLMImportanceProcessor:
         action_items: list[ActionItem] = []
         now = (context.now or datetime.now(tz=UTC)).astimezone(UTC)
         for position, item in enumerate(payload.action_items):
+            if item.must_do is not True:
+                logger.info(
+                    "dropping non-mandatory action item %d from %r",
+                    position,
+                    mail.message_id,
+                )
+                continue
             try:
                 due_at = parse_due_at(item.due_at, context.timezone)
                 if due_at <= now:
@@ -515,6 +526,14 @@ class LLMImportanceProcessor:
                         (now - _as_utc(mail.date)).days,
                     )
                     continue
+                due_end = parse_due_at(item.due_end, context.timezone) if item.due_end else None
+                if due_end is not None and due_end <= due_at:
+                    logger.info(
+                        "dropping action item %d from %r because due_end is not after due_at",
+                        position,
+                        mail.message_id,
+                    )
+                    continue
                 action_items.append(
                     ActionItem(
                         item_id=uuid.uuid4().hex[:16],
@@ -522,9 +541,7 @@ class LLMImportanceProcessor:
                         summary=item.summary[:200],
                         action_type=item.action_type,
                         due_at=due_at,
-                        due_end=(
-                            parse_due_at(item.due_end, context.timezone) if item.due_end else None
-                        ),
+                        due_end=due_end,
                         notes=item.notes[:300],
                     )
                 )
