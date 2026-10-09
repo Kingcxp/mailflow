@@ -45,7 +45,6 @@ from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
-    Checkbox,
     DataTable,
     Input,
     Label,
@@ -60,7 +59,7 @@ from textual.widgets import (
 
 from mailflow_tui.labels import error_detail, error_message, urgency_label
 from mailflow_tui.search import SearchMatcher, build_search_matcher
-from mailflow_tui.widgets import SafeSelect
+from mailflow_tui.widgets import SafeSelect, SearchToggle
 
 _SECTION_LABELS = {
     "general": "tui.settings_section_general",
@@ -1168,8 +1167,8 @@ class SettingsPane(Vertical):
             yield Input(
                 placeholder=self._t("tui.settings_search_placeholder"), id="settings-search"
             )
-            yield Checkbox(self._t("tui.search_regex"), id="settings-search-regex")
-            yield Checkbox(self._t("tui.search_case"), id="settings-search-case")
+            yield SearchToggle("regex", ident="settings-search-regex")
+            yield SearchToggle("case", ident="settings-search-case")
         with Horizontal(id="settings-body"):
             with Vertical(id="settings-sidebar"):
                 yield Static(self._t("tui.settings_sections"), id="settings-sidebar-title")
@@ -1260,8 +1259,8 @@ class SettingsPane(Vertical):
         await self._render_options()
 
     def _current_matcher(self) -> SearchMatcher:
-        regex = self.query_one_optional("#settings-search-regex", Checkbox)
-        case = self.query_one_optional("#settings-search-case", Checkbox)
+        regex = self.query_one_optional("#settings-search-regex", SearchToggle)
+        case = self.query_one_optional("#settings-search-case", SearchToggle)
         return build_search_matcher(
             self._query,
             regex=bool(regex.value) if regex is not None else False,
@@ -1329,8 +1328,8 @@ class SettingsPane(Vertical):
             self._query = event.value
             self._schedule_settings_filter()
 
-    async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        if event.checkbox.id in {"settings-search-regex", "settings-search-case"}:
+    async def on_search_toggle_toggled(self, event: SearchToggle.Toggled) -> None:
+        if event.toggle.id in {"settings-search-regex", "settings-search-case"}:
             self._schedule_settings_filter()
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -1827,7 +1826,10 @@ class AccountsPane(Vertical):
             return
         table.clear()
         self._ensure_history_columns()
-        for mail in self._history:
+        # The IMAP page arrives in UID order, which is NOT the Date-header
+        # order (moved/late-delivered mail breaks it); the user reads this
+        # table as a timeline, so sort by the displayed date instead.
+        for mail in sorted(self._history, key=lambda item: item.date, reverse=True):
             record_id = mail.normalized_message_id()
             try:
                 subject = escape(mail.subject or self._t("tui.mail_no_subject"))

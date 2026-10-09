@@ -234,7 +234,7 @@ async def test_full_tui_walkthrough(tmp_path: Path) -> None:
                 budget=15.0,
             )
             assert await _wait_for(pilot, lambda: table.row_count == 1)
-            assert "ID card" in str(table.get_row_at(0)[1])
+            assert "ID card" in str(table.get_row_at(0)[2])
 
             # -- a delete instruction asks before removing, and cancel is safe
             before_delete = await service.count_mails()

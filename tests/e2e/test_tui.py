@@ -305,16 +305,17 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             await pilot.pause(0.35)
             assert table.row_count == 3
             # select the urgent mail row: its urgency cell carries the contract color
+            # (column order: date, urgency, subject, sender)
             urgent_index = next(
                 (
                     i
                     for i in range(table.row_count)
-                    if "urgent" in str(table.get_row_at(i)[0]).lower()
+                    if "urgent" in str(table.get_row_at(i)[1]).lower()
                 ),
                 -1,
             )
             assert urgent_index >= 0, "no urgent row rendered"
-            urgent_cell_text = str(table.get_row_at(urgent_index)[0])
+            urgent_cell_text = str(table.get_row_at(urgent_index)[1])
             assert "■" in urgent_cell_text
             assert "urgent" in urgent_cell_text.lower()
 
@@ -569,7 +570,7 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
                     break
                 await asyncio.sleep(0.05)
             assert int(table.row_count) == 1
-            assert "Pick up your student ID card" in str(table.get_row_at(0)[1])
+            assert "Pick up your student ID card" in str(table.get_row_at(0)[2])
             assert pane._smart_action_result is not None  # pyright: ignore[reportPrivateUsage]
             app.exit()
             await pilot.pause()

@@ -426,14 +426,33 @@ class ToolRegistry:
                     "schedule in one call. Prefer this whenever more than one candidate "
                     "should be added: each entry still goes through the seminar import "
                     "path, so it is marked as a seminar automatically — never add the "
-                    "marker to the title yourself."
+                    "marker to the title yourself. Optional title_template / "
+                    "notes_template customize every entry in this one call; placeholders "
+                    "like {title}, {location}, {mode} (online/offline/empty), {url}, "
+                    "{description} are filled per candidate — e.g. "
+                    "'[SEMINAR] {title} @ {location} ({mode})'."
                 ),
                 {
                     "candidate_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Candidate ids reported by check_seminars.",
-                    }
+                    },
+                    "title_template": {
+                        "type": "string",
+                        "description": (
+                            "Optional format string applied to every candidate's title; "
+                            "placeholders {title} {location} {mode} {url} {description} "
+                            "{starts_at}."
+                        ),
+                    },
+                    "notes_template": {
+                        "type": "string",
+                        "description": (
+                            "Optional format string applied to every candidate's notes; "
+                            "same placeholders as title_template."
+                        ),
+                    },
                 },
                 ["candidate_ids"],
             ),
@@ -566,23 +585,6 @@ class ToolRegistry:
                 raise ToolError("none of those mail ids exist")
         discovery = await self._service.discover_seminars(records=records)
         now = datetime.now(UTC)
-        if discovery.failed_batches:
-            # an incomplete scan cannot answer "which of these are upcoming":
-            # the mail that would have proven it may be exactly the one that
-            # did not come back, so the model is told to report a retry rather
-            # than read a partial scan as a complete one
-            return (
-                f"error: the seminar scan could not read {discovery.failed_mails} "
-                f"mail(s) in {discovery.failed_batches} batch(es)"
-                + (
-                    f" ({'; '.join(discovery.failure_reasons)})"
-                    if discovery.failure_reasons
-                    else ""
-                )
-                + f" out of {discovery.total_mails}; the result would be incomplete, "
-                "so retry this scan (or scan fewer mails) instead of reporting it",
-                None,
-            )
         allowed = {record.record_id for record in records} if records is not None else None
         pending = [
             candidate
@@ -599,12 +601,34 @@ class ToolRegistry:
             for candidate in pending
             if candidate.starts_at is None or to_utc(candidate.starts_at) > now
         ]
-        untimed = [candidate for candidate in upcoming if candidate.starts_at is None]
         scope = (
             f"the {len(records)} mail(s) you asked about"
             if records is not None
             else f"{discovery.total_mails} stored mail(s)"
         )
+        if discovery.failed_batches:
+            # A failed batch must not throw away the candidates the other
+            # batches did find (a 300-mail scan is 50 LLM batches; asking the
+            # model to restart on any failure turned "retry" into "give up
+            # and add three by hand"). Report what succeeded plus the gap so
+            # the model can finish the scan incrementally instead of losing
+            # the whole pass.
+            return (
+                f"partial: {len(upcoming)} upcoming candidate(s) in {scope}, but "
+                f"{discovery.failed_mails} mail(s) in {discovery.failed_batches} batch(es) "
+                "could not be read"
+                + (
+                    f" ({'; '.join(discovery.failure_reasons)})"
+                    if discovery.failure_reasons
+                    else ""
+                )
+                + ". The listed candidates are real and complete for their mails — you may "
+                "stage them now with `schedule_seminars`. To cover the failed mails too, "
+                "call check_seminars again with just those `record_ids`."
+                + ("\n\n" if upcoming else ""),
+                None,
+            )
+        untimed = [candidate for candidate in upcoming if candidate.starts_at is None]
         if not upcoming:
             return f"no upcoming seminar found in {scope}", None
         lines = [f"{len(upcoming)} upcoming candidate(s) in {scope}:"]
@@ -784,9 +808,17 @@ class ToolRegistry:
         list of ids.
         """
         candidate_ids = _as_str_list(arguments, "candidate_ids", required=True)
+        # Per-candidate customization without a step per candidate: the user
+        # may ask for "[SEMINAR] prefix + venue + online/offline + signup" —
+        # a title/notes template lets one call satisfy that instead of
+        # forcing the model to stage entries one add_action per step.
+        title_template = _as_str(arguments, "title_template")
+        notes_template = _as_str(arguments, "notes_template")
         staged: list[str] = []
         skipped: list[str] = []
         titles: list[str] = []
+        title_overrides: dict[str, str] = {}
+        notes_overrides: dict[str, str] = {}
         available = {
             item.candidate_id: item for item in await self._service.list_seminar_candidates()
         }
@@ -806,6 +838,12 @@ class ToolRegistry:
                 continue
             staged.append(candidate_id)
             titles.append(candidate.title[:60])
+            if title_template:
+                fields = _seminar_template_fields(candidate)
+                title_overrides[candidate_id] = title_template.format(**fields)
+            if notes_template:
+                fields = _seminar_template_fields(candidate)
+                notes_overrides[candidate_id] = notes_template.format(**fields)
         if not staged:
             raise ToolError(
                 "none of those candidates can be scheduled (unknown id, already "
@@ -817,11 +855,16 @@ class ToolRegistry:
                 f" ({len(skipped)} skipped: unknown, already started, or no time "
                 "in the mail — those need the user to complete them)"
             )
+        arguments_out: dict[str, Any] = {"candidate_ids": staged}
+        if title_overrides:
+            arguments_out["title_overrides"] = title_overrides
+        if notes_overrides:
+            arguments_out["notes_overrides"] = notes_overrides
         return (
             f"staged: {len(staged)} seminar(s) will be added to the schedule on confirmation{note}",
             PendingOperation(
                 tool="schedule_seminars",
-                arguments={"candidate_ids": staged},
+                arguments=arguments_out,
                 record_ids=[],
                 summary_key="tui.agent_pending_seminars",
                 summary_params={"count": len(staged), "titles": "; ".join(titles[:4])},
@@ -1000,6 +1043,30 @@ def _mail_line(record: MailRecord) -> str:
         f"from={mail.sender.address} subject={mail.subject!r} "
         f"summary={_snippet(record.summary or '')} body={_snippet(mail.body_text or '')}"
     )
+
+
+def _seminar_template_fields(candidate: SeminarCandidate) -> dict[str, str]:
+    """Fields a ``title_template``/``notes_template`` may reference.
+
+    The user asks for things like "title starts with [SEMINAR] and states the
+    venue, online or offline, and whether signup is required" — the model
+    builds one template and this fills it per candidate in a single staged
+    call, instead of one add_action per candidate burning the step budget.
+    """
+    mode = ""
+    lowered = f"{candidate.location} {candidate.description}".casefold()
+    if any(word in lowered for word in ("online", "zoom", "teams", "webinar", "腾讯会议", "线上")):
+        mode = "online"
+    elif candidate.location:
+        mode = "offline"
+    return {
+        "title": candidate.title,
+        "location": candidate.location,
+        "url": candidate.url,
+        "mode": mode,
+        "description": candidate.description,
+        "starts_at": to_utc(candidate.starts_at).isoformat() if candidate.starts_at else "",
+    }
 
 
 def _assistant_turn(completion: LLMCompletion) -> dict[str, Any]:

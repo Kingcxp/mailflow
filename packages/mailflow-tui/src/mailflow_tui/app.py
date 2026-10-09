@@ -37,7 +37,6 @@ from textual.screen import ModalScreen
 from textual.widget import MountError
 from textual.widgets import (
     Button,
-    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -65,7 +64,7 @@ from mailflow_tui.seminars import SeminarReviewModal
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
-from mailflow_tui.widgets import SafeSelect
+from mailflow_tui.widgets import SafeSelect, SearchToggle
 
 logger = logging.getLogger("mailflow.tui")
 
@@ -543,8 +542,8 @@ class MailPane(Vertical):
             yield Input(
                 placeholder=self._service.t("tui.smart_action_placeholder"), id="mail-search"
             )
-            yield Checkbox(self._service.t("tui.search_regex"), id="mail-search-regex")
-            yield Checkbox(self._service.t("tui.search_case"), id="mail-search-case")
+            yield SearchToggle("regex", ident="mail-search-regex")
+            yield SearchToggle("case", ident="mail-search-case")
             yield Button(self._service.t("tui.smart_action"), id="smart-action", variant="primary")
         yield RichLog(id="smart-action-progress", max_lines=8, wrap=True)
         yield Static("", id="mail-empty-hint")
@@ -656,10 +655,10 @@ class MailPane(Vertical):
             return
         for key in ("urgency", "subject", "sender", "date"):
             _remove_column(table, key)
+        table.add_column(self._service.t("tui.column_date"), key="date")
         table.add_column(self._service.t("tui.column_urgency"), key="urgency")
         table.add_column(self._service.t("tui.column_subject"), key="subject")
         table.add_column(self._service.t("tui.column_sender"), key="sender")
-        table.add_column(self._service.t("tui.column_date"), key="date")
         table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
         urgency = self._urgency_select()
         if urgency is not None:
@@ -712,10 +711,10 @@ class MailPane(Vertical):
         for position, record in enumerate(records, start=1):
             urgency = record.effective_urgency
             table.add_row(
+                _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
                 RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
                 escape(record.mail.subject or self._service.t("tui.mail_no_subject")),
                 escape(record.mail.sender.address),
-                _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
                 key=record.record_id,
             )
             if position % 50 == 0:
@@ -807,6 +806,11 @@ class MailPane(Vertical):
         }
         candidates = await self._service.list_seminar_candidates() if wanted_candidates else []
         candidate_map = {candidate.candidate_id: candidate for candidate in candidates}
+        # a bulk stage may carry per-candidate title/notes templates; they must
+        # survive the expansion into single-candidate operations or the review
+        # modal would show, and apply, the un-customized titles
+        bulk_title_overrides: dict[str, str] = {}
+        bulk_notes_overrides: dict[str, str] = {}
         actions = (
             await self._service.list_actions()
             if any(op.tool in {"edit_action", "delete_action"} for op in pending)
@@ -834,13 +838,13 @@ class MailPane(Vertical):
                 tool="schedule_seminar",
                 arguments={
                     "candidate_id": candidate_id,
-                    "title": candidate.title,
+                    "title": bulk_title_overrides.get(candidate_id, candidate.title),
                     "starts_at": _iso(candidate.starts_at),
                     "ends_at": _iso(candidate.ends_at),
                     "timezone": candidate.timezone,
                     "location": candidate.location,
                     "url": candidate.url,
-                    "description": candidate.description,
+                    "description": bulk_notes_overrides.get(candidate_id, candidate.description),
                     "clear_end": candidate.ends_at is None,
                 },
             )
@@ -854,6 +858,22 @@ class MailPane(Vertical):
                     review_ids.append(candidate_id)
                 continue
             if tool == "schedule_seminars":
+                bulk_title_overrides.update(
+                    {
+                        str(key): str(value)
+                        for key, value in (
+                            cast("dict[Any, Any]", args.get("title_overrides") or {}).items()
+                        )
+                    }
+                )
+                bulk_notes_overrides.update(
+                    {
+                        str(key): str(value)
+                        for key, value in (
+                            cast("dict[Any, Any]", args.get("notes_overrides") or {}).items()
+                        )
+                    }
+                )
                 for candidate_id in cast("list[str]", args.get("candidate_ids") or []):
                     candidate_operation = _candidate_operation(str(candidate_id))
                     if candidate_operation.tool != "review_seminar":
@@ -1021,8 +1041,17 @@ class MailPane(Vertical):
             return 1
         if tool == "schedule_seminars":
             applied = 0
+            title_overrides = cast("dict[str, str]", arguments.get("title_overrides") or {})
+            notes_overrides = cast("dict[str, str]", arguments.get("notes_overrides") or {})
             for candidate_id in cast("list[str]", arguments["candidate_ids"]):
-                await self._service.import_seminar(str(candidate_id))
+                # the candidate may resolve to an already-imported item (the
+                # service dedupes); apply the staged overrides only when the
+                # entry is actually created
+                await self._service.import_seminar(
+                    str(candidate_id),
+                    title=title_overrides.get(str(candidate_id)),
+                    description=notes_overrides.get(str(candidate_id)),
+                )
                 applied += 1
             return applied
         if tool in {"schedule_event", "add_action"}:
@@ -1108,8 +1137,8 @@ class MailPane(Vertical):
         self._refresh_view_options()
         search = self.query_one_optional("#mail-search", Input)
         query = search.value.strip() if search is not None else ""
-        regex_control = self.query_one_optional("#mail-search-regex", Checkbox)
-        case_control = self.query_one_optional("#mail-search-case", Checkbox)
+        regex_control = self.query_one_optional("#mail-search-regex", SearchToggle)
+        case_control = self.query_one_optional("#mail-search-case", SearchToggle)
         matcher = build_search_matcher(
             query,
             regex=bool(regex_control.value) if regex_control is not None else False,
@@ -1158,10 +1187,10 @@ class MailPane(Vertical):
         for position, record in enumerate(records, start=1):
             urgency = record.effective_urgency
             table.add_row(
+                _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
                 RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
                 escape(record.mail.subject or self._service.t("tui.mail_no_subject")),
                 escape(record.mail.sender.address),
-                _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
                 key=record.record_id,
             )
             if position % 50 == 0:
@@ -1260,8 +1289,8 @@ class MailPane(Vertical):
             self._clear_smart_action_result()
             self._schedule_mail_filter()
 
-    async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        if event.checkbox.id in {"mail-search-regex", "mail-search-case"}:
+    def on_search_toggle_toggled(self, event: SearchToggle.Toggled) -> None:
+        if event.toggle.id in {"mail-search-regex", "mail-search-case"}:
             progress = self.query_one_optional("#smart-action-progress", RichLog)
             if progress is not None:
                 progress.clear()
@@ -2050,8 +2079,8 @@ class ActionsPane(Vertical):
             yield Input(
                 placeholder=self._service.t("tui.actions_search_placeholder"), id="actions-search"
             )
-            yield Checkbox(self._service.t("tui.search_regex"), id="actions-search-regex")
-            yield Checkbox(self._service.t("tui.search_case"), id="actions-search-case")
+            yield SearchToggle("regex", ident="actions-search-regex")
+            yield SearchToggle("case", ident="actions-search-case")
         with Horizontal(id="actions-controls"):
             yield SafeSelect(
                 [
@@ -2126,8 +2155,8 @@ class ActionsPane(Vertical):
         if table is None:
             return
         search = self.query_one_optional("#actions-search", Input)
-        regex = self.query_one_optional("#actions-search-regex", Checkbox)
-        case = self.query_one_optional("#actions-search-case", Checkbox)
+        regex = self.query_one_optional("#actions-search-regex", SearchToggle)
+        case = self.query_one_optional("#actions-search-case", SearchToggle)
         matcher = build_search_matcher(
             search.value if search is not None else "",
             regex=bool(regex.value) if regex is not None else False,
@@ -2268,8 +2297,8 @@ class ActionsPane(Vertical):
         if event.input.id == "actions-search":
             self._schedule_actions_filter()
 
-    async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        if event.checkbox.id in {"actions-search-regex", "actions-search-case"}:
+    def on_search_toggle_toggled(self, event: SearchToggle.Toggled) -> None:
+        if event.toggle.id in {"actions-search-regex", "actions-search-case"}:
             self._schedule_actions_filter()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -2715,8 +2744,8 @@ class LogsPane(Vertical):
                     placeholder=self._service.t("tui.logs_search_placeholder"),
                     id="log-search",
                 )
-                yield Checkbox(self._service.t("tui.search_regex"), id="log-search-regex")
-                yield Checkbox(self._service.t("tui.search_case"), id="log-search-case")
+                yield SearchToggle("regex", ident="log-search-regex")
+                yield SearchToggle("case", ident="log-search-case")
                 yield Button(
                     self._service.t("tui.logs_export"),
                     id="logs-export",
@@ -2824,8 +2853,8 @@ class LogsPane(Vertical):
         self._append_new_lines(pulled)
 
     def _current_log_matcher(self) -> SearchMatcher:
-        regex = self.query_one_optional("#log-search-regex", Checkbox)
-        case = self.query_one_optional("#log-search-case", Checkbox)
+        regex = self.query_one_optional("#log-search-regex", SearchToggle)
+        case = self.query_one_optional("#log-search-case", SearchToggle)
         return build_search_matcher(
             self._query,
             regex=bool(regex.value) if regex is not None else False,
@@ -2965,8 +2994,8 @@ class LogsPane(Vertical):
             cast(Any, _filter), exclusive=True, group="logs-filter", exit_on_error=False
         )
 
-    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        if event.checkbox.id in {"log-search-regex", "log-search-case"}:
+    def on_search_toggle_toggled(self, event: SearchToggle.Toggled) -> None:
+        if event.toggle.id in {"log-search-regex", "log-search-case"}:
             self._schedule_log_filter()
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -3243,8 +3272,8 @@ class MarketPane(Vertical):
                     placeholder=self._service.t("tui.market_search_placeholder"),
                     id="market-search",
                 )
-                yield Checkbox(self._service.t("tui.search_regex"), id="market-search-regex")
-                yield Checkbox(self._service.t("tui.search_case"), id="market-search-case")
+                yield SearchToggle("regex", ident="market-search-regex")
+                yield SearchToggle("case", ident="market-search-case")
             with Horizontal(id="market-controls-top"):
                 yield SafeSelect([], id="market-category")
                 yield SafeSelect(
@@ -3434,8 +3463,8 @@ class MarketPane(Vertical):
         category = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
         filter_value = cast(str, category.value or "all") if category is not None else "all"  # pyright: ignore[reportUnknownMemberType]
         search = self.query_one_optional("#market-search", Input)
-        regex = self.query_one_optional("#market-search-regex", Checkbox)
-        case = self.query_one_optional("#market-search-case", Checkbox)
+        regex = self.query_one_optional("#market-search-regex", SearchToggle)
+        case = self.query_one_optional("#market-search-case", SearchToggle)
         matcher = build_search_matcher(
             search.value if search is not None else "",
             regex=bool(regex.value) if regex is not None else False,
@@ -3549,8 +3578,8 @@ class MarketPane(Vertical):
         if event.input.id == "market-search":
             self._schedule_market_filter()
 
-    async def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        if event.checkbox.id in {"market-search-regex", "market-search-case"}:
+    async def on_search_toggle_toggled(self, event: SearchToggle.Toggled) -> None:
+        if event.toggle.id in {"market-search-regex", "market-search-case"}:
             self._schedule_market_filter()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:

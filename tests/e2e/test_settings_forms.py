@@ -857,19 +857,34 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             assert "给导师发进度报告" in rows
 
             # edit it from the table selection: the Edit button opens the same
-            # form pre-filled and the change is persisted
-            idx = next(
-                i
-                for i in range(table.row_count)
-                if "给导师发进度报告" in str(table.get_row_at(i)[2])
-            )
-            table.move_cursor(row=idx, animate=False)  # pyright: ignore[reportUnknownMemberType]
-            await pilot.pause(0.05)
-            app.query_one("#actions-edit", Button).press()
-            await pilot.pause(0.3)
+            # form pre-filled and the change is persisted. A concurrent
+            # actions refresh can move the cursor between move_cursor and the
+            # press, so retry until the pre-filled modal is actually up.
             from mailflow_tui.todo_create import TodoEditModal
 
-            assert isinstance(app.screen, TodoEditModal)
+            for _ in range(10):
+                idx = next(
+                    (
+                        i
+                        for i in range(table.row_count)
+                        if "给导师发进度报告" in str(table.get_row_at(i)[2])
+                    ),
+                    -1,
+                )
+                assert idx >= 0, "todo row vanished"
+                table.move_cursor(row=idx, animate=False)  # pyright: ignore[reportUnknownMemberType]
+                await pilot.pause(0.1)
+                app.query_one("#actions-edit", Button).press()
+                await pilot.pause(0.3)
+                if (
+                    isinstance(app.screen, TodoEditModal)
+                    and str(app.screen.query_one("#todo-summary", Input).value)
+                    == "给导师发进度报告"
+                ):
+                    break
+                if isinstance(app.screen, TodoEditModal):
+                    app.screen.dismiss(False)  # pyright: ignore[reportUnknownMemberType]
+                    await pilot.pause(0.1)
             edit_summary = app.screen.query_one("#todo-summary", Input)
             assert str(edit_summary.value) == "给导师发进度报告"  # pre-filled
             edit_summary.value = "给导师发周报"

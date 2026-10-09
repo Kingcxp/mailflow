@@ -17,10 +17,11 @@ harmless because the widget's display is irrelevant once removed.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from textual.css.query import QueryError
-from textual.widgets import Select
+from textual.message import Message
+from textual.widgets import Button, Select
 from textual.widgets._select import SelectCurrent, SelectOverlay
 
 
@@ -68,4 +69,45 @@ class SafeSelect(Select[object]):  # pyright: ignore[reportUnsafeMultipleInherit
         self.post_message(changed)
 
 
-__all__ = ["SafeSelect"]
+__all__ = ["SafeSelect", "SearchToggle"]
+
+
+class SearchToggle(Button):
+    """Compact on/off toggle for the search inputs (``r*`` = regex, ``Aa``
+    = case-sensitive).
+
+    A labelled Checkbox eats a third of the search row; these two-letter
+    toggles read at a glance: idle grey, active green, pressed once to
+    flip. Exposes the same ``value`` attribute a Checkbox had so the
+    matcher code does not change.
+    """
+
+    LABELS: ClassVar[dict[str, str]] = {"regex": "r*", "case": "Aa"}
+
+    class Toggled(Message):
+        """Posted after the toggle flips; bubbles like Checkbox.Changed did."""
+
+        def __init__(self, toggle: SearchToggle, value: bool) -> None:
+            super().__init__()
+            self.toggle = toggle
+            self.value = value
+
+        @property
+        def control(self) -> SearchToggle:
+            return self.toggle
+
+    def __init__(self, kind: str, *, ident: str) -> None:
+        super().__init__(self.LABELS.get(kind, kind), id=ident, variant="default")
+        self._kind = kind
+        self._on = False
+
+    @property
+    def value(self) -> bool:
+        """Current toggle state (Checkbox-compatible reads)."""
+        return self._on
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self._on = not self._on
+        self.variant = "success" if self._on else "default"
+        self.post_message(self.Toggled(self, self._on))

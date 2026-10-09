@@ -106,6 +106,16 @@ Button:focus {
     margin-left: 1;
 }
 
+/* compact regex / case toggles: two characters each, green when on */
+SearchToggle {
+    min-width: 4;
+    width: 4;
+    margin-left: 1;
+    padding: 0;
+    border: none;
+    content-align: center middle;
+}
+
 #smart-action-progress {
     height: auto;
     max-height: 8;

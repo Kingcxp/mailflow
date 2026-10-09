@@ -699,7 +699,7 @@ class TestCheckSeminarsScope:
         assert "no start time" in text
         assert "unknown (no time in the mail)" in text
 
-    async def test_an_incomplete_scan_tells_the_model_to_retry(self) -> None:
+    async def test_an_incomplete_scan_reports_partial_results_and_the_gap(self) -> None:
         class FailingRouter:
             async def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> LLMCompletion:
                 raise TimeoutError("endpoint timed out")
@@ -710,8 +710,13 @@ class TestCheckSeminarsScope:
 
         text, staged = await registry.call("check_seminars", {})
 
-        assert text.startswith("error:")
-        assert "retry" in text
+        # A failed batch must not void the scan: the model gets the real
+        # candidates plus which mails it could not read, so it can finish
+        # the scan incrementally instead of restarting (or giving up and
+        # adding entries one step at a time).
+        assert text.startswith("partial:")
+        assert "could not be read" in text
+        assert "record_ids" in text
         assert staged is None
 
 
