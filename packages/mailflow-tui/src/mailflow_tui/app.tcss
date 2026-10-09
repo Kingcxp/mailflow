@@ -55,42 +55,6 @@ Button:focus {
     text-style: bold reverse;
 }
 
-/* Row alignment contract: an Input/Select draws a 3-row frame while a Button
-   is content-sized at 1 row, so any button sharing a Horizontal with one
-   floats off the middle line. Stretch every button inside such rows to the
-   same 3-row height; rows of only buttons keep auto sizing. */
-#mail-search-row Button,
-#actions-search-row Button,
-#market-search-row Button,
-#log-search-row Button,
-#settings-search-row Button,
-#actions-controls Button,
-#actions-buttons Button,
-#market-controls-top Button,
-#market-controls-buttons Button,
-#market-actions Button,
-#log-filters Button,
-#notifications-actions Button,
-#accounts-actions Button,
-#llms-actions Button,
-#history-actions Button,
-#mail-actions-row1 Button,
-#mail-actions-row2 Button,
-#mail-actions-row3 Button,
-#ask-correct-input-row Button,
-#reply-toolbar Button,
-#reply-templates Button,
-#reply-actions Button,
-#runtime-plugin-actions Button,
-.option-row Button {
-    height: 3;
-}
-
-SearchToggle {
-    /* keep the toggle inside the contract without inheriting min-width 16 */
-    min-width: 3;
-}
-
 #mail-search-row {
     height: 3;
     /* the input draws a 3-row frame (border+content+border) while a Button is
@@ -163,10 +127,11 @@ SearchToggle {
 #history-count {
     width: 10;
     min-width: 8;
-    /* the row's buttons are content-sized at 1 text row while the Input draws
-       a 3-row frame; give the input the bordered height too and center the
-       row so both sit on the same middle line */
-    height: 3;
+    /* match the 1-row content height of the row's buttons: drop the input's
+       frame instead of inflating the buttons, keeping the whole row on one
+       line */
+    height: 1;
+    border: none;
     margin-left: 1;
 }
 
