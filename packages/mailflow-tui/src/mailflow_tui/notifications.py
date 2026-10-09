@@ -285,8 +285,16 @@ class NotificationsPane(Vertical):
         if urgency is None:
             return
         current = urgency.value
-        urgency.set_options(self._urgency_options())  # pyright: ignore[reportUnknownMemberType]
-        urgency.value = current  # pyright: ignore[reportUnknownMemberType]
+        # a pane remount can tear the Select down between the mount check and
+        # the poke; its watcher's internal '#label' query would then raise
+        # NoMatches and kill the app — swallow exactly that race
+        from textual.css.query import QueryError
+
+        try:
+            urgency.set_options(self._urgency_options())  # pyright: ignore[reportUnknownMemberType]
+            urgency.value = current  # pyright: ignore[reportUnknownMemberType]
+        except QueryError:
+            pass
 
     def _sync_selection_controls(self) -> None:
         """Mirror the selected row's enabled/urgency into the action controls."""
@@ -309,9 +317,15 @@ class NotificationsPane(Vertical):
             )
         if urgency is not None:
             urgency.disabled = False
+            from textual.css.query import QueryError
+
             self._syncing_urgency = True
-            urgency.value = entry.minimum_urgency.value  # pyright: ignore[reportUnknownMemberType]
-            self._syncing_urgency = False
+            try:
+                urgency.value = entry.minimum_urgency.value  # pyright: ignore[reportUnknownMemberType]
+            except QueryError:
+                pass
+            finally:
+                self._syncing_urgency = False
 
     # -- actions ----------------------------------------------------------------
 

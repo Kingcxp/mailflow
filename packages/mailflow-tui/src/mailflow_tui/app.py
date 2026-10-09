@@ -31,6 +31,7 @@ from textual.app import App, ComposeResult
 from textual.binding import BindingsMap
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.coordinate import Coordinate
+from textual.css.query import QueryError
 from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widget import MountError
@@ -130,6 +131,23 @@ def _select_ready(select: Any) -> bool:
     return bool(getattr(select, "is_mounted", False)) and bool(select.query("#label"))
 
 
+def _safe_set_value(select: Any, value: Any) -> None:
+    """Assign ``select.value`` only while the widget is fully mounted.
+
+    Even a ready-looking Select can be torn down between the check and the
+    assignment (a pane remount races every queued sync); the watcher's
+    internal ``#label`` query then raises NoMatches and kills the app.
+    Losing one programmatic sync is harmless — the next render re-derives
+    the value — so swallow exactly that race.
+    """
+    try:
+        if select is None or not _select_ready(select):
+            return
+        select.value = value  # pyright: ignore[reportUnknownMemberType]
+    except QueryError:
+        pass
+
+
 def _apply_options(owner: Any, selector: str, pairs: list[tuple[str, str]]) -> None:
     """set_options + restore value, skipping identical lists so startup never
     pokes freshly mounted widgets (a Textual render race)."""
@@ -157,9 +175,13 @@ def _apply_options(owner: Any, selector: str, pairs: list[tuple[str, str]]) -> N
         return
     owner._options_signatures = {**signatures, selector: signature}
     current = select.value
-    select.set_options(pairs)  # pyright: ignore[reportUnknownMemberType]
+    try:
+        select.set_options(pairs)  # pyright: ignore[reportUnknownMemberType]
+    except QueryError:
+        # torn down between the ready check and the poke (pane remount race)
+        return
     if current is not Select.NULL:
-        select.value = current  # pyright: ignore[reportUnknownMemberType]
+        _safe_set_value(select, current)
 
 
 class ReplyModal(ModalScreen[Any]):
@@ -1178,7 +1200,7 @@ class MailPane(Vertical):
             try:
                 select = self._urgency_select()
                 if select is not None and _select_ready(select) and str(select.value) != wanted:
-                    select.value = wanted  # pyright: ignore[reportUnknownMemberType]
+                    _safe_set_value(select, wanted)
             finally:
                 self._urgency_suppress = False
         await self._show_selected()
@@ -1592,7 +1614,7 @@ class MailPane(Vertical):
         try:
             select = self._urgency_select()
             if select is not None and _select_ready(select) and str(select.value) != wanted:
-                select.value = wanted  # pyright: ignore[reportUnknownMemberType]
+                _safe_set_value(select, wanted)
         finally:
             self._urgency_suppress = False
 
@@ -2172,7 +2194,7 @@ class ActionsPane(Vertical):
             if type_select is not None and _select_ready(type_select):
                 selected_value = type_select.value
                 if selected_value is not Select.NULL and str(selected_value) != "all":
-                    type_select.value = "all"
+                    _safe_set_value(type_select, "all")
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
@@ -2726,14 +2748,17 @@ class LogsPane(Vertical):
         current = level.value
         if not _select_ready(level):
             return
-        level.set_options(
-            [
-                (self._service.t("tui.logs_level_warning"), "WARNING"),
-                (self._service.t("tui.logs_level_info"), "INFO"),
-                (self._service.t("tui.logs_level_debug"), "DEBUG"),
-            ]
-        )
-        level.value = current
+        try:
+            level.set_options(
+                [
+                    (self._service.t("tui.logs_level_warning"), "WARNING"),
+                    (self._service.t("tui.logs_level_info"), "INFO"),
+                    (self._service.t("tui.logs_level_debug"), "DEBUG"),
+                ]
+            )
+        except QueryError:
+            return
+        _safe_set_value(level, current)
 
     def _refresh_source_options(self) -> None:
         source = _typed_select(self, "#log-source")
@@ -2747,10 +2772,13 @@ class LogsPane(Vertical):
         # identical list re-renders the widget each tick — skip it
         signature = repr(pairs)
         if getattr(self, "_source_signature", None) != signature and _select_ready(source):
-            source.set_options(pairs)  # pyright: ignore[reportUnknownMemberType]
+            try:
+                source.set_options(pairs)  # pyright: ignore[reportUnknownMemberType]
+            except QueryError:
+                return
             self._source_signature = signature
         if current is not Select.NULL and current != "":
-            source.value = current if current in self._seen_sources else ""
+            _safe_set_value(source, current if current in self._seen_sources else "")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id != "logs-export":
@@ -3469,14 +3497,17 @@ class MarketPane(Vertical):
         if categories != getattr(self, "_categories", None):
             select = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
             if select is not None and _select_ready(select):
-                select.set_options(  # pyright: ignore[reportUnknownMemberType]
-                    [("all", "all"), *[(self._category_label(c), c) for c in categories]]
-                )
+                try:
+                    select.set_options(  # pyright: ignore[reportUnknownMemberType]
+                        [("all", "all"), *[(self._category_label(c), c) for c in categories]]
+                    )
+                except QueryError:
+                    return
                 self._categories = categories
         select = self.query_one_optional("#market-category", Select)  # pyright: ignore[reportUnknownVariableType]
         desired = filter_value if filter_value in {*categories, "all"} else "all"
-        if select is not None and _select_ready(select) and select.value != desired:  # pyright: ignore[reportUnknownMemberType]
-            select.value = desired
+        if select is not None and select.value != desired:  # pyright: ignore[reportUnknownMemberType]
+            _safe_set_value(select, desired)
         self._set_status(self._market_stale_status)
         if self._selected is not None:
             self._show_detail(self._selected)

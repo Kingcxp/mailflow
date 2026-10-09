@@ -1193,14 +1193,22 @@ class SettingsPane(Vertical):
         select = self.query_one_optional("#language-select", Select)  # pyright: ignore[reportUnknownVariableType]
         if select is None:
             return
-        select.set_options(  # pyright: ignore[reportUnknownMemberType]
-            [
-                (f"{info.name} ({info.code})", info.code)
-                for info in self._service.i18n.available_languages()
-            ]
-        )
-        if select.value != self._service.i18n.language:  # pyright: ignore[reportUnknownMemberType]
-            select.value = self._service.i18n.language
+        # a concurrent pane remount can detach the Select between the lookup
+        # and the poke; its watcher's internal '#label' query would raise
+        # NoMatches and kill the app — swallow exactly that race
+        from textual.css.query import QueryError
+
+        try:
+            select.set_options(  # pyright: ignore[reportUnknownMemberType]
+                [
+                    (f"{info.name} ({info.code})", info.code)
+                    for info in self._service.i18n.available_languages()
+                ]
+            )
+            if select.value != self._service.i18n.language:  # pyright: ignore[reportUnknownMemberType]
+                select.value = self._service.i18n.language
+        except QueryError:
+            pass
 
     # -- sections ----------------------------------------------------------
 
