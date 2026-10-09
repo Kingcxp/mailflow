@@ -109,6 +109,7 @@ Button:focus {
 /* regex / case toggles: 3x3 square buttons matching the input frame */
 SearchToggle {
     width: 3;
+    min-width: 3;
     height: 3;
     margin-left: 1;
     padding: 0;
