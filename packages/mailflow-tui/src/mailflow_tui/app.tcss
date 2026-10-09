@@ -118,6 +118,11 @@ Button:focus {
 #history-count {
     width: 10;
     min-width: 8;
+    /* the row's buttons are content-sized at 1 text row while the Input draws
+       a 3-row frame; give the input the bordered height too and center the
+       row so both sit on the same middle line */
+    height: 3;
+    margin-left: 1;
 }
 
 #history-count-label {
