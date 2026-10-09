@@ -65,6 +65,7 @@ from mailflow_tui.seminars import SeminarReviewModal
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
+from mailflow_tui.widgets import SafeSelect
 
 logger = logging.getLogger("mailflow.tui")
 
@@ -559,11 +560,11 @@ class MailPane(Vertical):
                 yield Static("", id="mail-attachments")
                 yield Static("", id="mail-notes")
         with Horizontal(id="mail-controls"):
-            yield Select(self._urgency_options(), id="urgency-select", allow_blank=False)
-            yield Select(
+            yield SafeSelect(self._urgency_options(), id="urgency-select", allow_blank=False)
+            yield SafeSelect(
                 self._urgency_filter_options(), id="mail-urgency-filter", allow_blank=False
             )
-            yield Select(
+            yield SafeSelect(
                 [
                     (self._service.t("tui.sort_time"), "time"),
                     (self._service.t("tui.sort_urgency"), "urgency"),
@@ -2052,7 +2053,7 @@ class ActionsPane(Vertical):
             yield Checkbox(self._service.t("tui.search_regex"), id="actions-search-regex")
             yield Checkbox(self._service.t("tui.search_case"), id="actions-search-case")
         with Horizontal(id="actions-controls"):
-            yield Select(
+            yield SafeSelect(
                 [
                     (self._service.t("tui.range_all"), "all"),
                     (self._service.t("tui.range_today"), "today"),
@@ -2061,7 +2062,7 @@ class ActionsPane(Vertical):
                 id="actions-range",
                 allow_blank=False,
             )
-            yield Select(
+            yield SafeSelect(
                 [(self._service.t("tui.filter_all_types"), "all")],
                 id="actions-type-filter",
                 allow_blank=False,
@@ -2694,7 +2695,7 @@ class LogsPane(Vertical):
     def compose(self) -> ComposeResult:
         with Vertical(id="log-controls"):
             with Horizontal(id="log-filters"):
-                yield Select(
+                yield SafeSelect(
                     [
                         (self._service.t("tui.logs_level_warning"), "WARNING"),
                         (self._service.t("tui.logs_level_info"), "INFO"),
@@ -2704,7 +2705,7 @@ class LogsPane(Vertical):
                     id="log-level",
                     allow_blank=False,
                 )
-                yield Select(
+                yield SafeSelect(
                     [(self._service.t("tui.logs_all_sources"), "")],
                     id="log-source",
                     allow_blank=False,
@@ -3245,8 +3246,8 @@ class MarketPane(Vertical):
                 yield Checkbox(self._service.t("tui.search_regex"), id="market-search-regex")
                 yield Checkbox(self._service.t("tui.search_case"), id="market-search-case")
             with Horizontal(id="market-controls-top"):
-                yield Select([], id="market-category")
-                yield Select(
+                yield SafeSelect([], id="market-category")
+                yield SafeSelect(
                     [
                         (self._service.t("tui.market_sort_name"), "name"),
                         (self._service.t("tui.market_sort_status"), "status"),

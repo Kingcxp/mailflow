@@ -27,6 +27,7 @@ from textual.widgets import Button, DataTable, Select, Static
 
 from mailflow_tui.gateway_guide import GatewayGuideModal
 from mailflow_tui.labels import error_detail, error_message, urgency_label
+from mailflow_tui.widgets import SafeSelect
 
 _URGENCY_ORDER = (Urgency.AD, Urgency.INFO, Urgency.IMPORTANT, Urgency.URGENT)
 
@@ -157,7 +158,7 @@ class NotificationsPane(Vertical):
             yield Button(
                 self._service.t("tui.notifications_toggle"), id="notif-toggle", variant="primary"
             )
-            yield Select(self._urgency_options(), id="notif-urgency", allow_blank=False)
+            yield SafeSelect(self._urgency_options(), id="notif-urgency", allow_blank=False)
             yield Button(
                 self._service.t("tui.notifications_check"), id="notif-check", variant="primary"
             )

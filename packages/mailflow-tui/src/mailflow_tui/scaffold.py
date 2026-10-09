@@ -15,6 +15,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DirectoryTree, Input, Select, Static
 
 from mailflow_tui.labels import error_message
+from mailflow_tui.widgets import SafeSelect
 
 
 class PluginScaffoldScreen(ModalScreen[Path | None]):
@@ -46,7 +47,7 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
                 id="scaffold-plugin-id",
                 value="mailflow-",
             )
-            yield Select(
+            yield SafeSelect(
                 [(f"{c} — {self._t(f'plugin.template.{c}')}", c) for c in CATEGORIES],
                 id="scaffold-type",
                 value=CATEGORIES[3],

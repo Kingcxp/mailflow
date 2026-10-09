@@ -60,6 +60,7 @@ from textual.widgets import (
 
 from mailflow_tui.labels import error_detail, error_message, urgency_label
 from mailflow_tui.search import SearchMatcher, build_search_matcher
+from mailflow_tui.widgets import SafeSelect
 
 _SECTION_LABELS = {
     "general": "tui.settings_section_general",
@@ -632,7 +633,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             # literal None is an illegal Select value: NULL makes Textual pick
             # the first option when blank is not allowed, instead of crashing
             initial_value: Any = initial if initial is not None else Select.NULL
-            yield Select(
+            yield SafeSelect(
                 [(self._choice_label(choice), str(choice)) for choice in choices],
                 value=initial_value,
                 id=widget_id,
@@ -668,7 +669,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 yield Static(escape(translated_desc), classes="field-desc")
             if extra.kind == "choice":
                 _choice_names = tuple(extra.choices) or tuple(_IMAP_PRESET_HOSTS)
-                yield Select(
+                yield SafeSelect(
                     [(name, name) for name in _choice_names],
                     value=self._extra_value(extra) or (_choice_names[0] if _choice_names else ""),
                     id=widget_id,
@@ -1113,7 +1114,7 @@ class OptionCard(Vertical):
         if spec.editor is EditorKind.BOOLEAN:
             yield Switch(value=bool(spec.value), id=widget_id, classes="option-input")
         elif spec.editor is EditorKind.CHOICE:
-            yield Select(
+            yield SafeSelect(
                 [(choice, choice) for choice in spec.choices],
                 value=str(spec.value) if spec.value in spec.choices else Select.NULL,
                 id=widget_id,

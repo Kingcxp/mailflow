@@ -17,6 +17,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DirectoryTree, Input, Select, Static
 
 from mailflow_tui.labels import error_detail
+from mailflow_tui.widgets import SafeSelect
 
 
 class BotExportScreen(ModalScreen[Path | None]):
@@ -36,7 +37,7 @@ class BotExportScreen(ModalScreen[Path | None]):
         frameworks = self._service.registry.component_ids(ComponentKind.BOT_EXPORTER)
         with Vertical(id="export-dialog"):
             yield Static(self._t("tui.export_title"), classes="scaffold-title")
-            yield Select(
+            yield SafeSelect(
                 [(fw, fw) for fw in frameworks],
                 id="export-framework",
                 value=frameworks[0] if frameworks else None,
