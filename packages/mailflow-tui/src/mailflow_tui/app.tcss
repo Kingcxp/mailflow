@@ -55,6 +55,42 @@ Button:focus {
     text-style: bold reverse;
 }
 
+/* Row alignment contract: an Input/Select draws a 3-row frame while a Button
+   is content-sized at 1 row, so any button sharing a Horizontal with one
+   floats off the middle line. Stretch every button inside such rows to the
+   same 3-row height; rows of only buttons keep auto sizing. */
+#mail-search-row Button,
+#actions-search-row Button,
+#market-search-row Button,
+#log-search-row Button,
+#settings-search-row Button,
+#actions-controls Button,
+#actions-buttons Button,
+#market-controls-top Button,
+#market-controls-buttons Button,
+#market-actions Button,
+#log-filters Button,
+#notifications-actions Button,
+#accounts-actions Button,
+#llms-actions Button,
+#history-actions Button,
+#mail-actions-row1 Button,
+#mail-actions-row2 Button,
+#mail-actions-row3 Button,
+#ask-correct-input-row Button,
+#reply-toolbar Button,
+#reply-templates Button,
+#reply-actions Button,
+#runtime-plugin-actions Button,
+.option-row Button {
+    height: 3;
+}
+
+SearchToggle {
+    /* keep the toggle inside the contract without inheriting min-width 16 */
+    min-width: 3;
+}
+
 #mail-search-row {
     height: 3;
     /* the input draws a 3-row frame (border+content+border) while a Button is
@@ -106,13 +142,12 @@ Button:focus {
     margin-left: 1;
 }
 
-/* compact regex / case toggles: two characters each, green when on */
+/* regex / case toggles: 3x3 square buttons matching the input frame */
 SearchToggle {
-    min-width: 4;
-    width: 4;
+    width: 3;
+    height: 3;
     margin-left: 1;
     padding: 0;
-    border: none;
     content-align: center middle;
 }
 
