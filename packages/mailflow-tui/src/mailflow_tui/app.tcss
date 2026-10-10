@@ -55,6 +55,21 @@ Button:focus {
     text-style: bold reverse;
 }
 
+/* The 3x3 toggles must read as one solid block: reverse-video on hover only
+   inverts the 2 label cells and looks half-lit, and the press animation's
+   tint blanks the block. Bold + slight tint instead; the on/off state is the
+   variant colour (grey -> green), which fills the whole square. */
+SearchToggle:hover,
+SearchToggle:focus {
+    text-style: bold;
+    background-tint: $foreground 15%;
+}
+
+SearchToggle.-active {
+    tint: transparent;
+    text-style: bold;
+}
+
 #mail-search-row {
     height: 3;
     /* the input draws a 3-row frame (border+content+border) while a Button is
