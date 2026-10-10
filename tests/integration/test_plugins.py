@@ -827,6 +827,92 @@ class TestIMAPMailSource:
         ]
 
 
+class TestIMAPInternalDate:
+    """``received_at`` is the server's arrival time (INTERNALDATE), not the
+    moment MailFlow fetched the mail — otherwise backfilled history stamps
+    every message with the same import moment and the timeline collapses."""
+
+    def test_parse_mime_uses_internal_date_when_given(self) -> None:
+        from mailflow_mail_imap.plugin import parse_mime
+
+        raw = (
+            b"From: a@example.com\r\nSubject: old\r\n"
+            b"Date: Mon, 10 Jun 2026 09:00:00 +0800\r\n\r\nbody"
+        )
+        arrival = datetime(2026, 6, 15, 1, 15, tzinfo=UTC)
+        mail = parse_mime(raw, "acct-1", internal_date=arrival)
+        assert mail.received_at == arrival
+        assert mail.date == datetime(2026, 6, 10, 1, 0, tzinfo=UTC)
+
+    def test_parse_mime_falls_back_to_fetch_time(self) -> None:
+        from mailflow_mail_imap.plugin import parse_mime
+
+        raw = b"From: a@example.com\r\nSubject: live\r\n\r\nbody"
+        before = datetime.now(UTC) - timedelta(seconds=5)
+        mail = parse_mime(raw, "acct-1")
+        assert before <= mail.received_at <= datetime.now(UTC) + timedelta(seconds=5)
+
+    def test_internal_date_parses_server_format(self) -> None:
+        from mailflow_mail_imap import plugin as imap_plugin
+
+        response = [
+            (
+                b'4 (UID 4 INTERNALDATE "15-Jun-2026 09:15:00 +0800" RFC822 {123})',
+                b"raw bytes",
+            )
+        ]
+        parsed = imap_plugin._internal_date(response)  # pyright: ignore[reportPrivateUsage]
+        assert parsed == datetime(2026, 6, 15, 1, 15, tzinfo=UTC)
+
+    def test_internal_date_tolerates_malformed(self) -> None:
+        from mailflow_mail_imap import plugin as imap_plugin
+
+        assert imap_plugin._internal_date([(b"4 (UID 4 RFC822 {5})", b"raw")]) is None  # pyright: ignore[reportPrivateUsage]
+        assert imap_plugin._internal_date([(b'4 (INTERNALDATE "garbage")', b"raw")]) is None  # pyright: ignore[reportPrivateUsage]
+        assert imap_plugin._internal_date([]) is None  # pyright: ignore[reportPrivateUsage]
+
+    async def test_fetch_history_carries_server_arrival_times(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mailflow.config import MailAccountConfig
+        from mailflow_mail_imap.plugin import IMAPSource
+
+        class HistoryIMAP:
+            def __init__(self, host: str, port: int, timeout: float = 0) -> None: ...
+
+            def login(self, user: str, password: str) -> None: ...
+
+            def select(self, folder: str) -> None: ...
+
+            def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+                if command == "search":
+                    return "OK", [b"1 2"]
+                uid = int(args[0])
+                raw = (
+                    f"From: a@example.com\r\nSubject: msg {uid}\r\n"
+                    f"Message-ID: <x-{uid}@e>\r\n\r\nbody"
+                ).encode()
+                stamp = f"1{uid}-Jan-2026 08:00:00 +0000"
+                return "OK", [(f'1 (UID {uid} INTERNALDATE "{stamp}" RFC822)'.encode(), raw)]
+
+            def logout(self) -> None: ...
+
+        monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", HistoryIMAP)
+        account = MailAccountConfig(
+            account_id="acct-1",
+            provider="imap",
+            options={"preset": "qq", "username": "u", "password": "p", "limit": 5},
+        )
+        source = IMAPSource(account)
+        page = await source.fetch_history(limit=2)
+        # each mail carries its own server arrival time — not one shared
+        # "fetched now" stamp
+        stamps = [m.received_at for m in page]
+        assert [m.subject for m in page] == ["msg 2", "msg 1"]
+        assert stamps[0].year == 2026 and stamps[0].month == 1
+        assert stamps[0] != stamps[1]
+
+
 class TestAnthropicBackend:
     async def test_chat_uses_messages_api(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from mailflow.config import LLMConfig

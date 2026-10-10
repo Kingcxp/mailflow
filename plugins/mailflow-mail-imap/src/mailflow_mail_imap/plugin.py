@@ -20,7 +20,7 @@ import importlib
 import logging
 import re
 import smtplib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from email import message_from_bytes
 from email.header import decode_header
 from email.message import EmailMessage, Message
@@ -211,10 +211,75 @@ def _apply_image_text(mail: MailMessage, *, enabled: bool) -> MailMessage:
     return mail.model_copy(update={"image_text": text})
 
 
+_INTERNALDATE_MONTHS = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+
+
+def _internal_date(response: Any) -> datetime | None:
+    """Extract INTERNALDATE from a UID FETCH response tuple.
+
+    imaplib returns the untagged data as ``(b'1234 (UID 5 INTERNALDATE
+    "01-Jan-2026 09:15:00 +0800" RFC822 {size})', b'...')``. The timestamp
+    is the server's arrival time — the honest `received_at` for mail
+    fetched long after delivery. Malformed or absent values return None
+    (the caller falls back to the fetch time).
+    """
+    try:
+        metadata = response[0][0]
+    except (IndexError, TypeError):
+        return None
+    if not isinstance(metadata, bytes):
+        return None
+    match = re.search(rb'INTERNALDATE\s+"([^"]+)"', metadata, re.IGNORECASE)
+    if match is None:
+        return None
+    tokens = match.group(1).decode("ascii", "replace").replace("-", " ").split()
+    if len(tokens) != 5:
+        return None
+    day, month_name, year, clock, offset = tokens
+    month = _INTERNALDATE_MONTHS.get(month_name[:3].casefold())
+    if month is None or offset[:1] not in {"+", "-"}:
+        return None
+    try:
+        hour, minute, second = (int(part) for part in clock.split(":"))
+        shift = timedelta(hours=int(offset[1:3]), minutes=int(offset[3:5]))
+        if offset[0] == "-":
+            shift = -shift
+        return datetime(
+            int(year), month, int(day), hour, minute, second, tzinfo=timezone(shift)
+        ).astimezone(UTC)
+    except (ValueError, IndexError):
+        return None
+
+
 def _parse_mime(
-    raw: bytes, account_id: str, provider: str, *, ocr_enabled: bool = False
+    raw: bytes,
+    account_id: str,
+    provider: str,
+    *,
+    ocr_enabled: bool = False,
+    internal_date: datetime | None = None,
 ) -> MailMessage:
-    """Convert one raw RFC-822 message into a normalized MailMessage."""
+    """Convert one raw RFC-822 message into a normalized MailMessage.
+
+    ``internal_date`` is the IMAP server's own arrival timestamp
+    (INTERNALDATE) — the closest thing to "when this mail reached the
+    mailbox". Without it the fetch time is used: that is honest for live
+    polls (arrival ≈ fetch) but wrong for backfilled history, where it
+    would stamp every historical mail with today's import moment.
+    """
     message = message_from_bytes(raw)
     subject = _decode(message.get("Subject")) or "(no subject)"
     sender = _mail_address(message.get("From"))
@@ -228,6 +293,7 @@ def _parse_mime(
         date = datetime.now(UTC)
     if date.tzinfo is None:
         date = date.replace(tzinfo=UTC)
+    received_at = internal_date.astimezone(UTC) if internal_date is not None else datetime.now(UTC)
     body_text, body_html, attachments = _extract_body(message)
     return _apply_image_text(
         MailMessage(
@@ -238,7 +304,7 @@ def _parse_mime(
             recipients=recipients,
             cc=cc,
             date=date,
-            received_at=datetime.now(UTC),
+            received_at=received_at,
             body_text=body_text,
             body_html=body_html,
             attachments=attachments,
@@ -249,11 +315,18 @@ def _parse_mime(
 
 
 def parse_mime(
-    raw: bytes, account_id: str, provider: str = "imap", *, ocr_enabled: bool = False
+    raw: bytes,
+    account_id: str,
+    provider: str = "imap",
+    *,
+    ocr_enabled: bool = False,
+    internal_date: datetime | None = None,
 ) -> MailMessage:
     """Normalize raw RFC-822 data, retaining unexpected parser failures."""
     try:
-        return _parse_mime(raw, account_id, provider, ocr_enabled=ocr_enabled)
+        return _parse_mime(
+            raw, account_id, provider, ocr_enabled=ocr_enabled, internal_date=internal_date
+        )
     except Exception as exc:
         # Never log raw RFC-822 data: headers and bodies can contain secrets.
         logger.warning("MIME parse fallback for account %r: %s", account_id, type(exc).__name__)
@@ -361,7 +434,7 @@ class IMAPSource:
                     self._persist_watermark()
             messages: list[MailMessage] = []
             for uid_int in wanted:
-                _status, fetch = client.uid("fetch", str(uid_int), "(RFC822)")
+                _status, fetch = client.uid("fetch", str(uid_int), "(INTERNALDATE RFC822)")
                 if not fetch or fetch[0] is None:
                     # Leave the watermark behind this uid so a transient
                     # server error does not drop the mail permanently.
@@ -372,6 +445,7 @@ class IMAPSource:
                     self._account.account_id,
                     provider="imap",
                     ocr_enabled=self._ocr_images,
+                    internal_date=_internal_date(fetch),
                 )
                 # Advance only once the mail is in hand: an exception above
                 # retries the same uid on the next poll instead of skipping it.
@@ -409,7 +483,7 @@ class IMAPSource:
             window = newest_first[offset : offset + limit] if limit > 0 else []
             messages: list[MailMessage] = []
             for uid_int in window:
-                _status, fetch = client.uid("fetch", str(uid_int), "(RFC822)")
+                _status, fetch = client.uid("fetch", str(uid_int), "(INTERNALDATE RFC822)")
                 if not fetch or fetch[0] is None:
                     continue
                 messages.append(
@@ -418,6 +492,10 @@ class IMAPSource:
                         self._account.account_id,
                         provider="imap",
                         ocr_enabled=self._ocr_images,
+                        # INTERNALDATE is the server's arrival time: without it
+                        # every historical mail would carry today's import
+                        # moment and the timeline would collapse into one stamp
+                        internal_date=_internal_date(fetch),
                     )
                 )
             return messages

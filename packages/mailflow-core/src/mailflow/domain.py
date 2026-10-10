@@ -151,7 +151,7 @@ class MailMessage(BaseModel):
     recipients: list[MailAddress] = Field(default_factory=lambda: [])
     cc: list[MailAddress] = Field(default_factory=lambda: [])
     date: datetime  # send time as reported by the provider
-    received_at: datetime  # normalized fetch time, always timezone-aware UTC
+    received_at: datetime  # mailbox arrival time (IMAP INTERNALDATE), always UTC
     body_text: str = ""
     body_html: str = ""
     attachments: list[Attachment] = Field(default_factory=lambda: [])

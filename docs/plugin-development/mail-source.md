@@ -44,7 +44,11 @@ email = "me@example.com"
 
 - `MailMessage.message_id` — provider-stable id; `provider_message_id` for
   identity (`normalized_message_id()` falls back to a content digest).
-- `date` and `received_at` — timezone-aware UTC datetimes.
+- `date` and `received_at` — timezone-aware UTC datetimes. `date` is the
+  send time from the mail's own `Date` header; `received_at` is when the
+  mail reached the mailbox — for IMAP the server's `INTERNALDATE`, which
+  backfilled history must carry so old mail does not all appear stamped
+  at the import moment.
 - Keep the **original** `body_text` and `body_html`; analysis is separate.
 - Set `account_id` (the emitting account) and `provider` (your plugin id).
 
