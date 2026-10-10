@@ -121,10 +121,11 @@ SearchToggle.-active {
     margin-left: 1;
 }
 
-/* regex / case toggles: 3x3 square buttons matching the input frame */
+/* regex / case toggles: square blocks matching the input's 3-row height,
+   wide enough that the 2-char label fits on ONE line without wrapping */
 SearchToggle {
-    width: 3;
-    min-width: 3;
+    width: 6;
+    min-width: 6;
     height: 3;
     margin-left: 1;
     padding: 0;
