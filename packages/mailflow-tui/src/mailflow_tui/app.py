@@ -134,17 +134,22 @@ def _select_ready(select: Any) -> bool:
 def _safe_set_value(select: Any, value: Any) -> None:
     """Assign ``select.value`` only while the widget is fully mounted.
 
-    Even a ready-looking Select can be torn down between the check and the
-    assignment (a pane remount races every queued sync); the watcher's
-    internal ``#label`` query then raises NoMatches and kills the app.
+    Two benign races would otherwise kill the app:
+    - the Select is torn down between the check and the assignment (pane
+      remount): the watcher's internal ``#label`` query raises NoMatches;
+    - the value is no longer a legal option (the last todo of a filtered
+      type was just deleted): ``_validate_value`` raises
+      InvalidSelectValueError.
     Losing one programmatic sync is harmless — the next render re-derives
-    the value — so swallow exactly that race.
+    the value — so swallow exactly those.
     """
+    from textual.widgets._select import InvalidSelectValueError
+
     try:
         if select is None or not _select_ready(select):
             return
         select.value = value  # pyright: ignore[reportUnknownMemberType]
-    except QueryError:
+    except (QueryError, InvalidSelectValueError):
         pass
 
 
@@ -181,7 +186,14 @@ def _apply_options(owner: Any, selector: str, pairs: list[tuple[str, str]]) -> N
         # torn down between the ready check and the poke (pane remount race)
         return
     if current is not Select.NULL:
-        _safe_set_value(select, current)
+        # the new option list may no longer contain the current value (the
+        # last todo of a filtered type was just deleted, so that type vanished
+        # from the dropdown): assigning it raises InvalidSelectValueError and
+        # kills the app. Skip the restore — the stale-selection reset below
+        # (or the widget's own default) resolves the dropdown.
+        legal = {value for _prompt, value in pairs}
+        if str(current) in legal:
+            _safe_set_value(select, current)
 
 
 class ReplyModal(ModalScreen[Any]):

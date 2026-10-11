@@ -67,22 +67,32 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
             # Enter appends a stable-token row, preserves the value and moves focus.
             row0.focus()  # pyright: ignore[reportUnknownMemberType]
             await pilot.press("enter")
-            await pilot.pause(0.2)
-            assert editor.value() == ["10001"]
+            # the new row's focus lands a frame later on slow runners: poll
+            await _wait_until(pilot, lambda: editor.value() == ["10001"])
+            await _wait_until(
+                pilot,
+                lambda: len(editor.query(".list-editor-row")) == 2,
+            )
             row1 = editor.query(".list-editor-row")[1].query_one(Input)
             assert row1.has_focus
             # bottom add appends another row and focuses it without rebuilding prior rows
             add_btn: Button = editor.query_one("#list-editor-add", Button)
             add_btn.press()
-            await pilot.pause(0.2)
+            await _wait_until(
+                pilot,
+                lambda: len(editor.query(".list-editor-row")) == 3,
+            )
             row2 = editor.query(".list-editor-row")[2].query_one(Input)
             assert row2.has_focus
             # Delete the original row by its stable token, then focus the next surviving row.
             token = (row0.id or "").removeprefix("list-editor-input-")
             del0: Button = editor.query_one(f"#list-editor-del-{token}", Button)
             del0.press()
-            await pilot.pause(0.2)
-            assert editor.value() == []
+            await _wait_until(pilot, lambda: editor.value() == [])
+            await _wait_until(
+                pilot,
+                lambda: len(editor.query(".list-editor-row")) == 2,
+            )
             assert row1.has_focus
 
             # collection passes required with a typed value, and the value
