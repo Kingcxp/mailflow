@@ -1463,16 +1463,46 @@ class MailFlowService:
     def _dedupe_candidates(candidates: list[SeminarCandidate]) -> list[SeminarCandidate]:
         """One candidate per event, preferring the most confident description.
 
-        Identity is the normalized title plus the start instant when the mail
-        stated one; two untimed announcements with the same title are also the
-        same event. A candidate already resolved (imported or rejected) wins
-        over a pending duplicate so its state is not lost.
+        Identity, in order of strength:
+        - a timed event at the same start instant in the same venue (location
+          or URL) is ONE event however the model rewords the title per mail —
+          an announcement and its reminder share the venue but routinely
+          reword ("X: Graph Learning" vs "Graph Learning Seminar"), and two
+          distinct talks in the same room at the same minute are not a real
+          thing;
+        - otherwise the normalized title plus the start instant (untimed
+          events key on the title alone).
+
+        A candidate already resolved (imported or rejected) wins over a
+        pending duplicate so its state is not lost.
         """
+
+        def _norm(value: str) -> str:
+            return " ".join(value.casefold().split())
+
+        def _same_venue(left: SeminarCandidate, right: SeminarCandidate) -> bool:
+            if left.url and right.url:
+                return left.url.casefold() == right.url.casefold()
+            if left.location and right.location:
+                return _norm(left.location) == _norm(right.location)
+            return False
+
         best: dict[str, SeminarCandidate] = {}
         order: list[str] = []
         for candidate in candidates:
             starts = to_utc(candidate.starts_at).isoformat() if candidate.starts_at else "untimed"
             key = f"{' '.join(candidate.title.casefold().split())}|{starts}"
+            venue_owner: str | None = None
+            if candidate.starts_at is not None:
+                for existing_key, prior in best.items():
+                    prior_starts = (
+                        to_utc(prior.starts_at).isoformat() if prior.starts_at else "untimed"
+                    )
+                    if prior_starts == starts and _same_venue(prior, candidate):
+                        venue_owner = existing_key
+                        break
+            if venue_owner is not None:
+                key = venue_owner
             previous = best.get(key)
             if previous is None:
                 best[key] = candidate

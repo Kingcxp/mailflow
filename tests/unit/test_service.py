@@ -1936,6 +1936,52 @@ class TestSeminarCandidateDedupe:
         assert [item.candidate_id for item in listed] == ["d1"]
         assert listed[0].status is SeminarStatus.IMPORTED
 
+    def test_title_drift_with_same_venue_and_time_collapses(self) -> None:
+        """The same event announced twice with reworded titles must collapse
+        when the venue matches: an announcement and its reminder share the
+        room, and two distinct talks in one room at one minute are not real."""
+        from mailflow.service import MailFlowService
+
+        soon = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
+        first = self._candidate(
+            "e1", "X Colloquium: Graph Learning", mail_id="m1", starts=soon, confidence=60
+        )
+        first = first.model_copy(update={"location": "Room 101, Bldg B"})
+        second = self._candidate(
+            "e2", "Graph Learning Seminar (updated)", mail_id="m2", starts=soon, confidence=90
+        )
+        second = second.model_copy(update={"location": "room 101, bldg b"})
+        listed = MailFlowService._dedupe_candidates([first, second])  # pyright: ignore[reportPrivateUsage]
+
+        assert [item.candidate_id for item in listed] == ["e2"]  # better confidence wins
+
+    def test_same_time_different_venue_stays_separate(self) -> None:
+        """Two talks at the same instant in DIFFERENT rooms are distinct."""
+        from mailflow.service import MailFlowService
+
+        soon = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
+        first = self._candidate("f1", "Parallel Session A", mail_id="m1", starts=soon)
+        first = first.model_copy(update={"location": "Room 1"})
+        second = self._candidate("f2", "Parallel Session B", mail_id="m2", starts=soon)
+        second = second.model_copy(update={"location": "Room 2"})
+        listed = MailFlowService._dedupe_candidates([first, second])  # pyright: ignore[reportPrivateUsage]
+
+        assert [item.candidate_id for item in listed] == ["f1", "f2"]
+
+    def test_url_matches_venue_even_when_locations_differ(self) -> None:
+        from mailflow.service import MailFlowService
+
+        soon = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
+        first = self._candidate("g1", "Webinar on X", mail_id="m1", starts=soon)
+        first = first.model_copy(update={"url": "https://zoom.us/j/123"})
+        second = self._candidate(
+            "g2", "X — online webinar", mail_id="m2", starts=soon, confidence=90
+        )
+        second = second.model_copy(update={"url": "https://zoom.us/j/123"})
+        listed = MailFlowService._dedupe_candidates([first, second])  # pyright: ignore[reportPrivateUsage]
+
+        assert [item.candidate_id for item in listed] == ["g2"]
+
 
 class TestMarketplaceService:
     @staticmethod
