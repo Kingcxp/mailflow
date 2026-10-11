@@ -181,7 +181,7 @@ class DiscoveryRouter(RankingRouter):
 
     async def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> LLMCompletion:
         system = str(messages[0].get("content") or "")
-        if system.startswith("You identify optional academic seminars"):
+        if system.startswith("You identify optional academic events"):
             return LLMCompletion(text="[]")
         return await super().chat(messages, **kwargs)
 

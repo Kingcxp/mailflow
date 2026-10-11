@@ -1028,6 +1028,47 @@ class TestActionMutations:
         saved_candidate = await service.list_seminar_candidates(include_resolved=True)
         assert saved_candidate[0].status is SeminarStatus.PENDING
 
+    async def test_reimport_of_title_drifted_same_event_returns_existing(self) -> None:
+        """The same event announced by two mails yields two candidates whose
+        titles drift; importing both must end with ONE schedule row."""
+        service = self.make_service()
+        storage = cast(Any, service.storage)
+        start = datetime(2099, 6, 1, 9, tzinfo=UTC)
+        end = start + timedelta(hours=1)
+        first = SeminarCandidate(
+            candidate_id="seminar-a",
+            mail_id="m1",
+            title="Graph Learning Seminar",
+            starts_at=start,
+            ends_at=end,
+            location="Room 101",
+        )
+        second = SeminarCandidate(
+            candidate_id="seminar-b",
+            mail_id="m2",
+            title="Seminars on graph learning",  # title drift, same event
+            starts_at=start,
+            ends_at=end,
+            location="Room 101",
+        )
+        await storage.set_preference(
+            "seminars.candidates",
+            f"[{first.model_dump_json()}, {second.model_dump_json()}]",
+        )
+
+        imported_first = await service.import_seminar(first.candidate_id)
+        imported_second = await service.import_seminar(second.candidate_id)
+
+        assert imported_second == imported_first
+        actions = await storage.list_custom_actions()
+        assert len(actions) == 1
+        # both candidates are marked imported so repeat scans stop offering them
+        statuses = {
+            candidate.status
+            for candidate in await service.list_seminar_candidates(include_resolved=True)
+        }
+        assert statuses == {SeminarStatus.IMPORTED}
+
 
 class TestSmartAction:
     """One instruction is executed by letting the model call tools."""
