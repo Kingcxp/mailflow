@@ -1402,13 +1402,15 @@ class MailPane(Vertical):
 
         async def _spin() -> None:
             while bool(spinner_state["running"]):
-                if (
-                    not self._smart_progress_started
-                    and hint is not None
-                    and self._smart_action_running
-                ):
+                if hint is not None and self._smart_action_running:
                     frame = SPINNER[int(spinner_state["frame"]) % len(SPINNER)]
                     spinner_state["frame"] = int(spinner_state["frame"]) + 1
+                    # keep animating through the WHOLE run: the first stage
+                    # callback now fires within milliseconds (run_agent
+                    # reports before each LLM round trip), so hiding the
+                    # spinner once stages start left no visible animation at
+                    # all — instead the hint carries the latest stage text
+                    # and the RichLog below keeps the full history
                     hint.update(f"{frame} {spinner_state['message']}")
                     hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
                 await asyncio.sleep(0.12)
@@ -1438,9 +1440,9 @@ class MailPane(Vertical):
             )
             if progress_log is not None:
                 progress_log.write(message)
-            if hint is not None:
-                hint.update(message)
-                hint.display = "none"  # pyright: ignore[reportUnknownMemberType]
+            # the hint line keeps spinning with this message (see _spin);
+            # hiding it here killed the animation because the first stage
+            # callback fires before the spinner's first frame
             spinner_state["message"] = message
             if detail_key == "smart_batch" and table is not None:
                 match_ids = set(detail_params.get("mails") or [])
