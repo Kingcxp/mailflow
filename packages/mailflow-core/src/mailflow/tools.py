@@ -632,10 +632,26 @@ class ToolRegistry:
             for candidate in pending
             if candidate.starts_at is None or to_utc(candidate.starts_at) > now
         ]
+        expired = [
+            candidate
+            for candidate in discovery.candidates
+            if candidate.status is SeminarStatus.EXPIRED
+            and (allowed is None or candidate.mail_id in allowed)
+        ]
         scope = (
             f"the {len(records)} mail(s) you asked about"
             if records is not None
             else f"{discovery.total_mails} stored mail(s)"
+        )
+        # the user's request usually says "find seminars" without implying
+        # every announcement is still future: state how many were found and
+        # how many had already passed, so a small result is verifiable as
+        # correct rather than looking like an incomplete scan
+        expiry_note = (
+            f" ({len(expired)} further announcement(s) found but their stated date "
+            "already passed — they are kept in the review list as expired)"
+            if expired
+            else ""
         )
         if discovery.failed_batches:
             # A failed batch must not throw away the candidates the other
@@ -645,7 +661,7 @@ class ToolRegistry:
             # the model can finish the scan incrementally instead of losing
             # the whole pass.
             return (
-                f"partial: {len(upcoming)} upcoming candidate(s) in {scope}, but "
+                f"partial: {len(upcoming)} upcoming candidate(s) in {scope}{expiry_note}, but "
                 f"{discovery.failed_mails} mail(s) in {discovery.failed_batches} batch(es) "
                 "could not be read"
                 + (
@@ -661,8 +677,8 @@ class ToolRegistry:
             )
         untimed = [candidate for candidate in upcoming if candidate.starts_at is None]
         if not upcoming:
-            return f"no upcoming seminar found in {scope}", None
-        lines = [f"{len(upcoming)} upcoming candidate(s) in {scope}:"]
+            return f"no upcoming seminar found in {scope}{expiry_note}", None
+        lines = [f"{len(upcoming)} upcoming candidate(s) in {scope}{expiry_note}:"]
         for candidate in upcoming:
             starts = to_utc(candidate.starts_at) if candidate.starts_at else None
             lines.append(
