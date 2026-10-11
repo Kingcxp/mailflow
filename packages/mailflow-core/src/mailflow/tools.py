@@ -122,6 +122,11 @@ How to work:
   literal word, and you may combine it with `query`.
 - A hard condition decides the result set: never drop a mail that satisfies
   `contains`, and never add one that does not.
+- When a complete `find_mail` result provides a `search_id`, downstream tools
+  accept that token to operate on EVERY matched mail — not just the 40 the
+  preview shows: `delete_mail` stages deletion of the whole set;
+  `check_seminars` scans the whole set for events. A preview of 40 ids is a
+  display cap, never the data set.
 - Mutating tools (`delete_mail`, `schedule_event`, `add_action`, `edit_action`,
   `delete_action`) only *stage* the change; the user confirms afterwards and it
   is applied for them. Plan freely, but never submit the same change twice.
@@ -387,15 +392,24 @@ class ToolRegistry:
                 (
                     "Scan mail for seminars/talks/lectures and report the ones that "
                     "have not started yet, with a candidate id each. Pass "
-                    "`record_ids` to scan only some mails. Add one to the schedule "
-                    "with `schedule_seminar`."
+                    "`record_ids` to scan only some mails, or `search_id` to scan "
+                    "the COMPLETE result of a find_mail search (every match, not "
+                    "just the 40-id preview). Add candidates to the schedule with "
+                    "`schedule_seminars`."
                 ),
                 {
                     "record_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Mail record ids to scan (default: all stored mail).",
-                    }
+                    },
+                    "search_id": {
+                        "type": "string",
+                        "description": (
+                            "One-use token for a complete find_mail result; scans "
+                            "every matched mail."
+                        ),
+                    },
                 },
                 [],
             ),
@@ -520,7 +534,10 @@ class ToolRegistry:
             search_id = secrets.token_urlsafe(24)
             self._searches[search_id] = list(result.records)
             lines.append(f"search_id: {search_id}")
-            lines.append("Use this search_id to stage deletion of every match.")
+            lines.append(
+                "Use this search_id to stage deletion of every match, or pass it "
+                "to check_seminars to scan every matched mail for events."
+            )
         else:
             lines.append(f"incomplete search; no deletion token was created{note}")
         return "\n".join(lines), None
@@ -575,6 +592,16 @@ class ToolRegistry:
         self, arguments: dict[str, Any]
     ) -> tuple[str, PendingOperation | None]:
         record_ids = _as_str_list(arguments, "record_ids", required=False)
+        search_supplied = "search_id" in arguments
+        search_id: str | None = None
+        if search_supplied:
+            if record_ids:
+                raise ToolError("give `record_ids` or `search_id`, not both")
+            search_id = _as_str(arguments, "search_id")
+            records = self._searches.get(search_id)
+            if records is None:
+                raise ToolError("unknown or already-used search_id; run find_mail again")
+            record_ids = [record.record_id for record in records]
         records = None
         if record_ids:
             wanted = set(record_ids)
@@ -584,6 +611,10 @@ class ToolRegistry:
             if not records:
                 raise ToolError("none of those mail ids exist")
         discovery = await self._service.discover_seminars(records=records)
+        if search_id is not None:
+            # one-use: a stale token scanning the wrong set is worse than an
+            # explicit re-search
+            self._searches.pop(search_id, None)
         now = datetime.now(UTC)
         allowed = {record.record_id for record in records} if records is not None else None
         pending = [

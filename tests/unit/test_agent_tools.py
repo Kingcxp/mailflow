@@ -577,6 +577,70 @@ class TestMiscTools:
         assert "candidate_id=seminar-1" in text
         assert "2099-10-15" in text
 
+    async def test_check_seminars_scans_every_search_id_match(self) -> None:
+        """find_mail's 40-id preview is a display cap: passing its search_id
+        to check_seminars must scan the COMPLETE matched set, so a candidate
+        hiding in match #45 is still reported."""
+        service = make_service()
+        await seed(service)
+        storage = cast(Any, service.storage)
+        registry = ToolRegistry(service)
+        # 45 mails that contain the keyword; the candidate lives in #45, far
+        # beyond the preview cap
+        for index in range(45):
+            await storage.save_mail(
+                MailRecord(
+                    record_id=f"bulk-{index}",
+                    mail=make_mail(
+                        f"bulk-{index}",
+                        subject=f"Seminar notice {index}",
+                        body="a seminar announcement",
+                    ),
+                    auto_urgency=Urgency.INFO,
+                )
+            )
+        candidate = SeminarCandidate(
+            candidate_id="seminar-45",
+            mail_id="bulk-44",
+            title="Deep in the match set",
+            starts_at=datetime(2099, 10, 15, 6, tzinfo=UTC),
+            timezone="UTC",
+            confidence=90,
+        )
+        import json
+
+        await storage.set_preference(
+            "seminars.candidates", json.dumps([candidate.model_dump(mode="json")])
+        )
+
+        find_text, _ = await registry.call("find_mail", {"contains": "seminar"})
+        search_id = next(
+            line.split("search_id: ", 1)[1].strip()
+            for line in find_text.splitlines()
+            if line.startswith("search_id: ")
+        )
+        assert "bulk-44" not in find_text  # beyond the preview
+
+        text, staged = await registry.call("check_seminars", {"search_id": search_id})
+
+        assert "candidate_id=seminar-45" in text
+        assert "you asked about" in text
+        assert staged is None
+        # one-use token
+        second, _ = await registry.call("check_seminars", {"search_id": search_id})
+        assert second.startswith("error:")
+
+    async def test_check_seminars_rejects_both_selectors(self) -> None:
+        service = make_service()
+        await seed(service)
+        registry = ToolRegistry(service)
+
+        text, _ = await registry.call(
+            "check_seminars", {"record_ids": ["a"], "search_id": "whatever"}
+        )
+
+        assert "not both" in text
+
     async def test_specs_describe_every_tool_with_a_json_schema(self) -> None:
         service = make_service()
         specs = ToolRegistry(service).specs()
