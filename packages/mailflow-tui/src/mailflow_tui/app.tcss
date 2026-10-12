@@ -1025,11 +1025,6 @@ MarketDetailScreen {
    Settings editor (VS Code style): sidebar + searchable option cards
    --------------------------------------------------------------------------- */
 
-#settings-search {
-    dock: top;
-    margin: 0 1 1 1;
-}
-
 #settings-body {
     height: 1fr;
 }
