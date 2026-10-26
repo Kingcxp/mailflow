@@ -485,8 +485,37 @@ class LLMImportanceProcessor:
         # it so reasoning never leaks into stored summaries or JSON extraction
         clean_text = re.sub(
             r"<think>.*?</think>\s*", "", completion.text, flags=re.DOTALL | re.IGNORECASE
-        )
-        raw_payload = extract_json(clean_text)
+        ).strip()
+        if not clean_text:
+            # a reply that is ONLY a reasoning block (or empty) reaches this
+            # processor as "" — extract_json on it would surface the raw
+            # json error "Expecting value: line 1 column 1 (char 0)", which
+            # names nothing the user can act on
+            had_reasoning = bool(
+                re.search(r"<think>.*?</think>", completion.text, re.DOTALL | re.IGNORECASE)
+            )
+            raise RuntimeError(
+                "the LLM returned no content"
+                + (
+                    " (only a reasoning block — the final answer was empty)"
+                    if had_reasoning
+                    else ""
+                )
+                + "; check the model/endpoint (some reasoning models need a "
+                "larger max_tokens to emit an answer after thinking)"
+            )
+        try:
+            raw_payload = extract_json(clean_text)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning(
+                "llm-importance: unparseable reply for %r: %.400s",
+                mail.message_id,
+                clean_text,
+            )
+            preview = " ".join(clean_text.split())[:120]
+            raise RuntimeError(
+                f"the LLM reply is not JSON ({exc}); reply started with: {preview!r}"
+            ) from exc
         try:
             payload = AnalysisPayload.model_validate(_coerce_analysis_payload(raw_payload))
         except ValidationError:
