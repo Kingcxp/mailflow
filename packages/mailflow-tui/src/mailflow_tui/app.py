@@ -425,21 +425,53 @@ class ActionModal(ModalScreen[Any]):
         item = self._item
         yield Static(self._service.t("tui.action_detail"), id="action-title")
         with ScrollableContainer(id="action-detail-scroll"):
+            # every field below is model/user text (summaries routinely
+            # contain "[SEMINAR]"-style brackets); Rich Text is never parsed
+            # as console markup, so the values render verbatim
             yield Label(
-                f"{self._service.t('tui.action_time')}: "
-                f"{escape(_action_time_range(self._service, item))}\n"
+                RichText.assemble(
+                    (self._service.t("tui.action_time") + ": ", "bold"),
+                    (_action_time_range(self._service, item) + "\n", ""),
+                )
             )
             yield Label(
-                f"{self._service.t('tui.action_type')}: "
-                f"{escape(_action_type_label(self._service, item.action_type))}\n"
+                RichText.assemble(
+                    (self._service.t("tui.action_type") + ": ", "bold"),
+                    (_action_type_label(self._service, item.action_type) + "\n", ""),
+                )
             )
-            yield Label(f"{self._service.t('tui.action_content')}:\n{escape(item.summary)}\n")
-            yield Label(f"{self._service.t('tui.action_notes')}: {escape(item.notes or '-')}\n")
-            yield Label(f"{self._service.t('tui.action_source')}: {escape(item.mail_id)}")
+            yield Label(
+                RichText.assemble(
+                    (self._service.t("tui.action_content") + ":\n", "bold"),
+                    (item.summary + "\n", ""),
+                )
+            )
+            yield Label(
+                RichText.assemble(
+                    (self._service.t("tui.action_notes") + ": ", "bold"),
+                    ((item.notes or "-") + "\n", ""),
+                )
+            )
+            yield Label(
+                RichText.assemble(
+                    (self._service.t("tui.action_source") + ": ", "bold"),
+                    (item.mail_id, ""),
+                )
+            )
             if item.location:
-                yield Label(f"{self._service.t('tui.action_location')}: {escape(item.location)}\n")
+                yield Label(
+                    RichText.assemble(
+                        (self._service.t("tui.action_location") + ": ", "bold"),
+                        (item.location + "\n", ""),
+                    )
+                )
             if item.url:
-                yield Label(f"{self._service.t('tui.action_url')}: {escape(item.url)}\n")
+                yield Label(
+                    RichText.assemble(
+                        (self._service.t("tui.action_url") + ": ", "bold"),
+                        (item.url + "\n", ""),
+                    )
+                )
             # the source mail's own details load asynchronously below
             yield Static("", id="action-mail-detail")
         # outside the scroll box: always visible, never scrolls away
@@ -468,30 +500,24 @@ class ActionModal(ModalScreen[Any]):
             body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", mail.body_html)
             body = re.sub(r"<[^>]+>", " ", body)
             body = re.sub(r"[ \t\r\f\v]+", " ", body).strip()
-        lines = [
-            f"[bold]{self._service.t('tui.column_subject')}:[/bold] {escape(mail.subject)}\n",
-            f"[bold]{self._service.t('tui.column_sender')}:[/bold] "
-            f"{escape(mail.sender.display or mail.sender.address)}\n",
-            f"[bold]{self._service.t('tui.column_date')}:[/bold] "
-            f"{_localize(self._service, mail.date)}\n",
-        ]
+        lines: RichText = RichText()
+        lines.append(f"{self._service.t('tui.column_subject')}: ", style="bold")
+        lines.append(f"{mail.subject}\n")
+        lines.append(f"{self._service.t('tui.column_sender')}: ", style="bold")
+        lines.append(f"{mail.sender.display or mail.sender.address}\n")
+        lines.append(f"{self._service.t('tui.column_date')}: ", style="bold")
+        lines.append(f"{_localize(self._service, mail.date)}\n")
         analysis_summary = record.analysis.summary if record.analysis else ""
         if analysis_summary:
-            lines.append(
-                f"[bold]{self._service.t('tui.detail_summary')}:[/bold]\n"
-                f"{escape(analysis_summary)}\n"
-            )
+            lines.append(f"{self._service.t('tui.detail_summary')}:\n", style="bold")
+            lines.append(f"{analysis_summary}\n")
         reason = record.analysis.reason if record.analysis else ""
         if reason:
-            lines.append(
-                f"[bold]{self._service.t('tui.detail_reason')}:[/bold]\n"
-                f"{escape(self._service.display_text(reason))}\n"
-            )
-        lines.append(
-            f"[bold]{self._service.t('tui.detail_body')}:[/bold]\n"
-            f"{escape(body[:800] or self._service.t('tui.mail_no_body'))}"
-        )
-        node.update("\n".join(lines))
+            lines.append(f"{self._service.t('tui.detail_reason')}:\n", style="bold")
+            lines.append(f"{self._service.display_text(reason)}\n")
+        lines.append(f"{self._service.t('tui.detail_body')}:\n", style="bold")
+        lines.append(body[:800] or self._service.t("tui.mail_no_body"))
+        node.update(lines)
 
     def _open_editor(self) -> None:
         def _after_edit(changed: bool | None) -> None:
@@ -1530,7 +1556,16 @@ class MailPane(Vertical):
             self._set_static(selector, "")
 
     async def _show_selected(self) -> None:
-        """Render the detail column for the selected mail."""
+        """Render the detail column for the selected mail.
+
+        Every dynamic field (summary, reason, action items, body, processor
+        notes) is pipeline/model/user text that may contain square brackets
+        ("[SEMINAR] …", a pydantic error repr with ``input_value={'item':
+        …}``). Textual 8.2.8's ``escape()`` does not neutralize those — the
+        markup parser swallows bracket tags or raises "Expected markup
+        value" and kills the app mid mail-switch. Render each field as Rich
+        ``Text`` (never markup-parsed) with bold labels as styled spans.
+        """
         if self._selected_id is None:
             self._clear_mail_detail()
             return
@@ -1554,51 +1589,47 @@ class MailPane(Vertical):
             status = service.t("tui.detail_analysis_unavailable")
         else:
             status = ""
-        self._set_static("#mail-analysis-status", f"[red]{escape(status)}[/red]" if status else "")
+        self._set_static_text(
+            "#mail-analysis-status",
+            RichText(status, style="red") if status else RichText(""),
+        )
         self._set_static("#mail-operation-status", self._operation_status)
         # The stored summary and reason are the mail's content: they stay
         # visible even when the pipeline had to fall back, because hiding them
         # left the user with no content at all. A fallback is labelled, never
         # presented as a generated analysis.
         summary_value = service.display_text(record.summary).strip()
+        summary_line = RichText(service.t("tui.detail_summary") + ": ", style="bold")
         if summary_value:
-            summary_text = escape(summary_value)
+            summary_line.append(summary_value)
             if record.analysis_is_fallback:
-                summary_text += (
-                    f" [yellow]({escape(service.t('tui.detail_summary_fallback'))})[/yellow]"
+                summary_line.append(
+                    f" ({service.t('tui.detail_summary_fallback')})", style="yellow"
                 )
         else:
-            summary_text = (
-                f"[yellow]{escape(service.t('tui.detail_analysis_unavailable'))}[/yellow]"
-            )
-        self._set_static(
-            "#mail-summary",
-            f"[bold]{service.t('tui.detail_summary')}:[/bold] {summary_text}",
-        )
+            summary_line.append(service.t("tui.detail_analysis_unavailable"), style="yellow")
+        self._set_static_text("#mail-summary", summary_line)
         reason = service.display_text(record.analysis.reason if record.analysis else "").strip()
+        reason_line = RichText(service.t("tui.detail_reason") + ": ", style="bold")
         if reason:
-            reason_text = escape(reason)
+            reason_line.append(reason)
         elif record.analysis_is_fallback:
-            reason_text = f"[yellow]{escape(service.t('tui.detail_reason_unavailable'))}[/yellow]"
+            reason_line.append(service.t("tui.detail_reason_unavailable"), style="yellow")
         else:
-            reason_text = "-"
-        self._set_static(
-            "#mail-reason",
-            f"[bold]{service.t('tui.detail_reason')}:[/bold] {reason_text}",
-        )
-        actions_text = ""
+            reason_line.append("-")
+        self._set_static_text("#mail-reason", reason_line)
+        actions_text: RichText | None = None
         if record.action_items:
-            lines = [
-                "  "
-                + escape(
+            actions_text = RichText("\n" + service.t("tui.action_content") + ":", style="bold")
+            for item in record.action_items:
+                actions_text.append("\n  ")
+                actions_text.append(
                     f"{_action_time_range(service, item)} "
                     f"({_action_type_label(service, item.action_type)}) {item.summary}"
                 )
-                + (f" — {escape(item.notes)}" if item.notes else "")
-                for item in record.action_items
-            ]
-            actions_text = f"\n[bold]{service.t('tui.action_content')}:[/bold]\n" + "\n".join(lines)
-        self._set_static("#mail-actions", actions_text)
+                if item.notes:
+                    actions_text.append(f" — {item.notes}")
+        self._set_static_text("#mail-actions", actions_text or RichText(""))
         from mailflow.domain import looks_binary
 
         body = record.mail.body_text.strip()
@@ -1613,42 +1644,44 @@ class MailPane(Vertical):
         if len(body) > 4000:
             # a 200 KB dump into one Static is unusable and slow to render
             body = body[:4000] + "…"
-        self._set_static(
-            "#mail-body",
-            f"[bold]{service.t('tui.detail_body')}:[/bold]\n"
-            f"{escape(body or service.t('tui.mail_no_body'))}",
-        )
-        attachment_lines = [
-            f"  {escape(a.filename)} ({a.content_type}, {a.size} B)"
-            for a in record.mail.attachments
-        ]
-        if attachment_lines:
-            self._set_static(
-                "#mail-attachments",
-                f"[bold]{service.t('tui.detail_attachments')}:[/bold]\n"
-                + "\n".join(attachment_lines),
+        body_line = RichText(service.t("tui.detail_body") + ":\n", style="bold")
+        body_line.append(body or service.t("tui.mail_no_body"))
+        self._set_static_text("#mail-body", body_line)
+        attachments_line: RichText | None = None
+        if record.mail.attachments:
+            attachments_line = RichText(service.t("tui.detail_attachments") + ":", style="bold")
+            for a in record.mail.attachments:
+                attachments_line.append(f"\n  {a.filename} ({a.content_type}, {a.size} B)")
+        self._set_static_text("#mail-attachments", attachments_line or RichText(""))
+        reply_line = RichText()
+        if record.analysis and record.analysis.reply_required:
+            reply_line.append(
+                "\n" + service.t("tui.detail_reply_required", answer=service.t("common.yes")),
+                style="bold yellow",
             )
-        else:
-            self._set_static("#mail-attachments", "")
-        reply_flag = (
-            f"\n[bold yellow]{service.t('tui.detail_reply_required', answer=service.t('common.yes'))}[/bold yellow]"
-            if record.analysis and record.analysis.reply_required
-            else ""
-        )
-        feedback = ""
         if not getattr(service, "remote", False):
             existing = await service.get_feedback(record.record_id)
             if existing:
-                feedback = (
-                    f"\n[bold yellow]{service.t('tui.feedback_marker')}: "
-                    f"{escape(existing)}[/bold yellow]"
+                reply_line.append(
+                    f"\n{service.t('tui.feedback_marker')}: {existing}", style="bold yellow"
                 )
-        self._set_static(
-            "#mail-notes",
-            f"{reply_flag}{feedback}\n{service.t('tui.urgency_label')}: "
-            f"{urgency_label(service, record.effective_urgency)} "
-            f"({service.t('tui.detail_manual_marker') if record.manual_urgency is not None else service.t('tui.detail_auto_marker')})",
+        reply_line.append(
+            f"\n{service.t('tui.urgency_label')}: {urgency_label(service, record.effective_urgency)} "
+            f"({service.t('tui.detail_manual_marker') if record.manual_urgency is not None else service.t('tui.detail_auto_marker')})"
         )
+        self._set_static_text("#mail-notes", reply_line)
+
+    def _set_static_text(self, selector: str, content: RichText | None) -> None:
+        """Update a detail Static with Rich ``Text`` — console markup in the
+        content is rendered verbatim instead of parsed, so bracket-laden
+        pipeline text can never raise MarkupError."""
+        if content is None:
+            return
+        node = self.query_one_optional(selector, Static)
+        if node is None:
+            return
+        node.update(content)
+        node.display = bool(content.plain)
 
     def _sync_urgency_select(self, record: MailRecord) -> None:
         """Mirror the selected mail's manual override into the dropdown

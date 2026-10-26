@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mailflow.domain import MailRecord
 from mailflow.service import MailFlowService
+from rich.text import Text as RichText
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
@@ -87,15 +88,22 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         self.query_one("#ask-correct-input", Input).focus()  # pyright: ignore[reportUnknownMemberType]
 
     def _render_mail_info(self) -> None:
-        """Right pane: current analysis + original body (body never edited)."""
+        """Right pane: current analysis + original body (body never edited).
+
+        The analysis fields carry pipeline/model text (summaries, processor
+        failure notes that embed pydantic error reprs with square brackets).
+        They are rendered as Rich ``Text`` so no console markup parsing can
+        swallow or reject them.
+        """
         record = self._record
         urgency = record.effective_urgency
         # The four contract colors are reused everywhere; the localized label
         # receives the same color while its stored enum value stays unchanged.
         label = urgency_label(self._service, urgency)
+        urgency_line = RichText(f"{self._t('tui.column_urgency')}: ", style="bold")
+        urgency_line.append(f"■ {label}", style=f"bold {urgency.color}")
         self.query_one("#ask-correct-urgency", Static).update(  # pyright: ignore[reportUnknownMemberType]
-            f"[bold]{self._t('tui.column_urgency')}:[/bold] "
-            f"[bold {urgency.color}]■ {escape(label)}[/bold {urgency.color}]"
+            urgency_line
         )
         failed_notes = [note for note in record.processor_notes if note.status == "failed"]
         failure_detail = "; ".join(
@@ -113,30 +121,36 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         else:
             status = ""
         self.query_one("#ask-correct-analysis-status", Static).update(  # pyright: ignore[reportUnknownMemberType]
-            f"[red]{escape(status)}[/red]" if status else ""
+            RichText(status, style="red") if status else RichText("")
         )
         summary = (record.summary or "").strip()
         if not summary:
             summary = self._t("tui.detail_analysis_unavailable")
         elif record.analysis_is_fallback:
             summary = f"{summary} ({self._t('tui.detail_summary_fallback')})"
+        summary_line = RichText(f"{self._t('tui.detail_summary')}: ", style="bold")
+        summary_line.append(summary)
+        self.query_one("#ask-correct-summary", Static).update(  # pyright: ignore[reportUnknownMemberType]
+            summary_line
+        )
         reason = record.analysis.reason if record.analysis else ""
         if not reason and record.analysis_is_fallback:
             reason = self._t("tui.detail_reason_unavailable")
-        self.query_one("#ask-correct-summary", Static).update(  # pyright: ignore[reportUnknownMemberType]
-            f"[bold]{self._t('tui.detail_summary')}:[/bold] {escape(summary)}"
-        )
+        reason_line = RichText(f"{self._t('tui.detail_reason')}: ", style="bold")
+        reason_line.append(reason or "-")
         self.query_one("#ask-correct-reason", Static).update(  # pyright: ignore[reportUnknownMemberType]
-            f"[bold]{self._t('tui.detail_reason')}:[/bold] {escape(reason or '-')}"
+            reason_line
         )
         body = record.mail.body_text or record.mail.body_html or ""
+        body_line = RichText(f"{self._t('tui.detail_body')}: ", style="dim bold")
+        body_line.append(body[:4000])
         self.query_one("#ask-correct-original-body", Static).update(  # pyright: ignore[reportUnknownMemberType]
-            f"[dim][bold]{self._t('tui.detail_body')}:[/bold][/dim] {escape(body[:4000])}"
+            body_line
         )
         attachments = [a.filename for a in record.mail.attachments if a.filename]
         notes = ""
         if attachments:
-            notes = f"{self._t('tui.detail_attachments')}: {escape(', '.join(attachments[:5]))}"
+            notes = f"{self._t('tui.detail_attachments')}: {', '.join(attachments[:5])}"
         self.query_one("#ask-correct-notes", Static).update(  # pyright: ignore[reportUnknownMemberType]
             notes
         )
