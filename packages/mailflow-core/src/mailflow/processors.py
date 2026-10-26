@@ -457,6 +457,13 @@ class LLMImportanceProcessor:
                 "\nWrite the summary, reason, suggested reply, action-item "
                 f"summaries and notes in the following language: {language}.\n"
             )
+        # the last instruction a model reads weighs the most: models that
+        # otherwise answer in markdown (headings, prose) usually comply when
+        # the output contract is repeated here instead of only in rule 11
+        user += (
+            "\nReply with ONLY the JSON object from rule 11 — no markdown, "
+            "no headings, no code fences, no explanation before or after it.\n"
+        )
         system_prompt = SYSTEM_PROMPT
         for enhancer in self._enhancers:
             system_prompt = enhancer.system_prompt(system_prompt)
@@ -467,6 +474,25 @@ class LLMImportanceProcessor:
         for enhancer in self._enhancers:
             messages.extend(enhancer.extra_messages(mail, context))
         return messages
+
+    def _parse_payload(self, mail: MailMessage, clean_text: str) -> dict[str, Any]:
+        """Extract the JSON object from a model reply, with a readable error.
+
+        Shared by the first attempt and the corrective retry so both fail
+        with the same diagnosable message instead of a raw json error.
+        """
+        try:
+            return extract_json(clean_text)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning(
+                "llm-importance: unparseable reply for %r: %.400s",
+                mail.message_id,
+                clean_text,
+            )
+            preview = " ".join(clean_text.split())[:120]
+            raise RuntimeError(
+                f"the LLM reply is not JSON ({exc}); reply started with: {preview!r}"
+            ) from exc
 
     async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
         primary = self._config.llm
@@ -505,17 +531,46 @@ class LLMImportanceProcessor:
                 "larger max_tokens to emit an answer after thinking)"
             )
         try:
-            raw_payload = extract_json(clean_text)
-        except (json.JSONDecodeError, ValueError) as exc:
-            logger.warning(
-                "llm-importance: unparseable reply for %r: %.400s",
-                mail.message_id,
-                clean_text,
+            raw_payload = self._parse_payload(mail, clean_text)
+        except RuntimeError:
+            # models that answer in markdown/prose despite the system prompt
+            # often comply once the violation is named in the conversation:
+            # retry ONCE with a corrective turn instead of failing the mail
+            # (the pipeline retry would repeat the identical request and
+            # produce the identical markdown)
+            logger.info(
+                "llm-importance: non-JSON reply for %r; retrying with a correction", mail.message_id
             )
-            preview = " ".join(clean_text.split())[:120]
-            raise RuntimeError(
-                f"the LLM reply is not JSON ({exc}); reply started with: {preview!r}"
-            ) from exc
+            retry_messages = [
+                *messages,
+                {"role": "assistant", "content": clean_text[:2000]},
+                {
+                    "role": "user",
+                    "content": (
+                        "Your reply was prose, not JSON. Answer again with ONLY "
+                        "the JSON object defined in the system prompt — no "
+                        "markdown, no headings, no fences, no explanations."
+                    ),
+                },
+            ]
+            retry_completion = await self._router.chat(
+                retry_messages,
+                primary=primary,
+                fallback=list(self._config.fallback_llms),
+                options={"temperature": 0.0},
+            )
+            retry_text = re.sub(
+                r"<think>.*?</think>\s*",
+                "",
+                retry_completion.text,
+                flags=re.DOTALL | re.IGNORECASE,
+            ).strip()
+            if not retry_text:
+                raise RuntimeError(
+                    "the LLM returned no content on the JSON retry; the model "
+                    "keeps ignoring the output contract — try a different model"
+                ) from None
+            raw_payload = self._parse_payload(mail, retry_text)
         try:
             payload = AnalysisPayload.model_validate(_coerce_analysis_payload(raw_payload))
         except ValidationError:
