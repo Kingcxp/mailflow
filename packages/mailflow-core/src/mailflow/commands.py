@@ -916,20 +916,27 @@ class CommandRouter:
             return False
 
     async def _find_action(self, item_id: str) -> ActionItem | None:
-        """Exact id wins; then the ``#n``/``n`` printed by `action list`
-        (same order); then a unique prefix."""
+        """Resolve one schedule entry.
+
+        Resolution order: exact id, then the ``#n``/``n`` list index printed
+        by ``action list`` (short tokens only), then a unique id prefix.
+        The index branch is bounded to 1-3 digit tokens: action ids are
+        uuid4 hex, and a 10-character truncated prefix can be all digits
+        (about 1% of ids) — treating that as an index silently broke prefix
+        deletion on CI. Long all-digit tokens resolve as id prefixes.
+        """
         clean = item_id.strip().lstrip("#")
         if not clean:
             return None
         items = await self.service.list_actions()
-        if clean.isdigit():
+        for item in items:
+            if item.item_id == item_id:
+                return item
+        if clean.isdigit() and len(clean) <= 3:
             index = int(clean) - 1
             if 0 <= index < len(items):
                 return items[index]
-            return None
-        matches = [
-            item for item in items if item.item_id == item_id or item.item_id.startswith(item_id)
-        ]
+        matches = [item for item in items if item.item_id.startswith(item_id)]
         return matches[0] if len(matches) == 1 else None
 
     async def _cmd_plugin_repo(self, args: list[str]) -> CommandResponse:
