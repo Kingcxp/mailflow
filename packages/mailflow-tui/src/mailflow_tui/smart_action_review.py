@@ -94,6 +94,11 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
             parts.append(self._t(key))
         if operation.tool == "edit_action" and args.get("origin") == "analysis":
             parts.append(self._t("tui.smart_review_analysis_readonly"))
+        # the parts after the localized label are model/user text: a title
+        # like "[SEMINAR] …" (our own template!) or a notes field with an
+        # unbalanced "[" is content, not console markup. The row widget
+        # renders with markup=False, so keep the text verbatim — escaping
+        # here would only show a stray backslash.
         return " · ".join(part for part in parts if part)
 
     def _can_edit(self, operation: PendingOperation) -> bool:
@@ -114,8 +119,15 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
             with ScrollableContainer(id="smart-review-operations"):
                 for index, operation in enumerate(self._operations):
                     with Horizontal(classes="smart-review-row"):
+                        # markup=False: the description is model/user text
+                        # (titles like "[SEMINAR] …" are routine); Textual's
+                        # console-markup parser treats such brackets as tags
+                        # — even escape()d ones vanish or raise — so render
+                        # the row verbatim instead
                         label = Static(
-                            self._description(index, operation), id=f"smart-review-op-{index}"
+                            self._description(index, operation),
+                            id=f"smart-review-op-{index}",
+                            markup=False,
                         )
                         self._labels[index] = label
                         yield label
@@ -159,6 +171,7 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
         operation.arguments = {**operation.arguments, **values}
         label = self._labels.get(index)
         if label is not None:
+            # the widget was built with markup=False; update keeps it verbatim
             label.update(self._description(index, operation))
         error = self.query_one_optional("#smart-review-error", Static)
         if error is not None:

@@ -17,7 +17,6 @@ from typing import Any, ClassVar, Literal
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
@@ -54,12 +53,14 @@ class ConfirmModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm-dialog"):
-            yield Static(escape(self._title), id="confirm-title")
+            # markup=False: the body lists staged changes whose summaries are
+            # model/user text — square brackets there are content, not markup
+            yield Static(self._title, id="confirm-title", markup=False)
             # a bounded, scrollable body: 12 staged changes on a 24-row
             # terminal used to push the buttons past the bottom of the screen,
             # leaving no visible way to confirm
             with ScrollableContainer(id="confirm-body-scroll"):
-                yield Static(escape(self._body), id="confirm-body")
+                yield Static(self._body, id="confirm-body", markup=False)
             with Horizontal(id="confirm-buttons"):
                 yield Button(self._confirm_label, id="confirm-run", variant=self._variant)
                 yield Button(self._service.t("tui.btn_cancel"), id="confirm-cancel")
