@@ -153,8 +153,8 @@ class GeneralConfig(BaseModel):
         ),
     )
     auto_update: bool = Field(
-        default=True,
-        description="Check daily for MailFlow releases and plugin updates, and apply them automatically",
+        default=False,
+        description="Opt in to daily checks and automatic installation of MailFlow and plugin updates",
     )
     summary_language: str = Field(
         default="",

@@ -1273,3 +1273,128 @@ class TestSourcesSurviveUnrelatedEdits:
             assert source.closed == 1
         finally:
             await runtime.stop()
+
+    async def test_repeated_start_stop_and_restart_have_one_task_set(self) -> None:
+        runtime, source = await self._runtime()
+        first = list(runtime._tasks)  # pyright: ignore[reportPrivateUsage]
+        await runtime.start()
+        assert runtime._tasks == first  # pyright: ignore[reportPrivateUsage]
+        await runtime.stop()
+        await runtime.stop()
+        assert source.closed == 1
+        assert all(task.done() for task in first)
+        await runtime.start()
+        await asyncio.sleep(0)
+        try:
+            assert source.started == 2
+            current = runtime._tasks  # pyright: ignore[reportPrivateUsage]
+            assert len(current) == len(first)
+            assert not set(current) & set(first)
+        finally:
+            await runtime.stop()
+
+
+async def test_reload_preserves_queued_and_inflight_mail_when_queue_shrinks() -> None:
+    entered = asyncio.Event()
+
+    class BlockedProcessor(StaticProcessor):
+        async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
+            entered.set()
+            await asyncio.Event().wait()
+            return await super().process(mail, context)
+
+    mails = [make_mail(subject=str(index)) for index in range(4)]
+    config = MailFlowConfig.model_validate(
+        {
+            "general": {"workers": 1, "queue_size": 4},
+            "accounts": [{"account_id": "acct-1", "provider": "fake"}],
+        }
+    )
+    storage = FakeStorage()
+    runtime = MailFlowRuntime(
+        config,
+        sources={"acct-1": EmittingSource(mails)},
+        pipeline=PipelineEngine(
+            [
+                ProcessorBinding(
+                    processor_id="blocked",
+                    plugin_id="test",
+                    processor=BlockedProcessor(MailAnalysis(summary="old", urgency=Urgency.INFO)),
+                )
+            ]
+        ),
+        storage=storage,
+        notifiers=[],
+        notifier_configs=[],
+        events=EventBus(),
+        account_configs=config.accounts,
+    )
+    await runtime.start()
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    old_tasks = list(runtime._tasks)  # pyright: ignore[reportPrivateUsage]
+    changed = config.model_copy(deep=True)
+    changed.general.workers = 3
+    changed.general.queue_size = 1
+    changed.general.reminder_interval_seconds = 30
+    try:
+        await asyncio.wait_for(
+            runtime.reconfigure(
+                config=changed,
+                sources={},
+                pipeline=PipelineEngine([]),
+                notifiers=[],
+                notifier_configs=[],
+                restart_sources=True,
+            ),
+            timeout=3,
+        )
+        assert await runtime.wait_idle()
+        assert len(storage.saved) == len(mails)
+        assert runtime._queue.maxsize == 1  # pyright: ignore[reportPrivateUsage]
+        names = [task.get_name() for task in runtime._tasks]  # pyright: ignore[reportPrivateUsage]
+        assert len([name for name in names if name.startswith("worker-")]) == 3
+        assert names.count("reminders") == names.count("cleanup") == 1
+        assert all(task.done() for task in old_tasks)
+    finally:
+        await runtime.stop()
+
+
+async def test_retired_source_cannot_emit_after_reload() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    attempted = asyncio.Event()
+
+    class ReluctantSource(EmittingSource):
+        async def run(self, emit: MailEmitter, stop_event: asyncio.Event) -> None:
+            entered.set()
+            try:
+                await stop_event.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+                attempted.set()
+                await emit(make_mail(subject="stale account"))
+
+    source = ReluctantSource([])
+    config = MailFlowConfig.model_validate(
+        {"accounts": [{"account_id": "acct-1", "provider": "fake"}]}
+    )
+    runtime, storage, _ = build_runtime({"acct-1": source}, accounts=config.accounts)
+    await runtime.start()
+    await entered.wait()
+    try:
+        await runtime.reconfigure(
+            config=MailFlowConfig(),
+            sources={},
+            pipeline=PipelineEngine([]),
+            notifiers=[],
+            notifier_configs=[],
+            restart_sources=True,
+        )
+        release.set()
+        await attempted.wait()
+        await asyncio.sleep(0)
+        assert storage.saved == []
+        assert runtime.account_status("acct-1") != "running"
+    finally:
+        release.set()
+        await runtime.stop()

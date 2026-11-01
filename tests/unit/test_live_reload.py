@@ -3,9 +3,10 @@ running runtime without a restart."""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from mailflow.config import MailFlowConfig, NotifierConfig, load_config
@@ -148,6 +149,110 @@ async def test_account_edit_applies_without_restart(tmp_path: Path) -> None:
     assert service.runtime.account_error("a1") is not None
     assert reloaded == ["mailflow.runtime.reconfigured"]
     await service.stop()
+
+
+async def test_service_start_failure_rolls_back_and_can_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = make_service(tmp_path)
+    service.config.general.auto_update = False
+    close = AsyncMock(wraps=service.storage.close)
+    monkeypatch.setattr(service.storage, "close", close)
+    fail_start = True
+    bots: list[Any] = []
+
+    class Bot:
+        url = "http://fake/bot"
+
+        def __init__(self, owner: Any) -> None:
+            self.stopped = 0
+            bots.append(self)
+
+        async def start(self) -> None:
+            if fail_start:
+                raise RuntimeError("port occupied")
+
+        async def stop(self) -> None:
+            self.stopped += 1
+
+    monkeypatch.setattr("mailflow.bot_server.BotServer", Bot)
+    with pytest.raises(RuntimeError, match="port occupied"):
+        await service.start()
+    assert not service.started
+    assert bots[0].stopped == 1
+    assert close.await_count == 1
+    assert service.runtime._tasks == []  # pyright: ignore[reportPrivateUsage]
+    fail_start = False
+    await service.start()
+    first = list(service.runtime._tasks)  # pyright: ignore[reportPrivateUsage]
+    await service.start()
+    assert len(bots) == 2
+    assert service.runtime._tasks == first  # pyright: ignore[reportPrivateUsage]
+    await service.stop()
+    await service.stop()
+    assert close.await_count == 2
+    assert bots[1].stopped == 1
+    assert all(task.done() for task in first)
+
+
+async def test_live_reload_releases_old_gateway_and_schedulers_before_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = make_service(tmp_path)
+    service.config.general.auto_update = False
+    order: list[str] = []
+
+    class Gateways:
+        _service_ref: Any = None
+
+        def __init__(self, *args: Any) -> None:
+            self.active = False
+
+        async def start(self) -> None:
+            self.active = True
+            order.append("gateway-start")
+
+        async def stop(self, **kwargs: Any) -> None:
+            self.active = False
+            order.append("gateway-stop")
+
+    class Bot:
+        url = "http://fake/bot"
+
+        def __init__(self, owner: Any) -> None:
+            pass
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+    monkeypatch.setattr("mailflow.service.GatewayManager", Gateways)
+    monkeypatch.setattr("mailflow.bot_server.BotServer", Bot)
+    service.gateways = cast(Any, Gateways())
+    await service.start()
+    old_gateway = service.gateways
+    tasks = [*service.runtime._tasks, service._update_task, service._expiry_task]  # pyright: ignore[reportPrivateUsage]
+    order.clear()
+    try:
+        changed = service.config.model_copy(deep=True)
+        changed.general.workers = 4
+        changed.general.queue_size = 2
+        service.config = changed
+        await service.reload_runtime()
+        await asyncio.sleep(0)
+        assert service.gateways is not old_gateway
+        assert order == ["gateway-stop", "gateway-start"]
+        assert all(task is None or task.done() for task in tasks)
+        assert service.runtime._queue.maxsize == 2  # pyright: ignore[reportPrivateUsage]
+        assert (
+            len([task for task in service.runtime._tasks if task.get_name().startswith("worker-")])
+            == 4
+        )  # pyright: ignore[reportPrivateUsage]
+        assert not service._stopped_event.is_set()  # pyright: ignore[reportPrivateUsage]
+    finally:
+        await service.stop()
 
 
 def test_default_chain_uses_rules_without_a_model() -> None:

@@ -76,6 +76,7 @@ from mailflow.events import EventBus
 from mailflow.gateway import GatewayManager
 from mailflow.i18n import I18n
 from mailflow.letters import build_letter
+from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.llm import LLMRouterImpl
 from mailflow.logging import LoggingRuntime, configure_logging
 from mailflow.pipeline import PipelineEngine, build_bindings
@@ -111,7 +112,7 @@ logger = logging.getLogger("mailflow.service")
 
 _LANGUAGE_PREFERENCE = "language"
 _REPLY_TOKEN_TTL = timedelta(minutes=10)
-_LIVE_GROUPS = frozenset({"accounts", "llms", "processors", "notifiers"})
+_LIVE_GROUPS = frozenset({"accounts", "llms", "processors", "notifiers", "general"})
 """Config groups whose changes hot-apply to the running runtime."""
 
 _CHAT_REPLY_MAX_UTF8_BYTES = 1_600
@@ -653,10 +654,13 @@ class MailFlowService:
 
         self.subscriptions = Subscriptions(storage)
         self._started = False
+        self._resources_closed = False
+        self._lifecycle_lock = asyncio.Lock()
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
         self._expiry_task: asyncio.Task[Any] | None = None
+        self.bot_server: Any | None = None
         self.commands: Any | None = None  # CommandRouter wired by mailflow.commands
         self._reply_locks = _DraftLocks()
         self._seminar_lock = asyncio.Lock()
@@ -664,43 +668,81 @@ class MailFlowService:
     # -- lifecycle ---------------------------------------------------------------
 
     async def start(self) -> None:
-        await self.storage.initialize()
-        await self._load_persisted_language()
-        await self.runtime.start()
-        # bot_server must exist BEFORE gateways resume: the supervisor's
-        # first healthy poll runs ensure_bridge with the persisted options,
-        # whose bot_url points at THIS server — starting the gateways
-        # first left every resumed instance without a bridge until a later
-        # re-save ('no bot_url in gateway options' after TUI restart)
-        from mailflow.bot_server import BotServer
+        async with self._lifecycle_lock:
+            if self._started:
+                return
+            self._stopped_event = asyncio.Event()
+            rebuild = self._resources_closed
+            self._resources_closed = False
+            try:
+                await self.storage.initialize()
+                if rebuild:
+                    # Plugins may retain closed sockets after a stop or failed
+                    # start. Rebuild their objects before starting again.
+                    await self._reload_runtime_unlocked(restart_sources=True)
+                await self._load_persisted_language()
+                await self.runtime.start()
+                # bot_server must exist BEFORE gateways resume: the supervisor's
+                # first healthy poll runs ensure_bridge with the persisted options,
+                # whose bot_url points at THIS server — starting the gateways
+                # first left every resumed instance without a bridge until a later
+                # re-save ('no bot_url in gateway options' after TUI restart)
+                from mailflow.bot_server import BotServer
 
-        self.bot_server = BotServer(self)
-        await self.bot_server.start()
-        await self.gateways.start()
-        self._started = True
-        self._stopped_event = asyncio.Event()
-        self._update_task = asyncio.create_task(self._update_loop(), name="updates")
-        self._expiry_task = asyncio.create_task(
-            self._schedule_expiry_loop(), name="schedule-expiry"
-        )
-        logger.info("mailflow service started (version %s)", __version__)
+                self.bot_server = BotServer(self)
+                await self.bot_server.start()
+                await self.gateways.start()
+                self._update_task = asyncio.create_task(self._update_loop(), name="updates")
+                self._expiry_task = asyncio.create_task(
+                    self._schedule_expiry_loop(), name="schedule-expiry"
+                )
+                self._started = True
+            except BaseException:
+                # Startup is transactional from the host's point of view: a
+                # gateway, bot server or scheduler failure cannot leave an
+                # already-running runtime behind a failed start call.
+                await self._stop_unlocked(persist_running=True)
+                raise
+            logger.info("mailflow service started (version %s)", __version__)
 
     async def stop(self) -> None:
+        async with self._lifecycle_lock:
+            await self._stop_unlocked(persist_running=True)
+
+    async def _stop_unlocked(self, *, persist_running: bool) -> None:
+        if self._resources_closed:
+            return
+        was_active = self._started or self._update_task is not None or self._expiry_task is not None
         self._stopped_event.set()
-        if self._update_task is not None:
-            self._update_task.cancel()
-        if self._expiry_task is not None:
-            self._expiry_task.cancel()
+        tasks = [task for task in (self._update_task, self._expiry_task) if task is not None]
+        await cancel_tasks(tasks)
+        self._update_task = None
+        self._expiry_task = None
         # app shutdown: kill the children but KEEP the persisted running
-        # status so the next boot's autostart resumes them (writing
-        # 'stopped' here made the resume filter skip every gateway)
-        await self.gateways.stop(persist_running=True)
-        if getattr(self, "bot_server", None) is not None:
-            await self.bot_server.stop()
-        await self.runtime.stop()
-        await self.storage.close()
+        # status so the next boot's autostart resumes them.
+        await self._stop_component(
+            self.gateways.stop(persist_running=persist_running),
+            timeout_seconds=15.0,
+            label="gateways",
+        )
+        bot_server = self.bot_server
+        self.bot_server = None
+        if bot_server is not None:
+            await self._stop_component(bot_server.stop(), timeout_seconds=3.0, label="bot server")
+        await self._stop_component(self.runtime.stop(), timeout_seconds=10.0, label="runtime")
+        await self._stop_component(self.storage.close(), timeout_seconds=3.0, label="storage")
         self._started = False
-        logger.info("mailflow service stopped")
+        self._resources_closed = True
+        if was_active:
+            logger.info("mailflow service stopped")
+
+    async def _stop_component(
+        self, operation: Awaitable[Any], *, timeout_seconds: float, label: str
+    ) -> None:
+        try:
+            await bounded(operation, timeout_seconds=timeout_seconds, label=label)
+        except Exception as exc:
+            logger.warning("%s stop failed: %s", label, exc)
 
     async def _rebuild_notifiers(self) -> None:
         """Hot-swap only the notifier components (targets changed). Keeps
@@ -727,16 +769,11 @@ class MailFlowService:
         await self.runtime.reconfigure_notifiers(notifiers, notifier_configs)
 
     async def reload_runtime(self, *, restart_sources: bool | None = None) -> None:
-        """Rebuild sources, LLMs, pipeline and notifiers from the current
-        config without restarting: plugin enable/disable, account edits and
-        notifier changes apply immediately (storage swaps still require a
-        restart).
+        """Rebuild components after releasing their previous task owners."""
+        async with self._lifecycle_lock:
+            await self._reload_runtime_unlocked(restart_sources=restart_sources)
 
-        ``restart_sources`` is decided by the runtime when left as ``None``:
-        live source tasks survive an edit that cannot have changed them (an LLM
-        timeout, a notifier target, a reordered list), which is what made those
-        edits take seconds to appear. Plugin (un)loads pass ``True`` because an
-        adapter implementation can change under an unchanged provider id."""
+    async def _reload_runtime_unlocked(self, *, restart_sources: bool | None = None) -> None:
         registry = self.plugin_manager.build_registry(self.config)
         register_builtin_processors(registry)
         from mailflow.subscriptions import Subscriptions
@@ -760,20 +797,37 @@ class MailFlowService:
                 continue
             notifiers.append(registry.notifier_factory(notifier.provider)(notifier))
             notifier_configs.append(notifier)
-        await self.gateways.reconfigure(self.config, registry, running=self.started)
-        self.registry = registry
-        self.subscriptions = Subscriptions(self.storage)
-        self.router = router
-        self.pipeline = pipeline
-        self.sources = sources
+        was_started = self.started
+        await self.gateways.stop(persist_running=True)
+        if was_started:
+            # Stop every bridge/process before changing the registry.  This is
+            # deliberately a full gateway pause; preserving a supervisor here
+            # lets a removed plugin keep using its old provisioner.
+            await cancel_tasks(
+                task for task in (self._update_task, self._expiry_task) if task is not None
+            )
+            self._update_task = self._expiry_task = None
         await self.runtime.reconfigure(
             config=self.config,
             sources=sources,
             pipeline=pipeline,
             notifiers=notifiers,
             notifier_configs=notifier_configs,
-            restart_sources=restart_sources,
+            restart_sources=True if was_started and restart_sources is None else restart_sources,
         )
+        self.registry = registry
+        self.subscriptions = Subscriptions(self.storage)
+        self.router = router
+        self.pipeline = pipeline
+        self.sources = self.runtime.sources
+        self.gateways = GatewayManager(self.config, registry, self.storage)
+        self.gateways._service_ref = self  # pyright: ignore[reportPrivateUsage]
+        if was_started:
+            await self.gateways.start()
+            self._update_task = asyncio.create_task(self._update_loop(), name="updates")
+            self._expiry_task = asyncio.create_task(
+                self._schedule_expiry_loop(), name="schedule-expiry"
+            )
 
     async def wait(self) -> None:
         """Block until the service is stopped (useful for standalone hosts)."""
@@ -1835,7 +1889,7 @@ class MailFlowService:
                 await self.purge_expired_actions()
             except Exception as exc:
                 logger.error("schedule expiry sweep failed: %s", exc)
-            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
                     self._stopped_event.wait(), timeout=_SCHEDULE_EXPIRY_INTERVAL
                 )
@@ -1848,7 +1902,7 @@ class MailFlowService:
                 await self._run_daily_update()
             except Exception as exc:
                 logger.error("daily update check failed: %s", exc)
-            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stopped_event.wait(), timeout=3600)
 
     async def _run_daily_update(self) -> None:
@@ -1857,7 +1911,12 @@ class MailFlowService:
         today = datetime.now(ZoneInfo(self.config.general.timezone)).date().isoformat()
         if await self.storage.get_preference(f"update.check.{today}"):
             return
-        report = await self.check_updates()
+        await self._set_update_state("checking")
+        try:
+            report = await self.check_updates()
+        except Exception as exc:
+            await self._set_update_state("failed", error=safe_failure_reason(exc))
+            raise
         # Mark the day as checked only after the check succeeded: a network
         # failure must not suppress today's remaining retry windows.
         await self.storage.set_preference(f"update.check.{today}", "done")
@@ -1871,9 +1930,35 @@ class MailFlowService:
             },
         )
         if not report.has_updates:
+            await self._set_update_state("up_to_date")
             return
-        results = await self.apply_updates()
+        await self._set_update_state(
+            "applying", latest=report.mailflow_latest, plugins=list(report.plugin_updates)
+        )
+        try:
+            results = await self.apply_updates()
+        except Exception as exc:
+            await self._set_update_state("failed", error=safe_failure_reason(exc))
+            raise
+        failed = any(value.startswith("failed:") for value in results.values())
+        await self._set_update_state("failed" if failed else "applied", results=results)
         await self.events.emit("mailflow.update.applied", results=results)
+
+    async def _set_update_state(self, state: str, **details: Any) -> None:
+        status = {"state": state, "at": utcnow().isoformat(), **details}
+        await self.storage.set_preference("update.status", json.dumps(status, ensure_ascii=False))
+        logger.info(self.t("update.state_" + state))
+        await self.events.emit("mailflow.update.status", **status)
+
+    async def update_status(self) -> str:
+        raw = await self.storage.get_preference("update.status")
+        if not raw:
+            return self.t("update.state_idle")
+        try:
+            status = json.loads(raw)
+            return self.t("update.state_" + str(status["state"]))
+        except (ValueError, KeyError, TypeError):
+            return self.t("update.state_idle")
 
     async def clear_plugin_source(self, plugin_id: str) -> None:
         await self.storage.set_preference(f"plugin.source.{plugin_id}", "")
@@ -3986,6 +4071,8 @@ async def start_service(
             console_stream=output,
         )
 
+    storage: StorageBackend | None = None
+    service: MailFlowService | None = None
     try:
         i18n = I18n(
             # the user-facing general.language setting drives the bootstrap;
@@ -4059,7 +4146,12 @@ async def start_service(
             service.config.timeouts_migrated = True
         await service.start()
         return service
-    except Exception:
+    except BaseException:
+        if service is not None:
+            await service.stop()
+        elif storage is not None:
+            with contextlib.suppress(Exception):
+                await bounded(storage.close(), timeout_seconds=3.0, label="storage")
         if logging_runtime is not None:
             logging_runtime.close()
         raise

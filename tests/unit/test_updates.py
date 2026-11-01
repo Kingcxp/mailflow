@@ -208,7 +208,7 @@ class TestUpdateCommand:
         router, _service = commands
         status = await router.execute("update status")
         assert status.ok
-        assert "auto update: yes" in status.text
+        assert "auto update: no" in status.text
 
     async def test_update_auto_toggle_persists(self, tmp_path: Path) -> None:
         service = _make_service(config_path=str(tmp_path / "config.toml"))
@@ -222,6 +222,7 @@ class TestUpdateCommand:
 class TestDailyUpdateLoop:
     async def test_runs_once_per_day_and_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         service = _make_service()
+        service.config.general.auto_update = True
         events_captured: list[tuple[str, dict[str, Any]]] = []
 
         async def capture(event: str, **payload: Any) -> None:
@@ -247,6 +248,7 @@ class TestDailyUpdateLoop:
         await service._run_daily_update()  # pyright: ignore[reportPrivateUsage]
         assert events_captured[0][0] == "mailflow.update.checked"
         assert events_captured[1][0] == "mailflow.update.applied"
+        assert "finished" in await service.update_status()
         storage = service.storage
         assert any(k.startswith("update.check.") for k in storage.preferences)  # pyright: ignore[reportUnknownMemberType]
         # once per day
@@ -256,7 +258,7 @@ class TestDailyUpdateLoop:
 
     async def test_disabled_auto_update_skips(self, monkeypatch: pytest.MonkeyPatch) -> None:
         service = _make_service()
-        service.config.general.auto_update = False
+        assert service.config.general.auto_update is False
 
         async def should_not_run() -> UpdateReport:
             raise AssertionError("check_updates must not run when auto update is off")

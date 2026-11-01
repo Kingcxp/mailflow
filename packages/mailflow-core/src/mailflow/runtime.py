@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -30,6 +31,7 @@ from mailflow.domain import (
     to_utc,
 )
 from mailflow.events import EventBus
+from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.pipeline import PipelineEngine
 
 logger = logging.getLogger("mailflow.runtime")
@@ -39,6 +41,16 @@ _WAIT_TIMEOUT = 0.5  # seconds between queue polls while stopping
 _NOTES_KEPT = 20
 """Processor notes retained per record; a kept analysis accumulates failures."""
 _EVENT_PREFIX = "mailflow."
+
+
+class _MailQueue(asyncio.Queue[MailMessage]):
+    def resize(self, size: int) -> None:
+        # Keeping the same queue preserves pending puts and unfinished-work
+        # accounting. On shrink, existing messages drain before new puts fit.
+        self._maxsize = size
+        queue = cast(Any, self)
+        while queue._putters and not self.full():
+            queue._wakeup_next(queue._putters)
 
 
 def seconds_until_next_cleanup(
@@ -102,9 +114,18 @@ class MailFlowRuntime:
         # English fallback (standalone test harnesses)
         self._i18n = i18n
 
-        self._queue: asyncio.Queue[MailMessage] = asyncio.Queue(maxsize=config.general.queue_size)
+        self._queue = _MailQueue(maxsize=config.general.queue_size)
+        self._retry_mails: deque[MailMessage] = deque()
         self._stop_event = asyncio.Event()
         self._tasks: list[asyncio.Task[Any]] = []
+        # One lifecycle gate covers start/stop/reconfigure.  Hosts can call
+        # these entry points from settings, shutdown hooks and a reload
+        # watcher at the same time; without a gate each caller could register
+        # another source/worker set.
+        self._lifecycle_lock = asyncio.Lock()
+        self._running = False
+        self._source_generation = 0
+        self._processing_generation = 0
         self._account_status: dict[str, str] = {}
         self._account_errors: dict[str, str | None] = {}
         self._started_at: datetime | None = None
@@ -120,18 +141,52 @@ class MailFlowRuntime:
     # -- lifecycle --------------------------------------------------------------
 
     async def start(self) -> None:
-        self._started_at = datetime.now()
-        # preload persisted IMAP watermarks so source factories can resume
-        # polling where the previous run left off
-        for account in self._account_configs:
+        async with self._lifecycle_lock:
+            if self._running:
+                return
+            # A stopped runtime can be started again.  The old event and task
+            # list must never be reused: the event remains set after stop and
+            # would make every newly created loop exit immediately.
+            if self._closed or self._stop_event.is_set():
+                self._stop_event = asyncio.Event()
+                self._tasks = []
+                self._closed = False
+            self._started_at = datetime.now()
             try:
-                raw = await self._storage.get_preference(f"imap.watermark.{account.account_id}")
+                # preload persisted IMAP watermarks so source factories can resume
+                # polling where the previous run left off
+                for account in self._account_configs:
+                    try:
+                        raw = await self._storage.get_preference(
+                            f"imap.watermark.{account.account_id}"
+                        )
+                    except Exception:
+                        raise RuntimeError(
+                            f"account {account.account_id!r}: cannot load receive checkpoint"
+                        ) from None
+                    if raw is not None:
+                        self._stored_watermarks[account.account_id] = str(raw)
+                self._start_source_tasks()
+                self._start_processing_tasks()
+                self._running = True
             except Exception:
-                raise RuntimeError(
-                    f"account {account.account_id!r}: cannot load receive checkpoint"
-                ) from None
-            if raw is not None:
-                self._stored_watermarks[account.account_id] = str(raw)
+                # A failed start is still a partial start.  Release every task
+                # created before surfacing the configuration error.
+                await self._stop_tasks(list(self._tasks), timeout_seconds=2.0)
+                self._tasks = []
+                for source in self._sources.values():
+                    await self._close_source(source)
+                self._running = False
+                self._closed = True
+                raise
+            logger.info(
+                "runtime started: %d accounts, %d workers, retention %d days",
+                len(self._account_configs),
+                self._config.general.workers,
+                self._config.general.mail_retention_days,
+            )
+
+    def _start_source_tasks(self) -> None:
         for account in self._account_configs:
             if not account.enabled:
                 self._account_status[account.account_id] = "stopped"
@@ -152,20 +207,17 @@ class MailFlowRuntime:
             self._inject_watermark_store(source, account.account_id)
             self._tasks.append(
                 asyncio.create_task(
-                    self._run_source(account, source), name=f"source-{account.account_id}"
+                    self._run_source(account, source, self._source_generation),
+                    name=f"source-{account.account_id}",
                 )
             )
+
+    def _start_processing_tasks(self) -> None:
         for index in range(self._config.general.workers):
             self._tasks.append(asyncio.create_task(self._worker(index), name=f"worker-{index}"))
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="cleanup"))
         self._tasks.append(asyncio.create_task(self._reminder_loop(), name="reminders"))
         self._schedule_warmup()
-        logger.info(
-            "runtime started: %d accounts, %d workers, retention %d days",
-            len(self._account_configs),
-            self._config.general.workers,
-            self._config.general.mail_retention_days,
-        )
 
     def _schedule_warmup(self) -> None:
         """Load the analysis model in the background.
@@ -183,26 +235,44 @@ class MailFlowRuntime:
         self._tasks.append(asyncio.create_task(warm, name="llm-warmup"))
 
     async def stop(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self._stop_event.set()
-        await self._events.emit(f"{_EVENT_PREFIX}runtime.stopping")
-        if self._tasks:
-            _done, pending = await asyncio.wait(self._tasks, timeout=10)
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-        for source in self._sources.values():
+        async with self._lifecycle_lock:
+            if self._closed and not self._running and not self._tasks:
+                return
+            self._closed = True
+            self._running = False
+            self._stop_event.set()
+            await self._events.emit(f"{_EVENT_PREFIX}runtime.stopping")
+            self._source_generation += 1
+            # Stop producers first, then let workers finish accepted mail.
+            await self._stop_named_tasks(
+                lambda task: task.get_name().startswith("source-"), timeout_seconds=1.0
+            )
             try:
-                await source.close()
-            except Exception as exc:
-                logger.warning("source close failed: %s", exc)
-        for account_id in self._account_status:
-            if self._account_status[account_id] == "running":
-                self._account_status[account_id] = "stopped"
-        logger.info("runtime stopped")
+                await bounded(self._queue.join(), timeout_seconds=3.0, label="mail queue drain")
+            except TimeoutError:
+                logger.warning("mail queue did not drain before shutdown; retained for restart")
+            self._processing_generation += 1
+            await cancel_tasks(self._tasks)
+            self._tasks = []
+            await asyncio.gather(*(self._close_source(source) for source in self._sources.values()))
+            for account_id in self._account_status:
+                if self._account_status[account_id] in {"running", "starting"}:
+                    self._account_status[account_id] = "stopped"
+            logger.info("runtime stopped")
+
+    async def _stop_tasks(
+        self,
+        tasks: list[asyncio.Task[Any]],
+        *,
+        timeout_seconds: float,
+    ) -> None:
+        await cancel_tasks(tasks, timeout_seconds=timeout_seconds)
+
+    async def _close_source(self, source: MailSource) -> None:
+        try:
+            await bounded(source.close(), timeout_seconds=2.0, label="source close")
+        except Exception as exc:
+            logger.warning("source close failed: %s", exc)
 
     async def reconfigure(
         self,
@@ -214,83 +284,80 @@ class MailFlowRuntime:
         notifier_configs: list[NotifierConfig],
         restart_sources: bool | None = None,
     ) -> None:
-        """Hot-swap components after a settings change; the queue, workers
-        and scheduler loops keep running.
+        """Stop consumers before swapping components; preserve queued mail.
 
-        Source tasks are restarted only when the account configuration (or an
-        adapter's class) actually changed. Restarting them unconditionally made
-        every settings edit — reordering LLMs, editing a notifier, moving a
-        list entry — tear down live connections and, because a source parked in
-        a blocking connect cannot be cancelled, wait up to five seconds before
-        the edit appeared. ``restart_sources=True`` forces the old behaviour
-        (used when plugins were loaded/unloaded, since adapter implementations
-        can change under an unchanged provider id).
-
-        Storage swaps are deliberately not supported: a storage change still
-        requires a restart.
+        Unchanged sources may retain their connections. Plugin reloads force
+        source replacement. Storage replacement requires a service restart.
         """
-        if restart_sources is None:
-            restart_sources = self._sources_changed(config, sources)
-        if restart_sources:
-            old_source_tasks = [
-                task for task in self._tasks if task.get_name().startswith("source-")
-            ]
-            for task in old_source_tasks:
-                task.cancel()
-            if old_source_tasks:
-                # A source parked in a blocking connect (to_thread cannot be
-                # interrupted) must not stall a settings change indefinitely:
-                # wait briefly, then proceed — the cancelled tasks finish in
-                # the background and are already removed from the task list.
-                await asyncio.wait(old_source_tasks, timeout=5.0)
-            self._tasks = [task for task in self._tasks if task not in old_source_tasks]
-            for source in self._sources.values():
-                with suppress(Exception):
-                    await source.close()
-        self._config = config
-        self._account_configs = list(config.accounts)
-        if not restart_sources:
-            # the running adapters are still the right ones: keep them (and
-            # their live connections) instead of the freshly built copies
+        async with self._lifecycle_lock:
+            if restart_sources is None:
+                restart_sources = self._sources_changed(config, sources)
+            was_running = self._running
+            if restart_sources:
+                self._source_generation += 1
+                await self._stop_named_tasks(
+                    lambda task: task.get_name().startswith("source-"), timeout_seconds=1.0
+                )
+                await asyncio.gather(
+                    *(self._close_source(source) for source in self._sources.values())
+                )
+            if was_running:
+                self._processing_generation += 1
+                await self._stop_named_tasks(
+                    lambda task: not task.get_name().startswith("source-"), timeout_seconds=2.0
+                )
+            self._config = config
+            self._account_configs = list(config.accounts)
+            account_ids = {account.account_id for account in self._account_configs}
+            self._account_status = {
+                key: value for key, value in self._account_status.items() if key in account_ids
+            }
+            self._account_errors = {
+                key: value for key, value in self._account_errors.items() if key in account_ids
+            }
             self._pipeline = pipeline
             self._notifiers = list(notifiers)
             self._notifier_configs = list(notifier_configs)
+            if restart_sources:
+                self._sources = dict(sources)
+            self._queue.resize(config.general.queue_size)
+            if was_running:
+                if restart_sources:
+                    for account in self._account_configs:
+                        self._account_errors.pop(account.account_id, None)
+                    self._start_source_tasks()
+                self._start_processing_tasks()
+            elif restart_sources:
+                # Reconfiguration is also used by hosts before the runtime
+                # has been started.  Keep the account pane truthful in that
+                # state so a missing adapter is visible immediately.
+                for account in self._account_configs:
+                    self._account_errors.pop(account.account_id, None)
+                    if not account.enabled:
+                        self._account_status[account.account_id] = "stopped"
+                        continue
+                    if account.account_id not in self._sources:
+                        self._account_status[account.account_id] = "error"
+                        self._account_errors[account.account_id] = (
+                            f"no source adapter for provider {account.provider!r}"
+                        )
+                    else:
+                        self._account_status[account.account_id] = "stopped"
             await self._events.emit(f"{_EVENT_PREFIX}runtime.reconfigured")
             logger.info(
-                "runtime reconfigured without restarting sources: %d account(s)",
+                "runtime reconfigured%s: %d account(s)",
+                " with source restart" if restart_sources else "",
                 len(self._account_configs),
             )
+
+    async def _stop_named_tasks(
+        self, predicate: Callable[[asyncio.Task[Any]], bool], *, timeout_seconds: float
+    ) -> None:
+        selected = [task for task in self._tasks if predicate(task)]
+        if not selected:
             return
-        self._sources = dict(sources)
-        self._pipeline = pipeline
-        self._notifiers = list(notifiers)
-        self._notifier_configs = list(notifier_configs)
-        for account in self._account_configs:
-            self._account_errors.pop(account.account_id, None)
-            if not account.enabled:
-                self._account_status[account.account_id] = "stopped"
-                continue
-            adapter = self._sources.get(account.account_id)
-            if adapter is None:
-                self._account_status[account.account_id] = "error"
-                self._account_errors[account.account_id] = (
-                    f"no source adapter for provider {account.provider!r}"
-                )
-                logger.error(
-                    "account %r: no source adapter for provider %r",
-                    account.account_id,
-                    account.provider,
-                )
-                continue
-            self._account_status[account.account_id] = "starting"
-            self._inject_watermark_store(adapter, account.account_id)
-            self._tasks.append(
-                asyncio.create_task(
-                    self._run_source(account, adapter), name=f"source-{account.account_id}"
-                )
-            )
-        await self._events.emit(f"{_EVENT_PREFIX}runtime.reconfigured")
-        logger.info("runtime reconfigured: %d accounts", len(self._account_configs))
+        await self._stop_tasks(selected, timeout_seconds=timeout_seconds)
+        self._tasks = [task for task in self._tasks if task not in selected]
 
     # -- source tasks ------------------------------------------------------------
 
@@ -333,8 +400,14 @@ class MailFlowRuntime:
 
     # -- source tasks ------------------------------------------------------------
 
-    async def _run_source(self, account: MailAccountConfig, source: MailSource) -> None:
+    async def _run_source(
+        self, account: MailAccountConfig, source: MailSource, generation: int
+    ) -> None:
+        stop_event = self._stop_event
+
         async def emit(mail: MailMessage) -> None:
+            if generation != self._source_generation or stop_event.is_set():
+                raise asyncio.CancelledError
             mail = mail.model_copy(
                 update={
                     "account_id": account.account_id,
@@ -346,10 +419,12 @@ class MailFlowRuntime:
 
         try:
             self._account_status[account.account_id] = "running"
-            await source.run(emit, self._stop_event)
+            await source.run(emit, stop_event)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if generation != self._source_generation:
+                return
             self._account_status[account.account_id] = "error"
             self._account_errors[account.account_id] = str(exc)
             logger.error("source for account %r failed: %s", account.account_id, exc)
@@ -359,22 +434,36 @@ class MailFlowRuntime:
                 error=str(exc),
             )
         finally:
-            if self._account_status.get(account.account_id) == "running":
+            if (
+                generation == self._source_generation
+                and self._account_status.get(account.account_id) == "running"
+            ):
                 self._account_status[account.account_id] = "stopped"
 
     # -- workers -------------------------------------------------------------------
 
     async def _worker(self, index: int) -> None:
         logger.debug("worker %d started", index)
-        while not self._stop_event.is_set() or not self._queue.empty():
+        queue = self._queue
+        stop_event = self._stop_event
+        generation = self._processing_generation
+        while not stop_event.is_set() or self._retry_mails or not queue.empty():
             try:
-                mail = await asyncio.wait_for(self._queue.get(), timeout=_WAIT_TIMEOUT)
+                mail = (
+                    self._retry_mails.popleft()
+                    if self._retry_mails
+                    else await asyncio.wait_for(queue.get(), timeout=_WAIT_TIMEOUT)
+                )
             except TimeoutError:
                 continue
+            completed = False
             try:
                 while True:
+                    if generation != self._processing_generation:
+                        raise asyncio.CancelledError
                     try:
                         await self._process_one(mail)
+                        completed = True
                         break
                     except Exception as exc:
                         logger.error(
@@ -382,7 +471,12 @@ class MailFlowRuntime:
                         )
                         await asyncio.sleep(1)
             finally:
-                self._queue.task_done()
+                if completed:
+                    queue.task_done()
+                else:
+                    # Still counted as unfinished queue work. The replacement
+                    # worker will finish it, including after stop/start.
+                    self._retry_mails.appendleft(mail)
 
     async def process_mail_now(
         self, mail: MailMessage, *, force: bool = False
@@ -405,6 +499,7 @@ class MailFlowRuntime:
     async def _process_one(
         self, mail: MailMessage, *, _skip_dedup: bool = False
     ) -> MailRecord | None:
+        generation = self._processing_generation
         identity = mail.normalized_message_id()
         # Fixed stripes keep memory bounded while serializing concurrent
         # deliveries and explicit re-analysis of the same mail.
@@ -435,8 +530,12 @@ class MailFlowRuntime:
                 ),
                 user_profile=(await self._storage.get_preference("feedback.profile") or ""),
             )
+            if generation != self._processing_generation:
+                raise asyncio.CancelledError
             failed = analysis.summary_is_fallback or any(note.status == "failed" for note in notes)
             async with self._write_lock:
+                if generation != self._processing_generation:
+                    raise asyncio.CancelledError
                 # A user can edit urgency while the model is working. Read the
                 # latest record at commit, preserving all local record fields.
                 previous = await self._storage.get_mail(record_id) or previous
@@ -615,7 +714,8 @@ class MailFlowRuntime:
         await self._events.emit(f"{_EVENT_PREFIX}cleanup.done", moved=moved, purged=purged)
 
     async def _cleanup_loop(self) -> None:
-        while not self._stop_event.is_set():
+        stop_event = self._stop_event
+        while not stop_event.is_set():
             wait_seconds = seconds_until_next_cleanup(
                 datetime.now(),
                 self._config.general.timezone,
@@ -624,8 +724,8 @@ class MailFlowRuntime:
             )
             logger.debug("next cleanup in %.0f seconds", wait_seconds)
             with suppress(TimeoutError):
-                await asyncio.wait_for(self._stop_event.wait(), timeout=max(wait_seconds, 1.0))
-            if self._stop_event.is_set():
+                await asyncio.wait_for(stop_event.wait(), timeout=max(wait_seconds, 1.0))
+            if stop_event.is_set():
                 break
             try:
                 await self.run_cleanup()
@@ -634,13 +734,14 @@ class MailFlowRuntime:
 
     async def _reminder_loop(self) -> None:
         interval = max(10, self._config.general.reminder_interval_seconds)
-        while not self._stop_event.is_set():
+        stop_event = self._stop_event
+        while not stop_event.is_set():
             try:
                 await self.run_reminder_tick()
             except Exception as exc:
                 logger.error("reminder tick failed: %s", exc)
             with suppress(TimeoutError):
-                await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
 
     async def run_reminder_tick(self) -> int:
         """Deliver each due reminder once; unsuccessful destinations can retry."""
@@ -1045,14 +1146,15 @@ class MailFlowRuntime:
     async def reconfigure_notifiers(
         self, notifiers: list[Notifier], notifier_configs: list[NotifierConfig]
     ) -> None:
-        """Swap only the notifier list (subscription changes). Sources,
-        pipeline, workers and schedulers keep running — a full
-        reconfigure here stalled chat command replies for seconds and
-        dropped in-flight work."""
-        self._notifiers = list(notifiers)
-        self._notifier_configs = list(notifier_configs)
-        await self._events.emit(f"{_EVENT_PREFIX}runtime.reconfigured")
-        logger.info("runtime notifiers rebuilt: %d", len(notifiers))
+        """Replace notifier users before releasing the old notifier objects."""
+        await self.reconfigure(
+            config=self._config,
+            sources=self._sources,
+            pipeline=self._pipeline,
+            notifiers=notifiers,
+            notifier_configs=notifier_configs,
+            restart_sources=False,
+        )
 
     # -- status -----------------------------------------------------------------------
 
@@ -1068,6 +1170,10 @@ class MailFlowRuntime:
     @property
     def started_at(self) -> datetime | None:
         return self._started_at
+
+    @property
+    def sources(self) -> dict[str, MailSource]:
+        return dict(self._sources)
 
     def account_status(self, account_id: str) -> str:
         return self._account_status.get(account_id, "stopped")

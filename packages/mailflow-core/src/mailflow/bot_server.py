@@ -19,6 +19,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from mailflow.lifecycle import OwnedListener
+
 logger = logging.getLogger("mailflow.bot_server")
 
 if TYPE_CHECKING:
@@ -29,21 +31,23 @@ _PORT = 18789
 _MAX_REQUEST_BYTES = 1 << 20
 
 
-class BotServer:
+class BotServer(OwnedListener):
     """Async HTTP server for chat command dispatch."""
 
     def __init__(self, service: MailFlowService) -> None:
+        super().__init__()
         self._service = service
-        self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
+        if self.running:
+            return
         # bind the configured port, bumping on conflict so parallel test
         # services (and stray zombies) never take the endpoint down
         port = _PORT
         last_exc: OSError | None = None
         for _attempt in range(5):
             try:
-                self._server = await asyncio.start_server(self._handle_connection, _HOST, port)
+                await self.start_listener(self._handle_connection, _HOST, port)
                 break
             except OSError as exc:
                 last_exc = exc
@@ -56,10 +60,7 @@ class BotServer:
         logger.info("bot command endpoint listening on http://%s:%d/bot/message", _HOST, port)
 
     async def stop(self) -> None:
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
+        await self.stop_listener()
 
     @property
     def url(self) -> str:

@@ -1468,6 +1468,7 @@ class CommandRouter:
                     "update.status",
                     version=__version__,
                     auto=self._t("common.yes" if auto else "common.no"),
+                    state=await self.service.update_status(),
                 )
             )
         if sub == "auto" and len(args) == 2 and args[1] in ("on", "off"):
