@@ -79,6 +79,13 @@ from mailflow.letters import build_letter
 from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.llm import LLMRouterImpl
 from mailflow.logging import LoggingRuntime, configure_logging
+from mailflow.permissions import (
+    PermissionContext,
+    admin_operation,
+    authorize_command,
+    normalize_provider,
+    permission_scope,
+)
 from mailflow.pipeline import PipelineEngine, build_bindings
 from mailflow.plugin_market import (
     MarketFetchReport,
@@ -668,6 +675,7 @@ class MailFlowService:
 
     # -- lifecycle ---------------------------------------------------------------
 
+    @admin_operation
     async def start(self) -> None:
         async with self._lifecycle_lock:
             if self._started:
@@ -707,6 +715,7 @@ class MailFlowService:
                 raise
             logger.info("mailflow service started (version %s)", __version__)
 
+    @admin_operation
     async def stop(self) -> None:
         async with self._lifecycle_lock:
             await self._stop_unlocked(persist_running=True)
@@ -783,6 +792,7 @@ class MailFlowService:
             notifier_configs.append(notifier)
         await self.runtime.reconfigure_notifiers(notifiers, notifier_configs)
 
+    @admin_operation
     async def reload_runtime(self, *, restart_sources: bool | None = None) -> None:
         """Rebuild components after releasing their previous task owners."""
         async with self._lifecycle_lock:
@@ -998,6 +1008,7 @@ class MailFlowService:
             if self._is_expired(record, now, linked=linked.get(record.record_id, []))
         ]
 
+    @admin_operation
     async def purge_expired_mails(self, record_ids: list[str] | None = None) -> int:
         """Move expired mail to the trash and report how many actually moved.
 
@@ -1042,6 +1053,7 @@ class MailFlowService:
             logger.debug("could not read the user profile: %s", exc)
             return ""
 
+    @admin_operation
     async def set_user_profile(self, text: str) -> str:
         """Store the recipient profile fed to the LLM with every analysis.
 
@@ -1082,13 +1094,12 @@ class MailFlowService:
             raise ValueError("history offset must not be negative")
         source = self.sources.get(account_id)
         if source is None:
-            raise KeyError(f"no mail source for account {account_id!r}")
+            raise KeyError(self.t("account.not_found", account_id=account_id))
         if not isinstance(source, HistoryCapableSource):
-            raise NotImplementedError(
-                f"source for account {account_id!r} cannot list historical mail"
-            )
+            raise NotImplementedError(self.t("account.history_unsupported", account_id=account_id))
         return await source.fetch_history(limit=limit, offset=offset)
 
+    @admin_operation
     async def process_mail(self, mail: MailMessage, *, force: bool = False) -> MailRecord | None:
         """Analyze and store one mail immediately (same path as live mail).
 
@@ -1114,6 +1125,7 @@ class MailFlowService:
     async def list_actions(self) -> list[ActionItem]:
         return [entry.item for entry in await self.runtime.action_store.read()]
 
+    @admin_operation
     async def delete_action(self, item_id: str) -> bool:
         async with self.runtime.action_store.lock:
             entries = await self.runtime.action_store.read(deduplicate=False)
@@ -1163,6 +1175,7 @@ class MailFlowService:
                 return item
         return None
 
+    @admin_operation
     async def purge_expired_actions(self) -> int:
         """Retire visible entries a day after their full time window ended."""
         cutoff = datetime.now(UTC) - _EXPIRED_ACTION_AGE
@@ -1187,6 +1200,7 @@ class MailFlowService:
         """Visible entries before event deduplication, for edits and searches."""
         return [entry.item for entry in await self.runtime.action_store.read(deduplicate=False)]
 
+    @admin_operation
     async def add_action(
         self,
         summary: str,
@@ -1240,6 +1254,7 @@ class MailFlowService:
         await self.storage.save_custom_action(item)
         return item
 
+    @admin_operation
     async def edit_action(
         self,
         item_id: str,
@@ -1459,6 +1474,7 @@ class MailFlowService:
                 best[key] = candidate
         return [best[key] for key in order]
 
+    @admin_operation
     async def reject_seminar(self, candidate_id: str) -> bool:
         """Reject one proposal so repeated scans cannot offer it again."""
         async with self._seminar_lock:
@@ -1474,6 +1490,7 @@ class MailFlowService:
                 return True
         return False
 
+    @admin_operation
     async def discover_seminars(
         self, *, progress: Any = None, records: list[MailRecord] | None = None
     ) -> SeminarDiscoveryResult:
@@ -1711,6 +1728,7 @@ class MailFlowService:
             failure_reasons=failure_reasons,
         )
 
+    @admin_operation
     async def import_seminar(
         self,
         candidate_id: str,
@@ -1863,6 +1881,7 @@ class MailFlowService:
 
     # -- user feedback (filter tuning) -------------------------------------------
 
+    @admin_operation
     async def record_feedback(self, mail_id: str, reason: str) -> None:
         """Store a user note on why a mail was irrelevant or unwanted.
 
@@ -1891,6 +1910,7 @@ class MailFlowService:
 
     # -- plugin update sources --------------------------------------------------
 
+    @admin_operation
     async def record_plugin_source(self, plugin_id: str, source: str) -> None:
         """Remember where a plugin was installed from ('' clears it)."""
         if source:
@@ -1981,6 +2001,7 @@ class MailFlowService:
         except (ValueError, KeyError, TypeError):
             return self.t("update.state_idle")
 
+    @admin_operation
     async def clear_plugin_source(self, plugin_id: str) -> None:
         await self.storage.set_preference(f"plugin.source.{plugin_id}", "")
 
@@ -1993,6 +2014,7 @@ class MailFlowService:
             )
         return sources
 
+    @admin_operation
     async def check_updates(self) -> UpdateReport:
         from mailflow.updates import check_updates
 
@@ -2009,6 +2031,7 @@ class MailFlowService:
 
         return await asyncio.to_thread(installed_plugin_versions)
 
+    @admin_operation
     async def apply_updates(self) -> dict[str, str]:
         """Apply every available update; returns plugin_id -> outcome and
         reports the mailflow upgrade result under a ``mailflow`` key."""
@@ -2031,6 +2054,7 @@ class MailFlowService:
 
     # -- mutations -------------------------------------------------------------------
 
+    @admin_operation
     async def set_mail_urgency(self, record_id: str, urgency: Urgency | None) -> MailRecord | None:
         """Set or reset (None) the manual urgency override."""
         record = await self.storage.set_manual_urgency(record_id, urgency)
@@ -2138,6 +2162,7 @@ is never edited.
             logger.info("ask & correct proposed a correction for %s", record_id)
         return {"reply": reply, "corrections": corrections}
 
+    @admin_operation
     async def apply_mail_correction(
         self, record_id: str, corrections: dict[str, Any], *, note: str = ""
     ) -> MailRecord | None:
@@ -2454,6 +2479,7 @@ Return every candidate in this batch."""
             raise RuntimeError(self.t("seminar.no_llm"))
         return await run_agent(self, self.router, text, progress=progress)
 
+    @admin_operation
     async def update_mail_analysis(
         self,
         record_id: str,
@@ -2473,6 +2499,7 @@ Return every candidate in this batch."""
             await self.events.emit("mail.analysis.changed", record_id=record_id)
         return record
 
+    @admin_operation
     async def delete_mail(self, record_id: str) -> bool:
         """Move a mail to trash (recoverable); returns False when unknown."""
         record = await self.storage.get_mail(record_id)
@@ -2482,6 +2509,7 @@ Return every candidate in this batch."""
         await self.events.emit("mail.deleted", record_id=record_id)
         return True
 
+    @admin_operation
     async def delete_mails(self, record_ids: list[str]) -> int:
         """Move several mails to the trash; returns how many actually moved.
 
@@ -2499,9 +2527,11 @@ Return every candidate in this batch."""
             logger.info("moved %d mail(s) to the trash", moved)
         return moved
 
+    @admin_operation
     async def restore_mail(self, record_id: str) -> MailRecord | None:
         return await self.storage.restore_from_trash(record_id)
 
+    @admin_operation
     async def purge_all_processed(self) -> tuple[int, int]:
         """Wipe every active mail and the entire trash to start analysis again.
 
@@ -2512,6 +2542,7 @@ Return every candidate in this batch."""
         moved, purged = await self.run_cleanup_wide()
         return moved, purged
 
+    @admin_operation
     async def clear_all_records(self) -> tuple[int, int]:
         """Move every stored mail and every schedule entry to the trash.
 
@@ -2546,6 +2577,7 @@ Return every candidate in this batch."""
         await self.events.emit("mailflow.records.cleared", mails=moved, actions=actions)
         return moved, actions
 
+    @admin_operation
     async def purge_trash_now(self) -> int:
         """Permanently delete everything in the trash; returns how many went.
 
@@ -2558,6 +2590,7 @@ Return every candidate in this batch."""
         await self.events.emit("mailflow.trash.purged", count=purged)
         return purged
 
+    @admin_operation
     async def run_cleanup_wide(self) -> tuple[int, int]:
         """Move every active mail to trash and purge the trash permanently."""
         from mailflow.domain import utcnow
@@ -2568,6 +2601,7 @@ Return every candidate in this batch."""
         purged = await self.storage.purge_trash(horizon_trash)
         return moved, purged
 
+    @admin_operation
     async def run_cleanup(self) -> tuple[int, int]:
         moved = await self.storage.cleanup_mail(
             utcnow() - timedelta(days=self.config.general.mail_retention_days)
@@ -2591,6 +2625,7 @@ Return every candidate in this batch."""
     async def get_language(self) -> str:
         return self.i18n.language
 
+    @admin_operation
     async def set_language(self, code: str) -> None:
         self.i18n.set_language(code)  # raises KeyError for unknown packs
         await self.storage.set_preference(_LANGUAGE_PREFERENCE, code)
@@ -2664,6 +2699,7 @@ Return every candidate in this batch."""
             raise KeyError(f"unknown config option {key!r}")
         return option
 
+    @admin_operation
     async def set_config_value(self, key: str, raw_value: str) -> Any:
         """Coerce, validate and persist one scalar config option."""
         from mailflow.config import patch_config_value, set_option_value, write_config
@@ -2719,6 +2755,7 @@ Return every candidate in this batch."""
                 await self.events.emit("config.reload_failed", key=key, error=str(exc))
                 raise RuntimeError(self.t("tui.settings_reload_failed", error=str(exc))) from exc
 
+    @admin_operation
     async def set_setting(self, key: str, raw_value: Any) -> OptionSpec | None:
         """Coerce, validate and persist one option (scalar, list or mapping).
 
@@ -2756,12 +2793,14 @@ Return every candidate in this batch."""
                 logger.error("pipeline language rebuild failed: %s", exc)
         return self.settings_option("general.language")
 
+    @admin_operation
     async def reset_setting(self, key: str) -> OptionSpec | None:
         """Restore one option to its schema default and persist."""
         updated = reset_value(self.config, key, **self._settings_context())
         await self._persist_config(updated, key)
         return self.settings_option(key)
 
+    @admin_operation
     async def add_config_entry(self, group: str, values: dict[str, Any]) -> MailFlowConfig:
         """Append a validated entry to accounts/llms/processors/notifiers."""
         updated = add_entry(self.config, group, values)
@@ -2771,6 +2810,7 @@ Return every candidate in this batch."""
         await self._persist_config(updated, group)
         return updated
 
+    @admin_operation
     async def update_config_entry(
         self, group: str, index: int, values: dict[str, Any]
     ) -> MailFlowConfig:
@@ -2781,6 +2821,7 @@ Return every candidate in this batch."""
         await self._persist_config(updated, group)
         return updated
 
+    @admin_operation
     async def remove_config_entry(self, group: str, index: int) -> MailFlowConfig:
         updated = remove_entry(self.config, group, index)
         if group == "llms":
@@ -2788,6 +2829,7 @@ Return every candidate in this batch."""
         await self._persist_config(updated, group)
         return updated
 
+    @admin_operation
     async def move_config_entry(self, group: str, index: int, offset: int) -> MailFlowConfig:
         """Reorder one entry; for LLMs the order *is* the fallback chain.
 
@@ -2810,6 +2852,7 @@ Return every candidate in this batch."""
 
     # -- plugin marketplace ------------------------------------------------------------
 
+    @admin_operation
     async def plugin_repo_add(self, name: str, url: str) -> None:
         """Register a marketplace repository without requiring network access."""
         if self.config_path is None:
@@ -2834,6 +2877,7 @@ Return every candidate in this batch."""
         )
         self._market_fetch_report = None
 
+    @admin_operation
     async def plugin_repo_edit(self, original_name: str, name: str, url: str) -> None:
         """Atomically replace one repository configuration entry."""
         if self.config_path is None:
@@ -2864,6 +2908,7 @@ Return every candidate in this batch."""
         )
         self._market_fetch_report = None
 
+    @admin_operation
     async def plugin_repo_remove(self, name: str) -> None:
         if self.config_path is None:
             raise ValueError("no config file loaded; start with --config to persist changes")
@@ -2975,6 +3020,7 @@ Return every candidate in this batch."""
         await self.storage.set_preference(f"plugin.package.{plugin.id}", plugin.package)
         return str(output or ""), False
 
+    @admin_operation
     async def plugin_install(self, plugin_id: str) -> str:
         """Look up and install one remote plugin, recording source on success."""
 
@@ -2988,6 +3034,7 @@ Return every candidate in this batch."""
         output, _already = await self._install_plugin(plugin, source=plugin.source)
         return output
 
+    @admin_operation
     async def plugin_install_local(self, root: Path) -> str:
         """Install local plugin folders, retaining successful installs on partial failure."""
         from mailflow.plugin_market import MarketPlugin, detect_plugin_folders
@@ -3066,6 +3113,7 @@ Return every candidate in this batch."""
             return
         raise KeyError(self.t("plugin.unknown_plugin", plugin_id=plugin_id))
 
+    @admin_operation
     async def plugin_disable(self, plugin_id: str) -> None:
         """Disable a plugin; its components unload immediately (config
         entries stay, so re-enabling restores them)."""
@@ -3120,6 +3168,7 @@ Return every candidate in this batch."""
             created += 1
         return created
 
+    @admin_operation
     async def plugin_enable(self, plugin_id: str) -> str:
         """Enable a plugin: components load immediately and notifier plugins
         get a default instance when none exists. Returns the id of the
@@ -3176,6 +3225,7 @@ Return every candidate in this batch."""
             raise RuntimeError(safe_failure_reason(exc)) from exc
         return found[1] if found is not None else None
 
+    @admin_operation
     async def plugin_uninstall(self, plugin_id: str) -> str:
         """Uninstall one marketplace plugin and clean its configuration."""
         from mailflow.plugin_market import PluginMarket
@@ -3272,10 +3322,12 @@ Return every candidate in this batch."""
         """Every managed gateway instance (for the Bots tab table)."""
         return await self.gateways.instances()
 
+    @admin_operation
     async def gateway_detect(self, provider: str) -> str:
         """Status line for the guide's first step (installed/running?)."""
         return await self.gateways.detect(provider)
 
+    @admin_operation
     async def gateway_provision(
         self,
         provider: str,
@@ -3297,10 +3349,12 @@ Return every candidate in this batch."""
             options = {**options, "bot_url": bot_url.url}
         return await self.gateways.provision(provider, instance_id, options, autostart=autostart)
 
+    @admin_operation
     async def gateway_qr(self, provider: str, instance_id: str) -> str:
         """QR payload for the login step ('' when not supported)."""
         return await self.gateways.qr(provider, instance_id)
 
+    @admin_operation
     async def gateway_shutdown(self, provider: str, instance_id: str) -> None:
         """Stop one gateway instance and stop supervising it."""
         await self.gateways.shutdown_instance(provider, instance_id)
@@ -3364,6 +3418,7 @@ Return every candidate in this batch."""
         chat_type: str = "",
         provider: str = "",
         instance_id: str = "",
+        context: PermissionContext | None = None,
     ) -> str | list[str] | None:
         """Handle one chat-platform message.
 
@@ -3389,14 +3444,18 @@ Return every candidate in this batch."""
             return None
         line = text[len(prefix) :].strip()
         if line.startswith("mailflow"):
-            return await self._mailflow_command(
-                line[len("mailflow") :].strip(),
-                sender=sender,
-                chat_id=chat_id,
-                chat_type=chat_type,
-                provider=provider,
-                instance_id=instance_id,
+            identity = context or self.permission_context(
+                sender=sender, provider=provider, instance_id=instance_id, chat_id=chat_id
             )
+            with permission_scope(identity):
+                return await self._mailflow_command(
+                    line[len("mailflow") :].strip(),
+                    sender=identity.sender,
+                    chat_id=identity.chat_id,
+                    chat_type=chat_type,
+                    provider=identity.provider,
+                    instance_id=identity.instance_id,
+                )
         if not line:
             return None
         # a bare legacy command (e.g. "/help"): teach the namespace instead
@@ -3437,6 +3496,8 @@ Return every candidate in this batch."""
                 provider=provider,
                 instance_id=instance_id,
             )
+        except PermissionError as exc:
+            return str(exc)
         except Exception:
             # A chat command must NEVER die silently: the user has no way
             # to tell 'crashed' from 'ignored'. Log the traceback (the
@@ -3459,23 +3520,18 @@ Return every candidate in this batch."""
         parts = args.split()
         sub = parts[0] if parts else "help"
         prefix = self.command_prefix()
+        if sub in ("subscribe", "unsubscribe", "hourly") and not chat_id:
+            return self.t("chat.needs_context")
+        if sub in self._CHAT_SUBCOMMANDS:
+            authorize_command(sub, parts[1:], self.t)
         if sub == "help":
             return self._chat_help(prefix)
         if sub == "example":
             return await self._chat_example(provider, instance_id)
-        # subscription commands are the only ones bound to the chat they
-        # were sent from: everything else routes to the shared router (its
-        # own permission semantics apply — mail reads are harmless, writes
-        # touch the same config the TUI exposes)
-        if sub in ("subscribe", "unsubscribe"):
-            if not chat_id:
-                return self.t("chat.needs_context")
-            if not self._is_admin(sender, provider):
-                return self.t("chat.not_admin")
         if sub == "subscribe":
             ok = await self.subscriptions.add(provider, instance_id, chat_id)
             await self._sync_subscription_targets(
-                provider, chat_id, chat_type=chat_type, subscribe=True
+                provider, chat_id, instance_id=instance_id, chat_type=chat_type, subscribe=True
             )
             # rebuild ONLY the notifier components: a full reload_runtime()
             # would also replace GatewayManager — orphaning the running
@@ -3487,7 +3543,7 @@ Return every candidate in this batch."""
         if sub == "unsubscribe":
             ok = await self.subscriptions.remove(provider, instance_id, chat_id)
             await self._sync_subscription_targets(
-                provider, chat_id, chat_type=chat_type, subscribe=False
+                provider, chat_id, instance_id=instance_id, chat_type=chat_type, subscribe=False
             )
             await self._rebuild_notifiers()
             return self.t("chat.unsubscribed") if ok else self.t("chat.not_subscribed")
@@ -3499,8 +3555,6 @@ Return every candidate in this batch."""
             # Admin-gated like subscribe: it changes what the bot pushes.
             if not chat_id:
                 return self.t("chat.needs_context")
-            if not self._is_admin(sender, provider):
-                return self.t("chat.not_admin")
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg not in ("on", "off", ""):
                 return self.t("chat.hourly_usage")
@@ -3634,19 +3688,28 @@ Return every candidate in this batch."""
         provider: str,
         chat_id: str,
         *,
+        instance_id: str = "",
         chat_type: str = "private",
         subscribe: bool,
     ) -> None:
         """Add/remove ``chat_id`` from every notifier's targets for this
         provider so the runtime delivers to subscribed chats, and persist
         the change so delivery survives a restart."""
-        provider = "onebot" if provider == "napcat" else provider
+        provider = normalize_provider(provider)
         # OneBot targets must be ``user:<id>`` / ``group:<id>``; a bare id
         # is malformed and silently dropped by the notifier
         kind = "group" if chat_type == "group" else "user"
         prefixed = f"{kind}:{chat_id}"
         for index, notifier in enumerate(self.config.notifiers):
-            if notifier.provider != provider:
+            if notifier.provider != provider or (
+                instance_id
+                and instance_id
+                not in {
+                    notifier.notifier_id,
+                    str(notifier.options.get("bot_id") or ""),
+                    str(notifier.options.get("uin") or ""),
+                }
+            ):
                 continue
             raw_targets: list[Any] = list(notifier.options.get("targets") or [])
             targets = [str(t) for t in raw_targets]
@@ -3666,23 +3729,46 @@ Return every candidate in this batch."""
         if config_path:
             write_config(self.config, config_path)
 
-    def _is_admin(self, sender: str, provider: str) -> bool:
-        """True when ``sender`` is listed as an admin of any notifier
-        (admins are platform user ids: QQ number / wxid). ``provider``
-        maps the gateway id to the notifier provider (napcat -> onebot)."""
-        if not sender:
-            return False
-        provider = "onebot" if provider == "napcat" else provider
-        for notifier in self.config.notifiers:
-            if provider and notifier.provider != provider:
-                continue
-            admins = _flatten_admins(notifier.options.get("admins") or [])
-            if sender in admins:
-                return True
-        return False
+    def permission_context(
+        self, *, sender: str, provider: str, instance_id: str = "", chat_id: str = ""
+    ) -> PermissionContext:
+        """Resolve platform admins within one enabled notifier instance."""
+        normalized_provider = normalize_provider(provider)
+        candidates = [
+            notifier
+            for notifier in self.config.notifiers
+            if notifier.enabled and notifier.provider == normalized_provider
+        ]
+        if instance_id:
+            candidates = [
+                n
+                for n in candidates
+                if instance_id
+                in {
+                    n.notifier_id,
+                    str(n.options.get("bot_id") or ""),
+                    str(n.options.get("uin") or ""),
+                }
+            ]
+        # A legacy bridge without an instance id can only identify a single
+        # configured bot. Multiple bots must never share administrator grants.
+        notifier = candidates[0] if len(candidates) == 1 else None
+        is_admin = bool(
+            sender
+            and provider
+            and notifier
+            and sender in _flatten_admins(notifier.options.get("admins") or [])
+        )
+        return PermissionContext(sender, provider, instance_id, chat_id, is_admin)
+
+    def _is_admin(self, sender: str, provider: str, instance_id: str = "") -> bool:
+        return self.permission_context(
+            sender=sender, provider=provider, instance_id=instance_id
+        ).is_admin
 
     # -- reply workflow ---------------------------------------------------------------------
 
+    @admin_operation
     async def create_reply(self, mail_id: str) -> ReplyDraft:
         record = await self._reply_record(mail_id)
         draft = ReplyDraft(
@@ -3697,6 +3783,7 @@ Return every candidate in this batch."""
         await self.events.emit("reply.created", draft_id=draft.draft_id, mail_id=mail_id)
         return draft.model_copy(deep=True)
 
+    @admin_operation
     async def create_letter_draft(
         self,
         mail_id: str,
@@ -3792,6 +3879,7 @@ Return every candidate in this batch."""
                 ) from None
         return source
 
+    @admin_operation
     async def edit_draft(self, draft_id: str, subject: str, body: str) -> ReplyDraft:
         async with self._reply_locks.for_draft(draft_id):
             draft = await self._require_draft(draft_id)
@@ -3805,6 +3893,7 @@ Return every candidate in this batch."""
             await self.events.emit("reply.changed", draft_id=draft_id)
             return draft
 
+    @admin_operation
     async def prepare_reply(self, draft_id: str) -> ReplyDraft:
         async with self._reply_locks.for_draft(draft_id):
             draft = await self._require_draft(draft_id)
@@ -3819,6 +3908,7 @@ Return every candidate in this batch."""
             await self.events.emit("reply.changed", draft_id=draft_id)
             return draft
 
+    @admin_operation
     async def confirm_reply(self, draft_id: str, token: str) -> ReplyDraft:
         async with self._reply_locks.for_draft(draft_id):
             # SMTP can keep running in its thread after the requesting UI is
@@ -3869,6 +3959,7 @@ Return every candidate in this batch."""
         await self.events.emit("reply.sent", draft_id=draft_id, mail_id=draft.mail_id)
         return draft
 
+    @admin_operation
     async def cancel_reply(self, draft_id: str) -> ReplyDraft:
         async with self._reply_locks.for_draft(draft_id):
             draft = await self._require_draft(draft_id)

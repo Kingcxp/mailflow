@@ -97,8 +97,16 @@ class Main(Star):
             line = line[len("/mailflow"):].strip()
         elif line.startswith("mailflow "):
             line = line[len("mailflow "):].strip()
-        response = await _router.execute(line)
-        reply = response.text if response.ok else _service.t("chat.command_error") + chr(10) + response.text
+        sender = str(event.get_sender_id())
+        group_id = str(event.get_group_id() or "")
+        reply = await _service.command_dispatch(
+            _service.command_prefix() + "mailflow " + line,
+            sender=sender,
+            provider=str(event.platform_meta.name),
+            instance_id=str(event.platform_meta.id),
+            chat_id=group_id or sender,
+            chat_type="group" if group_id else "private",
+        )
         pages = _service.chat_reply_chunks(reply)
         for page in pages if isinstance(pages, list) else [pages]:
             yield event.plain_result(page)

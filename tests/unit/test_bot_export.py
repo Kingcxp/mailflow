@@ -8,8 +8,8 @@ import sys
 from collections.abc import Awaitable, Callable
 from importlib import metadata
 from pathlib import Path
-from types import ModuleType
-from unittest.mock import Mock
+from types import ModuleType, SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from mailflow.bot_export import (
@@ -18,8 +18,10 @@ from mailflow.bot_export import (
     available_frameworks,
     export_bot_plugin,
 )
-from mailflow.config import MailFlowConfig, load_config
+from mailflow.commands import CommandRouter
+from mailflow.config import MailFlowConfig, NotifierConfig, load_config
 from mailflow.domain import ComponentKind
+from mailflow.permissions import PermissionContext, current_context
 from mailflow.plugins import PluginInfo
 from mailflow.registry import ComponentRegistry, PluginRegistrar
 from mailflow.service import MailFlowService
@@ -206,6 +208,9 @@ class TestNonebotExporter:
             get_driver=Mock(return_value=driver), on_message=Mock(return_value=matcher)
         )
         monkeypatch.setitem(sys.modules, "nonebot", nonebot)
+        adapters = ModuleType("nonebot.adapters")
+        adapters.__dict__.update(Bot=object, Event=object)
+        monkeypatch.setitem(sys.modules, "nonebot.adapters", adapters)
         external = ModuleType("mailflow_generated_fixture")
         external.__dict__["plugin"] = FakeExporterPlugin()
         monkeypatch.setitem(sys.modules, external.__name__, external)
@@ -235,6 +240,37 @@ class TestNonebotExporter:
             assert service.registry.has(ComponentKind.BOT_EXPORTER, "fake")
             await driver.startups[0]()
             assert module.__dict__["_service"] is service
+            service.config.notifiers = [
+                NotifierConfig(
+                    notifier_id="bot-1",
+                    provider="onebot",
+                    options={"admins": ["42"]},
+                )
+            ]
+            bot = SimpleNamespace(
+                self_id="bot-1", adapter=SimpleNamespace(get_name=lambda: "OneBot V11")
+            )
+            event = SimpleNamespace(
+                get_plaintext=lambda: "/mailflow clean records",
+                get_user_id=lambda: "reader",
+                group_id="chat-1",
+            )
+            matcher.send = AsyncMock()
+            service.clear_all_records = AsyncMock(return_value=(0, 0))
+            await module.__dict__["_handle_mailflow"](bot, event)
+            service.clear_all_records.assert_not_awaited()
+            assert service.t("permission.denied") in matcher.send.call_args.args[0]
+            observed: list[PermissionContext] = []
+
+            async def clear() -> tuple[int, int]:
+                observed.append(current_context())
+                return 0, 0
+
+            service.clear_all_records.side_effect = clear
+            event.get_user_id = lambda: "42"
+            await module.__dict__["_handle_mailflow"](bot, event)
+            assert observed[0].sender == "42"
+            assert observed[0].instance_id == "bot-1" and observed[0].chat_id == "chat-1"
         finally:
             await driver.shutdowns[0]()
         assert module.__dict__["_service"] is None
@@ -247,6 +283,61 @@ class TestNonebotExporter:
 
 
 class TestAstrbotExporter:
+    async def test_exported_handler_preserves_identity_and_shared_permission(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from test_commands import commands_service
+
+        event_module = ModuleType("astrbot.api.event")
+        event_module.__dict__.update(
+            AstrMessageEvent=object,
+            filter=SimpleNamespace(command=lambda name: lambda method: method),
+        )
+        star_module = ModuleType("astrbot.api.star")
+        star_module.__dict__.update(Context=object, Star=object)
+        monkeypatch.setitem(sys.modules, "astrbot", ModuleType("astrbot"))
+        monkeypatch.setitem(sys.modules, "astrbot.api", ModuleType("astrbot.api"))
+        monkeypatch.setitem(sys.modules, "astrbot.api.event", event_module)
+        monkeypatch.setitem(sys.modules, "astrbot.api.star", star_module)
+        export_astrbot(_context(tmp_path))
+        spec = importlib.util.spec_from_file_location("fake_astrbot_plugin", tmp_path / "main.py")
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        service = commands_service()
+        service.config.notifiers = [
+            NotifierConfig(
+                notifier_id="bot-1",
+                provider="telegram",
+                options={"admins": ["42"]},
+            )
+        ]
+        module.__dict__.update(_service=service, _router=CommandRouter(service))
+        event = SimpleNamespace(
+            message_str="/mailflow clean records",
+            get_sender_id=lambda: "reader",
+            get_group_id=lambda: "chat-1",
+            platform_meta=SimpleNamespace(name="telegram", id="bot-1"),
+            plain_result=lambda text: text,
+        )
+        clear = AsyncMock(return_value=(0, 0))
+        service.clear_all_records = clear
+        handler = module.__dict__["Main"].mailflow
+        replies = [reply async for reply in handler(object(), event)]
+        assert service.t("permission.denied") in replies[0]
+        clear.assert_not_awaited()
+        contexts: list[PermissionContext] = []
+
+        async def remove() -> tuple[int, int]:
+            contexts.append(current_context())
+            return 0, 0
+
+        clear.side_effect = remove
+        event.get_sender_id = lambda: "42"
+        assert [reply async for reply in handler(object(), event)]
+        assert contexts[0].sender == "42" and contexts[0].provider == "telegram"
+        assert contexts[0].instance_id == "bot-1" and contexts[0].chat_id == "chat-1"
+
     def test_generates_plugin_folder(self, tmp_path: Path) -> None:
         result = export_astrbot(_context(tmp_path))
         assert result.framework == "astrbot"

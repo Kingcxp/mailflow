@@ -61,6 +61,7 @@ from zoneinfo import ZoneInfo
 from typing import Any
 
 from nonebot import get_driver, on_message
+from nonebot.adapters import Bot, Event
 
 driver = get_driver()
 _service: Any = None
@@ -101,7 +102,7 @@ _mailflow_matcher = on_message(priority=10, block=False)
 
 
 @_mailflow_matcher.handle()
-async def _handle_mailflow(event: Any) -> None:
+async def _handle_mailflow(bot: Bot, event: Event) -> None:
     """Dispatch ``mailflow ...`` chat messages to the shared command router."""
     text = str(event.get_plaintext() or "").strip()
     if _router is None:
@@ -112,8 +113,16 @@ async def _handle_mailflow(event: Any) -> None:
         line = text[len("mailflow "):].strip()
     else:
         return
-    response = await _router.execute(line)
-    reply = response.text if response.ok else _service.t("chat.command_error") + chr(10) + response.text
+    sender = str(event.get_user_id())
+    group_id = str(getattr(event, "group_id", "") or "")
+    reply = await _service.command_dispatch(
+        _service.command_prefix() + "mailflow " + line,
+        sender=sender,
+        provider=bot.adapter.get_name(),
+        instance_id=str(bot.self_id),
+        chat_id=group_id or sender,
+        chat_type="group" if group_id else "private",
+    )
     pages = _service.chat_reply_chunks(reply)
     for page in pages if isinstance(pages, list) else [pages]:
         await _mailflow_matcher.send(page)

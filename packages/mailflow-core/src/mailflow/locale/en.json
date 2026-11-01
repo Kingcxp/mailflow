@@ -20,7 +20,9 @@
       "status_starting": "starting",
       "status_stopped": "stopped",
       "title": "Accounts ({count})",
-      "usage": "account <list [--page <n>]>"
+      "usage": "account <list [--page <n>]>",
+      "not_found": "Account {account_id} does not exist.",
+      "history_unsupported": "Account {account_id} does not support mail history."
     },
     "action": {
       "add_usage": "usage: action add \"<summary>\" --due \"YYYY-MM-DD HH:MM\" [--type <type>] [--notes \"...\"]",
@@ -106,7 +108,8 @@
       "no": "no",
       "none": "none",
       "ok": "OK",
-      "yes": "yes"
+      "yes": "yes",
+      "unsupported": "This operation is not supported."
     },
     "config": {
       "desc": {
@@ -215,7 +218,8 @@
       "header_model": "MODEL",
       "header_name": "NAME",
       "title": "LLMs ({count})",
-      "usage": "llm <list [--page <n>]|bindings [--page <n>]>"
+      "usage": "llm <list [--page <n>]|bindings [--page <n>]>",
+      "not_found": "Model {llm_id} does not exist."
     },
     "mail": {
       "btn_wipe": "Wipe & redo",
@@ -387,7 +391,8 @@
       "version": "Version {version}"
     },
     "trash": {
-      "usage": "trash <list|restore <id>>"
+      "usage": "trash <list|restore <id>>",
+      "not_found": "Trash record {record_id} does not exist."
     },
     "seminar": {
       "candidate_not_found": "Seminar proposal not found.",
@@ -1005,13 +1010,13 @@
       "available": "update available",
       "mailflow": "MailFlow {current}",
       "plugins_up_to_date": "all plugins up to date",
-        "status": "MailFlow {version}; auto update: {auto}; {state}",
-        "state_idle": "No automatic update has run",
-        "state_checking": "Checking for updates",
-        "state_up_to_date": "Update check complete: up to date",
-        "state_applying": "Installing automatic updates; a restart may be required",
-        "state_applied": "Automatic updates finished; restart to load installed versions",
-        "state_failed": "Automatic update failed; see the update log",
+      "status": "MailFlow {version}; auto update: {auto}; {state}",
+      "state_idle": "No automatic update has run",
+      "state_checking": "Checking for updates",
+      "state_up_to_date": "Update check complete: up to date",
+      "state_applying": "Installing automatic updates; a restart may be required",
+      "state_applied": "Automatic updates finished; restart to load installed versions",
+      "state_failed": "Automatic update failed; see the update log",
       "title": "Updates",
       "up_to_date": "up to date",
       "usage": "update <check|now|status|auto <on|off>>"
@@ -1074,6 +1079,13 @@
       "push": "【Schedule reminder】\"{summary}\" is due ({due})",
       "digest_push": "【Daily schedule】{today} today / {total} upcoming:",
       "digest_item": "{index}. {summary} ({due})"
+    },
+    "permission": {
+      "denied": "This operation requires administrator permission.",
+      "unauthorized": "The username or password is invalid."
+    },
+    "remote": {
+      "unsupported": "This feature requires a local service."
     }
   }
 }

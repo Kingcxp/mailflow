@@ -33,6 +33,12 @@ from mailflow.domain import (
     parse_urgency,
 )
 from mailflow.letters import LETTER_LANGUAGES, html_to_text, markup_to_html
+from mailflow.permissions import (
+    PermissionContext,
+    authorize_command,
+    current_context,
+    permission_scope,
+)
 from mailflow.updates import UpdateReport
 
 if TYPE_CHECKING:
@@ -279,7 +285,9 @@ class CommandRouter:
 
     # -- entry point --------------------------------------------------------------------
 
-    async def execute(self, line: str) -> CommandResponse:
+    async def execute(
+        self, line: str, *, context: PermissionContext | None = None
+    ) -> CommandResponse:
         try:
             parts = shlex.split(line)
         except ValueError as exc:
@@ -298,7 +306,9 @@ class CommandRouter:
                 ok=False,
             )
         try:
-            return await handler(args)
+            with permission_scope(context or current_context()):
+                authorize_command(command, args, self._t)
+                return await handler(args)
         except KeyError as exc:
             return self._err(str(exc))
         except ValueError as exc:

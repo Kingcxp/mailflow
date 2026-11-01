@@ -20,7 +20,9 @@
       "status_starting": "启动中",
       "status_stopped": "已停止",
       "title": "账户（{count}）",
-      "usage": "account <list [--page <页码>]>"
+      "usage": "account <list [--page <页码>]>",
+      "not_found": "账户 {account_id} 不存在。",
+      "history_unsupported": "账户 {account_id} 不支持浏览历史邮件。"
     },
     "action": {
       "add_usage": "用法：action add \"<内容>\" --due \"YYYY-MM-DD HH:MM\" [--type <类型>] [--notes \"…\"]",
@@ -106,7 +108,8 @@
       "no": "否",
       "none": "无",
       "ok": "完成",
-      "yes": "是"
+      "yes": "是",
+      "unsupported": "不支持此操作。"
     },
     "config": {
       "desc": {
@@ -215,7 +218,8 @@
       "header_model": "模型",
       "header_name": "显示名",
       "title": "LLM（{count}）",
-      "usage": "llm <list [--page <页码>]|bindings [--page <页码>]>"
+      "usage": "llm <list [--page <页码>]|bindings [--page <页码>]>",
+      "not_found": "模型 {llm_id} 不存在。"
     },
     "mail": {
       "btn_wipe": "清空重析",
@@ -387,7 +391,8 @@
       "version": "版本 {version}"
     },
     "trash": {
-      "usage": "trash <list|restore <id>>"
+      "usage": "trash <list|restore <id>>",
+      "not_found": "回收站中的邮件 {record_id} 不存在。"
     },
     "seminar": {
       "candidate_not_found": "未找到该研讨会候选。",
@@ -1005,13 +1010,13 @@
       "available": "有可用更新",
       "mailflow": "MailFlow {current}",
       "plugins_up_to_date": "所有插件均为最新",
-        "status": "MailFlow {version}；自动更新：{auto}；{state}",
-        "state_idle": "尚未运行自动更新",
-        "state_checking": "正在检查更新",
-        "state_up_to_date": "更新检查完成：已是最新",
-        "state_applying": "正在安装自动更新，完成后可能需要重启",
-        "state_applied": "自动更新已完成，重启后加载安装的版本",
-        "state_failed": "自动更新失败，请查看更新日志",
+      "status": "MailFlow {version}；自动更新：{auto}；{state}",
+      "state_idle": "尚未运行自动更新",
+      "state_checking": "正在检查更新",
+      "state_up_to_date": "更新检查完成：已是最新",
+      "state_applying": "正在安装自动更新，完成后可能需要重启",
+      "state_applied": "自动更新已完成，重启后加载安装的版本",
+      "state_failed": "自动更新失败，请查看更新日志",
       "title": "更新",
       "up_to_date": "已是最新",
       "usage": "update <check|now|status|auto <on|off>>"
@@ -1074,6 +1079,13 @@
       "push": "【日程提醒】「{summary}」即将到期（{due}）",
       "digest_push": "【每日日程】今日 {today} 项 / 近期共 {total} 项：",
       "digest_item": "{index}. {summary}（{due}）"
+    },
+    "permission": {
+      "denied": "此操作需要管理员权限。",
+      "unauthorized": "用户名或密码不正确。"
+    },
+    "remote": {
+      "unsupported": "此功能需要连接本地服务。"
     }
   }
 }
