@@ -647,14 +647,16 @@ def _drop_llm_references(data: dict[str, Any], llm_id: str) -> None:
         return
     for llm in data.get("llms", []):
         llm["fallback"] = [name for name in llm.get("fallback", []) if name != llm_id]
+    known = {entry["llm_id"] for entry in data.get("llms", [])}
     for processor in data.get("processors", []):
+        fallbacks = [name for name in processor.get("fallback_llms", []) if name in known]
         if processor.get("llm") == llm_id:
-            processor["llm"] = None
-        processor["fallback_llms"] = [
-            name for name in processor.get("fallback_llms", []) if name != llm_id
-        ]
-        if processor.get("llm") is None:
-            processor["fallback_llms"] = []
+            processor["llm"] = (
+                fallbacks[0]
+                if fallbacks
+                else next((entry["llm_id"] for entry in data.get("llms", [])), None)
+            )
+        processor["fallback_llms"] = [name for name in fallbacks if name != processor.get("llm")]
 
 
 def move_entry(config: MailFlowConfig, group: str, index: int, offset: int) -> MailFlowConfig:

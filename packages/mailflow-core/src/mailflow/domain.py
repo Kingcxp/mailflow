@@ -10,6 +10,7 @@ without importing plugin packages.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -128,6 +129,9 @@ class MailAddress(BaseModel):
         return MailAddress(address=raw)
 
 
+MAX_ATTACHMENT_BYTES = 4_000_000
+
+
 class Attachment(BaseModel):
     filename: str
     content_type: str = "application/octet-stream"
@@ -171,20 +175,21 @@ class MailMessage(BaseModel):
     parse_error: str = ""
 
     def normalized_message_id(self) -> str:
-        """Stable identity, account-independent so forwarded copies of the
-        same mail deduplicate across accounts: provider id when present,
-        else the RFC message id (kept by forwarders), else a content digest
-        over sender/subject/date/body."""
-        if self.provider_message_id:
-            return self.provider_message_id
-        if self.message_id:
-            return self.message_id
-        digest = hashlib.sha256(
-            (
-                f"{self.sender.address}|{self.subject}|{self.date.isoformat()}|{self.body_text}"
-            ).encode()
-        ).hexdigest()[:24]
-        return digest
+        """Stable within an account/source; IMAP UID resets keep RFC identity."""
+        identity = self.message_id.strip().strip("<>") or self.provider_message_id
+        if not identity:
+            identity = json.dumps(
+                [
+                    self.sender.address,
+                    self.subject,
+                    to_utc(self.date).isoformat(),
+                    self.body_text,
+                    self.body_html,
+                ],
+                ensure_ascii=False,
+            )
+        scoped = json.dumps([self.account_id, self.provider, identity], ensure_ascii=False)
+        return hashlib.sha256(scoped.encode()).hexdigest()[:32]
 
     @property
     def is_read(self) -> bool:

@@ -254,9 +254,10 @@ class TestLLMChain:
         )
         config = remove_entry(config, "llms", 1)  # drop "b"
         assert [llm.llm_id for llm in config.llms] == ["a", "c"]
-        # the processor referenced the removed llm: cleared, not left dangling
-        assert config.processors[0].llm is None
-        assert config.processors[0].fallback_llms == []
+        # The explicit fallback becomes primary when its predecessor is deleted.
+        processor = config.processor("p")
+        assert processor is not None and processor.llm == "c"
+        assert "b" not in processor.fallback_llms
         # no llm still lists the removed id as a fallback
         assert all("b" not in llm.fallback for llm in config.llms)
 
@@ -281,7 +282,8 @@ class TestLLMChain:
         assert [llm.llm_id for llm in renamed.llms] == ["a", "b2", "c"]
         assert renamed.llms[0].fallback == ["b2", "c"]
         assert renamed.llms[2].fallback == []
-        assert renamed.processors[0].llm == "c"
+        processor = renamed.processor("p")
+        assert processor is not None and processor.llm == "c"
         assert all("b" not in llm.fallback for llm in renamed.llms)
 
     def test_renaming_the_bound_llm_follows_the_processor(self) -> None:
@@ -299,8 +301,9 @@ class TestLLMChain:
 
         renamed = update_entry(config, "llms", 1, {"llm_id": "b2"})
 
-        assert renamed.processors[0].llm == "b2"
-        assert renamed.processors[0].fallback_llms == ["c"]
+        processor = renamed.processor("p")
+        assert processor is not None and processor.llm == "b2"
+        assert processor.fallback_llms == ["c"]
 
     def test_adding_an_llm_extends_the_chain(self) -> None:
         config = add_entry(self._three(), "llms", {"llm_id": "d", "model": "m-d"})
@@ -329,7 +332,8 @@ class TestTimeouts:
             "processors",
             {"processor_id": "p", "provider": "rules", "timeout_seconds": 45},
         )
-        assert config.processors[0].timeout_seconds == 45.0
+        processor = config.processor("p")
+        assert processor is not None and processor.timeout_seconds == 45.0
 
 
 class TestPlaceholderBookkeeping:
@@ -428,7 +432,8 @@ class TestTimeoutMigration:
         config = load_config(path)
 
         assert [llm.timeout_seconds for llm in config.llms] == [15.0]
-        assert [p.timeout_seconds for p in config.processors] == [5.0]
+        processor = config.processor("rules")
+        assert processor is not None and processor.timeout_seconds == 5.0
         assert config.timeouts_migrated is False
 
     def test_fresh_defaults_need_no_migration(self) -> None:

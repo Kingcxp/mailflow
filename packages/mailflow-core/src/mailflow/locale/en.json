@@ -223,6 +223,7 @@
       "field_account": "Account",
       "field_actions": "Action items",
       "field_auto": "Automatic",
+      "field_image_text": "Text from attached images",
       "field_body": "Original body",
       "field_date": "Date",
       "field_feedback": "Feedback",

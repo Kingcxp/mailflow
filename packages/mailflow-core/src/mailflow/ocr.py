@@ -24,13 +24,16 @@ from __future__ import annotations
 import importlib
 import logging
 import re
+from html import unescape
 from typing import Any, cast
+
+from mailflow.domain import MAX_ATTACHMENT_BYTES, MailMessage
 
 logger = logging.getLogger("mailflow.ocr")
 
 # Poster images are usually the inline ones; a scan of a 40-page brochure would
 # cost more than it returns, so only images under this size are attempted.
-MAX_IMAGE_BYTES = 4_000_000
+MAX_IMAGE_BYTES = MAX_ATTACHMENT_BYTES
 """Largest attachment worth OCR-ing, in bytes."""
 
 _ENGINE_PACKAGE = "rapidocr_onnxruntime"
@@ -108,6 +111,23 @@ def searchable_forms(text: str) -> list[str]:
     return [lowered] if collapsed == lowered else [lowered, collapsed]
 
 
+def searchable_mail_text(mail: MailMessage) -> str:
+    """The same source/attachment/image text in every search surface."""
+    html_text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", mail.body_html)
+    html_text = unescape(re.sub(r"<[^>]+>", " ", html_text))
+    text = "\n".join(
+        [
+            mail.subject,
+            mail.sender.display,
+            mail.body_text,
+            " ".join(html_text.split()),
+            " ".join(attachment.filename for attachment in mail.attachments),
+            mail.image_text,
+        ]
+    )
+    return f"{text}\n{collapsed_text(text)}" if mail.image_text else text
+
+
 def searchable_text(text: str) -> str:
     """Every searchable form joined, for callers that do a substring test."""
     return "\n".join(searchable_forms(text))
@@ -134,12 +154,11 @@ def _decode_image(data: bytes) -> Any | None:
 def extract_text(image_bytes: bytes | None, *, content_type: str = "") -> str:
     """Read the text out of one image; '' when unreadable or OCR is absent.
 
-    Truncates oversized images rather than refusing them: a poster that big is
-    usually a scan, and the headline is what matters.
+    Images outside the attachment budget are skipped.
     """
     if not image_bytes:
         return ""
-    if content_type and not content_type.startswith("image/"):
+    if content_type and not is_image_type(content_type):
         return ""
     if len(image_bytes) > MAX_IMAGE_BYTES:
         logger.debug("image of %d bytes exceeds the OCR budget; skipping", len(image_bytes))
@@ -191,6 +210,33 @@ def _rows_to_text(result: Any) -> str:
     return "\n".join(lines)
 
 
+def is_image_type(content_type: str) -> bool:
+    return content_type.partition(";")[0].strip().casefold() in {
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "image/tiff",
+        "image/x-ms-bmp",
+    }
+
+
+def apply_image_text(mail: MailMessage, *, enabled: bool) -> MailMessage:
+    """Optional OCR must never turn a readable mail into a parser failure."""
+    if not enabled or mail.image_text.strip():
+        return mail
+    try:
+        text = extract_mail_images(mail.attachments)
+    except Exception as exc:
+        logger.warning(
+            "image text extraction failed for %r: %s", mail.account_id, type(exc).__name__
+        )
+        return mail
+    return mail.model_copy(update={"image_text": text}) if text.strip() else mail
+
+
 def should_attempt(content_type: str, size: int, *, filename: str = "") -> bool:
     """Whether an attachment looks worth OCR-ing.
 
@@ -198,7 +244,7 @@ def should_attempt(content_type: str, size: int, *, filename: str = "") -> bool:
     recognition on every sync: images only, within the size budget, and not the
     chrome every mail carries (logos, QR codes, tracking pixels, signatures).
     """
-    if not content_type.startswith("image/"):
+    if not is_image_type(content_type):
         return False
     if size < MIN_IMAGE_BYTES or size > MAX_IMAGE_BYTES:
         return False
@@ -247,8 +293,10 @@ def extract_mail_images(attachments: list[Any], *, limit: int = 3) -> str:
         if len(chunks) >= limit:
             break
         attachment: Attachment = item
+        if not attachment.data:
+            continue
         if not should_attempt(
-            str(attachment.content_type), int(attachment.size), filename=str(attachment.filename)
+            str(attachment.content_type), len(attachment.data), filename=str(attachment.filename)
         ):
             continue
         text = extract_text(attachment.data, content_type=str(attachment.content_type))
@@ -264,11 +312,14 @@ _MAX_TEXT_CHARS = 4000
 __all__ = [
     "MAX_IMAGE_BYTES",
     "MIN_IMAGE_BYTES",
+    "apply_image_text",
     "collapsed_text",
     "extract_mail_images",
     "extract_text",
     "is_available",
+    "is_image_type",
     "searchable_forms",
+    "searchable_mail_text",
     "searchable_text",
     "should_attempt",
 ]

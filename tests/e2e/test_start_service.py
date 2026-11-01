@@ -182,8 +182,9 @@ async def test_full_service_flow(tmp_path: Path) -> None:
             return await service.count_mails() == 1
 
         await wait_until(mails_processed)
-        record = await service.get_mail("e2e-1")
-        assert record is not None
+        record = (await service.list_mails())[0]
+        record_id = record.record_id
+        assert record.mail.message_id == "e2e-1"
         assert record.analysis is not None
         assert record.analysis.urgency is Urgency.URGENT
         assert record.analysis.summary.startswith("Final calculus exam")
@@ -192,7 +193,7 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         item = record.action_items[0]
         assert item.action_type == "exam"
         assert item.notes == "Bring student ID"
-        assert item.mail_id == "e2e-1"
+        assert item.mail_id == record_id
         assert item.due_at.tzinfo is not None
 
         # -- llm fallback: primary failed, backup handled -----------------------
@@ -207,7 +208,7 @@ async def test_full_service_flow(tmp_path: Path) -> None:
 
         # -- notifier invoked with the computed analysis ------------------------
         await wait_until(lambda: len(notified) == 1)
-        assert notified[0].record_id == "e2e-1"
+        assert notified[0].record_id == record_id
 
         # -- snapshot maps components to their providing plugins ----------------
         snapshot = service.snapshot()
@@ -222,16 +223,16 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         assert llm_snapshot.backend == "test-llm"
 
         # -- manual urgency override and reset restores automatic ----------------
-        changed = await service.set_mail_urgency("e2e-1", Urgency.AD)
+        changed = await service.set_mail_urgency(record_id, Urgency.AD)
         assert changed is not None
         assert changed.effective_urgency is Urgency.AD
         assert changed.auto_urgency is Urgency.URGENT  # automatic preserved
-        reset = await service.set_mail_urgency("e2e-1", None)
+        reset = await service.set_mail_urgency(record_id, None)
         assert reset is not None
         assert reset.effective_urgency is Urgency.URGENT  # reset restores automatic
 
         # -- reply workflow: prepare + confirm calls the matching source --------
-        draft = await service.create_reply("e2e-1")
+        draft = await service.create_reply(record_id)
         with pytest.raises(PermissionError):
             await service.confirm_reply(draft.draft_id, "wrong-token")
         prepared = await service.prepare_reply(draft.draft_id)
@@ -240,7 +241,7 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         assert confirmed.state.value == "sent"
         source: FakeMailSource = service.sources["acct-1"]  # type: ignore[assignment]
         assert len(source.sent_replies) == 1
-        assert source.sent_replies[0][0] == "e2e-1"
+        assert source.sent_replies[0][0] == record_id
 
         # -- command router shows mail with summary and original body ------------
         assert service.commands is not None
@@ -262,14 +263,14 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         assert await service.storage.get_preference("language") == "zh-CN"
 
         # -- trash/restore -------------------------------------------------------
-        assert await service.delete_mail("e2e-1") is True
-        assert await service.get_mail("e2e-1") is None
+        assert await service.delete_mail(record_id) is True
+        assert await service.get_mail(record_id) is None
         trash = await service.list_trash()
         assert len(trash) == 1
-        restored = await service.restore_mail("e2e-1")
+        restored = await service.restore_mail(record_id)
         assert restored is not None
-        assert restored.record_id == "e2e-1"
-        assert await service.get_mail("e2e-1") is not None
+        assert restored.record_id == record_id
+        assert await service.get_mail(record_id) is not None
     finally:
         if service is not None:
             await service.stop()

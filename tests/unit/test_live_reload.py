@@ -150,12 +150,10 @@ async def test_account_edit_applies_without_restart(tmp_path: Path) -> None:
     await service.stop()
 
 
-def test_default_chain_is_empty() -> None:
-    """No mechanical analysis out of the box: mails without a configured
-    LLM are stored unanalyzed instead of getting canned summaries."""
+def test_default_chain_uses_rules_without_a_model() -> None:
     from mailflow.service import _default_processors  # pyright: ignore[reportPrivateUsage]
 
-    assert _default_processors() == []
+    assert [processor.provider for processor in _default_processors()] == ["rules"]
 
 
 async def test_disabling_only_allowlisted_plugin_does_not_enable_others(tmp_path: Path) -> None:

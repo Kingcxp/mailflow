@@ -278,9 +278,9 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             # the detail too, and an empty result must not leave a stale
             # previously selected mail beside the empty table.
             pane = app.query_one(MailPane)
-            old_record = await service.get_mail("m-info")
-            result_record = await service.get_mail("m-id")
-            assert old_record is not None and result_record is not None
+            records = {record.mail.message_id: record for record in await service.list_mails()}
+            old_record = records["m-info"]
+            result_record = records["m-id"]
             pane._selected_id = old_record.record_id  # pyright: ignore[reportPrivateUsage]
             await pane._show_selected()  # pyright: ignore[reportPrivateUsage]
             assert "Lecture on Friday" in str(app.query_one("#mail-summary", Static).render())
@@ -322,10 +322,11 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
 
             # select the urgent mail, then the urgency dropdown drives the mutation
             pane = app.query_one(MailPane)
-            pane._selected_id = "m-id"  # pyright: ignore[reportPrivateUsage]
+            record = next(r for r in await service.list_mails() if r.mail.message_id == "m-id")
+            pane._selected_id = record.record_id  # pyright: ignore[reportPrivateUsage]
             select = cast(Select[Any], app.query_one("#urgency-select", Select))
             await set_select_value(pilot, select, "ad")
-            record: MailRecord | None = await service.get_mail("m-id")
+            record = await service.get_mail(result_record.record_id)
             assert record is not None
             assert record.manual_urgency is Urgency.AD
             # language switch persists — driven through the general.language
@@ -440,7 +441,7 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             assert "Market Test" in market_rows
             assert "browsable from the tui" in market_rows
             # reply modal: confirm is disabled until prepared
-            pane._selected_id = "m-id"  # pyright: ignore[reportPrivateUsage]
+            pane._selected_id = result_record.record_id  # pyright: ignore[reportPrivateUsage]
             cast(Button, app.query_one("#btn-reply")).press()
             await pilot.pause(0.05)
             from mailflow_tui.app import ReplyModal
@@ -979,7 +980,8 @@ async def test_reply_letter_template_and_toolbar(tmp_path: Path) -> None:
         async with app.run_test() as pilot:
             await pilot.pause()
             pane = app.query_one(MailPane)
-            pane._selected_id = "m-id"  # pyright: ignore[reportPrivateUsage]
+            record = next(r for r in await service.list_mails() if r.mail.message_id == "m-id")
+            pane._selected_id = record.record_id  # pyright: ignore[reportPrivateUsage]
             cast(Button, app.query_one("#btn-reply")).press()
             await pilot.pause(0.1)
             assert isinstance(app.screen, ReplyModal)

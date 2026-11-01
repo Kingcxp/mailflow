@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from mailflow.domain import MailRecord
+from mailflow.ocr import searchable_mail_text
+from mailflow_testkit.fakes import make_mail
 from mailflow_tui.search import build_search_matcher
 
 
@@ -28,3 +31,16 @@ def test_empty_query_matches_all() -> None:
     matcher = build_search_matcher("")
     assert matcher.error is None
     assert matcher.matches("anything")
+
+
+def test_mail_body_and_image_text_preserve_case_sensitive_search() -> None:
+    record = MailRecord(
+        record_id="search",
+        mail=make_mail(body_text="", body_html="<b>Room</b> Y908").model_copy(
+            update={"image_text": "Research Seminar"}
+        ),
+    )
+    text = searchable_mail_text(record.mail)
+    assert build_search_matcher("Room Y908", case_sensitive=True).matches(text)
+    assert build_search_matcher("Research", case_sensitive=True).matches(text)
+    assert not build_search_matcher("research", case_sensitive=True).matches(text)

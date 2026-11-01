@@ -16,10 +16,12 @@ import contextlib
 import hashlib
 import html as html_lib
 import imaplib
-import importlib
+import inspect
+import json
 import logging
 import re
 import smtplib
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from email import message_from_bytes
 from email.header import decode_header
@@ -29,7 +31,13 @@ from typing import Any, cast
 
 from mailflow.config import MailAccountConfig
 from mailflow.contracts import MailEmitter
-from mailflow.domain import Attachment, ComponentKind, MailAddress, MailMessage
+from mailflow.domain import (
+    MAX_ATTACHMENT_BYTES,
+    Attachment,
+    ComponentKind,
+    MailAddress,
+    MailMessage,
+)
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -111,14 +119,16 @@ def _extract_body(
         is_body_candidate = is_text and disposition != "attachment" and not filename
         if not is_body_candidate:
             # record every attachment (image/pdf/office/...) with metadata;
-            # payloads stay out of memory — storage strips them anyway
+            # keep bounded bytes until OCR has read them; storage strips them later
             attachments.append(
                 Attachment(
                     filename=filename or "unnamed",
                     content_type=part.get_content_type(),
                     size=len(bytes(payload)) if payload else 0,
                     content_id=part.get("Content-ID"),
-                    data=None,
+                    data=bytes(payload)
+                    if payload and len(bytes(payload)) <= MAX_ATTACHMENT_BYTES
+                    else None,
                 )
             )
             continue
@@ -180,35 +190,10 @@ def _unparseable_mail(raw: bytes, account_id: str, provider: str, error: Excepti
 
 
 def _apply_image_text(mail: MailMessage, *, enabled: bool) -> MailMessage:
-    """Fill ``image_text`` from the mail's own posters when OCR is enabled.
+    """Use the shared attachment budget and failure-tolerant OCR path."""
+    from mailflow.ocr import apply_image_text
 
-    Done here, in the parsing thread, because this is the only point where the
-    image bytes exist: the storage backend deliberately strips attachment
-    payloads, so a later stage has nothing to read. The work is optional and
-    failure-tolerant — a mail is always returned, with an empty ``image_text``
-    when OCR is off, unavailable, or cannot read the image.
-    """
-    if not enabled:
-        return mail
-    core_ocr: Any = importlib.import_module("mailflow.ocr")
-    if not core_ocr.is_available():
-        return mail
-    images = [
-        attachment
-        for attachment in mail.attachments
-        if core_ocr.should_attempt(
-            str(attachment.content_type),
-            int(attachment.size),
-            filename=str(attachment.filename),
-        )
-    ]
-    if not images:
-        return mail
-    text = core_ocr.extract_mail_images(images)
-    if not text.strip():
-        return mail
-    logger.debug("read %d char(s) of poster text from %r", len(text), mail.subject[:40])
-    return mail.model_copy(update={"image_text": text})
+    return apply_image_text(mail, enabled=enabled)
 
 
 _INTERNALDATE_MONTHS = {
@@ -350,154 +335,187 @@ def _settings_for(account: MailAccountConfig) -> dict[str, Any]:
     return settings
 
 
+@dataclass
+class _FetchedBatch:
+    messages: list[tuple[int, MailMessage]]
+    uidvalidity: str
+    baseline: int
+
+
 class IMAPSource:
-    """Polls an IMAP INBOX and sends replies over SMTP."""
+    """Fetch without consuming; acknowledge each UID after the runtime accepts it."""
+
+    provider = "imap"
 
     def __init__(self, account: MailAccountConfig) -> None:
         self._account = account
         self._settings = _settings_for(account)
-        self._interval = int(account.options.get("interval_seconds", 300))
-        self._limit = int(account.options.get("limit", 20))
-        self._seen: set[str] = set()
+        self._interval = max(0.01, float(account.options.get("interval_seconds", 300)))
+        self._limit = max(1, int(account.options.get("limit", 20)))
         self._last_uid: int | None = None
-        self._watermark_save: Any | None = None
-        # default behavior: seed the watermark at first poll WITHOUT emitting
-        # the existing backlog — only mail arriving afterwards is analyzed.
-        # Set options.analyze_backlog = true to restore legacy full-backlog
-        # ingestion on the first poll.
+        self._uidvalidity = ""
+        self._checkpoint_scope = ""
+        self._watermark_save: Any = None
         self._analyze_backlog = bool(account.options.get("analyze_backlog", False))
-        # posters carry the title/date/room a body often omits; opt-in because
-        # it costs a local model pass per image
         self._ocr_images = bool(account.options.get("ocr_images", False))
         self._username = str(account.options.get("username") or account.email)
         self._password = str(account.options.get("password") or "")
+        self._folder = str(self._settings.get("imap_folder", "INBOX"))
+        self._scope = hashlib.sha256(
+            json.dumps(
+                [
+                    self._settings.get("imap_host"),
+                    self._settings.get("imap_port", 993),
+                    self._username,
+                    self._folder,
+                ]
+            ).encode()
+        ).hexdigest()[:24]
 
     def set_watermark_store(self, load: Any, save: Any) -> None:
-        """Inject a persistent watermark store (host-provided).
-
-        ``load() -> int | None`` restores the last seen UID across restarts;
-        ``save(uid)`` persists the watermark after every advance. Without a
-        store the watermark is in-memory only and a restart re-seeds it at
-        the newest UID — silently skipping every mail that arrived while the
-        service was down.
-        """
+        """Restore a scoped UID/UIDVALIDITY checkpoint; accept old numeric UIDs."""
         self._watermark_save = save
         try:
             stored = load()
-        except Exception:
-            stored = None
-        if isinstance(stored, int) and stored >= 0:
-            self._last_uid = stored
-        elif isinstance(stored, str) and stored.strip().isdigit():
-            self._last_uid = int(stored)
+            if stored is None:
+                return
+            if isinstance(stored, (str, int)) and str(stored).isdigit():
+                self._last_uid = int(stored)
+                return
+            checkpoint = json.loads(str(stored))
+            self._last_uid = int(checkpoint["uid"])
+            self._uidvalidity = str(checkpoint.get("uidvalidity", ""))
+            self._checkpoint_scope = str(checkpoint.get("scope", ""))
+        except (TypeError, ValueError, KeyError) as exc:
+            logger.warning("invalid IMAP checkpoint for %r: %s", self._account.account_id, exc)
 
     def _imap_client(self) -> imaplib.IMAP4:
         host = str(self._settings.get("imap_host", ""))
         port = int(self._settings.get("imap_port", 993))
         if not host:
-            raise ValueError(
-                f"account {self._account.account_id!r}: no imap_host configured "
-                "(set options.preset to qq/163/outlook/gmail or provide imap_host)"
-            )
-        # a bounded connect timeout keeps an unreachable host from stalling
-        # polls, history loads and runtime reconfiguration indefinitely
+            raise ValueError(f"account {self._account.account_id!r}: no imap_host configured")
         client = (
             imaplib.IMAP4_SSL(host, port, timeout=20.0)
             if self._settings.get("imap_ssl", True)
             else imaplib.IMAP4(host, port, timeout=20.0)
         )
-        client.login(self._username, self._password)
-        folder = str(self._settings.get("imap_folder", "INBOX"))
-        client.select(folder)
+        try:
+            client.login(self._username, self._password)
+            status, _ = client.select(self._folder, readonly=True)
+            if status != "OK":
+                raise RuntimeError(f"cannot select IMAP folder {self._folder!r}: {status}")
+        except BaseException:
+            with contextlib.suppress(Exception):
+                client.logout()
+            raise
         return client
 
-    def _fetch_once(self) -> list[MailMessage]:
+    @staticmethod
+    def _validity(client: imaplib.IMAP4) -> str:
+        response = getattr(client, "response", None)
+        if response is None:
+            return ""
+        _status, data = response("UIDVALIDITY")
+        return bytes(data[0]).decode("ascii", "replace") if data and data[0] else ""
+
+    def _read_mail(self, client: imaplib.IMAP4, uid: int, validity: str) -> MailMessage:
+        status, fetched = client.uid("fetch", str(uid), "(INTERNALDATE BODY.PEEK[])")
+        raw = next(
+            (
+                part[1]
+                for part in fetched or []
+                if isinstance(part, tuple)
+                and len(cast(tuple[Any, ...], part)) >= 2
+                and isinstance(part[1], bytes)
+            ),
+            None,
+        )
+        if status != "OK" or raw is None:
+            raise RuntimeError(f"IMAP FETCH UID {uid} failed: {status}")
+        mail = parse_mime(
+            raw,
+            self._account.account_id,
+            provider=self.provider,
+            ocr_enabled=self._ocr_images,
+            internal_date=_internal_date(fetched),
+        )
+        mail.provider_message_id = f"{self._folder}:{validity}:{uid}"
+        if not mail.message_id:
+            # The raw message also survives UID resets and missing Date headers;
+            # the parser's best-effort timestamp is not a stable identity.
+            mail.message_id = f"imap-{hashlib.sha256(raw).hexdigest()}"
+        return mail
+
+    def _search(self, client: imaplib.IMAP4) -> list[int]:
+        status, data = client.uid("search", cast(Any, None), "ALL")
+        if status != "OK" or not data:
+            raise RuntimeError(f"IMAP SEARCH failed: {status}")
+        return sorted({int(uid) for uid in (data[0] or b"").split() if uid.isdigit()})
+
+    def _fetch_once(self) -> _FetchedBatch:
+        # This worker thread never changes the live cursor. Cancellation can
+        # abandon its result safely, even while a socket is still connecting.
         client = self._imap_client()
         try:
-            _status, data = client.uid("search", cast(Any, None), "ALL")
-            all_uids = sorted(
-                {int(u) for u in (data[0] or b"").split() if u.isdigit()},
+            uids = self._search(client)
+            validity = self._validity(client)
+            changed = bool(
+                (self._checkpoint_scope and self._checkpoint_scope != self._scope)
+                or (self._uidvalidity and validity and validity != self._uidvalidity)
             )
-            if self._last_uid is not None:
-                # Incremental: only mails that arrived after the previous poll.
-                wanted = [u for u in all_uids if u > self._last_uid]
+            if changed:
+                baseline = 0
+            elif self._last_uid is not None:
+                baseline = self._last_uid
             elif self._analyze_backlog:
-                # Legacy mode: pull the newest ``limit`` existing mails
-                wanted = all_uids[-max(1, self._limit) :]
+                baseline = uids[-self._limit] - 1 if len(uids) >= self._limit else 0
             else:
-                # Default mode: skip the backlog entirely — seed the watermark
-                # at the newest UID so only mail arriving AFTER setup is
-                # analyzed
-                wanted = []
-                if all_uids:
-                    self._last_uid = max(all_uids)
-                    self._persist_watermark()
-            messages: list[MailMessage] = []
-            for uid_int in wanted:
-                _status, fetch = client.uid("fetch", str(uid_int), "(INTERNALDATE RFC822)")
-                if not fetch or fetch[0] is None:
-                    # Leave the watermark behind this uid so a transient
-                    # server error does not drop the mail permanently.
+                # Deliberately excluded setup backlog; even an empty mailbox
+                # needs baseline 0 so its very first new message is ingested.
+                baseline = max(uids, default=0)
+            messages: list[tuple[int, MailMessage]] = []
+            for uid in [uid for uid in uids if uid > baseline][: self._limit]:
+                try:
+                    messages.append((uid, self._read_mail(client, uid, validity)))
+                except Exception as exc:
+                    # Return the successful prefix. Do not consume this UID or
+                    # fetch past it; it must be retried on the next connection.
+                    logger.warning("IMAP account %r UID %d: %s", self._account.account_id, uid, exc)
                     break
-                raw = fetch[0][1]
-                mail = parse_mime(
-                    bytes(raw),
-                    self._account.account_id,
-                    provider="imap",
-                    ocr_enabled=self._ocr_images,
-                    internal_date=_internal_date(fetch),
-                )
-                # Advance only once the mail is in hand: an exception above
-                # retries the same uid on the next poll instead of skipping it.
-                self._last_uid = uid_int
-                self._persist_watermark()
-                if mail.normalized_message_id() not in self._seen:
-                    self._seen.add(mail.normalized_message_id())
-                    messages.append(mail)
-            if len(self._seen) > 10000:
-                # UID tracking already guarantees single fetch; the set is
-                # only a defense against servers that repeat UIDs.
-                self._seen.clear()
-            return messages
+            return _FetchedBatch(messages, validity, baseline)
         finally:
             with contextlib.suppress(Exception):
                 client.logout()
 
-    def _persist_watermark(self) -> None:
-        """Persist the current watermark via the injected store (no-op when
-        no store was provided)."""
-        if self._watermark_save is not None and self._last_uid is not None:
-            try:
-                self._watermark_save(self._last_uid)
-            except Exception:
-                logger.warning("imap watermark save failed for %r", self._account.account_id)
+    async def _commit(self, uid: int, validity: str) -> None:
+        value = json.dumps({"uid": uid, "uidvalidity": validity, "scope": self._scope})
+        if self._watermark_save is not None:
+            result = self._watermark_save(value)
+            if inspect.isawaitable(result):
+                await result
+        self._last_uid, self._uidvalidity = uid, validity
+        self._checkpoint_scope = self._scope
+
+    async def _poll_once(self, emit: MailEmitter) -> None:
+        batch = await asyncio.to_thread(self._fetch_once)
+        if (
+            self._last_uid != batch.baseline
+            or self._uidvalidity != batch.uidvalidity
+            or self._checkpoint_scope != self._scope
+        ):
+            await self._commit(batch.baseline, batch.uidvalidity)
+        for uid, mail in batch.messages:
+            await emit(mail)
+            await self._commit(uid, batch.uidvalidity)
 
     def _fetch_history(self, limit: int, offset: int) -> list[MailMessage]:
-        """Newest-first window over the mailbox, independent of the poll
-        watermark: browsing history must never consume the live stream."""
         client = self._imap_client()
         try:
-            _status, data = client.uid("search", cast(Any, None), "ALL")
-            all_uids = sorted({int(u) for u in (data[0] or b"").split() if u.isdigit()})
-            newest_first = list(reversed(all_uids))
-            window = newest_first[offset : offset + limit] if limit > 0 else []
+            uids = list(reversed(self._search(client)))
+            validity = self._validity(client)
             messages: list[MailMessage] = []
-            for uid_int in window:
-                _status, fetch = client.uid("fetch", str(uid_int), "(INTERNALDATE RFC822)")
-                if not fetch or fetch[0] is None:
-                    continue
-                messages.append(
-                    parse_mime(
-                        bytes(fetch[0][1]),
-                        self._account.account_id,
-                        provider="imap",
-                        ocr_enabled=self._ocr_images,
-                        # INTERNALDATE is the server's arrival time: without it
-                        # every historical mail would carry today's import
-                        # moment and the timeline would collapse into one stamp
-                        internal_date=_internal_date(fetch),
-                    )
-                )
+            for uid in uids[max(0, offset) : max(0, offset) + max(0, limit)]:
+                messages.append(self._read_mail(client, uid, validity))
             return messages
         finally:
             with contextlib.suppress(Exception):
@@ -509,11 +527,12 @@ class IMAPSource:
     async def run(self, emit: MailEmitter, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
             try:
-                for mail in await asyncio.to_thread(self._fetch_once):
-                    await emit(mail)
+                await self._poll_once(emit)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                logger.warning("imap fetch failed for %r: %s", self._account.account_id, exc)
-            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+                logger.warning("IMAP account %r poll failed: %s", self._account.account_id, exc)
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop_event.wait(), timeout=self._interval)
 
     async def send_reply(self, mail_id: str, draft: Any) -> None:

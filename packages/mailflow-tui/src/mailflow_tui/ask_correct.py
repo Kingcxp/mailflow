@@ -144,6 +144,9 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         body = record.mail.body_text or record.mail.body_html or ""
         body_line = RichText(f"{self._t('tui.detail_body')}: ", style="dim bold")
         body_line.append(body[:4000])
+        if record.mail.image_text:
+            body_line.append(f"\n\n{self._t('mail.field_image_text')}: ", style="dim bold")
+            body_line.append(record.mail.image_text)
         self.query_one("#ask-correct-original-body", Static).update(  # pyright: ignore[reportUnknownMemberType]
             body_line
         )

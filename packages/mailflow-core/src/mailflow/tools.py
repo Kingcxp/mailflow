@@ -1072,14 +1072,9 @@ def _haystack(record: MailRecord) -> str:
     subject is in the attachment.
 
     """
-    from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
+    from mailflow.ocr import searchable_mail_text
 
-    names = " ".join(str(item.filename or "") for item in (record.mail.attachments or []))
-    # subject/body/html are searched as written; only the recognised image text
-    # needs the extra gap-closed form, because OCR splits words ("Se minar")
-    return "\n".join(
-        (record.mail.subject, _plain_body(record.mail), record.mail.body_html or "", names)
-    ).casefold()
+    return searchable_mail_text(record.mail).casefold()
 
 
 def _mail_line(record: MailRecord) -> str:

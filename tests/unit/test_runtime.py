@@ -128,7 +128,11 @@ class FakeStorage:
     async def set_manual_urgency(
         self, record_id: str, urgency: Urgency | None
     ) -> MailRecord | None:
-        return None
+        record = await self.get_mail(record_id)
+        if record is not None:
+            record = record.model_copy(update={"manual_urgency": urgency})
+            await self.save_mail(record)
+        return record
 
     async def update_mail_analysis(
         self,
@@ -591,9 +595,8 @@ class TestCustomActionReminders:
 
 
 class TestDeduplication:
-    async def test_duplicate_mail_across_accounts_stored_once(self) -> None:
-        """Forwarded copies of the same mail (same message id from two
-        accounts) are processed, stored and notified exactly once."""
+    async def test_identical_message_ids_in_different_accounts_stay_separate(self) -> None:
+        """Each account owns its own copy and can apply its own local state."""
         analysis = MailAnalysis(summary="dup", urgency=Urgency.IMPORTANT)
         m1 = make_mail(account_id="acct-1")
         m2 = m1.model_copy(update={"account_id": "acct-2"})  # forwarded copy
@@ -610,8 +613,9 @@ class TestDeduplication:
         await runtime.start()
         await asyncio.sleep(0.4)
         await runtime.stop()
-        assert len(storage.saved) == 1
-        assert len(notifiers[0].notified) == 1
+        assert len(storage.saved) == 2
+        assert len(notifiers[0].notified) == 2
+        assert {record.mail.account_id for record in storage.saved} == {"acct-1", "acct-2"}
 
     async def test_same_account_refetch_is_skipped(self) -> None:
         """Re-fetching an already stored mail does not reprocess it."""

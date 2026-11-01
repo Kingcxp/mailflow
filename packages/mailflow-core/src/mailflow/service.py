@@ -13,6 +13,7 @@ import ast
 import asyncio
 import contextlib
 import hashlib
+import inspect
 import json
 import logging
 import re
@@ -537,76 +538,8 @@ def _seminar_from_payload(
 
 
 def _bind_llm_processor(config: MailFlowConfig) -> MailFlowConfig:
-    """Give the built-in LLM analysis a binding as soon as an LLM exists.
-
-    Adding the first LLM (or renaming ids) must make analysis work without
-    the user hand-writing a [[processors]] entry: bind to the first LLM in
-    the chain — which is also the fallback head — and leave explicit user
-    bindings untouched.
-
-    The fallback list is re-derived whenever it is missing or points at ids
-    that no longer exist. It used to be written only when the primary binding
-    itself changed, so adding a second LLM left the processor without
-    fallbacks: the primary failing simply failed the analysis instead of
-    routing to the next named LLM.
-    """
-    if not config.llms:
-        return config
-    llm_ids = [llm.llm_id for llm in config.llms]
-    processor = next((p for p in config.processors if p.provider == "llm-importance"), None)
-    if processor is None:
-        config.processors.append(
-            ProcessorConfig(
-                processor_id="llm-importance",
-                provider="llm-importance",
-                priority=20,
-                llm=llm_ids[0],
-                fallback_llms=llm_ids[1:],
-            )
-        )
-        return config
-    if processor.llm is None or processor.llm not in llm_ids:
-        processor.llm = llm_ids[0]
-        processor.fallback_llms = llm_ids[1:]
-    elif processor.llm != llm_ids[0]:
-        # The list order *is* the routing policy: the first entry is the default
-        # every processor without its own binding uses. Pinning a new model to
-        # the top of the chain (or moving one there) must therefore move the
-        # analysis onto it — keeping a stale primary meant every mail first
-        # waited out the old model's timeout before the new one was tried, which
-        # reads as "the timeout never fires". The previous primary stays
-        # reachable as the first fallback.
-        previous_primary = processor.llm
-        processor.llm = llm_ids[0]
-        rest = [name for name in llm_ids[1:] if name != previous_primary]
-        processor.fallback_llms = [previous_primary, *rest]
-    known = set(llm_ids)
-    processor.fallback_llms = [name for name in processor.fallback_llms if name in known]
-    if processor.llm in processor.fallback_llms:
-        processor.fallback_llms = [
-            name for name in processor.fallback_llms if name != processor.llm
-        ]
-    if not processor.fallback_llms:
-        # an empty list means "everything after the primary", the documented
-        # routing policy: deleting the last fallback must not leave the rest of
-        # the chain unreachable
-        processor.fallback_llms = [name for name in llm_ids if name != processor.llm]
-    # The processor bound wraps the whole request, so it can never be tighter
-    # than the request budget it contains: a 30 s processor over a 120 s request
-    # timeout only ever cuts the model off.
-    primary = next((llm for llm in config.llms if llm.llm_id == processor.llm), None)
-    if primary is not None:
-        floor = float(primary.timeout_seconds) + 15.0
-        if processor.timeout_seconds < floor:
-            logger.info(
-                "processor %r timeout raised to %.0fs to cover %r's %.0fs request budget",
-                processor.processor_id,
-                floor,
-                primary.llm_id,
-                primary.timeout_seconds,
-            )
-            processor.timeout_seconds = floor
-    return config
+    """Delegate configuration normalization to the core config contract."""
+    return config.bind_analysis_processor()
 
 
 class _DraftLocks:
@@ -1088,7 +1021,7 @@ class MailFlowService:
 
     async def is_mail_known(self, mail: MailMessage) -> bool:
         """True when this mail is already stored (so the UI can mark it)."""
-        return await self.storage.get_mail(mail.normalized_message_id()) is not None
+        return await self.runtime.find_mail_record(mail) is not None
 
     @staticmethod
     def action_natural_key(item: ActionItem) -> str:
@@ -2531,15 +2464,13 @@ Return every candidate in this batch."""
         return await self.storage.restore_from_trash(record_id)
 
     async def purge_all_processed(self) -> tuple[int, int]:
-        """Wipe every active mail and the entire trash, then forget in-memory
-        dedup state — the "start over" action for wrong historical analyses.
+        """Wipe every active mail and the entire trash to start analysis again.
 
         Live polling is unaffected (new mail keeps arriving); mails still
         sitting in an open history browser can be force re-analyzed back into
         storage via ``process_mail(force=True)``.
         """
         moved, purged = await self.run_cleanup_wide()
-        self.runtime.reset_dedup()
         return moved, purged
 
     async def clear_all_records(self) -> tuple[int, int]:
@@ -2570,9 +2501,6 @@ Return every candidate in this batch."""
         # a horizon past every stored mail moves them all; the trash itself is
         # left alone (purging it is the separate, explicit step)
         moved = await self.storage.cleanup_mail(utcnow() + timedelta(days=1))
-        # in-memory dedup state must be forgotten so a later re-sync that sees
-        # the same mail again can process it
-        self.runtime.reset_dedup()
         logger.info(
             "cleared %d mail(s) to the trash, removed %d schedule entry(ies)", moved, actions
         )
@@ -2815,7 +2743,7 @@ Return every candidate in this batch."""
     async def remove_config_entry(self, group: str, index: int) -> MailFlowConfig:
         updated = remove_entry(self.config, group, index)
         if group == "llms":
-            updated = normalize_llm_chain(updated)
+            updated = _bind_llm_processor(normalize_llm_chain(updated))
         await self._persist_config(updated, group)
         return updated
 
@@ -2828,6 +2756,12 @@ Return every candidate in this batch."""
         """
         updated = move_entry(self.config, group, index, offset)
         if group == "llms":
+            before = self.config.default_llm()
+            after = updated.llms[0] if updated.llms else None
+            for processor in updated.processors:
+                if before is not None and after is not None and processor.llm == before.llm_id:
+                    processor.llm = after.llm_id
+                    processor.fallback_llms = []
             updated = normalize_llm_chain(updated)
             updated = _bind_llm_processor(updated)
         await self._persist_config(updated, group)
@@ -3857,7 +3791,8 @@ def _build_sources(config: MailFlowConfig, registry: ComponentRegistry) -> dict[
             )
             continue
         factory = registry.source_factory(account.provider)
-        sources[account.account_id] = factory(account)
+        options = {"ocr_images": config.general.ocr_images, **account.options}
+        sources[account.account_id] = factory(account.model_copy(update={"options": options}))
     return sources
 
 
@@ -3880,13 +3815,8 @@ def _build_llms(
 
 
 def _default_processors() -> list[ProcessorConfig]:
-    """No processors run out of the box: without a configured LLM there is
-    no meaningful analysis (mails are stored with the subject as summary),
-    and the keyword pre-filter produced low-quality canned summaries.
-    ``_bind_llm_processor`` creates the LLM binding automatically as soon
-    as the first LLM is configured; users can still add ``rules`` or any
-    other processor explicitly."""
-    return []
+    """Use deterministic rules when no model can perform analysis."""
+    return [ProcessorConfig(processor_id="rules", provider="rules", priority=10)]
 
 
 def _build_llm_enhancers(config: MailFlowConfig, registry: ComponentRegistry) -> list[Any]:
@@ -3925,6 +3855,10 @@ def _build_processors(
     processors: dict[str, MailProcessor] = {}
     plugin_of: dict[str, str] = {}
     enhancers = _build_llm_enhancers(config, registry)
+    config = _bind_llm_processor(config)
+    available = {
+        llm.llm_id for llm in config.llms if registry.has(ComponentKind.LLM_BACKEND, llm.provider)
+    }
     for processor_config in config.processors or _default_processors():
         if not processor_config.enabled:
             continue
@@ -3935,6 +3869,20 @@ def _build_processors(
                 processor_config.provider,
             )
             continue
+        if processor_config.provider == "llm-importance":
+            candidates = [
+                name
+                for name in [processor_config.llm, *processor_config.fallback_llms]
+                if name in available
+            ]
+            if not candidates:
+                continue
+            processor_config = processor_config.model_copy(
+                update={
+                    "llm": candidates[0],
+                    "fallback_llms": candidates[1:],
+                }
+            )
         factory = registry.processor_factory(processor_config.provider)
         if (
             processor_config.provider == "llm-importance"
@@ -3954,7 +3902,7 @@ def _build_processors(
         if (
             processor_config.provider == "llm-importance"
             and enhancers
-            and factory is _BUILTIN_LLM_IMPORTANCE
+            and inspect.unwrap(factory) is _BUILTIN_LLM_IMPORTANCE
         ):
             # The built-in factory takes the enhancer list as a third
             # argument; a plugin-replaced factory keeps the 2-arg contract.
@@ -3967,6 +3915,16 @@ def _build_processors(
             registry.plugin_for(processor_config.provider) or ""
         )
         processor_configs.append(processor_config)
+    if not processors:
+        fallback = _default_processors()[0]
+        if registry.has(ComponentKind.MAIL_PROCESSOR, fallback.provider):
+            processors[fallback.processor_id] = registry.processor_factory(fallback.provider)(
+                fallback, router
+            )
+            processor_configs.append(fallback)
+            plugin_of[fallback.processor_id] = (
+                registry.plugin_for(fallback.provider, ComponentKind.MAIL_PROCESSOR) or ""
+            )
     bindings = build_bindings(processor_configs, processors, plugin_of)
     return PipelineEngine(bindings, router=router)
 
@@ -4011,6 +3969,7 @@ async def start_service(
     if config is None:
         config = load_config(config_path) if config_path else MailFlowConfig()
 
+    config = _bind_llm_processor(config)
     logging_runtime: LoggingRuntime | None = None
     if enable_logging:
         logging_runtime = configure_logging(
@@ -4030,7 +3989,7 @@ async def start_service(
         manager = plugin_manager or PluginManager(config)
         if discover_plugins and plugin_manager is None:
             manager.discover()
-        registry = manager.build_registry()
+        registry = manager.build_registry(config)
         register_builtin_processors(registry)
 
         storage = registry.storage_factory(config.storage.provider)(config.storage)

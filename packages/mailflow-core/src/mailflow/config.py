@@ -512,6 +512,41 @@ class MailFlowConfig(BaseModel):
                     f"processor {processor.processor_id!r} has fallback_llms but no primary llm"
                 )
 
+        return self.bind_analysis_processor()
+
+    def bind_analysis_processor(self) -> MailFlowConfig:
+        """The same effective analysis chain for TOML, startup and edits."""
+        if not self.llms:
+            return self
+        default = self.default_llm()
+        assert default is not None
+        ids = [llm.llm_id for llm in self.llms]
+        processors = [p for p in self.processors if p.provider == "llm-importance"]
+        if not processors:
+            name = "llm-importance"
+            while any(p.processor_id == name for p in self.processors):
+                name += "-auto"
+            processor = ProcessorConfig(
+                processor_id=name,
+                provider="llm-importance",
+                priority=20,
+                llm=default.llm_id,
+                timeout_seconds=max(120.0, sum(llm.timeout_seconds for llm in self.llms) + 15.0),
+            )
+            self.processors.append(processor)
+            processors.append(processor)
+        for processor in processors:
+            if processor.llm is None or processor.llm not in ids:
+                processor.llm = next(
+                    (name for name in processor.fallback_llms if name in ids), default.llm_id
+                )
+            processor.fallback_llms = list(
+                dict.fromkeys(
+                    name
+                    for name in processor.fallback_llms
+                    if name in ids and name != processor.llm
+                )
+            ) or [name for name in ids if name != processor.llm]
         return self
 
     # -- convenience accessors -------------------------------------------------

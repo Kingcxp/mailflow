@@ -7,6 +7,8 @@ cleanup (default 04:00 local time).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from collections.abc import Coroutine
 from contextlib import suppress
@@ -17,7 +19,14 @@ from zoneinfo import ZoneInfo
 
 from mailflow.config import GeneralConfig, MailAccountConfig, MailFlowConfig, NotifierConfig
 from mailflow.contracts import MailSource, Notifier, StorageBackend
-from mailflow.domain import ActionItem, MailMessage, MailRecord, dedupe_actions, to_utc
+from mailflow.domain import (
+    ActionItem,
+    MailMessage,
+    MailRecord,
+    actions_duplicate,
+    dedupe_actions,
+    to_utc,
+)
 from mailflow.events import EventBus
 from mailflow.pipeline import PipelineEngine
 
@@ -98,10 +107,8 @@ class MailFlowRuntime:
         self._account_errors: dict[str, str | None] = {}
         self._started_at: datetime | None = None
         self._closed = False
-        # record ids seen since start; makes the dedup check atomic across
-        # workers (storage lookup alone would race). Cross-restart dedup is
-        # covered by the storage lookup in _process_one.
-        self._seen_ids: set[str] = set()
+        self._record_locks = [asyncio.Lock() for _ in range(64)]
+        self._write_lock = asyncio.Lock()
         # account_id -> persisted UID watermark (read at start, written by
         # the injected store); lets IMAP polling resume across restarts.
         self._stored_watermarks: dict[str, str] = {}
@@ -110,14 +117,15 @@ class MailFlowRuntime:
 
     async def start(self) -> None:
         self._started_at = datetime.now()
-        loop = asyncio.get_running_loop()
         # preload persisted IMAP watermarks so source factories can resume
         # polling where the previous run left off
         for account in self._account_configs:
             try:
                 raw = await self._storage.get_preference(f"imap.watermark.{account.account_id}")
             except Exception:
-                raw = None
+                raise RuntimeError(
+                    f"account {account.account_id!r}: cannot load receive checkpoint"
+                ) from None
             if raw is not None:
                 self._stored_watermarks[account.account_id] = str(raw)
         for account in self._account_configs:
@@ -137,7 +145,7 @@ class MailFlowRuntime:
                     account.provider,
                 )
                 continue
-            self._inject_watermark_store(source, account.account_id, loop)
+            self._inject_watermark_store(source, account.account_id)
             self._tasks.append(
                 asyncio.create_task(
                     self._run_source(account, source), name=f"source-{account.account_id}"
@@ -271,7 +279,7 @@ class MailFlowRuntime:
                 )
                 continue
             self._account_status[account.account_id] = "starting"
-            self._inject_watermark_store(adapter, account.account_id, asyncio.get_running_loop())
+            self._inject_watermark_store(adapter, account.account_id)
             self._tasks.append(
                 asyncio.create_task(
                     self._run_source(account, adapter), name=f"source-{account.account_id}"
@@ -290,6 +298,8 @@ class MailFlowRuntime:
         in a blocking connect, so it happens only when accounts, adapters or
         their classes actually changed — never for an LLM or notifier edit.
         """
+        if config.general.ocr_images != self._config.general.ocr_images:
+            return True
         if set(sources) != set(self._sources):
             return True
         if list(config.accounts) != list(self._account_configs):
@@ -300,32 +310,20 @@ class MailFlowRuntime:
                 return True
         return False
 
-    def _inject_watermark_store(self, source: MailSource, account_id: str, loop: Any) -> None:
-        """Give a source (duck-typed) a persistent UID watermark backed by
-        storage preferences, so a restart resumes where polling left off
-        instead of re-seeding at the newest UID and silently skipping every
-        mail that arrived while the service was down.
-
-        Sources without ``set_watermark_store`` are untouched (the fake
-        source has no UIDs to persist).
-        """
+    def _inject_watermark_store(self, source: MailSource, account_id: str) -> None:
+        """Acknowledgement persistence runs on the host loop and is awaited."""
         inject = getattr(source, "set_watermark_store", None)
         if inject is None:
             return
         key = f"imap.watermark.{account_id}"
 
-        def load() -> int | None:
-            raw = self._stored_watermarks.get(account_id)
-            if raw is None:
-                return None
-            try:
-                return int(raw)
-            except (TypeError, ValueError):
-                return None
+        def load() -> str | None:
+            return self._stored_watermarks.get(account_id)
 
-        def save(uid: int) -> None:
-            self._stored_watermarks[account_id] = str(uid)
-            asyncio.run_coroutine_threadsafe(self._storage.set_preference(key, str(uid)), loop)
+        async def save(checkpoint: str | int) -> None:
+            value = str(checkpoint)
+            await self._storage.set_preference(key, value)
+            self._stored_watermarks[account_id] = value
 
         inject(load, save)
 
@@ -333,8 +331,14 @@ class MailFlowRuntime:
 
     async def _run_source(self, account: MailAccountConfig, source: MailSource) -> None:
         async def emit(mail: MailMessage) -> None:
-            await self._events.emit(f"{_EVENT_PREFIX}mail.received", mail=mail)
+            mail = mail.model_copy(
+                update={
+                    "account_id": account.account_id,
+                    "provider": mail.provider or account.provider,
+                }
+            )
             await self._queue.put(mail)
+            await self._events.emit(f"{_EVENT_PREFIX}mail.received", mail=mail)
 
         try:
             self._account_status[account.account_id] = "running"
@@ -358,21 +362,23 @@ class MailFlowRuntime:
 
     async def _worker(self, index: int) -> None:
         logger.debug("worker %d started", index)
-        while not self._stop_event.is_set():
+        while not self._stop_event.is_set() or not self._queue.empty():
             try:
                 mail = await asyncio.wait_for(self._queue.get(), timeout=_WAIT_TIMEOUT)
             except TimeoutError:
                 continue
             try:
-                await self._process_one(mail)
-            except Exception as exc:
-                logger.error("failed to process mail %r: %s", mail.message_id, exc)
+                while True:
+                    try:
+                        await self._process_one(mail)
+                        break
+                    except Exception as exc:
+                        logger.error(
+                            "mail %r processing failed; retrying: %s", mail.message_id, exc
+                        )
+                        await asyncio.sleep(1)
             finally:
                 self._queue.task_done()
-
-    def reset_dedup(self) -> None:
-        """Forget in-memory dedup state so wiped mails can be re-ingested."""
-        self._seen_ids.clear()
 
     async def process_mail_now(
         self, mail: MailMessage, *, force: bool = False
@@ -387,8 +393,6 @@ class MailFlowRuntime:
         bypassed and the stored record is replaced with the fresh analysis.
         """
         if force:
-            record_id = mail.normalized_message_id()
-            self._seen_ids.discard(record_id)
             # _process_one emits mailflow.mail.processed on success; emitting
             # again here would double-notify every re-analysis.
             return await self._process_one(mail, _skip_dedup=True)
@@ -397,84 +401,137 @@ class MailFlowRuntime:
     async def _process_one(
         self, mail: MailMessage, *, _skip_dedup: bool = False
     ) -> MailRecord | None:
-        record_id = mail.normalized_message_id()
-        if not _skip_dedup and record_id in self._seen_ids:
-            logger.debug("duplicate mail skipped (already processed): %s", record_id)
-            return None
-        self._seen_ids.add(record_id)  # no await: atomic across workers
-        if not _skip_dedup and await self._storage.get_mail(record_id) is not None:
-            # Forwarded copies of the same mail (multiple accounts, restarts)
-            # share the normalized id; process and store exactly one copy.
-            logger.debug("duplicate mail skipped (already stored): %s", record_id)
-            return None
-        try:
+        identity = mail.normalized_message_id()
+        # Fixed stripes keep memory bounded while serializing concurrent
+        # deliveries and explicit re-analysis of the same mail.
+        async with self._record_locks[hash(identity) % len(self._record_locks)]:
+            previous = await self.find_mail_record(mail)
+            if not _skip_dedup and previous is not None:
+                return None
+            record_id = previous.record_id if previous is not None else identity
+            if previous is not None and not mail.image_text.strip():
+                mail = mail.model_copy(update={"image_text": previous.mail.image_text})
+            from mailflow.ocr import apply_image_text
+
+            account = self._config.account(mail.account_id)
+            enabled = (
+                bool(account.options.get("ocr_images", self._config.general.ocr_images))
+                if account
+                else self._config.general.ocr_images
+            )
+            mail = await asyncio.to_thread(apply_image_text, mail, enabled=enabled)
+            guidelines = await self._storage.get_preference("feedback.guidelines") or ""
+            local_feedback = await self._storage.get_preference(f"feedback.{record_id}") or ""
             analysis, notes, _, _ = await self._pipeline.process(
                 mail,
                 mail.account_id,
                 timezone=self._config.general.timezone,
-                feedback_guidelines=(
-                    await self._storage.get_preference("feedback.guidelines") or ""
+                feedback_guidelines="\n".join(
+                    part for part in (guidelines, local_feedback) if part
                 ),
                 user_profile=(await self._storage.get_preference("feedback.profile") or ""),
             )
             failed = analysis.summary_is_fallback or any(note.status == "failed" for note in notes)
-            previous = await self._storage.get_mail(record_id) if _skip_dedup else None
-            if (
-                failed
-                and previous is not None
-                and previous.analysis is not None
-                and not previous.analysis_is_fallback
-            ):
-                # A failed re-analysis (rate limit, timeout, cold model) must
-                # not throw away a working analysis with its summary, reason and
-                # action items: keep the previous content and disclose this
-                # run's failure in the note trail, so the mail reads "shows the
-                # last good analysis, the latest attempt failed" instead of
-                # regressing to the subject.
-                record = previous.model_copy(
-                    update={
-                        "processor_notes": [*previous.processor_notes, *notes][-_NOTES_KEPT:],
-                    }
-                )
-                await self._persist_with_retry(record)
-                logger.warning("re-analysis of %r failed; kept the previous analysis", record_id)
-            else:
-                previous_records = await self._storage.list_mails()
-                existing_actions = [
-                    item
-                    for stored in previous_records
-                    if stored.record_id != record_id
-                    for item in stored.action_items
-                ]
-                custom_actions = await self._storage.list_custom_actions()
-                kept_object_ids = {
-                    id(item)
-                    for item in dedupe_actions(
-                        [*existing_actions, *custom_actions, *analysis.action_items]
+            async with self._write_lock:
+                # A user can edit urgency while the model is working. Read the
+                # latest record at commit, preserving all local record fields.
+                previous = await self._storage.get_mail(record_id) or previous
+                if (
+                    failed
+                    and previous is not None
+                    and previous.analysis is not None
+                    and not previous.analysis_is_fallback
+                ):
+                    record = previous.model_copy(
+                        update={
+                            "processor_notes": [*previous.processor_notes, *notes][-_NOTES_KEPT:],
+                        }
                     )
-                }
-                retained_actions = [
-                    item for item in analysis.action_items if id(item) in kept_object_ids
-                ]
-                if len(retained_actions) != len(analysis.action_items):
-                    analysis = analysis.model_copy(update={"action_items": retained_actions})
-                record = MailRecord(
-                    record_id=record_id,
-                    mail=mail,
-                    auto_urgency=analysis.urgency,
-                    analysis=analysis,
-                    processor_notes=notes,
-                    received_at=mail.received_at,
-                )
-            await self._persist_with_retry(record)
-        except Exception:
-            # Not stored: release the dedup mark so a retry this session is
-            # possible instead of silently dropping the mail forever.
-            self._seen_ids.discard(record_id)
-            raise
-        await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
-        await self._notify(record)
-        return record
+                    logger.warning("re-analysis of %r failed; kept previous analysis", record_id)
+                else:
+                    actions = await self._stable_actions(record_id, analysis.action_items, previous)
+                    analysis = analysis.model_copy(update={"action_items": actions})
+                    persisted_mail = mail.model_copy(deep=True)
+                    for attachment in persisted_mail.attachments:
+                        attachment.data = None
+                    changes: dict[str, Any] = {
+                        "mail": persisted_mail,
+                        "auto_urgency": analysis.urgency,
+                        "analysis": analysis,
+                        "processor_notes": notes,
+                    }
+                    record = (
+                        previous.model_copy(update=changes)
+                        if previous is not None
+                        else MailRecord(
+                            record_id=record_id,
+                            received_at=mail.received_at,
+                            **changes,
+                        )
+                    )
+                await self._persist_with_retry(record)
+            await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
+            await self._notify(record)
+            return record
+
+    async def find_mail_record(self, mail: MailMessage) -> MailRecord | None:
+        """Resolve both scoped identities and records kept from older versions."""
+        record = await self._storage.get_mail(mail.normalized_message_id())
+        if record is not None:
+            return record
+        # Retain old record ids on upgrade so feedback, drafts and reminders
+        # keep their references. Never reuse another account's legacy record.
+        digest = hashlib.sha256(
+            f"{mail.sender.address}|{mail.subject}|{mail.date.isoformat()}|{mail.body_text}".encode()
+        ).hexdigest()[:24]
+        for legacy in (mail.provider_message_id, mail.message_id, digest):
+            if not legacy:
+                continue
+            record = await self._storage.get_mail(legacy)
+            if (
+                record is not None
+                and record.mail.account_id == mail.account_id
+                and (not record.mail.provider or record.mail.provider == mail.provider)
+            ):
+                return record
+        return None
+
+    async def _stable_actions(
+        self,
+        record_id: str,
+        actions: list[ActionItem],
+        previous: MailRecord | None,
+    ) -> list[ActionItem]:
+        others = [
+            item
+            for stored in await self._storage.list_mails()
+            if stored.record_id != record_id
+            for item in stored.action_items
+        ]
+        others.extend(await self._storage.list_custom_actions())
+        prior = previous.action_items if previous is not None else []
+        retained: list[ActionItem] = []
+        for item in dedupe_actions(actions):
+            if any(actions_duplicate(item, other) for other in others):
+                continue
+            old = next((old for old in prior if actions_duplicate(old, item)), None)
+            identity = json.dumps(
+                [
+                    record_id,
+                    " ".join(item.summary.split()).casefold(),
+                    to_utc(item.due_at).isoformat(),
+                    to_utc(item.due_end).isoformat() if item.due_end else "",
+                    item.action_type.casefold(),
+                ],
+                ensure_ascii=False,
+            )
+            item_id = (
+                old.item_id
+                if old is not None
+                else hashlib.sha256(identity.encode()).hexdigest()[:32]
+            )
+            retained.append(item.model_copy(update={"item_id": item_id, "mail_id": record_id}))
+        return retained
 
     async def _persist_with_retry(self, record: MailRecord, attempts: int = 3) -> None:
         """Persist the record; a mail must not be lost to a transient storage error."""

@@ -9,6 +9,7 @@ from __future__ import annotations
 import inspect
 import types
 from collections.abc import Callable
+from functools import wraps
 from typing import Any, Union, cast, get_args, get_origin, get_type_hints
 
 from mailflow.bot_export import BotExportResult
@@ -102,6 +103,7 @@ def checked_factory(kind: ComponentKind, factory: Any, plugin_id: str, component
         except (TypeError, ValueError) as exc:
             raise TypeError(f"{label}: {exc}") from exc
 
+    @wraps(factory)
     def create(*args: Any, **kwargs: Any) -> Any:
         try:
             component = factory(*args, **kwargs)

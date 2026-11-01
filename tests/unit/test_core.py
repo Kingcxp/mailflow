@@ -154,25 +154,40 @@ class TestMailRecordUrgency:
 
 
 class TestMailMessage:
+    def test_source_scope_and_uid_changes_keep_mail_identity_consistent(self) -> None:
+        mail = make_mail(message_id="same-rfc-id", provider_message_id="INBOX:10:1")
+        assert (
+            mail.normalized_message_id()
+            == mail.model_copy(update={"provider_message_id": "INBOX:11:5"}).normalized_message_id()
+        )
+        assert (
+            mail.normalized_message_id()
+            != mail.model_copy(update={"provider": "different-source"}).normalized_message_id()
+        )
+
     def test_normalized_message_id_uses_provider_id(self) -> None:
-        mail = make_mail(provider_message_id="provider-42")
-        assert mail.normalized_message_id() == "provider-42"
+        mail = make_mail(message_id="", provider_message_id="provider-42")
+        assert mail.normalized_message_id() == mail.model_copy().normalized_message_id()
+        assert (
+            mail.normalized_message_id()
+            != mail.model_copy(update={"provider_message_id": "other"}).normalized_message_id()
+        )
 
     def test_normalized_message_id_digest_without_provider_id(self) -> None:
         mail = make_mail(message_id="")  # no provider or RFC id -> content digest
         digest = mail.normalized_message_id()
-        assert len(digest) == 24
+        assert digest
         assert mail.normalized_message_id() == digest  # stable
 
-    def test_normalized_message_id_account_independent(self) -> None:
-        """Forwarded copies of the same mail share one identity across accounts."""
+    def test_normalized_message_id_scopes_account_and_source(self) -> None:
+        """RFC ids and content hashes cannot merge different mailboxes."""
         first = make_mail(message_id="rfc-1", account_id="acct-1")
         forwarded = make_mail(message_id="rfc-1", account_id="acct-2")  # forward keeps the id
-        assert forwarded.normalized_message_id() == first.normalized_message_id()
-        # digest fallback also ignores the account
+        assert forwarded.normalized_message_id() != first.normalized_message_id()
+        # The content fallback also respects account scope
         a = make_mail(message_id="", account_id="acct-1", subject="S", body_text="B")
         b = make_mail(message_id="", account_id="acct-2", subject="S", body_text="B")
-        assert a.normalized_message_id() == b.normalized_message_id()
+        assert a.normalized_message_id() != b.normalized_message_id()
         # different content must not collide
         c = make_mail(message_id="", account_id="acct-1", subject="S", body_text="Other")
         assert a.normalized_message_id() != c.normalized_message_id()

@@ -33,6 +33,8 @@ class FakeMailSource:
         if self.fail:
             raise RuntimeError("fake source failure")
         for mail in self.mails:
+            if stop_event.is_set():
+                return
             await emit(mail)
             if self.delay:
                 await asyncio.sleep(self.delay)

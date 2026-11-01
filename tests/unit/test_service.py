@@ -485,7 +485,7 @@ class TestSmartSearch:
 
         result = await service.smart_search("the fee notice", progress=_progress)
 
-        assert [record.record_id for record in result.records] == ["m1"]
+        assert [record.mail.message_id for record in result.records] == ["m1"]
         assert result.is_complete
         assert result.total_mails == 2
         assert stages[0][:3] == ("warmup", 0, 1)
@@ -507,7 +507,7 @@ class TestSmartSearch:
         result = await service.smart_search("anything about m2")
 
         # Candidate m1 is the newest mail in this batch, not a raw record id.
-        assert [record.record_id for record in result.records] == ["m2"]
+        assert [record.mail.message_id for record in result.records] == ["m2"]
 
     async def test_candidate_refs_are_case_insensitive_and_hide_record_ids(self) -> None:
         opaque_record_id = "MixedCase-Opaque-Record-ID@example.test"
@@ -554,7 +554,7 @@ class TestSmartSearch:
 
         result = await service.smart_search("我需要参加线上研讨会")
 
-        assert [record.record_id for record in result.records] == ["m1"]
+        assert [record.mail.message_id for record in result.records] == ["m1"]
 
     async def test_scored_matches_rank_across_batches(self) -> None:
         """A highly relevant older result must precede a newer weak match."""
@@ -576,7 +576,7 @@ class TestSmartSearch:
 
         result = await service.smart_search("event details")
 
-        assert [record.record_id for record in result.records] == ["m0", "m15"]
+        assert [record.mail.message_id for record in result.records] == ["m0", "m15"]
         assert result.is_complete
 
     async def test_low_scored_candidates_are_not_returned(self) -> None:
@@ -598,7 +598,7 @@ class TestSmartSearch:
 
         result = await service.smart_search("the student ID invitation")
 
-        assert [record.record_id for record in result.records] == ["m2"]
+        assert [record.mail.message_id for record in result.records] == ["m2"]
 
     async def test_malformed_batch_is_retried_then_reported_incomplete(self) -> None:
         class BadRouter:
@@ -647,7 +647,7 @@ class TestSmartSearch:
 
         result = await service.smart_search("event details", progress=_progress)
 
-        assert [record.record_id for record in result.records] == ["m15"]
+        assert [record.mail.message_id for record in result.records] == ["m15"]
         assert result.failed_mails == 1
         assert result.failed_batches == 1
         assert not result.is_complete
@@ -1148,6 +1148,10 @@ class TestSmartAction:
         assert router.tool_specs[0] is not None and router.tool_specs[0][0]["type"] == "function"
 
     async def test_mutating_tool_only_stages_and_changes_nothing(self) -> None:
+        mail = make_mail("m1", minute=10).model_copy(
+            update={"body_text": "Your invoice is attached."}
+        )
+        record_id = mail.normalized_message_id()
         router = self._ToolRouter(
             [
                 _completion(
@@ -1159,7 +1163,9 @@ class TestSmartAction:
                 _completion(
                     "",
                     tool_calls=[
-                        ToolCall(call_id="c2", name="delete_mail", arguments={"record_ids": ["m1"]})
+                        ToolCall(
+                            call_id="c2", name="delete_mail", arguments={"record_ids": [record_id]}
+                        )
                     ],
                 ),
                 _completion("Staged the invoice mail for deletion."),
@@ -1167,10 +1173,6 @@ class TestSmartAction:
         )
         service = self.make_service(router)
         storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10).model_copy(
-            update={"body_text": "Your invoice is attached."}
-        )
-        record_id = mail.normalized_message_id()
         await storage.save_mail(MailRecord(record_id=record_id, mail=mail))
 
         result = await service.smart_action("delete the invoice mail")
@@ -1333,16 +1335,13 @@ class TestClearAllRecords:
         assert len(await service.list_trash()) == 1  # not duplicated
 
     async def test_a_reset_lets_the_same_mail_be_processed_again(self) -> None:
-        """The in-memory dedup state must be forgotten, or a re-sync would
-        silently skip everything just cleared."""
         service = self.make_service()
-        storage = cast(Any, service.storage)
-        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
-        service.runtime._seen_ids.add("m1")  # pyright: ignore[reportPrivateUsage]
-
+        record = _expired_record("m1", urgency=Urgency.INFO, due_in_hours=5)
+        await service.storage.save_mail(record)
         await service.clear_all_records()
-
-        assert "m1" not in service.runtime._seen_ids  # pyright: ignore[reportPrivateUsage]
+        restored = await service.process_mail(record.mail)
+        assert restored is not None
+        assert await service.storage.get_mail(restored.record_id) is not None
 
 
 class TestExpiredMail:
@@ -1706,17 +1705,9 @@ class TestLLMFallbackBinding:
         assert bound.llm == "new-fast"
         assert bound.fallback_llms == ["old-slow"]
 
-    async def test_processor_timeout_covers_the_bound_request_budget(self, tmp_path: Path) -> None:
+    async def test_automatic_processor_timeout_covers_request_budget(self, tmp_path: Path) -> None:
         config = MailFlowConfig()
         config.llms = [LLMConfig(llm_id="slow", timeout_seconds=300.0)]
-        config.processors = [
-            ProcessorConfig(
-                processor_id="llm-importance",
-                provider="llm-importance",
-                llm="slow",
-                timeout_seconds=30.0,
-            )
-        ]
         service = self._service(config, tmp_path)
 
         await service.update_config_entry("llms", 0, {"model": "changed"})

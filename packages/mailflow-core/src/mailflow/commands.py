@@ -379,23 +379,10 @@ class CommandRouter:
 
     @staticmethod
     def _matches_query(record: Any, query: str) -> bool:
-        """Subject + sender + summary + body_text (body_text already
-        carries the html-stripped text for mails stored through the
-        normal pipeline)."""
-
-        def body_text(record: Any) -> str:
-            body: str = record.mail.body_text
-            if not body and record.mail.body_html:
-                body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", record.mail.body_html)
-                body = re.sub(r"<[^>]+>", " ", body)
-            return body.lower()
+        from mailflow.ocr import searchable_mail_text
 
         return (
-            query
-            in (
-                f"{record.mail.subject} {record.mail.sender.address} "
-                f"{record.summary} {body_text(record)}"
-            ).lower()
+            query.casefold() in f"{record.summary}\n{searchable_mail_text(record.mail)}".casefold()
         )
 
     async def _mail_list(self, *, page: int = 1, query: str = "") -> CommandResponse:
@@ -627,6 +614,10 @@ class CommandRouter:
             )
         body = mail.body_text.strip() or "(no text body)"
         spans.append(StyleSpan(text=f"\n\n{self._t('mail.field_body')}:\n{body}"))
+        if mail.image_text.strip():
+            spans.append(
+                StyleSpan(text=f"\n\n{self._t('mail.field_image_text')}:\n{mail.image_text}")
+            )
         for note in record.processor_notes:
             spans.append(
                 StyleSpan(

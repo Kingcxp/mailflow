@@ -12,6 +12,7 @@ from mailflow.domain import (
     ActionItem,
     Attachment,
     MailAnalysis,
+    MailMessage,
     MailRecord,
     ReplyDraft,
     Urgency,
@@ -19,6 +20,16 @@ from mailflow.domain import (
 )
 from mailflow_storage_sqlite.plugin import SQLiteStorage
 from mailflow_testkit.fakes import make_mail
+
+
+async def poll_imap(source: Any) -> list[MailMessage]:
+    mails: list[MailMessage] = []
+
+    async def accept(mail: MailMessage) -> None:
+        mails.append(mail)
+
+    await source._poll_once(accept)
+    return mails
 
 
 @pytest.fixture
@@ -680,8 +691,9 @@ class TestIMAPMailSource:
             def login(self, user: str, password: str) -> None:
                 self.logged = (user, password)
 
-            def select(self, folder: str) -> None:
+            def select(self, folder: str, *, readonly: bool = False) -> tuple[str, list[bytes]]:
                 self.selected = folder
+                return "OK", []
 
             def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
                 if command == "search":
@@ -712,15 +724,15 @@ class TestIMAPMailSource:
             },
         )
         source = IMAPSource(account)
-        fetched = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        fetched = await poll_imap(source)  # pyright: ignore[reportPrivateUsage]
         assert len(fetched) == 2
         assert fetched[0].subject == "msg 1"
         # incremental poll: no new mails -> nothing fetched
-        fetched_again = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        fetched_again = await poll_imap(source)  # pyright: ignore[reportPrivateUsage]
         assert fetched_again == []
         # a burst beyond the first-poll window is still picked up via UIDs
         FakeIMAP.uids = [1, 2, 3, 4, 5]
-        fetched_burst = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        fetched_burst = await poll_imap(source)  # pyright: ignore[reportPrivateUsage]
         assert [m.subject for m in fetched_burst] == ["msg 3", "msg 4", "msg 5"]
 
     async def test_failed_fetch_does_not_skip_the_mail(
@@ -738,7 +750,8 @@ class TestIMAPMailSource:
 
             def login(self, user: str, password: str) -> None: ...
 
-            def select(self, folder: str) -> None: ...
+            def select(self, folder: str, *, readonly: bool = False) -> tuple[str, list[bytes]]:
+                return "OK", []
 
             def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
                 if command == "search":
@@ -767,11 +780,11 @@ class TestIMAPMailSource:
             },
         )
         source = IMAPSource(account)
-        first = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        first = await poll_imap(source)  # pyright: ignore[reportPrivateUsage]
         assert [m.subject for m in first] == ["msg 1"]
 
         state["fail_uid"] = 0  # server recovers
-        second = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        second = await poll_imap(source)  # pyright: ignore[reportPrivateUsage]
         assert [m.subject for m in second] == ["msg 2", "msg 3"]
 
     async def test_fetch_history_is_newest_first_and_independent(
@@ -786,7 +799,8 @@ class TestIMAPMailSource:
 
             def login(self, user: str, password: str) -> None: ...
 
-            def select(self, folder: str) -> None: ...
+            def select(self, folder: str, *, readonly: bool = False) -> tuple[str, list[bytes]]:
+                return "OK", []
 
             def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
                 if command == "search":
@@ -821,7 +835,7 @@ class TestIMAPMailSource:
         ]
         # browsing left the poll watermark untouched: the live stream still
         # delivers the most recent ``limit`` mails on its first poll
-        assert [m.subject for m in source._fetch_once()] == [  # pyright: ignore[reportPrivateUsage]
+        assert [m.subject for m in await poll_imap(source)] == [  # pyright: ignore[reportPrivateUsage]
             "msg 4",
             "msg 5",
         ]
@@ -882,7 +896,8 @@ class TestIMAPInternalDate:
 
             def login(self, user: str, password: str) -> None: ...
 
-            def select(self, folder: str) -> None: ...
+            def select(self, folder: str, *, readonly: bool = False) -> tuple[str, list[bytes]]:
+                return "OK", []
 
             def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
                 if command == "search":
@@ -989,7 +1004,8 @@ class TestIMAPBacklogSkipDefault:
 
             def login(self, user: str, password: str) -> None: ...
 
-            def select(self, folder: str) -> None: ...
+            def select(self, folder: str, *, readonly: bool = False) -> tuple[str, list[bytes]]:
+                return "OK", []
 
             def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
                 if command == "search":
@@ -1011,7 +1027,7 @@ class TestIMAPBacklogSkipDefault:
         )
         source = IMAPSource(account)
         # first poll emits nothing but seeds the watermark at uid 3
-        assert source._fetch_once() == []  # pyright: ignore[reportPrivateUsage]
+        assert await poll_imap(source) == []  # pyright: ignore[reportPrivateUsage]
         assert source._last_uid == 3  # pyright: ignore[reportPrivateUsage]
 
         # a later poll with a new mail (uid 4) is delivered normally
@@ -1027,7 +1043,7 @@ class TestIMAPBacklogSkipDefault:
                 return "OK", [(b"1", raw)]
 
         monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", NewMailIMAP)
-        fetched = source._fetch_once()  # pyright: ignore[reportPrivateUsage]
+        fetched = await poll_imap(source)  # pyright: ignore[reportPrivateUsage]
         assert [m.subject for m in fetched] == ["msg 4"]
 
     def _uid_handler(self, command: str, *args: Any):
@@ -1131,7 +1147,7 @@ class TestIMAPImageAttachments:
         assert att.filename == "screenshot.png"
         assert att.content_type == "image/png"
         assert att.size > 0
-        assert att.data is None  # payloads stay out of memory
+        assert att.data is not None and len(att.data) == att.size  # available until OCR/storage
 
     def test_unlabelled_binary_text_part_is_dropped(self) -> None:
         from mailflow_mail_imap.plugin import parse_mime

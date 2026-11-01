@@ -349,6 +349,28 @@ class TestLLMEnhancers:
         assert "confirmed by enhancer" not in result.analysis.reason
         assert len(router.last_messages) == 2  # system + user only
 
+    async def test_host_keeps_enhancers_when_factories_are_validated(self) -> None:
+        from mailflow.config import LLMConfig, MailFlowConfig
+        from mailflow.processors import register_builtin_processors
+        from mailflow.registry import ComponentRegistry, PluginRegistrar
+        from mailflow.service import _build_processors  # pyright: ignore[reportPrivateUsage]
+        from mailflow_testkit.fakes import FakeLLMBackend
+
+        config = MailFlowConfig(llms=[LLMConfig(llm_id="primary", provider="fake")])
+        registry = ComponentRegistry()
+        register_builtin_processors(registry)
+        registrar = PluginRegistrar(registry, config, "enhancer-test")
+        registrar.add_llm("fake", lambda _: FakeLLMBackend())
+        registrar.add_llm_enhancer("append", lambda _: self.AppendingEnhancer())
+        router = StubRouter(CRITICAL_EXAM_JSON)
+        pipeline = _build_processors(config, registry, cast(Any, router))
+
+        analysis, notes, _, _ = await pipeline.process(make_mail(), CONTEXT.account_id)
+
+        assert "confirmed by enhancer" in analysis.reason
+        assert {"role": "user", "content": "Be very concise."} in router.last_messages
+        assert not any(note.status == "failed" for note in notes)
+
 
 class TestSummaryLanguage:
     async def test_language_option_injects_instruction(self) -> None:

@@ -517,6 +517,9 @@ class ActionModal(ModalScreen[Any]):
             lines.append(f"{self._service.display_text(reason)}\n")
         lines.append(f"{self._service.t('tui.detail_body')}:\n", style="bold")
         lines.append(body[:800] or self._service.t("tui.mail_no_body"))
+        if mail.image_text.strip():
+            lines.append(f"\n\n{self._service.t('mail.field_image_text')}:\n", style="bold")
+            lines.append(mail.image_text)
         node.update(lines)
 
     def _open_editor(self) -> None:
@@ -1299,11 +1302,9 @@ class MailPane(Vertical):
         blob = f"{record.mail.subject} {record.mail.sender.address} {record.summary}"
         if matcher.matches(blob):
             return True
-        body = record.mail.body_text
-        if not body and record.mail.body_html:
-            body = re.sub(r"(?is)<(script|style)[^>]*>.*?</\\1>", " ", record.mail.body_html)
-            body = re.sub(r"<[^>]+>", " ", body)
-        return matcher.matches(body)
+        from mailflow.ocr import searchable_mail_text
+
+        return matcher.matches(searchable_mail_text(record.mail))
 
     def _schedule_mail_filter(self) -> None:
         self._mail_filter_generation += 1
@@ -1646,6 +1647,9 @@ class MailPane(Vertical):
             body = body[:4000] + "…"
         body_line = RichText(service.t("tui.detail_body") + ":\n", style="bold")
         body_line.append(body or service.t("tui.mail_no_body"))
+        if record.mail.image_text.strip():
+            body_line.append(f"\n\n{service.t('mail.field_image_text')}:\n", style="bold")
+            body_line.append(record.mail.image_text)
         self._set_static_text("#mail-body", body_line)
         attachments_line: RichText | None = None
         if record.mail.attachments:

@@ -6,12 +6,13 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from mailflow.config import MailFlowConfig
+from mailflow.config import LLMConfig, MailFlowConfig
+from mailflow.contracts import LLMCompletion
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.pipeline import PipelineEngine
+from mailflow.plugin_api import define_plugin
 from mailflow.plugins import PluginManager
-from mailflow.registry import ComponentRegistry
 from mailflow.service import MailFlowService
 
 
@@ -28,12 +29,32 @@ class _Store:
         self.preferences[k] = v
 
 
+def fake_manager(config: MailFlowConfig | None = None) -> PluginManager:
+    class Backend:
+        backend_id = "language-test"
+
+        def __init__(self, config: LLMConfig) -> None:
+            pass
+
+        async def chat(
+            self, messages: Any, *, temperature: Any = None, options: Any = None, tools: Any = None
+        ) -> LLMCompletion:
+            return LLMCompletion(text='{"summary": "local fake", "urgency": "info"}')
+
+    plugin = define_plugin("mailflow-language-test")
+    plugin.llm("language-test")(Backend)
+    manager = PluginManager(config)
+    manager.register(plugin.build())
+    return manager
+
+
 @pytest.fixture
 def service(tmp_path: Any) -> MailFlowService:
+    manager = fake_manager()
     svc = MailFlowService(
         config=MailFlowConfig(),
-        registry=ComponentRegistry(),
-        plugin_manager=PluginManager(),
+        registry=manager.build_registry(),
+        plugin_manager=manager,
         storage=cast(Any, _Store()),
         sources={},
         router=cast(Any, None),
@@ -47,18 +68,14 @@ def service(tmp_path: Any) -> MailFlowService:
 
 
 async def test_language_switch_updates_pipeline_language(service: MailFlowService) -> None:
+    # an llm-importance entry exists as soon as the user configures an LLM
+    from mailflow.config import LLMConfig, ProcessorConfig
     from mailflow.llm import LLMRouterImpl
     from mailflow.processors import register_builtin_processors
     from mailflow.service import _build_processors  # pyright: ignore[reportPrivateUsage]
 
     register_builtin_processors(service.registry)
-
-    # an llm-importance entry exists as soon as the user configures an LLM
-    from mailflow.config import LLMConfig, ProcessorConfig
-
-    service.config.llms = [
-        LLMConfig(llm_id="main", provider="openai-completions", model="gpt-test")
-    ]
+    service.config.llms = [LLMConfig(llm_id="main", provider="language-test", model="local")]
     service.config.processors = [
         ProcessorConfig(processor_id="llm-importance", provider="llm-importance", llm="main")
     ]
@@ -91,7 +108,6 @@ async def test_startup_applies_persisted_language_to_pipeline(tmp_path: Any) -> 
     preference with an en bootstrap produced English summaries)."""
     from pathlib import Path
 
-    from mailflow.plugins import PluginManager
     from mailflow.service import start_service
     from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 
@@ -99,9 +115,10 @@ async def test_startup_applies_persisted_language_to_pipeline(tmp_path: Any) -> 
         from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
 
         cfg = MailFlowConfig()
+        cfg.storage.path = str(db)
         cfg.i18n.language = "en"  # bootstrap default, as in example configs
         cfg.general.language = "zh-CN"
-        cfg.llms = [LLMConfig(llm_id="main", provider="openai-completions", model="m")]
+        cfg.llms = [LLMConfig(llm_id="main", provider="language-test", model="local")]
         cfg.processors = [
             ProcessorConfig(processor_id="llm-importance", provider="llm-importance", llm="main")
         ]
@@ -111,10 +128,11 @@ async def test_startup_applies_persisted_language_to_pipeline(tmp_path: Any) -> 
     config_path.write_text("", encoding="utf-8")
 
     # first run: persist the zh-CN preference the way the TUI does
-    manager = PluginManager(build_config(tmp_path / "unused.db"))
+    config = build_config(tmp_path / "language.db")
+    manager = fake_manager(config)
     manager.register(storage_plugin)
     service = await start_service(
-        build_config(tmp_path / "seed.db"),
+        config,
         config_path=config_path,
         plugin_manager=manager,
         discover_plugins=False,
@@ -125,7 +143,7 @@ async def test_startup_applies_persisted_language_to_pipeline(tmp_path: Any) -> 
 
     # second run: the persisted preference must reach the pipeline
     service2 = await start_service(
-        build_config(tmp_path / "run.db"),
+        build_config(tmp_path / "language.db"),
         config_path=config_path,
         plugin_manager=manager,
         discover_plugins=False,
