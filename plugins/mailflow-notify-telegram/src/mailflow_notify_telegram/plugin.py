@@ -96,18 +96,19 @@ class TelegramNotifier:
         await self._send_all(text)
 
     async def push_text(self, text: str) -> None:
-        """Plain-text push (schedule reminders, daily digest)."""
+        """Return only after every configured destination accepted the push."""
         if not self._token or not self._targets:
-            return
-        await self._send_all(text)
+            raise ValueError("telegram notifier requires bot_token and targets")
+        for target in self._targets:
+            await self.push_to_target(target, text)
 
     async def push_to_target(self, target: str, text: str) -> None:
         """Push one message to a single chat (per-chat hourly briefing)."""
         if not self._token:
-            return
+            raise ValueError("telegram notifier requires bot_token")
         chat_id = target.partition(":")[2].strip() or target.strip()
         if not chat_id:
-            return
+            raise ValueError("telegram notifier requires a target")
         await asyncio.to_thread(send_text, self._token, chat_id, text)
 
     async def _send_all(self, text: str) -> None:

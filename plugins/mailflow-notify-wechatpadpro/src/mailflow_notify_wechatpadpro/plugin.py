@@ -109,37 +109,35 @@ class WechatPadProNotifier:
             )
 
     async def push_text(self, text: str) -> None:
-        """Push a plain-text message (schedule reminders, daily digest)."""
+        """Return only after every configured destination accepted the push."""
         if not self._url or not self._targets:
-            return
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            for _kind, wxid in self._targets:
-                try:
-                    await self._send(client, wxid, text)
-                except Exception as exc:
-                    logger.warning("wechatpadpro text push to %s failed: %s", wxid, exc)
+            raise ValueError("wechatpadpro notifier requires base_url and targets")
+        for kind, identifier in self._targets:
+            await self.push_to_target(f"{kind}:{identifier}", text)
 
     async def push_to_target(self, target: str, text: str) -> None:
         """Push one plain-text message to a single ``user:<wxid>`` or
         ``group:<chatroom>`` target (per-chat hourly-summary delivery)."""
+        if not self._url:
+            raise ValueError("wechatpadpro notifier requires base_url")
         _kind, _, wxid = target.partition(":")
         wxid = wxid.strip() or target.strip()
         if not wxid:
-            return
+            raise ValueError("wechatpadpro notifier requires a target")
         async with httpx.AsyncClient(timeout=20.0) as client:
             key = await self._key(client)
             if not key:
-                return
+                raise ValueError("wechatpadpro notifier has no active login key")
             response = await client.post(
                 f"{self._url}/Msg/SendTxt",
                 params={"key": key},
                 json={"Wxid": "", "ToWxid": wxid, "Content": text, "Type": 0},
             )
-            if response.status_code >= 400:
-                logger.warning(
-                    "wechatpadpro notifier: targeted push to %s rejected: HTTP %d",
-                    wxid,
-                    response.status_code,
+            response.raise_for_status()
+            result = response.json()
+            if result.get("Success") is False or result.get("Code", 0) not in (0, "0"):
+                raise RuntimeError(
+                    f"wechatpadpro delivery rejected: {result.get('Code', 'failed')}"
                 )
 
     async def notify(self, record: MailRecord) -> None:

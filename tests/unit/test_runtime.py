@@ -302,8 +302,8 @@ class TestRuntime:
         await runtime.run_cleanup()
         assert storage.cleaned_before is not None
         assert storage.purged_before is not None
-        expected_retention = datetime.now() - timedelta(days=30)
-        expected_trash = datetime.now() - timedelta(days=7)
+        expected_retention = datetime.now(UTC) - timedelta(days=30)
+        expected_trash = datetime.now(UTC) - timedelta(days=7)
         assert abs((storage.cleaned_before - expected_retention).total_seconds()) < 60
         assert abs((storage.purged_before - expected_trash).total_seconds()) < 60
 
@@ -518,8 +518,15 @@ class TestReminderScheduler:
             due_at=datetime.now(UTC) + timedelta(days=2),
         )
         storage = FakeStorage()
-        runtime, _ = await self._runtime_with_item(item, storage=storage)
+        runtime, events = await self._runtime_with_item(item, storage=storage)
+        delivered: list[str] = []
+
+        async def capture(event: str, **payload: Any) -> None:
+            delivered.append(payload["item"].item_id)
+
+        events.subscribe("mailflow.action.reminder", capture)
         assert await runtime.run_reminder_tick() == 1
+        assert delivered == [item.item_id]
         # a fresh runtime on the same storage must not re-fire
         fresh_config = MailFlowConfig.model_validate(
             {"general": {"reminder_hour": 0, "reminder_minute": 0}}

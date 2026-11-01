@@ -39,6 +39,8 @@ class OpenWechatNotifier:
     async def push_to_target(self, target: str, text: str) -> None:
         """Push one plain-text message to a single ``contact:<name>`` or
         ``room:<name>`` target (per-chat hourly-summary delivery)."""
+        if not self._url:
+            raise ValueError("openwechat notifier requires gateway_url")
         kind, _, name = target.partition(":")
         kind = kind.strip().lower()
         name = name.strip() or target.strip()
@@ -50,12 +52,7 @@ class OpenWechatNotifier:
         }
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(f"{self._url}/send", json=payload)
-            if response.status_code >= 400:
-                logger.warning(
-                    "openwechat notifier: targeted push to %s rejected: HTTP %d",
-                    target,
-                    response.status_code,
-                )
+            response.raise_for_status()
 
     async def notify(self, record: MailRecord) -> None:
         if not self._url or not self._targets:
@@ -87,29 +84,11 @@ class OpenWechatNotifier:
                     logger.warning("openwechat delivery to %s:%s failed: %s", kind, name, exc)
 
     async def push_text(self, text: str) -> None:
-        """Push a plain-text message (schedule reminders, daily digest)
-        to every configured target through the bridge's /send endpoint.
-        Mirrors the onebot notifier's push_text so chat pushes reach
-        WeChat users too."""
+        """Return only after every configured destination accepted the push."""
         if not self._url or not self._targets:
-            return
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            for kind, name in self._targets:
-                payload = {
-                    "to": {"type": "room" if kind == "room" else "contact", "name": name},
-                    "text": text,
-                }
-                try:
-                    response = await client.post(f"{self._url}/send", json=payload)
-                    if response.status_code >= 400:
-                        logger.warning(
-                            "openwechat text push to %s:%s rejected: HTTP %d",
-                            kind,
-                            name,
-                            response.status_code,
-                        )
-                except Exception as exc:
-                    logger.warning("openwechat text push to %s:%s failed: %s", kind, name, exc)
+            raise ValueError("openwechat notifier requires gateway_url and targets")
+        for kind, name in self._targets:
+            await self.push_to_target(f"{kind}:{name}", text)
 
 
 class OpenWechatPlugin:

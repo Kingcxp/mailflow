@@ -10,19 +10,21 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
+from mailflow.action_store import ActionStore, action_has_ended
 from mailflow.config import GeneralConfig, MailAccountConfig, MailFlowConfig, NotifierConfig
 from mailflow.contracts import MailSource, Notifier, StorageBackend
 from mailflow.domain import (
     ActionItem,
     MailMessage,
     MailRecord,
+    action_time_window,
     actions_duplicate,
     dedupe_actions,
     to_utc,
@@ -109,6 +111,8 @@ class MailFlowRuntime:
         self._closed = False
         self._record_locks = [asyncio.Lock() for _ in range(64)]
         self._write_lock = asyncio.Lock()
+        self.action_store = ActionStore(storage)
+        self._reminder_lock = asyncio.Lock()
         # account_id -> persisted UID watermark (read at start, written by
         # the injected store); lets IMAP polling resume across restarts.
         self._stored_watermarks: dict[str, str] = {}
@@ -503,12 +507,10 @@ class MailFlowRuntime:
         previous: MailRecord | None,
     ) -> list[ActionItem]:
         others = [
-            item
-            for stored in await self._storage.list_mails()
-            if stored.record_id != record_id
-            for item in stored.action_items
+            entry.item
+            for entry in await self.action_store.read(deduplicate=False)
+            if entry.record is None or entry.record.record_id != record_id
         ]
-        others.extend(await self._storage.list_custom_actions())
         prior = previous.action_items if previous is not None else []
         retained: list[ActionItem] = []
         for item in dedupe_actions(actions):
@@ -584,10 +586,26 @@ class MailFlowRuntime:
     # -- retention cleanup ----------------------------------------------------------
 
     async def run_cleanup(self) -> None:
-        now = datetime.now()
+        now = datetime.now(UTC)
         retention_before = now - timedelta(days=self._config.general.mail_retention_days)
         trash_before = now - timedelta(days=self._config.general.trash_retention_days)
-        moved = await self._storage.cleanup_mail(retention_before)
+        async with self.action_store.lock:
+            protected = {
+                entry.record.record_id if entry.record is not None else entry.item.mail_id
+                for entry in await self.action_store.read(deduplicate=False)
+                if not action_has_ended(entry.item, now)
+            }
+            if not protected:
+                moved = await self._storage.cleanup_mail(retention_before)
+            else:
+                moved = 0
+                for record in await self._storage.list_mails():
+                    if (
+                        record.record_id not in protected
+                        and to_utc(record.mail.received_at) < retention_before
+                    ):
+                        await self._storage.delete_mail(record.record_id)
+                        moved += 1
         purged = await self._storage.purge_trash(trash_before)
         logger.info(
             "cleanup ran: %d old mails moved to trash, %d trash records purged",
@@ -625,57 +643,46 @@ class MailFlowRuntime:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
 
     async def run_reminder_tick(self) -> int:
-        """Fire due action-item reminders; returns how many fired.
-
-        A reminder fires once (persisted in preferences) once its scheduled
-        time has passed — including when the app was off at that moment.
-        """
-        now = datetime.now(UTC)
-        fired = 0
-        config = self._config.general
-        records = await self._storage.list_mails()
-        items = [item for record in records for item in record.action_items]
-        record_by_object = {id(item): record for record in records for item in record.action_items}
-        custom = await self._storage.list_custom_actions()
-        items.extend(custom)
-        for item in dedupe_actions(items):
-            fired += await self._fire_reminder(item, record_by_object.get(id(item)), now, config)
-        await self._fire_daily_digest(now, config)
-        await self._fire_hourly_summary(now, config)
-        return fired
+        """Deliver each due reminder once; unsuccessful destinations can retry."""
+        async with self._reminder_lock:
+            now = datetime.now(UTC)
+            config = self._config.general
+            fired = 0
+            async with self.action_store.lock:
+                for entry in await self.action_store.read():
+                    fired += await self._fire_reminder(entry.item, entry.record, now, config)
+            async with self.action_store.lock:
+                await self._fire_daily_digest(now, config)
+            await self._fire_hourly_summary(now, config)
+            return fired
 
     async def _fire_daily_digest(self, now: datetime, config: GeneralConfig) -> int:
-        """Once per day, after the configured reminder hour, emit a digest of
-        approaching actions: how many are due today and how many are coming
-        up, plus the items themselves — the host paginates them into chat
-        messages."""
-        local_now = now.astimezone(ZoneInfo(config.timezone))
-        if (local_now.hour, local_now.minute) < (
-            config.reminder_hour,
-            config.reminder_minute,
-        ):
+        local_now = to_utc(now).astimezone(ZoneInfo(config.timezone))
+        if (local_now.hour, local_now.minute) < (config.reminder_hour, config.reminder_minute):
             return 0
         today_key = local_now.date().isoformat()
-        if await self._storage.get_preference(f"digest.{today_key}"):
+        key = f"digest.{today_key}"
+        if await self._storage.get_preference(key):
             return 0
-        day_start = to_utc(local_now.replace(hour=0, minute=0, second=0, microsecond=0))
-        soon = await self._approaching_actions(day_start, config.reminder_days_before)
+        day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        soon = await self._approaching_actions(day_start, config.reminder_days_before, now=now)
         if not soon:
-            # nothing approaching today: mark the day as digested anyway
-            await self._storage.set_preference(f"digest.{today_key}", "fired")
             return 0
-        today_count = sum(1 for item in soon if item.due_at < day_start + timedelta(days=1))
-        await self._events.emit(
+        today_count = sum(
+            to_utc(item.due_at).astimezone(local_now.tzinfo).date() <= local_now.date()
+            for item in soon
+        )
+        delivered = await self._deliver_notification(
+            key,
+            self._format_digest(today_key, soon),
             f"{_EVENT_PREFIX}action.digest",
             date=today_key,
             today_count=today_count,
             upcoming_count=len(soon) - today_count,
             items=soon,
         )
-        # push the digest straight to chat-capable notifiers: the events
-        # had NO subscriber in the default deployment, so the daily
-        # summary never reached QQ/WeChat users at all
-        await self._push_text(self._format_digest(today_key, soon))
+        if not delivered:
+            return 0
         reminder_logger.warning(
             self._rt(
                 "reminder.digest_log",
@@ -684,10 +691,8 @@ class MailFlowRuntime:
                 soon=len(soon) - today_count,
                 days=config.reminder_days_before,
             )
-            or f"DIGEST {today_key}: {today_count} due today, "
-            f"{len(soon) - today_count} approaching in {config.reminder_days_before} days"
+            or f"DIGEST {today_key}: {today_count} due today, {len(soon) - today_count} upcoming"
         )
-        await self._storage.set_preference(f"digest.{today_key}", "fired")
         return 1
 
     async def _fire_hourly_summary(self, now: datetime, config: GeneralConfig) -> int:
@@ -838,21 +843,21 @@ class MailFlowRuntime:
             logger.error("hourly summary LLM request failed: %s", exc)
             return ""
 
-    async def _approaching_actions(self, day_start: datetime, days_before: int) -> list[ActionItem]:
-        """Actions due within ``days_before`` days from ``day_start``, soonest first."""
-        horizon = day_start + timedelta(days=days_before)
-        items: list[ActionItem] = [
-            item
-            for record in await self._storage.list_mails()
-            for item in record.action_items
-            if day_start <= item.due_at < horizon
-        ]
-        items.extend(
-            item
-            for item in await self._storage.list_custom_actions()
-            if day_start <= item.due_at < horizon
+    async def _approaching_actions(
+        self, day_start: datetime, days_before: int, *, now: datetime | None = None
+    ) -> list[ActionItem]:
+        """Include ongoing windows and every local day in the reminder horizon."""
+        zone = ZoneInfo(self._config.general.timezone)
+        local_start = (
+            to_utc(day_start).astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0)
         )
-        return dedupe_actions(items)
+        horizon = to_utc(local_start + timedelta(days=max(0, days_before) + 1))
+        cutoff = to_utc(now if now is not None else day_start)
+        return [
+            entry.item
+            for entry in await self.action_store.read()
+            if not action_has_ended(entry.item, cutoff) and to_utc(entry.item.due_at) < horizon
+        ]
 
     async def _fire_reminder(
         self,
@@ -862,6 +867,8 @@ class MailFlowRuntime:
         config: GeneralConfig,
     ) -> int:
         """Emit a once-per-window reminder for one action item when due."""
+        if action_has_ended(item, now):
+            return 0
         fired = 0
         for when, kind in reminder_times(
             item,
@@ -872,29 +879,26 @@ class MailFlowRuntime:
         ):
             if when > now:
                 continue
-            key = f"reminder.{item.item_id}.{item.due_at.date().isoformat()}.{kind}"
-            if await self._storage.get_preference(key):
+            start, end = action_time_window(item)
+            key = f"reminder.{item.item_id}.{start.isoformat()}.{end.isoformat()}.{kind}"
+            legacy_key = f"reminder.{item.item_id}.{item.due_at.date().isoformat()}.{kind}"
+            if await self._storage.get_preference(key) or await self._storage.get_preference(
+                legacy_key
+            ):
                 continue
-            # Persist the fired marker BEFORE emitting: a crash (or an event
-            # handler that raises) between emit and save must not cause the
-            # same reminder to fire again on the next tick.
-            await self._storage.set_preference(key, "fired")
-            await self._events.emit(
+            display_range = item.time_range_in(config.timezone)
+            delivered = await self._deliver_notification(
+                key,
+                self._rt("reminder.push", summary=item.summary, due=display_range)
+                or f"Reminder: {item.summary} ({display_range})",
                 f"{_EVENT_PREFIX}action.reminder",
                 item=item,
                 record=record,
                 kind=kind,
                 scheduled=when,
             )
-            display_range = item.time_range_in(config.timezone)
-            await self._push_text(
-                self._rt(
-                    "reminder.push",
-                    summary=item.summary,
-                    due=display_range,
-                )
-                or f"【日程提醒】「{item.summary}」即将到期（{display_range}）"
-            )
+            if not delivered:
+                continue
             source = record.record_id if record is not None else "user"
             if item.notes:
                 message = self._rt(
@@ -923,21 +927,63 @@ class MailFlowRuntime:
             fired += 1
         return fired
 
-    async def _push_text(self, text: str) -> None:
-        """Deliver a plain-text push through every notifier that supports
-        chat pushes (onebot etc.); mail-only notifiers skip silently."""
-        for notifier in self._notifiers:
+    async def _deliver_notification(self, key: str, text: str, event: str, **payload: Any) -> bool:
+        """Persist successful destinations individually, then the completed delivery.
+
+        The scheduler holds its lock across this call. A partial failure only
+        retries failed targets, including after a normal service restart.
+        """
+        destinations = 0
+        complete = True
+        for index, notifier in enumerate(self._notifiers):
             push = getattr(notifier, "push_text", None)
-            if push is None:
+            if not callable(push):
                 continue
-            try:
-                await push(text)
-            except Exception as exc:
-                logger.warning(
-                    "notifier %r text push failed: %s",
-                    getattr(notifier, "backend_id", type(notifier).__name__),
-                    exc,
+            config = self._notifier_configs[index] if index < len(self._notifier_configs) else None
+            notifier_id = (
+                config.notifier_id
+                if config is not None
+                else f"{getattr(notifier, 'backend_id', type(notifier).__name__)}.{index}"
+            )
+            targeted = getattr(notifier, "push_to_target", None)
+            targets: list[str] = []
+            if config is not None:
+                targets = list(
+                    dict.fromkeys(
+                        str(t).strip() for t in config.options.get("targets", []) if str(t).strip()
+                    )
                 )
+                chat_id = str(config.options.get("chat_id") or "").strip()
+                if chat_id and chat_id not in {t.partition(":")[2] or t for t in targets}:
+                    targets.append(chat_id)
+            for target in targets if targets and callable(targeted) else [None]:
+                destinations += 1
+                identity = hashlib.sha256(f"{notifier_id}|{target or ''}".encode()).hexdigest()[:24]
+                receipt = f"{key}.delivered.{identity}"
+                if await self._storage.get_preference(receipt):
+                    continue
+                try:
+                    if target is None:
+                        await cast("Callable[[str], Awaitable[None]]", push)(text)
+                    else:
+                        await cast("Callable[[str, str], Awaitable[None]]", targeted)(target, text)
+                except Exception as exc:
+                    complete = False
+                    logger.warning(
+                        "notifier %r target %r failed for %s: %s", notifier_id, target, key, exc
+                    )
+                else:
+                    await self._storage.set_preference(receipt, "delivered")
+        if destinations:
+            if not complete:
+                return False
+            await self._storage.set_preference(key, "fired")
+            await self._events.emit(event, **payload)
+            return True
+        if await self._events.emit_confirmed(event, **payload):
+            await self._storage.set_preference(key, "fired")
+            return True
+        return False
 
     def _format_digest(self, date_key: str, items: list[ActionItem]) -> str:
         """Format digest item times in the configured display timezone."""
@@ -955,7 +1001,12 @@ class MailFlowRuntime:
             ]
             header = self._rt(
                 "reminder.digest_push",
-                today=sum(1 for item in items if item.due_at.date().isoformat() == date_key),
+                today=sum(
+                    1
+                    for item in items
+                    if to_utc(item.due_at).astimezone(ZoneInfo(display_timezone)).date().isoformat()
+                    <= date_key
+                ),
                 total=len(items),
             )
             if header and lines:

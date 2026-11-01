@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import ValidationError
 
 from mailflow import __version__
+from mailflow.action_store import action_has_ended, action_key
 from mailflow.config import (
     LLMConfig,
     MailFlowConfig,
@@ -67,7 +68,6 @@ from mailflow.domain import (
     TrashRecord,
     Urgency,
     actions_duplicate,
-    dedupe_actions,
     to_utc,
     utcnow,
 )
@@ -861,7 +861,7 @@ class MailFlowService:
     @staticmethod
     def _has_future_obligation(items: list[ActionItem], now: datetime) -> bool:
         """Any item still running or ahead counts, including a window's end."""
-        return any((item.due_end or item.due_at) > now for item in items)
+        return any(not action_has_ended(item, now) for item in items)
 
     async def _actions_by_mail(self) -> dict[str, list[ActionItem]]:
         """Schedule entries created from a mail, grouped by that mail id.
@@ -873,9 +873,11 @@ class MailFlowService:
         reminder that still fires.
         """
         index: dict[str, list[ActionItem]] = {}
-        for item in await self.storage.list_custom_actions():
-            if item.mail_id:
-                index.setdefault(item.mail_id, []).append(item)
+        for entry in await self.runtime.action_store.read(deduplicate=False):
+            item = entry.item
+            mail_id = entry.record.record_id if entry.record is not None else item.mail_id
+            if mail_id:
+                index.setdefault(mail_id, []).append(item)
         return index
 
     def _is_expired(
@@ -902,7 +904,7 @@ class MailFlowService:
         urgency = record.effective_urgency
         if urgency not in {Urgency.AD, Urgency.INFO}:
             return False
-        items = [*record.action_items, *(linked or [])]
+        items = record.action_items if linked is None else linked
         if self._has_future_obligation(items, now):
             return False
         if urgency is Urgency.AD:
@@ -1025,83 +1027,46 @@ class MailFlowService:
 
     @staticmethod
     def action_natural_key(item: ActionItem) -> str:
-        """Stable identity across re-analysis: mail id + due time + type.
-
-        The summary text varies between LLM runs and is deliberately excluded
-        so a re-generated replacement still matches its dismissed predecessor.
-        Public because the expiry sweep and the manual delete must record the
-        *same* identity — otherwise an entry the sweep removed would silently
-        return the next time its mail was re-analyzed.
-        """
-        return f"{item.mail_id}|{to_utc(item.due_at).isoformat()}|{item.action_type}"
+        return action_key(item)
 
     async def _dismissed_keys(self) -> frozenset[str]:
-        raw = await self.storage.get_preference("actions.dismissed")
-        try:
-            parsed = json.loads(raw or "[]")
-            return frozenset(str(k) for k in parsed)
-        except Exception:
-            return frozenset()
+        return await self.runtime.action_store.dismissed()
 
     async def _set_dismissed_keys(self, keys: frozenset[str] | set[str]) -> None:
-        await self.storage.set_preference(
-            "actions.dismissed", json.dumps(sorted(keys), ensure_ascii=False)
-        )
-
-    async def _add_dismissed_key(self, key: str) -> None:
-        await self._set_dismissed_keys(await self._dismissed_keys() | {key})
+        await self.runtime.action_store.set_dismissed(keys)
 
     async def list_actions(self) -> list[ActionItem]:
-        """All timed action items by due time, one entry per event.
-
-        Mail-derived items whose natural key was dismissed (deleted by the
-        user) stay hidden even after the mail is re-analyzed; user-created
-        items are deleted for real. Two mails reminding of the same event
-        collapse onto the earliest entry — ``list_actions_all`` keeps every
-        stored entry for the delete path.
-        """
-        dismissed = await self._dismissed_keys()
-        items: list[ActionItem] = []
-        for record in await self.storage.list_mails():
-            items.extend(
-                item
-                for item in record.action_items
-                if self.action_natural_key(item) not in dismissed
-            )
-        custom = await self.storage.list_custom_actions()
-        items.extend(item for item in custom if self.action_natural_key(item) not in dismissed)
-        return dedupe_actions(items)
+        return [entry.item for entry in await self.runtime.action_store.read()]
 
     async def delete_action(self, item_id: str) -> bool:
-        """Delete an action item.
+        async with self.runtime.action_store.lock:
+            entries = await self.runtime.action_store.read(deduplicate=False)
+            target = next((entry for entry in entries if entry.item.item_id == item_id), None)
+            if target is None:
+                matches = [entry for entry in entries if entry.item.item_id.startswith(item_id)]
+                if len(matches) == 1:
+                    target = matches[0]
+            if target is None:
+                return False
+            removed = await self.runtime.action_store.remove(target, entries)
+        if removed:
+            if target.custom and target.item.origin is ActionOrigin.SEMINAR:
+                await self._retire_seminar(target.item.item_id, SeminarStatus.REJECTED)
+            await self.events.emit("action.deleted", item_id=target.item.item_id)
+        return removed
 
-        User-created items are removed from storage permanently. Items
-        derived from a mail cannot be deleted (they regenerate on
-        re-analysis); they are recorded in a dismissal list keyed by their
-        stable identity so they stay hidden across re-parses."""
-        all_items = await self.list_actions_all()
-        target = next((i for i in all_items if i.item_id == item_id), None)
-        if target is None:
-            # fall back to prefix matching like the router does
-            matches = [i for i in all_items if i.item_id.startswith(item_id)]
-            if len(matches) == 1:
-                target = matches[0]
-        if target is None:
-            return False
-        if target.origin is ActionOrigin.ANALYSIS and target.mail_id:
-            await self._add_dismissed_key(self.action_natural_key(target))
-            return True
-        return await self.storage.delete_custom_action(item_id)
+    async def _retire_seminar(self, item_id: str, status: SeminarStatus) -> None:
+        async with self._seminar_lock:
+            candidates = await self._load_seminar_candidates()
+            for index, candidate in enumerate(candidates):
+                if candidate.candidate_id == item_id:
+                    candidates[index] = candidate.model_copy(update={"status": status})
+                    await self._save_seminar_candidates(candidates)
+                    break
 
     @staticmethod
     def _action_has_ended(item: ActionItem, cutoff: datetime) -> bool:
-        """Whether the entry finished at or before ``cutoff``.
-
-        An entry with a window (``due_end``) counts as over only when the
-        window closed: deleting a meeting while it is still running would
-        drop the reminder the user is relying on right now.
-        """
-        return to_utc(item.due_end or item.due_at) <= cutoff
+        return action_has_ended(item, cutoff)
 
     def is_action_expired(self, item: ActionItem) -> bool:
         """Whether this schedule entry is already over (for display styling).
@@ -1123,51 +1088,28 @@ class MailFlowService:
         return None
 
     async def purge_expired_actions(self) -> int:
-        """Retire schedule entries that stopped being actionable over a day ago.
-
-        "Expired" is measured from the entry's end: an entry is swept only
-        once it has been over for more than ``_EXPIRED_ACTION_AGE``, so the
-        item the user is looking at — and the one whose reminder just fired —
-        survives until they have had a chance to act on it. Returns how many
-        entries were retired.
-
-        Mail-derived entries cannot be removed from the record that owns
-        them, so they are dismissed by their natural key, exactly like a
-        manual delete; that keeps them hidden when the same mail is
-        re-analyzed. User todos and imported seminars live in the
-        custom-action store and are deleted for real.
-        """
+        """Retire visible entries a day after their full time window ended."""
         cutoff = datetime.now(UTC) - _EXPIRED_ACTION_AGE
-        dismissed = await self._dismissed_keys()
-        expired_keys = {
-            self.action_natural_key(item)
-            for record in await self.storage.list_mails()
-            for item in record.action_items
-            if self.action_natural_key(item) not in dismissed
-            and self._action_has_ended(item, cutoff)
-        }
-        if expired_keys:
-            # one write for the whole sweep: a per-item write would rewrite
-            # the preference list once per expired entry
-            await self._set_dismissed_keys(dismissed | expired_keys)
-        retired = len(expired_keys)
-        for item in await self.storage.list_custom_actions():
-            if self._action_has_ended(item, cutoff) and await self.storage.delete_custom_action(
-                item.item_id
-            ):
-                retired += 1
+        retired = 0
+        retired_seminars: list[str] = []
+        async with self.runtime.action_store.lock:
+            entries = await self.runtime.action_store.read(deduplicate=False)
+            for entry in entries:
+                if action_has_ended(entry.item, cutoff):
+                    removed = await self.runtime.action_store.remove(entry, [entry])
+                    retired += int(removed)
+                    if removed and entry.custom and entry.item.origin is ActionOrigin.SEMINAR:
+                        retired_seminars.append(entry.item.item_id)
+        for item_id in retired_seminars:
+            await self._retire_seminar(item_id, SeminarStatus.EXPIRED)
         if retired:
             logger.info("retired %d spent schedule entry(ies)", retired)
             await self.events.emit("action.expired", count=retired)
         return retired
 
     async def list_actions_all(self) -> list[ActionItem]:
-        """list_actions() without the dismissal filter (internal)."""
-        items: list[ActionItem] = []
-        for record in await self.storage.list_mails():
-            items.extend(record.action_items)
-        items.extend(await self.storage.list_custom_actions())
-        return sorted(items, key=lambda item: item.due_at)
+        """Visible entries before event deduplication, for edits and searches."""
+        return [entry.item for entry in await self.runtime.action_store.read(deduplicate=False)]
 
     async def add_action(
         self,
@@ -1240,22 +1182,12 @@ class MailFlowService:
         Mail-analysis actions remain source-owned and are intentionally not
         mutable here; re-analysis would otherwise silently undo the edit.
         """
-        source = next(
-            (
-                candidate
-                for candidate in await self.list_actions_all()
-                if candidate.item_id == item_id
-            ),
-            None,
-        )
-        if source is not None and source.origin is ActionOrigin.ANALYSIS:
-            raise ValueError(self.t("action.not_editable", item_id=item_id))
         custom = await self.storage.list_custom_actions()
         item = next((candidate for candidate in custom if candidate.item_id == item_id), None)
         if item is None:
+            if any(candidate.item_id == item_id for candidate in await self.list_actions_all()):
+                raise ValueError(self.t("action.not_editable", item_id=item_id))
             raise ValueError(self.t("action.not_found", item_id=item_id))
-        if item.origin is ActionOrigin.ANALYSIS:
-            raise ValueError(self.t("action.not_editable", item_id=item_id))
         if clear_end and due_end is not None:
             raise ValueError(self.t("action.invalid_end"))
         final_summary = item.summary if summary is None else summary.strip()

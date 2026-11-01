@@ -49,42 +49,17 @@ class OneBotNotifier:
             self._targets.append((kind, identifier.strip()))
 
     async def push_text(self, text: str) -> None:
-        """Push a plain-text message (schedule reminders, daily digest)
-        to every configured target through the OneBot HTTP API."""
+        """Return only after every configured destination accepted the push."""
         if not self._url or not self._targets:
-            return
-        headers = {"Content-Type": "application/json"}
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            for kind, identifier in self._targets:
-                endpoint = (
-                    f"{self._url}/send_private_msg"
-                    if kind == "user"
-                    else f"{self._url}/send_group_msg"
-                )
-                payload = (
-                    {"user_id": int(identifier), "message": text}
-                    if kind == "user"
-                    else {"group_id": int(identifier), "message": text}
-                )
-                try:
-                    resp = await client.post(endpoint, json=payload, headers=headers)
-                    if resp.status_code >= 400:
-                        logger.warning(
-                            "onebot notifier: text push to %s:%s rejected: HTTP %d",
-                            kind,
-                            identifier,
-                            resp.status_code,
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        "onebot notifier: text push to %s:%s failed: %s", kind, identifier, exc
-                    )
+            raise ValueError("onebot notifier requires http_url and targets")
+        for kind, identifier in self._targets:
+            await self.push_to_target(f"{kind}:{identifier}", text)
 
     async def push_to_target(self, target: str, text: str) -> None:
         """Push one plain-text message to a single ``user:<id>`` or
         ``group:<id>`` target (per-chat hourly-summary delivery)."""
+        if not self._url:
+            raise ValueError("onebot notifier requires http_url")
         kind, _, identifier = target.partition(":")
         kind = kind.strip().lower()
         identifier = identifier.strip() or target.strip()
@@ -103,12 +78,10 @@ class OneBotNotifier:
         )
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(endpoint, json=payload, headers=headers)
-            if resp.status_code >= 400:
-                logger.warning(
-                    "onebot notifier: targeted push to %s rejected: HTTP %d",
-                    target,
-                    resp.status_code,
-                )
+            resp.raise_for_status()
+            result = resp.json()
+            if result.get("status") == "failed" or result.get("retcode", 0) != 0:
+                raise RuntimeError(f"onebot delivery rejected: {result.get('retcode', 'failed')}")
 
     async def notify(self, record: MailRecord) -> None:
         if not self._url or not self._targets:

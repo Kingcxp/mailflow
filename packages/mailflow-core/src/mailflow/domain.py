@@ -264,16 +264,12 @@ class ActionItem(BaseModel):
         """Format the stored instant in a configured display timezone."""
         zone = ZoneInfo(timezone_name)
 
-        def _local(value: datetime) -> datetime:
-            if value.tzinfo is None:
-                value = value.replace(tzinfo=UTC)
-            return value.astimezone(zone)
-
         fmt = "%Y-%m-%d %H:%M"
-        start = _local(self.due_at)
-        if self.due_end is None or self.due_end == self.due_at:
-            return start.strftime(fmt)
-        return f"{start.strftime(fmt)} ~ {_local(self.due_end).strftime(fmt)}"
+        start, end = action_time_window(self)
+        display_start = start.astimezone(zone).strftime(fmt)
+        if end == start:
+            return display_start
+        return f"{display_start} ~ {end.astimezone(zone).strftime(fmt)}"
 
     @property
     def time_range(self) -> str:

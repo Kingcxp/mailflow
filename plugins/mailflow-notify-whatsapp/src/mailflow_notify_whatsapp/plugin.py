@@ -94,32 +94,17 @@ class WhatsappNotifier:
                     logger.warning("whatsapp delivery to %s:%s failed: %s", kind, name, exc)
 
     async def push_text(self, text: str) -> None:
-        """Push a plain-text message (schedule reminders, daily digest)
-        to every configured target through the bridge's /send endpoint."""
+        """Return only after every configured destination accepted the push."""
         if not self._url or not self._targets:
-            return
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            for kind, name in self._targets:
-                try:
-                    response = await client.post(
-                        f"{self._url}/send", json=self._payload(kind, name, text)
-                    )
-                    if response.status_code >= 400:
-                        logger.warning(
-                            "whatsapp text push to %s:%s rejected: HTTP %d",
-                            kind,
-                            name,
-                            response.status_code,
-                        )
-                except Exception as exc:
-                    logger.warning("whatsapp text push to %s:%s failed: %s", kind, name, exc)
+            raise ValueError("whatsapp notifier requires gateway_url and targets")
+        for kind, name in self._targets:
+            await self.push_to_target(f"{kind}:{name}", text)
 
     async def push_to_target(self, target: str, text: str) -> None:
         """Push one plain-text message to a single ``user:<jid>`` or
         ``group:<jid>`` target (per-chat hourly-summary delivery)."""
         if not self._url:
-            logger.warning("whatsapp notifier: gateway_url not configured; skipping %s", target)
-            return
+            raise ValueError("whatsapp notifier requires gateway_url")
         kind, _, name = target.partition(":")
         kind = kind.strip().lower()
         name = name.strip() or target.strip()
@@ -127,12 +112,7 @@ class WhatsappNotifier:
             kind, name = "user", target.strip()
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(f"{self._url}/send", json=self._payload(kind, name, text))
-            if response.status_code >= 400:
-                logger.warning(
-                    "whatsapp notifier: targeted push to %s rejected: HTTP %d",
-                    target,
-                    response.status_code,
-                )
+            response.raise_for_status()
 
 
 class WhatsappPlugin:

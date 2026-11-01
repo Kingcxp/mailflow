@@ -39,10 +39,14 @@ class EventBus:
         return self.subscribe("*", handler)
 
     async def emit(self, event: str, **payload: Any) -> None:
+        await self.emit_confirmed(event, **payload)
+
+    async def emit_confirmed(self, event: str, **payload: Any) -> bool:
+        """Whether at least one subscriber accepted the event and none failed."""
         handlers = list(self._subscribers.get(event, []))
         wildcard = list(self._subscribers.get("*", []))
         if not handlers and not wildcard:
-            return
+            return False
         results = await asyncio.gather(
             *(h(event=event, **payload) for h in handlers),
             *(h(event=event, **payload) for h in wildcard),
@@ -56,6 +60,7 @@ class EventBus:
                     event,
                     result,
                 )
+        return not any(isinstance(result, BaseException) for result in results)
 
 
 __all__ = ["EventBus", "EventHandler", "Unsubscribe"]

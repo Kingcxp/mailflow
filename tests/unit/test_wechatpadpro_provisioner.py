@@ -261,6 +261,9 @@ async def test_webhook_bridge_sends_every_bot_reply_page(
 class _NotifierResponse:
     status_code = 200
 
+    def raise_for_status(self) -> None:
+        pass
+
     def json(self) -> dict[str, int]:
         return {"Code": 0}
 
