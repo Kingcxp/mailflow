@@ -8,6 +8,7 @@ skip-without-credentials / one-request-per-target behaviour.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 from typing import Any, ClassVar
 
@@ -139,6 +140,27 @@ async def test_start_without_a_token_is_an_error() -> None:
         await prov.start("tg-1", {})
 
 
+async def test_changing_token_or_host_replaces_old_poller(api: dict[str, Any]) -> None:
+    provisioner = TelegramProvisioner()
+    first = await provisioner.ensure_bridge("one", {"bot_token": "old", "bot_url": "http://old"})
+    first_task = first._task
+    same = await asyncio.gather(
+        *(
+            provisioner.ensure_bridge("one", {"bot_token": "old", "bot_url": "http://old"})
+            for _ in range(3)
+        )
+    )
+    assert all(bridge is first for bridge in same)
+    second = await provisioner.ensure_bridge("one", {"bot_token": "old", "bot_url": "http://new"})
+    assert second is not first and first_task.done()
+    second_task = second._task
+    third = await provisioner.ensure_bridge("one", {"bot_token": "new", "bot_url": "http://new"})
+    assert third is not second and second_task.done()
+    await provisioner.stop("one")
+    await provisioner.stop("one")
+    assert not third.running
+
+
 @pytest.mark.asyncio
 async def test_start_reports_the_bot_identity(api: dict[str, Any]) -> None:
     prov = TelegramProvisioner()
@@ -186,11 +208,15 @@ async def test_ensure_bridge_without_a_token_warns_and_does_nothing(
 
 
 @pytest.mark.asyncio
-async def test_qr_returns_the_logged_in_sentinel() -> None:
+async def test_qr_requires_an_active_authenticated_bridge(api: dict[str, Any]) -> None:
     """Telegram has no QR login: the guided setup must complete at once
     instead of waiting out the QR timeout."""
     prov = TelegramProvisioner()
+    assert (await prov.qr("tg-1")).startswith("ERROR:")
+    await prov.start("tg-1", {"bot_token": "123:abc"})
     assert await prov.qr("tg-1") == "__MAILFLOW_LOGGED_IN__"
+    await prov.stop("tg-1")
+    assert (await prov.qr("tg-1")).startswith("ERROR:")
 
 
 @pytest.mark.asyncio

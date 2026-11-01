@@ -89,7 +89,131 @@ def _manager(provisioner: FakeProvisioner) -> tuple[GatewayManager, FakeStorage]
     return GatewayManager(config, registry, storage), storage
 
 
-async def test_plugin_reload_keeps_supervisor_and_disable_stops_gateway() -> None:
+async def test_stop_during_install_never_starts_gateway() -> None:
+    installing = asyncio.Event()
+
+    class SlowInstall(FakeProvisioner):
+        async def install(self, instance_id: str, options: dict[str, Any]) -> None:
+            installing.set()
+            await asyncio.Event().wait()
+
+    provisioner = SlowInstall()
+    manager, _ = _manager(provisioner)
+    operation = asyncio.create_task(manager.provision("fake-gw", "one", {}))
+    await installing.wait()
+    await manager.stop()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+    await manager.stop()
+    assert provisioner.started == []
+    assert provisioner.stopped == ["one"]
+
+
+async def test_shutdown_also_cancels_setup_waiting_for_the_same_instance() -> None:
+    entered = asyncio.Event()
+
+    class Installing(FakeProvisioner):
+        async def install(self, instance_id: str, options: dict[str, Any]) -> None:
+            self.installed.append(instance_id)
+            entered.set()
+            await asyncio.Event().wait()
+
+    provisioner = Installing()
+    manager, _ = _manager(provisioner)
+    first = asyncio.create_task(manager.provision("fake-gw", "one", {}))
+    await entered.wait()
+    second = asyncio.create_task(manager.provision("fake-gw", "one", {}))
+    await asyncio.sleep(0)
+    await manager.stop()
+    outcomes = await asyncio.gather(first, second, return_exceptions=True)
+    assert isinstance(outcomes[0], asyncio.CancelledError)
+    assert isinstance(outcomes[1], RuntimeError)
+    assert provisioner.installed == ["one"] and not provisioner.started
+
+
+async def test_slow_stop_is_bounded_and_retry_joins_the_same_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = asyncio.Event()
+
+    class SlowStop(FakeProvisioner):
+        async def stop(self, instance_id: str) -> None:
+            self.stopped.append(instance_id)
+            await release.wait()
+
+    monkeypatch.setattr("mailflow.gateway._STOP_TIMEOUT_SECONDS", 0.02)
+    provisioner = SlowStop()
+    manager, _ = _manager(provisioner)
+    await manager.provision("fake-gw", "one", {})
+    with pytest.raises(RuntimeError, match="stop failed"):
+        await manager.stop()
+    with pytest.raises(RuntimeError, match="shutdown is still in progress"):
+        await manager.start()
+    release.set()
+    await manager.stop()
+    await manager.stop()
+    assert provisioner.stopped == ["one"]
+    instance = manager.instance("fake-gw", "one")
+    assert instance is not None and instance.status == "stopped"
+
+
+async def test_login_timeout_cleans_failed_setup_and_preserves_error() -> None:
+    provisioner = FakeProvisioner()
+    manager, _ = _manager(provisioner)
+    await manager.provision("fake-gw", "one", {"login_timeout_seconds": 0})
+    supervisor = manager._supervise_tasks["fake-gw.one"]
+    await asyncio.wait_for(supervisor, timeout=1)
+    instance = manager.instance("fake-gw", "one")
+    assert instance is not None and instance.status == "error"
+    assert "login timed out" in instance.error
+    await manager.stop()
+    assert provisioner.stopped == ["one"]
+
+
+async def test_progress_and_supervisors_are_isolated_by_instance() -> None:
+    provisioner = FakeProvisioner()
+    manager, _ = _manager(provisioner)
+    await asyncio.gather(
+        manager.provision("fake-gw", "one", {}),
+        manager.provision("fake-gw", "two", {}),
+    )
+    assert manager.progress("fake-gw", "one") is not manager.progress("fake-gw", "two")
+    supervisors = dict(manager._supervise_tasks)
+    await manager.start()
+    await manager.start()
+    assert manager._supervise_tasks == supervisors
+    await manager.stop()
+    await manager.stop()
+    assert sorted(provisioner.stopped) == ["one", "two"]
+
+
+async def test_service_restart_does_not_resume_removed_or_disabled_notifiers() -> None:
+    from types import SimpleNamespace
+
+    from mailflow.config import NotifierConfig
+
+    provisioner = FakeProvisioner()
+    manager, _storage = _manager(provisioner)
+    for name in ("removed", "disabled"):
+        await manager.provision("fake-gw", name, {})
+    await manager.stop(persist_running=True)
+    manager._config.notifiers = [
+        NotifierConfig(
+            notifier_id="disabled",
+            provider="fake-notify",
+            enabled=False,
+            options={"gateway": "fake-gw"},
+        )
+    ]
+    manager._service_ref = SimpleNamespace(bot_server=None)
+    await manager.start()
+    assert not manager._supervise_tasks
+    assert all(instance.status == "stopped" for instance in await manager.instances())
+    await manager.stop()
+    assert sorted(provisioner.stopped) == ["disabled", "removed"]
+
+
+async def test_plugin_reload_replaces_supervisor_and_stops_old_gateway() -> None:
     provisioner = FakeProvisioner()
     manager, storage = _manager(provisioner)
     await manager.provision("fake-gw", "gw-1", {})
@@ -100,10 +224,11 @@ async def test_plugin_reload_keeps_supervisor_and_disable_stops_gateway() -> Non
         "fake-gw", lambda: provisioner
     )
     await manager.reconfigure(config, registry, running=True)
-    assert manager._supervise_tasks == tasks  # pyright: ignore[reportPrivateUsage]
-    assert provisioner.stopped == []
-    await manager.reconfigure(config, ComponentRegistry(), running=True)
+    assert manager._supervise_tasks != tasks  # pyright: ignore[reportPrivateUsage]
+    assert all(task.done() for task in tasks.values())
     assert provisioner.stopped == ["gw-1"]
+    await manager.reconfigure(config, ComponentRegistry(), running=True)
+    assert provisioner.stopped == ["gw-1", "gw-1"]
     assert all(task.done() for task in tasks.values())
     assert await manager.instances() == []
     assert '"running"' in storage.preferences["gateway.instance.fake-gw.gw-1"]
@@ -253,7 +378,8 @@ async def test_reprovision_replaces_supervisor_and_persisted_options() -> None:
     assert first is not second
     assert first.done()
     assert len(manager._supervise_tasks) == 1  # pyright: ignore[reportPrivateUsage]
-    assert instance.extra == {"options": {"bot_url": "http://new"}, "autostart": False}
+    assert instance.extra["options"] == {"bot_url": "http://new"}
+    assert instance.extra["autostart"] is False
     await manager.stop()
 
 

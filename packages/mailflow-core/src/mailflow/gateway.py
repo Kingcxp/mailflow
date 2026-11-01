@@ -23,11 +23,14 @@ from typing import Any, cast
 from mailflow.config import MailFlowConfig
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
 from mailflow.domain import ComponentKind
+from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.registry import ComponentRegistry
 
 logger = logging.getLogger("mailflow.gateway")
 
 _PREF_PREFIX = "gateway.instance."
+_STOP_TIMEOUT_SECONDS = 8.0
+_PROBE_TIMEOUT_SECONDS = 15.0
 
 
 class GatewayNotInstalledError(RuntimeError):
@@ -90,13 +93,22 @@ class GatewayManager:
         self._config = config
         self._registry = registry
         self._storage = storage
-        # set by the owning service after bot_server exists; used only to
-        # heal persisted states that lost options.bot_url
+        # The service supplies current notifier ownership and bot_url.
         self._service_ref: Any = None
         self._provisioners: dict[str, GatewayProvisioner] = {}
         self._instances: dict[str, GatewayInstance] = {}
         self._supervise_tasks: dict[str, asyncio.Task[Any]] = {}
         self._stop_event = asyncio.Event()
+        self._lifecycle_lock = asyncio.Lock()
+        self._running = False
+        self._stopped_keys: set[str] = set()
+        self._operation_locks: dict[str, asyncio.Lock] = {}
+        self._operations: dict[str, asyncio.Task[GatewayInstance]] = {}
+        self._pending_stops: dict[str, asyncio.Task[None]] = {}
+        self._progress: dict[str, InstallProgress] = {}
+        self._stopping = False
+        self._reconfiguring = False
+        self._generation = 0
         # gates concurrent gateway launches (each NapCat is a full QQ
         # Electron app, ~1.5-2 GB RAM); shared by the startup resumes and
         # the guided-provision start so the host never OOMs
@@ -128,20 +140,26 @@ class GatewayManager:
         task = self._supervise_tasks.pop(self._key(provider, instance_id), None)
         if task is None:
             return
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        await cancel_tasks([task])
 
     async def _cleanup_failed_provision(
         self, provisioner: GatewayProvisioner, instance: GatewayInstance
     ) -> str:
         """Best-effort stop after a failed or cancelled install/start.
 
-        A provisioner can have launched child processes before reporting a
-        readiness failure. Leave the generated payload for a retry, but never
-        leave that partial process tree running without a managed instance.
+        Stop partial processes and roll back files created by this setup.
+        Existing credentials remain owned by their existing instance.
         """
         try:
-            await provisioner.stop(instance.instance_id)
+            await self._stop_provider(instance)
+            rollback = getattr(provisioner, "cleanup_failed", None)
+            if callable(rollback):
+                await bounded(
+                    rollback(instance.instance_id),
+                    timeout_seconds=_STOP_TIMEOUT_SECONDS,
+                    label=f"gateway {instance.provider}.{instance.instance_id} rollback",
+                )
+            self._stopped_keys.add(self._key(instance.provider, instance.instance_id))
         except Exception as exc:
             logger.error(
                 "gateway %s.%s cleanup after failed provisioning failed: %s",
@@ -174,6 +192,9 @@ class GatewayManager:
     def instance(self, provider: str, instance_id: str) -> GatewayInstance | None:
         return self._instances.get(self._key(provider, instance_id))
 
+    def progress(self, provider: str, instance_id: str) -> InstallProgress | None:
+        return self._progress.get(self._key(provider, instance_id))
+
     # -- lifecycle --------------------------------------------------------------
 
     async def start(self) -> None:
@@ -183,7 +204,25 @@ class GatewayManager:
         ``self._start_limiter`` inside :meth:`_supervise`, so many
         instances at boot never launch more than two QQ/NapCat Electron
         apps at once (~1.5-2 GB each)."""
-        self._stop_event = asyncio.Event()
+        async with self._lifecycle_lock:
+            if any(not task.done() for task in self._pending_stops.values()):
+                raise RuntimeError("gateway shutdown is still in progress; retry after it finishes")
+            if any(not task.done() for task in self._operations.values()):
+                raise RuntimeError("gateway setup cleanup is still in progress")
+            if any(
+                instance.error.startswith("stop failed:") for instance in self._instances.values()
+            ):
+                raise RuntimeError("gateway shutdown failed; retry stopping it before starting")
+            if self._running:
+                await self._resume_persisted()
+                return
+            if self._stopped_keys:
+                self._provisioners.clear()
+            self._stop_event = asyncio.Event()
+            self._running = True
+            await self._resume_persisted()
+
+    async def _resume_persisted(self) -> None:
         # scan preferences for known instances
         for instance in await self._list_persisted():
             key = self._key(instance.provider, instance.instance_id)
@@ -198,33 +237,54 @@ class GatewayManager:
             options_dict: dict[str, Any] = (
                 dict(cast("dict[str, Any]", options)) if isinstance(options, dict) else {}
             )
-            if not options_dict.get("bot_url"):
-                bot_server = getattr(self._service_ref, "bot_server", None)
-                url = str(getattr(bot_server, "url", "") or "") if bot_server else ""
-                if url:
-                    instance = instance.model_copy(
-                        update={
-                            "extra": {
-                                **instance.extra,
-                                "options": {**options_dict, "bot_url": url},
-                            }
+            if self._service_ref is not None:
+                notifier = next(
+                    (
+                        item
+                        for item in self._config.notifiers
+                        if item.notifier_id == instance.instance_id
+                        and item.options.get("gateway") == instance.provider
+                    ),
+                    None,
+                )
+                if (
+                    notifier is None
+                    or not notifier.enabled
+                    or not self._registry.has(ComponentKind.NOTIFIER, notifier.provider)
+                ):
+                    self._instances[key] = instance.model_copy(update={"status": "stopped"})
+                    self._stopped_keys.add(key)
+                    continue
+                options_dict.update(notifier.options)
+            bot_server = getattr(self._service_ref, "bot_server", None)
+            url = str(getattr(bot_server, "url", "") or "") if bot_server else ""
+            if url:
+                options_dict["bot_url"] = url
+            if options_dict != options:
+                instance = instance.model_copy(
+                    update={
+                        "extra": {
+                            **instance.extra,
+                            "options": options_dict,
                         }
-                    )
-                    await self._save_state(instance)
-                    logger.info(
-                        "gateway %s.%s: healed missing bot_url in persisted options",
-                        instance.provider,
-                        instance.instance_id,
-                    )
+                    }
+                )
+                await self._save_state(instance)
+                logger.info(
+                    "gateway %s.%s: refreshed persisted instance options",
+                    instance.provider,
+                    instance.instance_id,
+                )
             self._instances[key] = instance
             # resume RUNNING instances, but ALSO instances left in `error`
             # (e.g. the deploy failed on missing system libraries): once the
             # operator fixed the environment and restarted, the supervisor
             # must retry the deploy — otherwise the instance is stuck in
             # error forever and the only way out is deleting the notifier.
-            if instance.status in (_STATUS_RUNNING, "error") and instance.extra.get(
+            if instance.status in (_STATUS_RUNNING, "starting", "error") and instance.extra.get(
                 "autostart", True
             ):
+                self._stopped_keys.discard(key)
                 self._supervise_tasks[key] = asyncio.create_task(
                     self._supervise(instance, resume=True),
                     name=f"gateway-{instance.instance_id}",
@@ -233,27 +293,18 @@ class GatewayManager:
     async def reconfigure(
         self, config: MailFlowConfig, registry: ComponentRegistry, *, running: bool
     ) -> None:
-        """Unload removed provisioners while preserving their saved instances."""
-        removed = {
-            provider
-            for provider in self.providers()
-            if self._registry.plugin_for(provider, ComponentKind.GATEWAY_PROVISIONER)
-            != registry.plugin_for(provider, ComponentKind.GATEWAY_PROVISIONER)
-        }
-        for key, instance in list(self._instances.items()):
-            if instance.provider not in removed:
-                continue
-            await self._cancel_supervisor(instance.provider, instance.instance_id)
-            try:
-                await self.provisioner(instance.provider).stop(instance.instance_id)
-            except Exception as exc:
-                raise RuntimeError(f"gateway {key}: {exc}") from exc
-            self._instances.pop(key, None)
-        for provider in removed:
-            self._provisioners.pop(provider, None)
-        self._config, self._registry = config, registry
-        if running:
-            await self.start()
+        """Release every old provisioner and bridge before adopting a registry."""
+        self._reconfiguring = True
+        try:
+            await self.stop(persist_running=True)
+            self._provisioners.clear()
+            self._instances.clear()
+            self._stopped_keys.clear()
+            self._config, self._registry = config, registry
+            if running:
+                await self.start()
+        finally:
+            self._reconfiguring = False
 
     async def _list_persisted(self) -> list[GatewayInstance]:
         found: list[GatewayInstance] = []
@@ -282,27 +333,80 @@ class GatewayManager:
         normal TUI exit the gateways never came back, with no start logs
         and no supervision. Only an explicit per-instance shutdown (the
         Bots tab / guide) marks a user stop."""
-        self._stop_event.set()
-        tasks = list(self._supervise_tasks.values())
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._supervise_tasks.clear()
-        for instance in list(self._instances.values()):
-            if instance.status == _STATUS_RUNNING:
-                try:
-                    await self.provisioner(instance.provider).stop(instance.instance_id)
-                except Exception as exc:
-                    logger.warning(
-                        "gateway %s.%s stop failed: %s",
-                        instance.provider,
-                        instance.instance_id,
-                        exc,
-                    )
-                if not persist_running:
-                    instance.status = "stopped"
-                await self._save_state(instance)
+        async with self._lifecycle_lock:
+            if (
+                not self._running
+                and not self._supervise_tasks
+                and not self._instances
+                and not self._operations
+            ):
+                return
+            self._running = False
+            self._stopping = True
+            self._generation += 1
+            self._stop_event.set()
+            try:
+                await cancel_tasks([*self._supervise_tasks.values(), *self._operations.values()])
+                self._supervise_tasks.clear()
+                results = await asyncio.gather(
+                    *(
+                        self._stop_instance(instance, persist_running=persist_running)
+                        for instance in self._instances.values()
+                    ),
+                    return_exceptions=True,
+                )
+                errors = [str(result) for result in results if isinstance(result, Exception)]
+                pending = [task for task in self._operations.values() if not task.done()]
+                if pending:
+                    _, unfinished = await asyncio.wait(pending, timeout=2.0)
+                    if unfinished:
+                        errors.append("gateway setup cleanup is still in progress; retry stopping")
+                if errors:
+                    raise RuntimeError("; ".join(errors))
+            finally:
+                self._stopping = False
+
+    async def _stop_instance(self, instance: GatewayInstance, *, persist_running: bool) -> None:
+        key = self._key(instance.provider, instance.instance_id)
+        if key in self._stopped_keys:
+            return
+        try:
+            await self._stop_provider(instance)
+        except Exception as exc:
+            instance.status = "error"
+            instance.error = f"stop failed: {exc}"
+            await self._save_state(instance)
+            raise RuntimeError(f"gateway {key}: {instance.error}") from exc
+        self._stopped_keys.add(key)
+        instance.error = ""
+        if not persist_running:
+            instance.status = "stopped"
+        await self._save_state(instance)
+
+    async def _stop_provider(self, instance: GatewayInstance) -> None:
+        key = self._key(instance.provider, instance.instance_id)
+        if key in self._stopped_keys:
+            return
+        task = self._pending_stops.get(key)
+        if task is None:
+            task = asyncio.create_task(
+                self.provisioner(instance.provider).stop(instance.instance_id),
+                name=f"gateway-stop-{key}",
+            )
+            task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+            self._pending_stops[key] = task
+        try:
+            # Retain a slow stop operation so a retry joins it instead of
+            # issuing a second stop against the same process/bridge.
+            await bounded(
+                asyncio.shield(task),
+                timeout_seconds=_STOP_TIMEOUT_SECONDS,
+                label=f"gateway {key} stop",
+            )
+        finally:
+            if task.done():
+                self._pending_stops.pop(key, None)
+        self._stopped_keys.add(key)
 
     async def _ensure_side_channels(self, instance: GatewayInstance) -> None:
         """Give the provisioner a chance to recreate in-process bridges.
@@ -318,30 +422,32 @@ class GatewayManager:
         ensure = getattr(self.provisioner(instance.provider), "ensure_bridge", None)
         if ensure is None:
             return
-        try:
-            await ensure(instance.instance_id, instance.extra.get("options", {}))
-        except Exception as exc:
-            logger.warning(
-                "gateway %s.%s bridge ensure failed: %s",
-                instance.provider,
-                instance.instance_id,
-                exc,
-            )
+        await bounded(
+            ensure(instance.instance_id, instance.extra.get("options", {})),
+            timeout_seconds=_PROBE_TIMEOUT_SECONDS,
+            label=f"gateway {instance.provider}.{instance.instance_id} bridge",
+        )
 
     async def _supervise(self, instance: GatewayInstance, *, resume: bool = False) -> None:
         """Restart a crashed gateway with bounded backoff.
 
-        ``resume`` is True for instances restored at startup: the
-        process is not running yet, so a 'stopped' status must trigger a
-        start (a plain stopped status would be treated as user-stopped
-        and never restarted)."""
+        Explicit shutdown cancels this supervisor before stopping its child.
+        """
         backoff = 5
         first = True
-        while not self._stop_event.is_set():
+        stop_event = self._stop_event
+        starting_at = asyncio.get_running_loop().time()
+        while not stop_event.is_set():
             try:
-                current = await self.provisioner(instance.provider).status(instance.instance_id)
+                current = await bounded(
+                    self.provisioner(instance.provider).status(instance.instance_id),
+                    timeout_seconds=_PROBE_TIMEOUT_SECONDS,
+                    label=f"gateway {instance.provider}.{instance.instance_id} status",
+                )
             except Exception as exc:
-                current = instance.model_copy(update={"error": str(exc)})
+                current = instance.model_copy(update={"status": "error", "error": str(exc)})
+            if stop_event.is_set():
+                return
             if current.status == _STATUS_RUNNING:
                 # status() returns a bare instance without extra; storing
                 # it as-is would drop extra.options (bot_url) and
@@ -357,6 +463,23 @@ class GatewayManager:
                 )
                 self._instances[self._key(instance.provider, instance.instance_id)] = current
                 await self._save_state(current)
+                instance = current
+                if current.extra.get("setup_pending"):
+                    logged_in = await self.qr(current.provider, current.instance_id)
+                    login_budget = float(
+                        current.extra.get("options", {}).get("login_timeout_seconds", 300)
+                    )
+                    if (
+                        logged_in != "__MAILFLOW_LOGGED_IN__"
+                        and asyncio.get_running_loop().time() - starting_at >= login_budget
+                    ):
+                        cleanup_error = await self._cleanup_failed_provision(
+                            self.provisioner(current.provider), current
+                        )
+                        current.status = "error"
+                        current.error = f"login timed out{cleanup_error}"
+                        await self._save_state(current)
+                        return
                 backoff = 5
                 # memory watchdogs — recycle the gateway BEFORE the host
                 # runs out of memory (a leaking QQ/Electron tree ended in
@@ -383,7 +506,11 @@ class GatewayManager:
                         recycle_reason,
                     )
                     try:
-                        await self.provisioner(instance.provider).stop(instance.instance_id)
+                        await bounded(
+                            self.provisioner(instance.provider).stop(instance.instance_id),
+                            timeout_seconds=_STOP_TIMEOUT_SECONDS,
+                            label=f"gateway {instance.provider}.{instance.instance_id} recycle",
+                        )
                     except Exception as exc:
                         logger.warning(
                             "gateway %s.%s recycle-stop failed: %s",
@@ -400,16 +527,39 @@ class GatewayManager:
                     # healthy: resurrect in-process side channels (e.g. the
                     # onebot event bridge living in THIS process, missing
                     # after an app restart)
-                    await self._ensure_side_channels(instance)
+                    try:
+                        await self._ensure_side_channels(instance)
+                    except Exception as exc:
+                        current.status = "error"
+                        current.error = f"bridge failed: {exc}"
+                        await self._cleanup_failed_provision(
+                            self.provisioner(instance.provider), current
+                        )
+                        await self._save_state(current)
+                        return
                     # poll every 60s while healthy (the status probe hits the
                     # network; on low-RAM VMs the gateway itself is the
                     # resource hog, so keep supervision light)
                     try:
-                        await asyncio.wait_for(self._stop_event.wait(), timeout=60)
+                        await asyncio.wait_for(stop_event.wait(), timeout=60)
                     except TimeoutError:
                         continue
                     return
             if current.status == "starting":
+                current.extra = {**instance.extra, **current.extra}
+                self._instances[self._key(current.provider, current.instance_id)] = current
+                await self._save_state(current)
+                login_budget = float(
+                    instance.extra.get("options", {}).get("login_timeout_seconds", 300)
+                )
+                if asyncio.get_running_loop().time() - starting_at >= login_budget:
+                    cleanup_error = await self._cleanup_failed_provision(
+                        self.provisioner(instance.provider), current
+                    )
+                    current.status = "error"
+                    current.error = f"login timed out{cleanup_error}"
+                    await self._save_state(current)
+                    return
                 # the child process is alive but its HTTP API is not up yet
                 # (NapCat: waiting for a QR scan). Restarting here KILLS the
                 # login flow and loops forever — the exact restart storm
@@ -423,7 +573,7 @@ class GatewayManager:
                     current.error or "waiting for login",
                 )
                 try:
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=30)
+                    await asyncio.wait_for(stop_event.wait(), timeout=30)
                 except TimeoutError:
                     continue
                 return
@@ -442,8 +592,9 @@ class GatewayManager:
                         instance.instance_id,
                     )
                 else:
-                    # user stopped it: stop supervising
-                    return
+                    # Explicit shutdown cancels this supervisor. A stopped
+                    # child seen here therefore represents an unexpected exit.
+                    first = False
             # error/unknown: restart after backoff — a SELF-recycle is
             # healthy hostkeeping and restarts immediately
             recycled = current.error == "recycled"
@@ -456,18 +607,32 @@ class GatewayManager:
             )
             if not recycled:
                 with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+                    await asyncio.wait_for(stop_event.wait(), timeout=backoff)
                 backoff = min(backoff * 2, 60)
+            if stop_event.is_set():
+                return
             try:
                 async with self._start_limiter:
-                    started = await self.provisioner(instance.provider).start(
-                        instance.instance_id, instance.extra.get("options", {})
+                    self._stopped_keys.discard(self._key(instance.provider, instance.instance_id))
+                    started = await bounded(
+                        self.provisioner(instance.provider).start(
+                            instance.instance_id, instance.extra.get("options", {})
+                        ),
+                        timeout_seconds=900.0,
+                        label=f"gateway {instance.provider}.{instance.instance_id} restart",
                     )
+                if started.status not in {"running", "starting"}:
+                    raise RuntimeError(started.error or f"unexpected state {started.status}")
+                if stop_event.is_set():
+                    return
                 # merge persisted options/autostart into the relaunched
                 # instance's bare extra (same reason as in provision())
                 started = started.model_copy(update={"extra": {**instance.extra, **started.extra}})
                 self._instances[self._key(started.provider, started.instance_id)] = started
                 await self._save_state(started)
+                instance = started
+                starting_at = asyncio.get_running_loop().time()
+                self._stopped_keys.discard(self._key(instance.provider, instance.instance_id))
                 backoff = 5
                 first = False
             except GatewayNotInstalledError as exc:
@@ -476,6 +641,7 @@ class GatewayManager:
                 # Mark the instance error so the UI can tell the user to
                 # re-run the setup, then stop supervising it.
                 failed = instance.model_copy(update={"status": "error", "error": str(exc)})
+                await self._cleanup_failed_provision(self.provisioner(instance.provider), failed)
                 self._instances[self._key(instance.provider, instance.instance_id)] = failed
                 await self._save_state(failed)
                 logger.error(
@@ -486,6 +652,7 @@ class GatewayManager:
                 )
                 return
             except Exception as exc:
+                await self._cleanup_failed_provision(self.provisioner(instance.provider), instance)
                 logger.error(
                     "gateway %s.%s restart failed: %s", instance.provider, instance.instance_id, exc
                 )
@@ -502,7 +669,11 @@ class GatewayManager:
     async def detect(self, provider: str) -> str:
         """Status line for the guide's first step."""
         try:
-            return await self.provisioner(provider).detect()
+            return await bounded(
+                self.provisioner(provider).detect(),
+                timeout_seconds=_PROBE_TIMEOUT_SECONDS,
+                label=f"gateway {provider} detect",
+            )
         except Exception as exc:
             return f"error: {exc}"
 
@@ -514,6 +685,37 @@ class GatewayManager:
         *,
         autostart: bool = True,
     ) -> GatewayInstance:
+        key = self._key(provider, instance_id)
+        generation = self._generation
+        lock = self._operation_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            if generation != self._generation:
+                raise RuntimeError(f"gateway {key}: setup cancelled by shutdown or reload")
+            if self._stopping or self._reconfiguring:
+                raise RuntimeError(f"gateway {key}: service is stopping or reloading")
+            if key in self._pending_stops:
+                raise RuntimeError(f"gateway {key}: previous stop is still in progress")
+            if not self._running:
+                if any(not operation.done() for operation in self._operations.values()):
+                    raise RuntimeError("gateway setup cleanup is still in progress")
+                if self._stopped_keys:
+                    self._provisioners.clear()
+                self._stop_event = asyncio.Event()
+            self._running = True
+            task = asyncio.create_task(
+                self._provision(provider, instance_id, options, autostart=autostart),
+                name=f"gateway-provision-{key}",
+            )
+            self._operations[key] = task
+            try:
+                return await task
+            finally:
+                if self._operations.get(key) is task:
+                    self._operations.pop(key, None)
+
+    async def _provision(
+        self, provider: str, instance_id: str, options: dict[str, Any], *, autostart: bool
+    ) -> GatewayInstance:
         """Install (if needed), start and supervise one instance.
 
         Returns the running instance. The caller (TUI guide) then reads the
@@ -521,6 +723,7 @@ class GatewayManager:
         """
         provisioner = self.provisioner(provider)
         key = self._key(provider, instance_id)
+        self._running = True
         # A re-login/retry replaces its old supervisor before it starts a new
         # lifecycle, avoiding two pollers racing the same gateway process.
         await self._cancel_supervisor(provider, instance_id)
@@ -530,11 +733,18 @@ class GatewayManager:
         # there breaks model_dump_json) or survive the call.
         persistent_options = {k: v for k, v in options.items() if not k.startswith("_")}
         existing = self._instances.get(key)
+        if existing is not None:
+            await self._stop_instance(existing, persist_running=True)
+        self._stopped_keys.discard(key)
         instance = (
             GatewayInstance(
                 provider=provider,
                 instance_id=instance_id,
-                extra={"options": persistent_options, "autostart": autostart},
+                extra={
+                    "options": persistent_options,
+                    "autostart": autostart,
+                    "setup_pending": True,
+                },
             )
             if existing is None
             else existing.model_copy(
@@ -543,6 +753,7 @@ class GatewayManager:
                         **existing.extra,
                         "options": persistent_options,
                         "autostart": autostart,
+                        "setup_pending": True,
                     }
                 }
             )
@@ -552,10 +763,16 @@ class GatewayManager:
         instance.error = ""
         await self._save_state(instance)
         progress = InstallProgress()
-        self._last_progress = progress  # polled by the TUI guide
+        self._progress[key] = progress
         operation_options = {**options, "_progress": progress}
         try:
-            await provisioner.install(instance_id, operation_options)
+            await bounded(
+                provisioner.install(instance_id, operation_options),
+                timeout_seconds=1800.0,
+                label=f"gateway {key} install",
+            )
+            if self._stop_event.is_set():
+                raise asyncio.CancelledError
         except asyncio.CancelledError:
             cleanup_error = await self._cleanup_failed_provision(provisioner, instance)
             instance.status = "error" if cleanup_error else "stopped"
@@ -572,7 +789,15 @@ class GatewayManager:
         await self._save_state(instance)
         try:
             async with self._start_limiter:
-                running = await provisioner.start(instance_id, operation_options)
+                running = await bounded(
+                    provisioner.start(instance_id, operation_options),
+                    timeout_seconds=900.0,
+                    label=f"gateway {key} start",
+                )
+            if self._stop_event.is_set():
+                raise asyncio.CancelledError
+            if running.status not in {"running", "starting"}:
+                raise RuntimeError(running.error or f"unexpected state {running.status}")
         except asyncio.CancelledError:
             cleanup_error = await self._cleanup_failed_provision(provisioner, instance)
             instance.status = "error" if cleanup_error else "stopped"
@@ -607,19 +832,44 @@ class GatewayManager:
     async def qr(self, provider: str, instance_id: str) -> str:
         """QR payload for the login step ('' when not supported)."""
         try:
-            return await self.provisioner(provider).qr(instance_id)
-        except Exception:
-            return ""
+            result = await bounded(
+                self.provisioner(provider).qr(instance_id),
+                timeout_seconds=_PROBE_TIMEOUT_SECONDS,
+                label=f"gateway {provider}.{instance_id} QR",
+            )
+            if result == "__MAILFLOW_LOGGED_IN__":
+                commit = getattr(self.provisioner(provider), "commit_instance", None)
+                if callable(commit):
+                    commit(instance_id)
+                instance = self.instance(provider, instance_id)
+                if instance is not None and instance.extra.pop("setup_pending", None):
+                    await self._save_state(instance)
+            return result
+        except Exception as exc:
+            logger.warning("gateway %s.%s QR failed: %s", provider, instance_id, exc)
+            return f"ERROR: {provider}.{instance_id}: {exc}"
 
     async def shutdown_instance(self, provider: str, instance_id: str) -> None:
         """Stop one instance and stop supervising it."""
         key = self._key(provider, instance_id)
+        operation = self._operations.get(key)
+        if operation is not None:
+            await cancel_tasks([operation])
         await self._cancel_supervisor(provider, instance_id)
         instance = self._instances.get(key)
         if instance is None:
             return
         try:
-            await self.provisioner(provider).stop(instance_id)
+            await self._stop_provider(instance)
+            if instance.extra.get("setup_pending"):
+                rollback = getattr(self.provisioner(provider), "cleanup_failed", None)
+                if callable(rollback):
+                    await bounded(
+                        rollback(instance_id),
+                        timeout_seconds=_STOP_TIMEOUT_SECONDS,
+                        label=f"gateway {key} rollback",
+                    )
+                instance.extra.pop("setup_pending", None)
         except Exception as exc:
             instance.status = "error"
             instance.error = f"stop failed: {exc}"
@@ -627,6 +877,7 @@ class GatewayManager:
             raise
         instance.status = "stopped"
         instance.error = ""
+        self._stopped_keys.add(key)
         await self._save_state(instance)
 
 

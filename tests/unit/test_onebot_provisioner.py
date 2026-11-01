@@ -49,6 +49,7 @@ async def test_linux_start_launches_appimage_with_absolute_path(
     def fake_popen(command: list[str], **kwargs: Any) -> Any:
         captured["command"] = command
         captured["cwd"] = kwargs.get("cwd")
+        captured["env"] = kwargs.get("env")
 
         class FakeProc:
             pid = 4242
@@ -102,6 +103,9 @@ async def test_linux_start_launches_appimage_with_absolute_path(
     # extract-and-run bypasses FUSE, which containers/VMs cannot modprobe
     assert "--appimage-extract-and-run" in command
     assert captured["cwd"] == str(instance.resolve())
+    profile = instance.resolve() / "profile"
+    assert Path(captured["env"]["HOME"]) == profile
+    assert Path(captured["env"]["USERPROFILE"]) == profile
 
 
 def _fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -182,89 +186,11 @@ async def test_qr_fresh_keeps_waiting(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert result  # the QR payload
 
 
-def test_proc_socket_pids_parses_listener() -> None:
-    """The /proc fallback resolves the owner of a LISTEN socket without
-    fuser (minimal containers ship without psmisc). Mocked /proc: a
-    listener on port 43210 must surface the owning pid."""
-    import tempfile
-    from pathlib import Path as _Path
-
-    port = 43210
-    with tempfile.TemporaryDirectory() as td:
-        proc = _Path(td) / "proc"
-        (proc / "net").mkdir(parents=True)
-        # local_address port 43210 = 0xA8CA, state 0A = LISTEN, inode 12345
-        (proc / "net" / "tcp").write_text(
-            "  sl  local_address  rem_address  st  tx_queue rx_queue tr tm->when "
-            "retrnsmt    uid  timeout inode\n"
-            "   0: 0100007F:A8CA 00000000:0000 0A 00000000:00000000 00:00000000 "
-            "00000000  1000        0 12345 1 0000000000000000 100 0 0 10 0\n",
-            encoding="utf-8",
-        )
-        (proc / "4242").mkdir()
-        (proc / "4242" / "fd").mkdir()
-        (proc / "9999").mkdir()
-        (proc / "9999" / "fd").mkdir()
-        # os.readlink is patched through monkeypatched listdir/readlink on Path? —
-        # simpler: point the helper at the fake /proc via monkeypatched module
-        import mailflow_notify_onebot.gateway as gw
-
-        real_listdir = __import__("os").listdir
-        real_readlink = __import__("os").readlink
-
-        def fake_listdir(path: str) -> list[str]:
-            s = Path(path).as_posix()
-            if s == "/proc":
-                return ["net", "4242", "9999"]
-            if s == "/proc/4242/fd":
-                return ["3"]
-            if s == "/proc/9999/fd":
-                return ["3"]
-            return real_listdir(path)
-
-        def fake_readlink(path: str) -> str:
-            s = Path(path).as_posix()
-            if s.startswith("/proc/4242/fd"):
-                return "socket:[12345]"
-            if s.startswith("/proc/9999/fd"):
-                return "socket:[999]"
-            return real_readlink(path)
-
-        gw.os.listdir = fake_listdir  # type: ignore[assignment]
-        gw.os.readlink = fake_readlink  # type: ignore[assignment]
-        try:
-            # point the hardcoded /proc paths at the temp dir by patching
-            # Path.read_text via monkeypatched open on the helper's tables —
-            # the helper reads /proc/net/tcp directly; simplest is running the
-            # helper against a mocked open. Instead: chdir trick does not
-            # apply, so patch Path.read_text for the two table paths.
-            import unittest.mock as _mock
-
-            table = (proc / "net" / "tcp").read_text(encoding="utf-8")
-            real_read_text = _Path.read_text
-
-            def fake_read_text(self: _Path, *a: object, **k: object) -> str:
-                posix = self.as_posix()
-                if posix in ("/proc/net/tcp", "/proc/net/tcp6"):
-                    return table if posix == "/proc/net/tcp" else ""
-                return real_read_text(self, *a, **k)  # type: ignore[arg-type]
-
-            with _mock.patch.object(_Path, "read_text", fake_read_text):
-                pids = gw._proc_socket_pids(port)  # pyright: ignore[reportPrivateUsage]
-        finally:
-            gw.os.listdir = real_listdir  # type: ignore[assignment]
-            gw.os.readlink = real_readlink  # type: ignore[assignment]
-    assert pids == {4242}
-
-
 @pytest.mark.asyncio
 async def test_start_refuses_stale_process_on_port(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A port occupied by an unmanaged process (a stale NapCat left
-    over after a crash) must be killed and, when the kill cannot free
-    the port, surface as an error — silently reusing it would report a
-    phantom login."""
+    """An unmanaged listener must neither be adopted nor terminated."""
     monkeypatch.chdir(tmp_path)
     instance = _instance_dir("A-Bot-NapCat-5baf4a")  # pyright: ignore[reportPrivateUsage]
     instance.mkdir(parents=True, exist_ok=True)
@@ -279,10 +205,7 @@ async def test_start_refuses_stale_process_on_port(
         lambda self, port, wait_seconds=2.0: _async_true(),  # pyright: ignore[reportUnknownLambdaType,reportUnknownArgumentType]
     )
     prov = NapCatProvisioner()
-    # the stale-port owner lookup finds nothing (test sandbox has no
-    # listener PID for the mocked port), so the fresh start still hits the
-    # 'still in use' error after the kill attempt
-    with pytest.raises(RuntimeError, match=r"still in use|could not terminate"):
+    with pytest.raises(RuntimeError, match="still in use"):
         await prov.start("A-Bot-NapCat-5baf4a", {"port": "39999"})
 
 
@@ -343,6 +266,9 @@ async def test_ensure_bridge_syncs_per_account_on_healthy_poll() -> None:
 
     class _LiveBridge:
         port = live_port
+        running = True
+        _bot_url = "http://127.0.0.1:18789/bot/message"
+        _token = ""
 
     prov._bridges["napcat-1"] = cast(  # pyright: ignore[reportPrivateUsage]
         Any, _LiveBridge()
@@ -369,24 +295,6 @@ async def test_ensure_bridge_syncs_per_account_on_healthy_poll() -> None:
         assert restarts == []
     finally:
         listener.close()
-
-
-def test_looks_corrupt_detects_loader_failures() -> None:
-    """Corruption fingerprints (missing shared objects, preload failures)
-    must trigger the repair path; ordinary early exits must not."""
-    assert gw_mod.NapCatProvisioner._looks_corrupt(  # pyright: ignore[reportPrivateUsage]
-        "preload] failed. major.node: cannot open shared object file"
-    )
-    assert gw_mod.NapCatProvisioner._looks_corrupt(  # pyright: ignore[reportPrivateUsage]
-        "error while loading shared libraries: libgtk-3.so.0"
-    )
-    assert gw_mod.NapCatProvisioner._looks_corrupt(  # pyright: ignore[reportPrivateUsage]
-        "Trace/breakpoint trap"
-    )
-    # an OOM kill or a plain crash is NOT an install-corruption signature
-    assert not gw_mod.NapCatProvisioner._looks_corrupt(  # pyright: ignore[reportPrivateUsage]
-        "napcat exited early (code -9)"
-    )
 
 
 @pytest.mark.asyncio

@@ -655,6 +655,7 @@ class MailFlowService:
         self.subscriptions = Subscriptions(storage)
         self._started = False
         self._resources_closed = False
+        self._needs_rebuild = False
         self._lifecycle_lock = asyncio.Lock()
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
@@ -672,7 +673,7 @@ class MailFlowService:
             if self._started:
                 return
             self._stopped_event = asyncio.Event()
-            rebuild = self._resources_closed
+            rebuild = self._needs_rebuild
             self._resources_closed = False
             try:
                 await self.storage.initialize()
@@ -697,6 +698,7 @@ class MailFlowService:
                     self._schedule_expiry_loop(), name="schedule-expiry"
                 )
                 self._started = True
+                self._needs_rebuild = False
             except BaseException:
                 # Startup is transactional from the host's point of view: a
                 # gateway, bot server or scheduler failure cannot leave an
@@ -712,6 +714,7 @@ class MailFlowService:
     async def _stop_unlocked(self, *, persist_running: bool) -> None:
         if self._resources_closed:
             return
+        self._needs_rebuild = True
         was_active = self._started or self._update_task is not None or self._expiry_task is not None
         self._stopped_event.set()
         tasks = [task for task in (self._update_task, self._expiry_task) if task is not None]
@@ -720,29 +723,41 @@ class MailFlowService:
         self._expiry_task = None
         # app shutdown: kill the children but KEEP the persisted running
         # status so the next boot's autostart resumes them.
-        await self._stop_component(
+        closed = await self._stop_component(
             self.gateways.stop(persist_running=persist_running),
             timeout_seconds=15.0,
             label="gateways",
         )
         bot_server = self.bot_server
-        self.bot_server = None
         if bot_server is not None:
-            await self._stop_component(bot_server.stop(), timeout_seconds=3.0, label="bot server")
-        await self._stop_component(self.runtime.stop(), timeout_seconds=10.0, label="runtime")
-        await self._stop_component(self.storage.close(), timeout_seconds=3.0, label="storage")
+            bot_closed = await self._stop_component(
+                bot_server.stop(), timeout_seconds=3.0, label="bot server"
+            )
+            if bot_closed:
+                self.bot_server = None
+            closed = bot_closed and closed
+        closed = (
+            await self._stop_component(self.runtime.stop(), timeout_seconds=10.0, label="runtime")
+            and closed
+        )
+        closed = (
+            await self._stop_component(self.storage.close(), timeout_seconds=3.0, label="storage")
+            and closed
+        )
         self._started = False
-        self._resources_closed = True
+        self._resources_closed = closed
         if was_active:
             logger.info("mailflow service stopped")
 
     async def _stop_component(
         self, operation: Awaitable[Any], *, timeout_seconds: float, label: str
-    ) -> None:
+    ) -> bool:
         try:
             await bounded(operation, timeout_seconds=timeout_seconds, label=label)
+            return True
         except Exception as exc:
             logger.warning("%s stop failed: %s", label, exc)
+            return False
 
     async def _rebuild_notifiers(self) -> None:
         """Hot-swap only the notifier components (targets changed). Keeps
@@ -771,7 +786,11 @@ class MailFlowService:
     async def reload_runtime(self, *, restart_sources: bool | None = None) -> None:
         """Rebuild components after releasing their previous task owners."""
         async with self._lifecycle_lock:
-            await self._reload_runtime_unlocked(restart_sources=restart_sources)
+            try:
+                await self._reload_runtime_unlocked(restart_sources=restart_sources)
+            except BaseException:
+                await self._stop_unlocked(persist_running=True)
+                raise
 
     async def _reload_runtime_unlocked(self, *, restart_sources: bool | None = None) -> None:
         registry = self.plugin_manager.build_registry(self.config)
@@ -798,7 +817,9 @@ class MailFlowService:
             notifiers.append(registry.notifier_factory(notifier.provider)(notifier))
             notifier_configs.append(notifier)
         was_started = self.started
-        await self.gateways.stop(persist_running=True)
+        await bounded(
+            self.gateways.stop(persist_running=True), timeout_seconds=15.0, label="gateways reload"
+        )
         if was_started:
             # Stop every bridge/process before changing the registry.  This is
             # deliberately a full gateway pause; preserving a supervisor here
@@ -2695,6 +2716,8 @@ Return every candidate in this batch."""
                 await self.reload_runtime()
             except Exception as exc:
                 logger.error("hot reload failed after %s change: %s", key, exc)
+                await self.events.emit("config.reload_failed", key=key, error=str(exc))
+                raise RuntimeError(self.t("tui.settings_reload_failed", error=str(exc))) from exc
 
     async def set_setting(self, key: str, raw_value: Any) -> OptionSpec | None:
         """Coerce, validate and persist one option (scalar, list or mapping).

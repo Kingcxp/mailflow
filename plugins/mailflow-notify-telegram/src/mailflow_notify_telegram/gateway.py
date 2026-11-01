@@ -14,7 +14,6 @@ it after an app restart when the instance is already marked running.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from typing import Any, cast
 from urllib.parse import urlencode
@@ -22,6 +21,7 @@ from urllib.request import Request, urlopen
 
 import httpx
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
+from mailflow.lifecycle import cancel_tasks
 
 logger = logging.getLogger("mailflow.gateway.telegram")
 
@@ -82,36 +82,33 @@ class TelegramBridge:
         self._offset = 0
         self._stopping = False
         self.identity: dict[str, Any] = {}
+        self._lock = asyncio.Lock()
 
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
     async def start(self) -> None:
-        if self.running:
-            return
-        self._stopping = False
-        await self._load_identity()
-        self._task = asyncio.create_task(
-            self._poll_loop(), name=f"telegram-bridge-{self._instance_id}"
-        )
+        async with self._lock:
+            if self.running:
+                return
+            self._stopping = False
+            await self._load_identity()
+            self._task = asyncio.create_task(
+                self._poll_loop(), name=f"telegram-bridge-{self._instance_id}"
+            )
 
     async def stop(self) -> None:
-        self._stopping = True
-        task, self._task = self._task, None
-        if task is not None:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+        async with self._lock:
+            self._stopping = True
+            task, self._task = self._task, None
+            if task is not None:
+                await cancel_tasks([task])
 
     async def _load_identity(self) -> None:
         """Cache the bot's own id so self-messages are never dispatched."""
-        try:
-            result = await _call(self._token, "getMe")
-            self.identity = as_object(result.get("result"))
-        except Exception as exc:
-            logger.warning("telegram %s: getMe failed: %s", self._instance_id, exc)
-            self.identity = {}
+        result = await _call(self._token, "getMe")
+        self.identity = as_object(result.get("result"))
 
     async def _poll_loop(self) -> None:
         while not self._stopping:
@@ -131,12 +128,14 @@ class TelegramBridge:
                 )
                 for update in updates:
                     await self._handle_update(as_object(update))
+                # An empty/fast long-poll response must still allow stop and
+                # configuration changes to run on the same event loop.
+                await asyncio.sleep(0)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.warning("telegram %s: poll failed: %s", self._instance_id, exc)
-                with contextlib.suppress(TimeoutError, asyncio.CancelledError):
-                    await asyncio.wait_for(asyncio.sleep(_RETRY_DELAY), timeout=_RETRY_DELAY)
+                await asyncio.sleep(_RETRY_DELAY)
 
     async def _handle_update(self, update: dict[str, Any]) -> None:
         raw_id: Any = update.get("update_id")
@@ -198,17 +197,37 @@ class TelegramBridge:
 class TelegramProvisioner(GatewayProvisioner):
     provider = "telegram"
 
-    def _bridge(self, instance_id: str, options: dict[str, Any]) -> TelegramBridge | None:
+    def __init__(self) -> None:
+        self._bridges: dict[str, TelegramBridge] = {}
+        self._lock = asyncio.Lock()
+
+    async def _bridge(self, instance_id: str, options: dict[str, Any]) -> TelegramBridge | None:
         token = _token_of(options)
         if not token:
             return None
-        bridges: dict[str, TelegramBridge] = getattr(self, "_bridges", {})
-        bridge = bridges.get(instance_id)
-        if bridge is None or bridge._token != token:  # pyright: ignore[reportPrivateUsage]
-            bridge = TelegramBridge(instance_id, token, str(options.get("bot_url") or ""))
-            bridges[instance_id] = bridge
-            self._bridges = bridges
-        return bridge
+        async with self._lock:
+            bot_url = str(options.get("bot_url") or "")
+            bridge = self._bridges.get(instance_id)
+            if (
+                bridge is not None
+                and bridge._token == token
+                and bridge._bot_url == bot_url
+                and bridge.running
+            ):  # pyright: ignore[reportPrivateUsage]
+                return bridge
+            if bridge is not None:
+                await bridge.stop()
+                self._bridges.pop(instance_id, None)
+            new = TelegramBridge(instance_id, token, bot_url)
+            if bridge is not None and bridge._token == token:  # pyright: ignore[reportPrivateUsage]
+                new._offset = bridge._offset  # pyright: ignore[reportPrivateUsage]
+            try:
+                await new.start()
+            except BaseException:
+                await new.stop()
+                raise
+            self._bridges[instance_id] = new
+            return new
 
     async def detect(self) -> str:
         """Bot API reachability — nothing to install for Telegram."""
@@ -243,10 +262,9 @@ class TelegramProvisioner(GatewayProvisioner):
         token = _token_of(options)
         if not token:
             raise RuntimeError("telegram instance has no bot token; run the setup again")
-        bridge = self._bridge(instance_id, options)
+        bridge = await self._bridge(instance_id, options)
         if bridge is None:
             raise RuntimeError("telegram bridge could not be created (missing token)")
-        await bridge.start()
         identity = bridge.identity
         return GatewayInstance(
             provider="telegram",
@@ -264,19 +282,17 @@ class TelegramProvisioner(GatewayProvisioner):
 
     async def ensure_bridge(self, instance_id: str, options: dict[str, Any]) -> Any:
         """Recreate the long-poll loop after an app restart."""
-        bridge = self._bridge(instance_id, options)
+        bridge = await self._bridge(instance_id, options)
         if bridge is None:
             logger.warning("telegram %s: no token in options; bridge not started", instance_id)
             return None
-        if not bridge.running:
-            await bridge.start()
         return bridge
 
     async def stop(self, instance_id: str) -> None:
-        bridges: dict[str, TelegramBridge] = getattr(self, "_bridges", {})
-        bridge = bridges.pop(instance_id, None)
-        if bridge is not None:
-            await bridge.stop()
+        async with self._lock:
+            bridge = self._bridges.pop(instance_id, None)
+            if bridge is not None:
+                await bridge.stop()
 
     async def status(self, instance_id: str) -> GatewayInstance:
         bridges: dict[str, TelegramBridge] = getattr(self, "_bridges", {})
@@ -309,8 +325,12 @@ class TelegramProvisioner(GatewayProvisioner):
         Returning the logged-in sentinel lets the guided setup complete
         immediately instead of waiting out the QR timeout.
         """
-        del instance_id  # protocol shape; Telegram has no per-instance QR
-        return "__MAILFLOW_LOGGED_IN__"
+        bridge = self._bridges.get(instance_id)
+        return (
+            "__MAILFLOW_LOGGED_IN__"
+            if bridge is not None and bridge.running
+            else "ERROR: bridge not started"
+        )
 
 
 def send_text(token: str, chat_id: str, text: str) -> None:

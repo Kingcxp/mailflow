@@ -5,14 +5,15 @@ a handler fails the run (Textual re-raises it when the pilot exits), and the
 assertions check what a person actually sees — rows, labels, status lines and
 that controls return to a usable state after cancelling.
 
-The LLM is stubbed so the walkthrough stays fast and deterministic; the real
-model is exercised by the separate live measurements recorded in the build log.
+The LLM is stubbed so the walkthrough stays offline and deterministic.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import queue
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -81,11 +82,13 @@ class _StubRouter:
                 )
             return LLMCompletion(text="Matched the mail.", model="stub")
         if "smart mail finder" in system:
-            ref = user.split("candidate=", 1)[1].splitlines()[0] if "candidate=" in user else "m1"
-            return LLMCompletion(text=f'[{{"id":"{ref}","relevance":90}}]', model="stub")
-        if system.startswith("You are MailFlow's smart mail finder and"):
-            ref = user.split("candidate=", 1)[1].splitlines()[0] if "candidate=" in user else "m1"
-            return LLMCompletion(text=f'[{{"id":"{ref}","relevance":90}}]', model="stub")
+            request = user.split("Mails:", 1)[0]
+            keyword = "promotion" if "delete" in request.casefold() else "ID card"
+            candidates = re.findall(r"candidate=(\S+)\n.*?subject=([^\n]+)", user, re.DOTALL)
+            selected = [
+                {"id": ref, "relevance": 90} for ref, subject in candidates if keyword in subject
+            ]
+            return LLMCompletion(text=json.dumps(selected), model="stub")
         return LLMCompletion(
             text=(
                 '{"summary":"Stub analysis","urgency":"important",'

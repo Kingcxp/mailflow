@@ -131,7 +131,7 @@ async def test_full_runtime_queue_cancellation_keeps_the_pending_mail_retryable(
     runtime._queue = Queue(maxsize=1)  # pyright: ignore[reportPrivateUsage]
     runtime._inject_watermark_store(source, "account")  # pyright: ignore[reportPrivateUsage]
     pending = asyncio.create_task(
-        runtime._run_source(source._account, source)  # pyright: ignore[reportPrivateUsage]
+        runtime._run_source(source._account, source, runtime._source_generation)  # pyright: ignore[reportPrivateUsage]
     )
     try:
         await asyncio.wait_for(blocked.wait(), timeout=2)

@@ -349,7 +349,15 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 "options": self._options,
             }
             await self._qr_loop(service, provider)
+        except asyncio.CancelledError:
+            if not self._cancelling:
+                with contextlib.suppress(Exception):
+                    await service.gateway_shutdown(provider, self._instance_id)
+            raise
         except Exception as exc:
+            with contextlib.suppress(Exception):
+                await service.gateway_shutdown(provider, self._instance_id)
+            self._result = None
             message = self._t(
                 "tui.bots_guide_failed", error=escape(error_detail(self._service, exc))
             )
@@ -394,11 +402,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         try:
             while not task.done():
                 await asyncio.sleep(0.2)
-                # the provisioner mutates the options dict in place? no — it
-                # receives a copy with _progress injected; read it from the
-                # options copy the service made? Simplest: re-inject by
-                # querying the manager — use the service's last progress
-                progress = getattr(service.gateways, "_last_progress", None)
+                progress = service.gateways.progress(provider, self._instance_id)
                 _poll()
             return await task
         except asyncio.CancelledError:
@@ -406,12 +410,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             # task and tear down whatever it already started, so no
             # orphan gateway (and its QQ process) keeps running after the
             # modal is gone
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            if not self._cancelling:
-                with contextlib.suppress(Exception):
-                    await service.gateway_shutdown(provider, self._instance_id)
+            from mailflow.lifecycle import cancel_tasks
+
+            await cancel_tasks([task])
             raise
 
     # -- sudo password prompt -----------------------------------------------
@@ -499,8 +500,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._set_qr(self._logged_in_banner())
                 self._log("INFO", self._t("tui.bots_guide_logged_in"))
                 self._set_status(self._t("tui.bots_guide_logged_in"), "green")
-                await self._wait_for_endpoint()
-                self._finish_ready()
+                await self._finish_login(service, provider)
                 return
             if qr and qr != last_qr:
                 last_qr = qr
@@ -533,6 +533,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         if not getattr(self, "_qr_done", False):
             self._log("ERROR", self._t("tui.bots_guide_qr_timeout"))
             self._set_status(self._t("tui.bots_guide_qr_timeout"), "red")
+            await service.gateway_shutdown(provider, self._instance_id)
+            self._result = None
 
     def _finish_ready(self) -> None:
         """Login done: enable the Done button so the user explicitly
@@ -542,7 +544,21 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             done.disabled = False
             done.focus()  # pyright: ignore[reportUnknownMemberType]
 
-    async def _wait_for_endpoint(self) -> None:
+    async def _finish_login(self, service: MailFlowService, provider: str) -> None:
+        if await self._wait_for_endpoint():
+            self._finish_ready()
+            return
+        endpoint = (self._result or {}).get("endpoint", "")
+        self._result = None
+        self._set_status(self._t("tui.bots_guide_endpoint_pending", endpoint=endpoint), "red")
+        try:
+            await service.gateway_shutdown(provider, self._instance_id)
+        except Exception as exc:
+            self._log(
+                "ERROR", self._t("tui.bots_guide_stop_failed", error=error_detail(service, exc))
+            )
+
+    async def _wait_for_endpoint(self) -> bool:
         """Wait for the gateway HTTP endpoint to become reachable after login.
         The OneBot HTTP server (NapCat) or health endpoint (OpenWeChat) only
         starts serving after the user logs in via QR; this method polls
@@ -550,7 +566,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         saved config is immediately usable."""
         endpoint = (self._result or {}).get("endpoint", "")
         if not endpoint:
-            return
+            return True
         self._log("INFO", self._t("tui.bots_guide_endpoint_checking", endpoint=endpoint))
         import httpx
 
@@ -561,11 +577,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     resp = await client.get(endpoint)
                 if resp.status_code < 500:
                     self._log("INFO", self._t("tui.bots_guide_endpoint_ready", endpoint=endpoint))
-                    return
+                    return True
             except Exception:
                 pass
             await asyncio.sleep(2.0)
         self._log("WARN", self._t("tui.bots_guide_endpoint_pending", endpoint=endpoint))
+        return False
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "guide-done":
@@ -583,8 +600,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             self._log("INFO", self._t("tui.bots_guide_logged_in"))
             self._set_status(self._t("tui.bots_guide_logged_in"), "green")
             # Verify the gateway endpoint is reachable before enabling Done
-            await self._wait_for_endpoint()
-            self._finish_ready()
+            await self._finish_login(self._service, self._provider)
             return
         if event.button.id == "guide-cancel":
             await self._cancel_and_cleanup()

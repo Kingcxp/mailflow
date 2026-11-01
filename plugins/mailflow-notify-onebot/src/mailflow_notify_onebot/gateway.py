@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+import threading
 import urllib.error
 import urllib.request
 import zipfile
@@ -30,6 +32,14 @@ from typing import Any, cast
 import httpx
 from mailflow.contracts import GatewayInstance
 from mailflow.gateway import GatewayNotInstalledError
+from mailflow.gateway_resources import (
+    GatewayFiles,
+    allocate_port,
+    launch_owned,
+    read_metadata,
+    terminate_process,
+)
+from mailflow.lifecycle import OwnedListener
 
 logger = logging.getLogger("mailflow.gateway.napcat")
 
@@ -370,7 +380,7 @@ def _detect_qq() -> str | None:
     return shutil.which("qq") or shutil.which("linuxqq")
 
 
-class _OneBotEventBridge:
+class _OneBotEventBridge(OwnedListener):
     """Local HTTP endpoint NapCat posts OneBot v11 message events to.
 
     Each incoming ``message`` event is translated to the MailFlow
@@ -388,6 +398,7 @@ class _OneBotEventBridge:
         onebot_url: str,
         token: str = "",
     ) -> None:
+        super().__init__()
         self._instance_id = instance_id
         self._port = port
         self._bot_url = bot_url
@@ -404,13 +415,10 @@ class _OneBotEventBridge:
         return self._port
 
     async def start(self) -> None:
-        self._server = await asyncio.start_server(self._handle, "127.0.0.1", self._port)
+        await self.start_listener(self._handle, "127.0.0.1", self.port)
 
     async def stop(self) -> None:
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
+        await self.stop_listener()
 
     @staticmethod
     async def _read_chunked(reader: asyncio.StreamReader) -> bytes:
@@ -691,64 +699,18 @@ class _OneBotEventBridge:
         return False
 
 
-def _proc_socket_pids(port: int) -> set[int]:
-    """PIDs listening on ``port`` via /proc — no external tools needed.
-
-    Parses /proc/net/tcp (and tcp6) for the LISTEN socket's inode, then
-    matches every process's fd table against it. Works on any Linux
-    with /proc mounted (minimal containers included); empty on
-    non-Linux or when the listener belongs to another namespace."""
-    inodes: set[str] = set()
-    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
-        try:
-            lines = Path(table).read_text("utf-8").splitlines()[1:]
-        except OSError:
-            continue
-        for line in lines:
-            cols = line.split()
-            # sl local_address state ... inode
-            if len(cols) < 10 or cols[3] != "0A":  # 0A = TCP_LISTEN
-                continue
-            local = cols[1]
-            if local.rsplit(":", 1)[-1].upper() == f"{port:04X}":
-                inodes.add(cols[9])
-    if not inodes:
-        return set()
-    pids: set[int] = set()
-    try:
-        entries = os.listdir("/proc")
-    except OSError:
-        return set()
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        fddir = f"/proc/{entry}/fd"
-        try:
-            fds = os.listdir(fddir)
-        except OSError:
-            continue
-        for fd in fds:
-            try:
-                target = os.readlink(f"{fddir}/{fd}")
-            except OSError:
-                continue
-            # socket:[inode]
-            if target.startswith("socket:[") and target[8:-1] in inodes:
-                with contextlib.suppress(ValueError):
-                    pids.add(int(entry))
-                break
-    return pids
-
-
-class NapCatProvisioner:
+class NapCatProvisioner(GatewayFiles):
     """OneBot v11 gateway backed by a local NapCat process."""
 
     backend_id = "napcat"
 
     def __init__(self) -> None:
+        super().__init__()
         self._processes: dict[str, subprocess.Popen[Any]] = {}
+        self._download_cleanups: set[asyncio.Task[None]] = set()
         self._webui_ports: dict[str, int] = {}
         self._bridges: dict[str, _OneBotEventBridge] = {}
+        self._tokens: dict[str, str] = {}
         # QQ numbers seen logged in per instance (from get_login_info);
         # used to keep the per-account onebot11_<uin>.json in sync with
         # the httpClients bridge entry after login
@@ -766,38 +728,6 @@ class NapCatProvisioner:
             owner = str(data.get("instance_id") or "")
             if uin.isdigit() and owner:
                 self._uins[owner] = uin
-        # second source: NapCat's own per-account config written by an
-        # earlier run (onebot11_<uin>.json). Covers a fresh session.json
-        # state — e.g. the instance dir was recreated — while the QQ
-        # profile still remembers the account.
-        if not _IS_WINDOWS:
-            napcat_cfg = (
-                Path(os.environ.get("HOME") or str(Path.home()))
-                / ".config"
-                / "QQ"
-                / "NapCat"
-                / "config"
-            )
-            try:
-                for cfg in napcat_cfg.glob("onebot11_*.json"):
-                    uin = cfg.name[len("onebot11_") : -len(".json")]
-                    if uin.isdigit():
-                        # attribute to the single known instance: one QQ
-                        # profile serves every local napcat instance
-                        for directory in _data_root().glob("napcat-*"):
-                            owner_session = directory / "session.json"
-                            if not owner_session.exists():
-                                owner_session.write_text(
-                                    json.dumps({"uin": uin, "instance_id": directory.name}),
-                                    encoding="utf-8",
-                                )
-                            self._uins.setdefault(directory.name, uin)
-                        break
-            except OSError:
-                pass
-        # instances currently being repaired (delete + reinstall): guards
-        # the self-heal path against infinite repair loops
-        self._repairing: set[str] = set()
         # instances inside a bridge-recreation restart: the relaunch's own
         # ensure_bridge call recreates the bridge and must NOT trigger
         # another restart (infinite loop guard)
@@ -811,21 +741,15 @@ class NapCatProvisioner:
 
     @staticmethod
     def _port_for(instance_id: str) -> int:
-        # deterministic per instance id: stable across restarts
-        try:
-            suffix = int(_safe_token(instance_id).split("-")[-2])
-        except (ValueError, IndexError):
-            suffix = 0
-        return _BASE_PORT + (suffix % 100)
+        default = _BASE_PORT + int(hashlib.sha256(instance_id.encode()).hexdigest()[:8], 16) % 1000
+        return int(read_metadata(_instance_dir(instance_id)).get("http_port") or default)
 
     @staticmethod
     def _bridge_port_for(instance_id: str) -> int:
-        # deterministic, in a range far from the OneBot HTTP port (3000s)
-        try:
-            suffix = int(_safe_token(instance_id).split("-")[-2])
-        except (ValueError, IndexError):
-            suffix = 0
-        return _BRIDGE_BASE_PORT + (suffix % 100)
+        default = (
+            _BRIDGE_BASE_PORT + int(hashlib.sha256(instance_id.encode()).hexdigest()[:8], 16) % 1000
+        )
+        return int(read_metadata(_instance_dir(instance_id)).get("bridge_port") or default)
 
     def _endpoint(self, instance_id: str) -> str:
         return f"http://127.0.0.1:{self._port_for(instance_id)}"
@@ -854,7 +778,9 @@ class NapCatProvisioner:
             return False
         bridge = self._bridges.get(instance_id)
         bridge_url = bridge.url if bridge is not None else ""
-        signature = f"{uin}:{bridge_url}:{self._port_for(instance_id)}"
+        signature = (
+            f"{uin}:{bridge_url}:{self._port_for(instance_id)}:{self._tokens.get(instance_id, '')}"
+        )
         if self._synced.get(instance_id) == signature:
             return False  # already written, nothing changed since
         healed = await self._write_onebot_config(
@@ -873,7 +799,13 @@ class NapCatProvisioner:
         async with httpx.AsyncClient(timeout=8.0) as client:
             for endpoint in endpoints:
                 try:
-                    login = await client.post(f"{endpoint}/get_login_info", json={})
+                    token = self._tokens.get(instance_id, "")
+                    request_options: dict[str, Any] = (
+                        {"headers": {"Authorization": f"Bearer {token}"}} if token else {}
+                    )
+                    login = await client.post(
+                        f"{endpoint}/get_login_info", json={}, **request_options
+                    )
                     login.raise_for_status()
                     data: Any = login.json().get("data") or {}
                     uin = str(data.get("user_id") or data.get("uin") or data.get("account") or "")
@@ -911,7 +843,7 @@ class NapCatProvisioner:
                         "enableCors": False,
                         "enableWebsocket": False,
                         "messagePostFormat": "array",
-                        "token": "",
+                        "token": self._tokens.get(instance_id, ""),
                         "debug": False,
                     }
                 ],
@@ -921,7 +853,7 @@ class NapCatProvisioner:
                             "name": "mailflow-bridge",
                             "enable": True,
                             "url": bridge_url,
-                            "token": "",
+                            "token": self._tokens.get(instance_id, ""),
                             "messagePostFormat": "array",
                             "debug": False,
                         }
@@ -936,12 +868,10 @@ class NapCatProvisioner:
             "enableLocalFile2Url": False,
             "parseMultMsg": False,
         }
-        _write_configs = [_instance_dir(instance_id) / "config"]
+        target = _instance_dir(instance_id)
+        _write_configs = [target / "config"]
         if not _IS_WINDOWS:
-            import os as _os
-
-            home = _os.environ.get("HOME") or str(Path.home())
-            _write_configs.append(Path(home) / ".config" / "QQ" / "NapCat" / "config")
+            _write_configs.append(target / "profile" / ".config" / "QQ" / "NapCat" / "config")
         changed = False
         serialized = json.dumps(payload, indent=2)
         for _target in _write_configs:
@@ -997,80 +927,40 @@ class NapCatProvisioner:
     async def ensure_bridge(
         self, instance_id: str, options: dict[str, Any]
     ) -> _OneBotEventBridge | None:
-        """Recreate the in-process onebot event bridge if it is missing.
-
-        Idempotent: ``start()`` creates the bridge on first launch. After
-        an app restart the NapCat child may still be running (status
-        reports RUNNING) so ``start()`` is never called again — without a
-        bridge here the httpClients event push silently targets a dead
-        port and chat commands stop answering. The gateway supervisor
-        calls this hook on every healthy poll cycle.
-        """
         existing = self._bridges.get(instance_id)
-        if existing is not None:
-            # verify the listener is actually up: a bridge can vanish from
-            # the port map (server closed, listener crashed, relaunch
-            # swallowed) while its entry survives in _bridges — NapCat
-            # would then push events at a dead port with ECONNREFUSED
-            try:
-                _, writer = await asyncio.wait_for(
-                    asyncio.open_connection("127.0.0.1", existing.port), timeout=2.0
-                )
-                writer.close()
-            except Exception:
-                logger.warning(
-                    "napcat %s: event bridge port %d is dead — recreating",
-                    instance_id,
-                    existing.port,
-                )
-                self._bridges.pop(instance_id, None)
-                with contextlib.suppress(Exception):
-                    await existing.stop()
-                return await self.ensure_bridge(instance_id, options)
-            # The per-account sync must run on every healthy poll, not only
-            # at bridge creation: the QQ number is only known AFTER login,
-            # and a per-account config created before the bridge existed
-            # (older MailFlow, NapCat WebUI save) silently lacks the
-            # httpClients entry — the exact phantom-"logged in" failure
-            # where the gateway reports running but chat commands never
-            # answer. Sync here too; _sync_per_account_config dedupes.
-            healed = await self._sync_per_account_config(instance_id)
-            if healed:
-                await self._restart_for_config(instance_id, options)
-            return existing
         bot_url = str(options.get("bot_url") or "")
+        token = str(options.get("access_token") or "")
+        self._tokens[instance_id] = token
+        if (
+            existing is not None
+            and existing.running
+            and existing._bot_url == bot_url
+            and existing._token == token
+        ):
+            healed = await self._sync_per_account_config(instance_id)
+            if healed and instance_id not in self._relaunching:
+                await self._restart_for_config(instance_id, options)
+            return self._bridges.get(instance_id, existing)
+        if existing is not None:
+            await existing.stop()
+            self._bridges.pop(instance_id, None)
         if not bot_url:
-            # silent None here produced the phantom-running state: the
-            # gateway child pushes events at a port nothing listens on.
-            # Happens when the persisted instance state lost its options
-            # (old MailFlow bug) — name the fix: re-save the notifier.
             logger.warning(
-                "napcat %s: no bot_url in gateway options — event bridge "
-                "cannot be created; re-save the notifier config so the "
-                "chat endpoint is persisted",
-                instance_id,
+                "napcat %s: bot_url is missing; event bridge is unavailable", instance_id
             )
             return None
+        port = allocate_port(
+            _instance_dir(instance_id), "bridge_port", self._bridge_port_for(instance_id)
+        )
         bridge = _OneBotEventBridge(
-            instance_id,
-            self._bridge_port_for(instance_id),
-            bot_url,
-            self._endpoint(instance_id),
-            token=str(options.get("access_token") or ""),
+            instance_id, port, bot_url, self._endpoint(instance_id), token=token
         )
         await bridge.start()
         self._bridges[instance_id] = bridge
-        logger.info("napcat %s: event bridge recreated on :%d", instance_id, bridge.port)
         healed = await self._sync_per_account_config(instance_id)
-        # Restart when the per-account config was repaired, or when the
-        # bridge was RECREATED (not reused): events pushed while MailFlow
-        # was down were refused with ECONNREFUSED, so bounce the child once
-        # to make its pusher re-attach deterministically. The relaunch's
-        # own bridge recreation must not re-trigger this (loop guard).
-        must_restart = healed or instance_id not in self._relaunching
-        if must_restart:
+        if healed and instance_id in self._processes and instance_id not in self._relaunching:
             await self._restart_for_config(instance_id, options)
-        return bridge
+        return self._bridges.get(instance_id, bridge)
 
     async def _wait_http(self, instance_id: str, wait_seconds: float = _READY_TIMEOUT) -> bool:
         url = self._endpoint(instance_id)
@@ -1089,10 +979,10 @@ class NapCatProvisioner:
     # -- GatewayProvisioner ----------------------------------------------------
 
     async def detect(self) -> str:
-        node = _find_node()
+        node = await asyncio.to_thread(_find_node)
         if node is None:
             return "node not found (NapCat needs Node.js >= 18)"
-        installed = any(_instance_dir(p.name) for p in _data_root().glob("napcat-*"))
+        installed = any(_installed_marker(p) for p in _data_root().glob("napcat-*"))
         running = await self._any_running()
         parts = [f"node {node}"]
         parts.append("installed" if installed else "not installed")
@@ -1100,20 +990,7 @@ class NapCatProvisioner:
         return "; ".join(parts)
 
     async def _any_running(self) -> bool:
-        # the directory name is the sanitized token (not the original id);
-        # probe each instance's HTTP port by re-deriving it from the token
-        for directory in _data_root().glob("napcat-*"):
-            if not directory.is_dir():
-                continue
-            token = directory.name[len("napcat-") :]
-            try:
-                suffix = int(token.split("-")[-2])
-            except (ValueError, IndexError):
-                continue
-            port = _BASE_PORT + (suffix % 100)
-            if await self._wait_http_port(port, wait_seconds=2.0):
-                return True
-        return False
+        return any(process.poll() is None for process in self._processes.values())
 
     @staticmethod
     async def _wait_http_port(port: int, wait_seconds: float = 2.0) -> bool:
@@ -1132,7 +1009,7 @@ class NapCatProvisioner:
 
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:
 
-        node = _find_node()
+        node = await asyncio.to_thread(_find_node)
         if node is None:
             raise RuntimeError(
                 "NapCat needs Node.js >= 18; install Node first (or set options.node_path)"
@@ -1148,18 +1025,7 @@ class NapCatProvisioner:
         if await asyncio.to_thread(_installed_marker, target):
             logger.info("napcat %s already installed at %s", instance_id, target)
             return
-        # a leftover directory without the real entry point means a broken
-        # or partial install: wipe it so the fresh download starts clean
-        # (covers the case where data/gateways was half-removed, and old
-        # QQ-deb installs that predate the AppImage flow)
-        if await asyncio.to_thread(lambda: _path_exists(target)):
-            logger.warning(
-                "napcat %s: %s exists but is incomplete — removing it for a clean reinstall",
-                instance_id,
-                target,
-            )
-            await asyncio.to_thread(shutil.rmtree, target, True)
-        target.mkdir(parents=True, exist_ok=True)
+        self.prepare_directory(instance_id, target)
         if not _IS_WINDOWS:
             # Linux headless: download the official AppImage (bundles
             # QQ NT + NapCat); no QQ deb, no /opt/QQ mirroring
@@ -1173,14 +1039,14 @@ class NapCatProvisioner:
         """Download + unpack the NapCat.Shell package into ``target``."""
         requested = str(options.get("napcat_version") or "").strip()
         if requested == "latest":
-            version = _latest_napcat_version()
+            version = await asyncio.to_thread(_latest_napcat_version)
         else:
             version = requested or _NAPCAT_VERSION
         url = _release_url(version)
         archive = target / "napcat.zip"
         progress = options.get("_progress")
         logger.info("napcat %s: downloading %s (%.1f MB)", instance_id, url, _NAPCAT_SIZE_MB)
-        await asyncio.to_thread(self._download, url, archive, progress)
+        await self._download_payload(instance_id, url, archive, progress)
         if progress is not None:
             size_mb = archive.stat().st_size / (1024 * 1024) if archive.exists() else 0
             progress.update(85.0, f"unpacking {archive.name} ({size_mb:.0f} MB)…", "installing")
@@ -1281,7 +1147,7 @@ class NapCatProvisioner:
         if progress is not None:
             progress.update(0.0, f"downloading {asset} (~190 MB)", "downloading")
         logger.info("napcat %s: downloading AppImage %s", instance_id, url)
-        await asyncio.to_thread(self._download, url, appimage, progress)
+        await self._download_payload(instance_id, url, appimage, progress)
         if progress is not None:
             progress.update(90.0, "making the AppImage executable…", "installing")
         await asyncio.to_thread(appimage.chmod, 0o755)
@@ -1292,6 +1158,31 @@ class NapCatProvisioner:
         )
         logger.info("napcat %s: Linux QQ + NapCat ready", instance_id)
 
+    async def _download_payload(
+        self, instance_id: str, url: str, destination: Path, progress: Any
+    ) -> None:
+        cancelled = threading.Event()
+        task = asyncio.create_task(
+            asyncio.to_thread(self._download, url, destination, progress, cancelled=cancelled)
+        )
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled.set()
+
+            async def clean_late() -> None:
+                with contextlib.suppress(Exception):
+                    await task
+                with contextlib.suppress(Exception):
+                    await self.cleanup_failed(instance_id)
+
+            cleanup = asyncio.create_task(
+                clean_late(), name=f"napcat-download-cleanup-{instance_id}"
+            )
+            self._download_cleanups.add(cleanup)
+            cleanup.add_done_callback(self._download_cleanups.discard)
+            raise
+
     @staticmethod
     def _download(
         url: str,
@@ -1299,6 +1190,7 @@ class NapCatProvisioner:
         progress: Any | None = None,
         *,
         stage: str = "downloading",
+        cancelled: threading.Event | None = None,
     ) -> None:
         """Download ``url`` to ``destination``.
 
@@ -1317,6 +1209,8 @@ class NapCatProvisioner:
                 seen = 0
                 chunk = 64 * 1024
                 while True:
+                    if cancelled is not None and cancelled.is_set():
+                        raise RuntimeError("download cancelled")
                     block = response.read(chunk)
                     if not block:
                         break
@@ -1380,72 +1274,21 @@ class NapCatProvisioner:
             "the setup to reinstall"
         )
 
-    @staticmethod
-    def _looks_corrupt(log_tail: str) -> bool:
-        """Heuristic: did the child die because the install/runtime is
-        broken (missing loader objects, AppImage preload failure) rather
-        than a transient problem? These are the fingerprints of a corrupt
-        or incomplete NapCat environment that a clean reinstall fixes."""
-        signatures = (
-            "major.node",
-            "cannot open shared object file",
-            "error while loading shared libraries",
-            "preload] failed",
-            "Trace/breakpoint trap",
-            "AppRun: line",
-        )
-        return any(sig in log_tail for sig in signatures)
-
-    async def _repair_reinstall(
-        self, instance_id: str, options: dict[str, Any], failure: str
-    ) -> GatewayInstance:
-        """Delete the instance's NapCat install and deploy it fresh.
-
-        Called when the child dies with corruption fingerprints (missing
-        runtime objects, preload failures). The data dir is wiped so the
-        next install downloads a clean copy, then start() runs again once.
-
-        Repair fixes a corrupt *install* (broken download, half-removed
-        dir). It cannot fix missing system libraries — if the relaunched
-        child dies the same way again, the error escalates with the apt
-        command instead of looping the download forever.
-        """
-        logger.warning(
-            "napcat %s: install looks corrupted (%s) — deleting and reinstalling automatically",
-            instance_id,
-            failure,
-        )
-        target = _instance_dir(instance_id)
-        self._repairing.add(instance_id)
-        try:
-            self._terminate(instance_id)
-            await asyncio.to_thread(shutil.rmtree, target, True)
-            await self.install(instance_id, options)
-            try:
-                return await self.start(instance_id, options)
-            except Exception as exc:
-                # the reinstall died the same way: this is not a corrupt
-                # download but a missing runtime environment (system
-                # libraries). Escalate with the apt command and stop —
-                # supervisor treats GatewayNotInstalledError as final.
-                libs_hint = " ".join(pkg for _, pkg in _QQ_RUNTIME_LIBS)
-                raise GatewayNotInstalledError(
-                    f"napcat {instance_id}: reinstall completed but the "
-                    f"runtime still fails ({exc}). The container is missing "
-                    f"QQ/Electron system libraries — install them once with: "
-                    f"apt-get install -y xvfb xauth {libs_hint}"
-                ) from exc
-        finally:
-            self._repairing.discard(instance_id)
-
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
+        try:
+            return await self._start(instance_id, options)
+        except BaseException:
+            await self.stop(instance_id)
+            raise
 
-        node = _find_node()
+    async def _start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
+
+        node = await asyncio.to_thread(_find_node)
         if node is None:
             raise RuntimeError("NapCat needs Node.js >= 18; install Node first")
         qq: str | None = None
         if _IS_WINDOWS:
-            qq = _detect_qq()
+            qq = await asyncio.to_thread(_detect_qq)
             if qq is None:
                 raise RuntimeError(
                     "NapCat needs a local QQ client to log in (it injects "
@@ -1502,7 +1345,6 @@ class NapCatProvisioner:
         # forward them to the injected bot_server endpoint (bot_url) and
         # send the reply back through the OneBot HTTP API — the notifier's
         # chat commands work without an exported bot plugin
-        bridge = await self.ensure_bridge(instance_id, options)
         # already running on this port (another instance or a self-hosted
         # NapCat)? Only reuse a child WE spawned and that is still alive.
         # A port occupied by an unknown process is almost always a stale
@@ -1525,26 +1367,26 @@ class NapCatProvisioner:
                 extra={"port": port, "reused": True},
             )
         if await self._wait_http_port(port, wait_seconds=1.0):
-            # an unmanaged process occupies the instance's deterministic
-            # port — in practice always a stale NapCat child that survived
-            # a crash (the user log: 'port 3000 is already in use by a
-            # process MailFlow does not manage'). It answers get_login_info
-            # with the OLD session, which is exactly the phantom 'still
-            # logged in' after logging out on the phone. MailFlow OWNS this
-            # port (deterministic per instance id), so the stale process is
-            # killed by port owner before relaunching.
-            logger.warning(
-                "napcat %s: port %d is held by a stale process — killing it and relaunching",
-                instance_id,
-                port,
+            raise RuntimeError(
+                f"napcat {instance_id}: port {port} is still in use by an unmanaged process"
             )
-            await self._kill_port_owner(port)
-            if await self._wait_http_port(port, wait_seconds=1.0):
-                raise RuntimeError(
-                    f"napcat {instance_id}: port {port} is still in use by "
-                    "a process MailFlow could not terminate; stop it "
-                    "manually, then start again."
-                )
+        port = allocate_port(target, "http_port", port, explicit=bool(options.get("port")))
+        webui_port = allocate_port(
+            target,
+            "webui_port",
+            int(
+                options.get("webui_port")
+                or read_metadata(target).get("webui_port")
+                or (_WEBUI_PORT + (port - _BASE_PORT) % 900)
+            ),
+            explicit=bool(options.get("webui_port")),
+        )
+        webui_file = target / "config" / "webui.json"
+        webui_file.parent.mkdir(parents=True, exist_ok=True)
+        webui_file.write_text(
+            json.dumps({"host": "127.0.0.1", "port": webui_port}), encoding="utf-8"
+        )
+        bridge = await self.ensure_bridge(instance_id, options)
         # config for NapCat: HTTP server on the instance port plus the
         # httpClients entry pushing message events to the in-process
         # bridge (chat commands). Written to the default onebot11.json AND
@@ -1570,7 +1412,18 @@ class NapCatProvisioner:
         env.setdefault("NAPCAT_PORT", str(port))
         # NapCat writes its login QR to <workdir>/cache/qrcode.png; pin the
         # workdir to the instance data dir so qr() can find and refresh it
-        env.setdefault("NAPCAT_WORKDIR", str(data_dir))
+        env["NAPCAT_WORKDIR"] = str(data_dir.resolve())
+        profile = (data_dir / "profile").resolve()
+        profile.mkdir(parents=True, exist_ok=True)
+        env.update(
+            {
+                "HOME": str(profile),
+                "XDG_CONFIG_HOME": str(profile / ".config"),
+                "USERPROFILE": str(profile),
+                "APPDATA": str(profile / "AppData" / "Roaming"),
+                "LOCALAPPDATA": str(profile / "AppData" / "Local"),
+            }
+        )
         log_file = data_dir / "napcat.log"
 
         def _launch() -> subprocess.Popen[Any]:
@@ -1619,20 +1472,26 @@ class NapCatProvisioner:
                     env={**os.environ, **env},
                     stdout=handle,
                     stderr=subprocess.STDOUT,
+                    **(
+                        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                        if os.name == "nt"
+                        else {"start_new_session": True}
+                    ),
                 )
 
+        qr_file = target / "cache" / "qrcode.png"
+        with contextlib.suppress(FileNotFoundError):
+            qr_file.unlink()
         try:
-            process = await asyncio.to_thread(_launch)
+            process = await launch_owned(_launch, terminate=self._terminate_owned)
         except OSError as exc:
             raise RuntimeError(f"failed to launch napcat {instance_id}: {exc}") from exc
         self._processes[instance_id] = process
         # the OneBot HTTP API only listens after the QQ session logs in;
         # wait for the process being alive + the WebUI port (6099) as the
         # readiness signal, and report the login requirement clearly
-        webui_port = int(options.get("webui_port") or _WEBUI_PORT)
-        # NapCat auto-increments the WebUI port when it is taken; scan a
-        # small window. The WebUI may require a token or come up late on
-        # slow hosts, so the QR file appearing is also a valid ready
+        # The WebUI may require a token or come up late on slow hosts,
+        # so a fresh QR file appearing is also a valid ready
         # signal — the process is alive and the login flow started.
         qr_file = _instance_dir(instance_id) / "cache" / "qrcode.png"
         ready_port = webui_port
@@ -1640,6 +1499,11 @@ class NapCatProvisioner:
         deadline = asyncio.get_running_loop().time() + _READY_TIMEOUT
         progress = options.get("_progress")
         while asyncio.get_running_loop().time() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError(
+                    f"napcat {instance_id} exited early (code {process.returncode}); "
+                    f"see {log_file}{self._tail_log(log_file)}"
+                )
             if progress is not None:
                 remaining = max(0.0, deadline - asyncio.get_running_loop().time())
                 waiting_for = "QR code" if not ready_port else "WebUI"
@@ -1648,11 +1512,8 @@ class NapCatProvisioner:
                     f"gateway booting — waiting up to {remaining:.0f}s more for {waiting_for}/login…",
                     "starting",
                 )
-            for candidate in range(webui_port, webui_port + 5):
-                if await self._wait_http_port(candidate, wait_seconds=2.0):
-                    ready_port = candidate
-                    ready = True
-                    break
+            if await self._wait_http_port(webui_port, wait_seconds=1.0):
+                ready = True
             if ready:
                 break
             if _path_exists(qr_file) and qr_file.stat().st_size > 100:
@@ -1660,32 +1521,16 @@ class NapCatProvisioner:
                 ready = True
                 ready_port = 0
                 break
-            # the launcher died (missing xvfb, bad QQ binary, missing
-            # libs, OOM): report immediately with the exit code
-            proc: subprocess.Popen[Any] | None = self._processes.get(instance_id)
-            if proc is not None and proc.poll() is not None:
-                log_tail = self._tail_log(log_file)
-                self._processes.pop(instance_id, None)
-                detail = (
-                    f"napcat {instance_id} exited early (code "
-                    f"{proc.returncode}); see {log_file}{log_tail}"
-                )
-                if instance_id not in self._repairing and self._looks_corrupt(detail):
-                    return await self._repair_reinstall(instance_id, options, detail)
-                raise RuntimeError(detail)
             await asyncio.sleep(2.0)
         endpoint = self._endpoint(instance_id)
         if not ready:
             log_tail = self._tail_log(log_file)
             detail = (
                 f"napcat {instance_id} started but neither its WebUI "
-                f"(http://127.0.0.1:{webui_port}, scanned +0..+4) nor the "
+                f"(http://127.0.0.1:{webui_port}) nor the "
                 f"QR file ({qr_file}) appeared in {_READY_TIMEOUT:.0f}s; "
                 f"see {log_file}{log_tail}"
             )
-            self._terminate(instance_id)
-            if instance_id not in self._repairing and self._looks_corrupt(detail):
-                return await self._repair_reinstall(instance_id, options, detail)
             raise RuntimeError(detail)
         self._webui_ports[instance_id] = ready_port
         logger.info(
@@ -1697,162 +1542,41 @@ class NapCatProvisioner:
         return GatewayInstance(
             provider="napcat",
             instance_id=instance_id,
-            status="running",
+            status="starting",
             endpoint=endpoint,
             extra={"port": port, "pid": process.pid},
         )
 
     def _terminate(self, instance_id: str) -> None:
-        process = self._processes.pop(instance_id, None)
+        process = self._processes.get(instance_id)
         if process is None:
             return
-        if process.poll() is None:
-            with contextlib.suppress(Exception):
-                process.terminate()
-            try:
-                process.wait(timeout=5)
-            except Exception:
-                with contextlib.suppress(Exception):
-                    process.kill()
-        # NapCat spawns QQ (xvfb-run + dbus-run-session on Linux, boot exe
-        # on Windows): kill the whole tree so no orphan QQ process remains.
-        # pkill -P only hits direct children, so walk the tree recursively.
-        try:
-            if _IS_WINDOWS:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                    capture_output=True,
-                    timeout=10,
-                )
-            else:
-                visited: set[int] = set()
+        self._terminate_owned(process)
+        if self._processes.get(instance_id) is process:
+            self._processes.pop(instance_id, None)
 
-                def _kill_tree(pid: int, sig: str) -> None:
-                    if pid in visited:
-                        return
-                    visited.add(pid)
-                    out = subprocess.run(
-                        ["pgrep", "-P", str(pid)],
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    ).stdout
-                    for child in out.split():
-                        _kill_tree(int(child), sig)
-                    subprocess.run(
-                        ["kill", "-" + sig, str(pid)],
-                        capture_output=True,
-                        timeout=10,
-                    )
-
-                _kill_tree(process.pid, "TERM")
-                # give the tree a moment, then force what remains
-                try:
-                    process.wait(timeout=3)
-                except Exception:
-                    _kill_tree(process.pid, "KILL")
-        except Exception:
-            pass
-
-    async def _kill_port_owner(self, port: int) -> None:
-        """Kill whatever process listens on ``port`` (cross-platform).
-
-        Only used for MailFlow's own deterministic instance ports, where a
-        listener is by construction a stale NapCat child (crash leftover,
-        orphaned after the manager was stopped)."""
-        pids = await asyncio.to_thread(self._find_port_pids, port)
-        await asyncio.to_thread(self._kill_pids, pids, port)
-        if pids:
-            await asyncio.sleep(1.0)  # let the kernel release the socket
-
-    def _find_port_pids(self, port: int) -> set[int]:
-        pids: set[int] = set()
-        try:
-            if _IS_WINDOWS:
-                out = subprocess.run(
-                    ["netstat", "-ano", "-p", "TCP"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                ).stdout
-                for line in out.splitlines():
-                    parts = line.split()
-                    # TCP    127.0.0.1:3000    ...    LISTENING    1234
-                    if (
-                        len(parts) >= 5
-                        and parts[3] == "LISTENING"
-                        and parts[1].rsplit(":", 1)[-1] == str(port)
-                    ):
-                        try:
-                            pids.add(int(parts[4]))
-                        except ValueError:
-                            continue
-            else:
-                # fuser prints the PIDs of the socket owner directly —
-                # but minimal containers ship without psmisc; fall back
-                # to a pure /proc scan before giving up
-                fuser = subprocess.run(
-                    ["fuser", "-n", "tcp", str(port)],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                pids.update(
-                    int(tok) for tok in fuser.stdout.split() + fuser.stderr.split() if tok.isdigit()
-                )
-                if not pids:
-                    pids = _proc_socket_pids(port)
-        except (OSError, subprocess.SubprocessError) as exc:
-            logger.warning("napcat: port %d owner lookup failed: %s", port, exc)
-            pids = _proc_socket_pids(port)
-        return pids
-
-    async def _kill_pids_async(self, pids: set[int], port: int) -> None:
-        await asyncio.to_thread(self._kill_pids, pids, port)
-        await asyncio.sleep(1.0)  # let the kernel release the socket
-
-    def _kill_pids(self, pids: set[int], port: int) -> None:
-        for pid in pids:
-            logger.warning("napcat: killing stale process %d on port %d", pid, port)
-            try:
-                if _IS_WINDOWS:
-                    subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(pid)],
-                        capture_output=True,
-                        timeout=10,
-                    )
-                else:
-                    os.kill(pid, 9)  # SIGKILL
-            except (OSError, subprocess.SubprocessError) as exc:
-                logger.warning("napcat: kill %d failed: %s", pid, exc)
+    @staticmethod
+    def _terminate_owned(process: subprocess.Popen[Any]) -> None:
+        terminate_process(process, tree=True)
 
     async def stop(self, instance_id: str) -> None:
-        bridge = self._bridges.pop(instance_id, None)
-        if bridge is not None:
-            with contextlib.suppress(Exception):
+        bridge = self._bridges.get(instance_id)
+        try:
+            if bridge is not None:
                 await bridge.stop()
-        # terminate can block up to 5s waiting for the process tree; run it
-        # off the event loop so the TUI never freezes on cancel
-        await asyncio.to_thread(self._terminate, instance_id)
-        # belt and braces: if the instance's deterministic port is STILL
-        # held after the managed-tree kill (a reused-orphan boot has no
-        # Popen record, or the tree kill missed an adoptee), clear the
-        # port owner — a surviving NapCat answers get_login_info with the
-        # old session and produces the phantom-logged-in state
-        port = self._port_for(instance_id)
-        pids = await asyncio.to_thread(self._find_port_pids, port)
-        if pids:
-            logger.warning(
-                "napcat %s: port %d still held after stop (pids %s) — killing",
-                instance_id,
-                port,
-                sorted(pids),
-            )
-            await self._kill_pids_async(pids, port)
+                self._bridges.pop(instance_id, None)
+        finally:
+            await asyncio.to_thread(self._terminate, instance_id)
+        self._webui_ports.pop(instance_id, None)
 
     async def status(self, instance_id: str) -> GatewayInstance:
         endpoint = self._endpoint(instance_id)
-        running = await self._wait_http(instance_id, wait_seconds=2.0)
+        managed = self._processes.get(instance_id)
+        running = (
+            managed is not None
+            and managed.poll() is None
+            and await self._wait_http(instance_id, wait_seconds=2.0)
+        )
         if running:
             extra: dict[str, Any] = {}
             # memory watchdog: a leaking QQ/Electron tree eventually eats
@@ -1918,7 +1642,13 @@ class NapCatProvisioner:
         async with httpx.AsyncClient(timeout=8.0) as client:
             for endpoint in endpoints:
                 try:
-                    login = await client.post(f"{endpoint}/get_login_info", json={})
+                    token = self._tokens.get(instance_id, "")
+                    request_options: dict[str, Any] = (
+                        {"headers": {"Authorization": f"Bearer {token}"}} if token else {}
+                    )
+                    login = await client.post(
+                        f"{endpoint}/get_login_info", json={}, **request_options
+                    )
                     login.raise_for_status()
                     login_data: Any = login.json().get("data") or {}
                     # accept any id field NapCat/OneBot variants emit

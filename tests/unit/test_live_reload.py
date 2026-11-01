@@ -83,6 +83,45 @@ def make_service(tmp_path: Path) -> MailFlowService:
     return service
 
 
+async def test_failed_live_reload_stops_old_runtime_and_reports_saved_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    service = make_service(tmp_path)
+    bot = SimpleNamespace(url="http://fake/bot", start=AsyncMock(), stop=AsyncMock())
+    monkeypatch.setattr("mailflow.bot_server.BotServer", lambda _: bot)
+    await service.start()
+    tasks = list(service.runtime._tasks)
+    build_registry = service.plugin_manager.build_registry
+    monkeypatch.setattr(
+        service.plugin_manager, "build_registry", Mock(side_effect=RuntimeError("bad plugin"))
+    )
+    with pytest.raises(RuntimeError, match="reload failed"):
+        await service.set_setting("general.workers", 4)
+    assert load_config(str(service.config_path)).general.workers == 4
+    assert not service.started
+    assert all(task.done() for task in tasks)
+    bot.stop.assert_awaited_once()
+    monkeypatch.setattr(service.plugin_manager, "build_registry", build_registry)
+    await service.start()
+    assert service.started
+    await service.stop()
+
+
+async def test_service_retries_failed_gateway_shutdown(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    service = make_service(tmp_path)
+    stop = AsyncMock(side_effect=[RuntimeError("busy"), None])
+    service.gateways = cast(Any, SimpleNamespace(stop=stop))
+    await service.stop()
+    await service.stop()
+    await service.stop()
+    assert stop.await_count == 2
+
+
 async def test_enable_creates_notifier_instance_and_hot_loads(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     await service.storage.initialize()

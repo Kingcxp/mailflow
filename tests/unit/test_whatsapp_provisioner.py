@@ -17,8 +17,7 @@ from mailflow_notify_whatsapp.plugin import WhatsappNotifier
 
 
 def _bridge_path(instance_id: str) -> Path:
-    safe = "".join(c if c.isalnum() or c in "-_." else "-" for c in instance_id).strip("-")
-    return Path("data") / "gateways" / f"whatsapp-{safe}" / "whatsapp-bridge.mjs"
+    return gw_mod._instance_dir(instance_id) / "whatsapp-bridge.mjs"  # pyright: ignore[reportPrivateUsage]
 
 
 def _port_for(instance_id: str) -> int:
@@ -101,12 +100,12 @@ async def test_install_runs_npm_and_writes_the_bridge(
     monkeypatch.setattr(gw_mod, "_find_npm", lambda: "/usr/bin/npm")
     calls: list[tuple[list[str], str | None]] = []
 
-    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    async def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         calls.append((command, kwargs.get("cwd")))
         _deps(Path(str(kwargs["cwd"])))
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(gw_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(gw_mod, "run_command", fake_run)
     await WhatsappProvisioner().install("wa-1", {})
 
     assert _bridge_path("wa-1").exists()
@@ -143,7 +142,7 @@ async def test_start_requires_install() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_reuses_running_port(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_start_refuses_an_unmanaged_http_service(monkeypatch: pytest.MonkeyPatch) -> None:
     port = _port_for("wa-1")
     bridge = _bridge_path("wa-1")
     bridge.parent.mkdir(parents=True, exist_ok=True)
@@ -152,10 +151,8 @@ async def test_start_reuses_running_port(monkeypatch: pytest.MonkeyPatch) -> Non
 
     server = _serve(port, b"{}")
     try:
-        instance = await WhatsappProvisioner().start("wa-1", {"port": str(port)})
-        assert instance.status == "running"
-        assert instance.extra and instance.extra.get("reused")
-        assert instance.endpoint == f"http://127.0.0.1:{port}"
+        with pytest.raises(RuntimeError, match="unmanaged process"):
+            await WhatsappProvisioner().start("wa-1", {"port": str(port)})
     finally:
         server.shutdown()
         server.server_close()

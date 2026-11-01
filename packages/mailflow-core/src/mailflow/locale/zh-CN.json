@@ -671,6 +671,7 @@
       "settings_no_matches": "没有匹配的配置项。",
       "settings_reset_done": "{option} 已恢复默认值。",
       "settings_saved": "已保存 {option}。",
+      "settings_reload_failed": "配置已保存，但重新加载失败，服务已停止。请解决问题后重新启动：{error}",
       "settings_search_placeholder": "按名称或说明搜索配置项...",
       "settings_section_general": "通用",
       "settings_section_i18n": "语言",

@@ -1618,10 +1618,13 @@ class TestLLMFallbackBinding:
 
     @staticmethod
     def _service(config: MailFlowConfig, tmp_path: Path) -> MailFlowService:
+        from mailflow.plugins import PluginManager
+
+        manager = PluginManager(config)
         service = MailFlowService(
             config=config,
-            registry=ComponentRegistry(),
-            plugin_manager=cast(Any, None),
+            registry=manager.build_registry(),
+            plugin_manager=manager,
             storage=cast(Any, MemoryStorage()),
             sources={},
             router=cast(LLMRouter, None),

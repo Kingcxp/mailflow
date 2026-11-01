@@ -671,6 +671,7 @@
       "settings_no_matches": "No setting matches the search.",
       "settings_reset_done": "{option} restored to its default.",
       "settings_saved": "Saved {option}.",
+      "settings_reload_failed": "Configuration saved, but reload failed and the service has stopped. Fix the problem and start it again: {error}",
       "settings_search_placeholder": "Search settings by name or description...",
       "settings_section_general": "General",
       "settings_section_i18n": "Language",

@@ -39,10 +39,13 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from mailflow.contracts import GatewayInstance
 from mailflow.gateway import GatewayNotInstalledError
+from mailflow.gateway_resources import GatewayFiles, instance_directory, reserved_ports, run_command
+from mailflow.lifecycle import OwnedListener, bounded, cancel_tasks
 
 logger = logging.getLogger("mailflow.gateway.wechatpadpro")
 
@@ -57,8 +60,7 @@ def _data_root() -> Path:
 
 
 def _instance_dir(instance_id: str) -> Path:
-    safe = "".join(c if c.isalnum() or c in "-_." else "-" for c in str(instance_id)).strip("-")
-    return _data_root() / f"wechatpadpro-{safe}"
+    return instance_directory(_data_root(), "wechatpadpro", instance_id)
 
 
 def _compose_resource_slug(instance_id: str) -> str:
@@ -467,24 +469,7 @@ def _port_for(instance_id: str, base: int) -> int:
 
 
 def _known_instance_ports() -> set[int]:
-    """Ports reserved by another persisted WeChatPadPro instance."""
-    ports: set[int] = set()
-    root = _data_root()
-    if not root.exists():
-        return ports
-    for metadata in root.glob("wechatpadpro-*/instance.json"):
-        try:
-            values = cast_dict(json.loads(metadata.read_text(encoding="utf-8")))
-        except (OSError, ValueError):
-            continue
-        for name in ("api_port", "webhook_port"):
-            try:
-                port = int(values.get(name, 0))
-            except (TypeError, ValueError):
-                continue
-            if 1 <= port <= 65535:
-                ports.add(port)
-    return ports
+    return reserved_ports(_data_root())
 
 
 def _port_is_available(port: int) -> bool:
@@ -540,7 +525,7 @@ services:
       - WEBHOOK_URL={webhook_url}
       - WEBHOOK_SECRET={webhook_secret}
       - REDIS_DB=1
-      - MYSQL_CONNECT_STR=weixin:wppmailflow@tcp(mysql:3306)/weixin?charset=utf8mb4&parseTime=true&loc=Local
+      - MYSQL_CONNECT_STR=weixin:{mysql_password}@tcp(mysql:3306)/weixin?charset=utf8mb4&parseTime=true&loc=Local
     depends_on:
       mysql:
         condition: service_healthy
@@ -557,7 +542,7 @@ services:
       MYSQL_ROOT_PASSWORD: {mysql_root}
       MYSQL_DATABASE: weixin
       MYSQL_USER: weixin
-      MYSQL_PASSWORD: wppmailflow
+      MYSQL_PASSWORD: {mysql_password}
     volumes:
       - mysql_data_{safe}:/var/lib/mysql
     healthcheck:
@@ -593,7 +578,7 @@ volumes:
 """
 
 
-class _WebhookBridge:
+class _WebhookBridge(OwnedListener):
     """Forward incoming WeChat messages and return command replies.
 
     The gateway only sends webhook events; unlike OneBot, it has no quick
@@ -611,6 +596,7 @@ class _WebhookBridge:
         gateway_url: str = "",
         key_supplier: Callable[[], Awaitable[str]] | None = None,
     ) -> None:
+        super().__init__()
         self.instance_id = instance_id
         self.port = port
         self.bot_url = bot_url
@@ -621,19 +607,13 @@ class _WebhookBridge:
         self._pending_forwards: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
-        self._server = await asyncio.start_server(self._handle, "127.0.0.1", self.port)
+        # host.docker.internal reaches the host interface, not loopback.
+        await self.start_listener(self._handle, "0.0.0.0", self.port)
 
     async def stop(self) -> None:
-        if self._server is not None:
-            self._server.close()
-            with contextlib.suppress(Exception):
-                await self._server.wait_closed()
-            self._server = None
+        await self.stop_listener()
         pending = list(self._pending_forwards)
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        await cancel_tasks(pending)
         self._pending_forwards.clear()
 
     def _queue_forward(self, payload: dict[str, Any]) -> None:
@@ -664,8 +644,12 @@ class _WebhookBridge:
                 if content_length
                 else b""
             )
-            if not parts or parts[0] != "POST":
+            request = urlsplit(parts[1]) if len(parts) > 1 else urlsplit("")
+            token = parse_qs(request.query).get("token", [""])[0]
+            if not parts or parts[0] != "POST" or request.path != "/webhook":
                 status = 404
+            elif self.secret and not secrets.compare_digest(token, self.secret):
+                status = 403
             else:
                 forward_payload = cast_dict(json.loads(body.decode("utf-8", "replace") or "{}"))
         except (TimeoutError, asyncio.IncompleteReadError, ValueError, json.JSONDecodeError) as exc:
@@ -796,10 +780,11 @@ class _WebhookBridge:
             await writer.drain()
 
 
-class WechatPadProProvisioner:
+class WechatPadProProvisioner(GatewayFiles):
     provider = "wechatpadpro"
 
     def __init__(self) -> None:
+        super().__init__()
         self._bridges: dict[str, _WebhookBridge] = {}
 
     # -- helpers -------------------------------------------------------------
@@ -818,21 +803,28 @@ class WechatPadProProvisioner:
         )
 
     def _webhook_url(self, instance_id: str) -> str:
-        return f"http://host.docker.internal:{self._webhook_port(instance_id)}/webhook"
+        secret = str((self._meta(instance_id) or {}).get("webhook_secret") or "")
+        return (
+            f"http://host.docker.internal:{self._webhook_port(instance_id)}/webhook?token={secret}"
+        )
 
     # -- contract ------------------------------------------------------------
 
     async def detect(self) -> str:
-        compose = _find_docker_compose()
+        compose = await asyncio.to_thread(_find_docker_compose)
         return f"docker: {compose}" if compose else "docker not available"
 
     async def is_available(self) -> bool:
-        return _find_docker_compose() is not None
+        return await asyncio.to_thread(_find_docker_compose) is not None
 
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:
-        compose = _find_docker_compose()
+        compose = await asyncio.to_thread(_find_docker_compose)
         progress = options.get("_progress")
         if compose is None:
+            if not options.get("install_dependencies", False):
+                raise RuntimeError(
+                    "docker compose is unavailable; install/start Docker first, or explicitly enable options.install_dependencies"
+                )
             # either docker is missing entirely, or the CLI is present but
             # the daemon is down (Docker Desktop not started) — both must
             # be fixed before any pull can work
@@ -869,7 +861,7 @@ class WechatPadProProvisioner:
 
             compose = await asyncio.to_thread(_provision_docker)
         target = _instance_dir(instance_id)
-        target.mkdir(parents=True, exist_ok=True)
+        self.prepare_directory(instance_id, target)
         compose_file = target / "compose.yml"
         if compose_file.exists():
             logger.info("wechatpadpro %s: compose project already present", instance_id)
@@ -893,6 +885,7 @@ class WechatPadProProvisioner:
                     "bot_url": bot_url,
                     "api_port": api_port,
                     "webhook_port": webhook_port,
+                    "project_name": f"mailflow-{safe.lower()}",
                 },
                 indent=2,
             ),
@@ -905,6 +898,7 @@ class WechatPadProProvisioner:
             webhook_url=self._webhook_url(instance_id),
             webhook_secret=webhook_secret,
             mysql_root=mysql_root,
+            mysql_password=secrets.token_hex(16),
         )
         (target / "compose.yml").write_text(compose_body, encoding="utf-8")
         progress = options.get("_progress")
@@ -948,68 +942,86 @@ class WechatPadProProvisioner:
         them across images onto the 10..95 band. Phase-only lines still
         update the label so the bar never looks stuck."""
         process = await asyncio.create_subprocess_exec(
-            *_compose_arguments(compose, "-f", str(compose_file), "pull"),
+            *self._compose_command(compose, compose_file, "pull"),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        image_totals: dict[str, float] = {}
-        image_current: dict[str, float] = {}
-        error_tail = ""
+        try:
+            image_totals: dict[str, float] = {}
+            image_current: dict[str, float] = {}
+            error_tail = ""
 
-        def _emit(line: str) -> None:
-            if not line:
-                return
-            nonlocal error_tail
-            parsed = self._parse_pull_line(line)
-            if parsed is None and not any(
-                k in line for k in ("Pulling", "Downloading", "Extracting", "Waiting", "Pulled")
-            ):
-                error_tail = (error_tail + "\n" + line)[-600:]
-            if parsed is None:
-                if any(k in line for k in ("Pulling", "Downloading", "Extracting", "Waiting")):
-                    progress.update(progress.percent, f"pulling: {line[:70]}", "downloading")
-                return
-            image, current, total = parsed
-            image_totals[image] = total
-            image_current[image] = current
-            grand_current = sum(image_current.values())
-            grand_total = sum(image_totals.values())
-            if grand_total > 0:
-                pct = min(10.0 + 85.0 * (grand_current / grand_total), 95.0)
-                progress.update(
-                    pct,
-                    f"pulling {image}: {grand_current / 1e6:.0f}/{grand_total / 1e6:.0f} MB",
-                    "downloading",
-                )
+            def _emit(line: str) -> None:
+                if not line:
+                    return
+                nonlocal error_tail
+                parsed = self._parse_pull_line(line)
+                if parsed is None and not any(
+                    k in line for k in ("Pulling", "Downloading", "Extracting", "Waiting", "Pulled")
+                ):
+                    error_tail = (error_tail + "\n" + line)[-600:]
+                if progress is None:
+                    return
+                if parsed is None:
+                    if any(k in line for k in ("Pulling", "Downloading", "Extracting", "Waiting")):
+                        progress.update(progress.percent, f"pulling: {line[:70]}", "downloading")
+                    return
+                image, current, total = parsed
+                image_totals[image] = total
+                image_current[image] = current
+                grand_current = sum(image_current.values())
+                grand_total = sum(image_totals.values())
+                if grand_total > 0:
+                    pct = min(10.0 + 85.0 * (grand_current / grand_total), 95.0)
+                    progress.update(
+                        pct,
+                        f"pulling {image}: {grand_current / 1e6:.0f}/{grand_total / 1e6:.0f} MB",
+                        "downloading",
+                    )
 
-        stdout = process.stdout
-        assert stdout is not None
-        buf = b""
-        while True:
-            block: bytes = await stdout.read(4096)
-            if not block:
-                break
-            buf += block
+            stdout = process.stdout
+            assert stdout is not None
+            buf = b""
             while True:
-                cuts = [i for i in (buf.find(b"\n"), buf.find(b"\r")) if i != -1]
-                if not cuts:
+                block: bytes = await stdout.read(4096)
+                if not block:
                     break
-                cut = min(cuts)
-                line_bytes: bytes = buf[:cut]
-                buf = buf[cut + 1 :]
-                _emit(line_bytes.decode("utf-8", errors="replace").strip())
-        if buf.strip():
-            _emit(buf.decode("utf-8", errors="replace").strip())
-        code = await process.wait()
-        if code != 0:
-            # surface compose's own text: parse-only silences the real
-            # error otherwise
-            raise RuntimeError(
-                f"wechatpadpro: image pull failed (docker compose pull "
-                f"exited {code}): {error_tail.strip()[:400]}"
-            )
+                buf += block
+                while True:
+                    cuts = [i for i in (buf.find(b"\n"), buf.find(b"\r")) if i != -1]
+                    if not cuts:
+                        break
+                    cut = min(cuts)
+                    line_bytes: bytes = buf[:cut]
+                    buf = buf[cut + 1 :]
+                    _emit(line_bytes.decode("utf-8", errors="replace").strip())
+            if buf.strip():
+                _emit(buf.decode("utf-8", errors="replace").strip())
+            code = await process.wait()
+            if code != 0:
+                # surface compose's own text: parse-only silences the real
+                # error otherwise
+                raise RuntimeError(
+                    f"wechatpadpro: image pull failed (docker compose pull "
+                    f"exited {code}): {error_tail.strip()[:400]}"
+                )
+        finally:
+            if process.returncode is None:
+                process.terminate()
+                try:
+                    await bounded(process.wait(), timeout_seconds=2.0, label="docker image pull")
+                except TimeoutError:
+                    process.kill()
+                    await bounded(process.wait(), timeout_seconds=2.0, label="docker image pull")
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
+        try:
+            return await self._start(instance_id, options)
+        except BaseException:
+            await self.stop(instance_id)
+            raise
+
+    async def _start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
         target = _instance_dir(instance_id)
         compose_file = target / "compose.yml"
         if not compose_file.exists():
@@ -1017,30 +1029,41 @@ class WechatPadProProvisioner:
                 f"wechatpadpro {instance_id} is not installed (no compose "
                 f"project); run the setup to install it"
             )
-        compose = _find_docker_compose()
+        compose = await asyncio.to_thread(_find_docker_compose)
         if compose is None:
             raise GatewayNotInstalledError("docker compose disappeared since install")
+        content = compose_file.read_text(encoding="utf-8")
+        updated = re.sub(
+            r"(?m)(\s*- WEBHOOK_URL=).*",
+            lambda match: match[1] + self._webhook_url(instance_id),
+            content,
+        )
+        webhook_changed = updated != content
+        if webhook_changed:
+            compose_file.write_text(updated, encoding="utf-8")
         endpoint = self._endpoint(instance_id)
         # already up? (docker restarts containers with restart: unless-stopped)
         if await self._wait_http(endpoint, wait_seconds=2.0):
-            logger.info("wechatpadpro %s: reusing running gateway", instance_id)
-            await self._ensure_bridge(instance_id, options)
-            return GatewayInstance(
-                provider=self.provider,
-                instance_id=instance_id,
-                status="running",
-                endpoint=endpoint,
-                extra={"reused": True},
-            )
+            if not await self._owns_running(instance_id, compose):
+                raise RuntimeError(
+                    f"wechatpadpro {instance_id}: port {self._api_port(instance_id)} is in use by an unmanaged process"
+                )
+            if not webhook_changed:
+                logger.info("wechatpadpro %s: reusing running gateway", instance_id)
+                await self._ensure_bridge(instance_id, options)
+                return GatewayInstance(
+                    provider=self.provider,
+                    instance_id=instance_id,
+                    status="running",
+                    endpoint=endpoint,
+                    extra={"reused": True},
+                )
         progress = options.get("_progress")
         if progress is not None:
             progress.update(96.0, "starting containers (docker compose up)", "starting")
-        up = await asyncio.to_thread(
-            subprocess.run,
-            _compose_arguments(compose, "-f", str(compose_file), "up", "-d"),
-            capture_output=True,
-            text=True,
-            timeout=600,
+        up = await run_command(
+            self._compose_command(compose, compose_file, "up", "-d"),
+            timeout_seconds=600,
         )
         if up.returncode != 0:
             raise RuntimeError(
@@ -1077,25 +1100,27 @@ class WechatPadProProvisioner:
         compose_file = target / "compose.yml"
         if not compose_file.exists():
             return
-        compose = _find_docker_compose()
+        compose = await asyncio.to_thread(_find_docker_compose)
         if compose is None:
             return
-        stopped = await asyncio.to_thread(
-            subprocess.run,
-            _compose_arguments(compose, "-f", str(compose_file), "stop"),
-            capture_output=True,
-            text=True,
-            timeout=300,
+        stopped = await run_command(
+            self._compose_command(compose, compose_file, "down", "--remove-orphans"),
+            timeout_seconds=6,
         )
         if stopped.returncode != 0:
             raise RuntimeError(
-                f"wechatpadpro {instance_id}: docker compose stop failed: "
+                f"wechatpadpro {instance_id}: docker compose down failed: "
                 f"{(stopped.stderr or stopped.stdout).strip()[:400]}"
             )
 
     async def status(self, instance_id: str) -> GatewayInstance:
         endpoint = self._endpoint(instance_id)
-        running = await self._wait_http(endpoint, wait_seconds=2.0)
+        compose = await asyncio.to_thread(_find_docker_compose)
+        running = (
+            compose is not None
+            and await self._owns_running(instance_id, compose)
+            and await self._wait_http(endpoint, wait_seconds=2.0)
+        )
         if running:
             return GatewayInstance(
                 provider=self.provider,
@@ -1165,7 +1190,7 @@ class WechatPadProProvisioner:
                 return ""
         except Exception as exc:
             logger.warning("wechatpadpro %s /qr failed: %s", instance_id, exc)
-            return ""
+            return f"ERROR: wechatpadpro {instance_id}: {exc}"
 
     async def ensure_bridge(self, instance_id: str, options: dict[str, Any]) -> Any:
         return await self._ensure_bridge(instance_id, options)
@@ -1226,7 +1251,7 @@ class WechatPadProProvisioner:
                 instance_id,
             )
             return
-        if existing is not None and existing.bot_url == bot_url:
+        if existing is not None and existing.running and existing.bot_url == bot_url:
             return
         if existing is not None:
             await existing.stop()
@@ -1240,6 +1265,45 @@ class WechatPadProProvisioner:
         )
         await bridge.start()
         self._bridges[instance_id] = bridge
+
+    @staticmethod
+    def _compose_command(compose: str, compose_file: Path, *args: str) -> list[str]:
+        try:
+            metadata = cast_dict(
+                json.loads((compose_file.parent / "instance.json").read_text(encoding="utf-8"))
+            )
+        except (OSError, ValueError):
+            metadata = {}
+        project = str(metadata.get("project_name") or "")
+        prefix = ["-p", project] if project else []
+        return _compose_arguments(compose, *prefix, "-f", str(compose_file), *args)
+
+    async def _owns_running(self, instance_id: str, compose: str) -> bool:
+        compose_file = _instance_dir(instance_id) / "compose.yml"
+        if not compose_file.exists():
+            return False
+        result = await run_command(
+            self._compose_command(compose, compose_file, "ps", "-q", "wechatpadpro"),
+            timeout_seconds=8,
+        )
+        return result.returncode == 0 and bool(result.stdout.strip())
+
+    async def cleanup_failed(self, instance_id: str) -> None:
+        target = self._new_directories.get(instance_id)
+        if target is not None and (target / "compose.yml").exists():
+            compose = await asyncio.to_thread(_find_docker_compose)
+            if compose:
+                result = await run_command(
+                    self._compose_command(
+                        compose, target / "compose.yml", "down", "--volumes", "--remove-orphans"
+                    ),
+                    timeout_seconds=6,
+                )
+                if result.returncode:
+                    raise RuntimeError(
+                        f"wechatpadpro {instance_id}: rollback failed: {result.stderr.strip()}"
+                    )
+        await super().cleanup_failed(instance_id)
 
     @staticmethod
     async def _wait_http(endpoint: str, wait_seconds: float) -> bool:

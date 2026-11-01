@@ -92,6 +92,122 @@ class _RecordingWriter:
         self.closed = True
 
 
+async def test_webhook_rejects_credentials_from_another_instance() -> None:
+    bridge = gateway._WebhookBridge("wechat-1", 0, "http://bot", "one")
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"POST /webhook?token=two HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}")
+    reader.feed_eof()
+    writer = _RecordingWriter()
+    await bridge._handle(reader, cast(Any, writer))
+    assert bytes(writer.payload).startswith(b"HTTP/1.1 403")
+    assert not bridge._pending_forwards
+
+
+async def test_image_pull_cancellation_terminates_only_its_subprocess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reading = asyncio.Event()
+    finished = asyncio.Event()
+
+    class Process:
+        returncode: int | None = None
+        stdout: Any
+
+        def __init__(self) -> None:
+            self.stdout = self
+
+        async def read(self, size: int) -> bytes:
+            reading.set()
+            await asyncio.Event().wait()
+            return b""
+
+        def terminate(self) -> None:
+            self.returncode = -15
+            finished.set()
+
+        async def wait(self) -> int:
+            await finished.wait()
+            return self.returncode or 0
+
+    process = Process()
+
+    async def launch(*args: Any, **kwargs: Any) -> Process:
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    provisioner = gateway.WechatPadProProvisioner()
+    task = asyncio.create_task(
+        provisioner._pull_with_progress("docker", tmp_path / "compose.yml", None)
+    )
+    await reading.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert process.returncode == -15
+
+
+async def test_missing_docker_requires_explicit_install_permission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gateway, "_find_docker_compose", lambda: None)
+
+    def unexpected_install(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("must not install system software without opt-in")
+
+    monkeypatch.setattr(gateway, "install_docker_dependencies", unexpected_install)
+    with pytest.raises(RuntimeError, match="install_dependencies"):
+        await gateway.WechatPadProProvisioner().install("one", {})
+    assert not gateway._instance_dir("one").exists()
+
+
+async def test_guide_login_timeout_stops_gateway_and_discards_pending_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from mailflow_tui import gateway_guide
+
+    ticks = iter((0.0, 301.0))
+    monkeypatch.setattr(gateway_guide, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    service = SimpleNamespace(gateway_shutdown=AsyncMock())
+    guide = SimpleNamespace(
+        _provider="wechatpadpro",
+        _instance_id="one",
+        _qr_done=False,
+        _result={"endpoint": "http://fake"},
+        _t=lambda key, **kwargs: key,
+        _log=lambda *args: None,
+        _set_status=lambda *args: None,
+    )
+    await gateway_guide.GatewayGuideModal._qr_loop(guide, service, "wechatpadpro")
+    service.gateway_shutdown.assert_awaited_once_with("wechatpadpro", "one")
+    assert guide._result is None
+
+
+async def test_unreachable_endpoint_cannot_finish_the_gateway_guide() -> None:
+    from unittest.mock import AsyncMock, Mock
+
+    from mailflow_tui.gateway_guide import GatewayGuideModal
+
+    service = SimpleNamespace(gateway_shutdown=AsyncMock())
+    guide = SimpleNamespace(
+        _instance_id="one",
+        _result={"endpoint": "http://fake"},
+        _wait_for_endpoint=AsyncMock(return_value=False),
+        _finish_ready=Mock(),
+        _t=lambda key, **kwargs: key,
+        _log=lambda *args: None,
+        _set_status=Mock(),
+    )
+    await GatewayGuideModal._finish_login(guide, service, "wechatpadpro")
+    guide._finish_ready.assert_not_called()
+    service.gateway_shutdown.assert_awaited_once_with("wechatpadpro", "one")
+    assert guide._result is None
+
+
 @pytest.mark.asyncio
 async def test_webhook_bridge_waits_for_entire_declared_body(
     monkeypatch: pytest.MonkeyPatch,
@@ -105,7 +221,11 @@ async def test_webhook_bridge_waits_for_entire_declared_body(
 
     monkeypatch.setattr(bridge, "_forward", capture)
     body = b'{"Data":{"Content":"mailflow help","MsgType":1}}'
-    headers = b"POST /webhook HTTP/1.1\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n"
+    headers = (
+        b"POST /webhook?token=secret HTTP/1.1\r\nContent-Length: "
+        + str(len(body)).encode()
+        + b"\r\n\r\n"
+    )
     reader = asyncio.StreamReader()
     writer = _RecordingWriter()
     reader.feed_data(headers + body[:9])
@@ -141,7 +261,10 @@ async def test_webhook_bridge_acks_before_slow_command_dispatch(
     reader = asyncio.StreamReader()
     writer = _RecordingWriter()
     reader.feed_data(
-        b"POST /webhook HTTP/1.1\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+        b"POST /webhook?token=secret HTTP/1.1\r\nContent-Length: "
+        + str(len(body)).encode()
+        + b"\r\n\r\n"
+        + body
     )
     reader.feed_eof()
 
@@ -449,12 +572,12 @@ async def test_stop_reports_compose_failure(
     (instance_dir / "compose.yml").write_text("services: {}\n", encoding="utf-8")
     monkeypatch.setattr(gateway, "_find_docker_compose", lambda: "/usr/bin/docker")
 
-    def failed_stop(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+    async def failed_stop(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="daemon unavailable")
 
-    monkeypatch.setattr(subprocess, "run", failed_stop)
+    monkeypatch.setattr(gateway, "run_command", failed_stop)
 
-    with pytest.raises(RuntimeError, match="docker compose stop failed: daemon unavailable"):
+    with pytest.raises(RuntimeError, match="docker compose down failed: daemon unavailable"):
         await gateway.WechatPadProProvisioner().stop("wechat-1")
 
 
@@ -466,7 +589,7 @@ async def test_guide_escape_cancels_deployment_and_shuts_down() -> None:
 
     class GuideService:
         def __init__(self) -> None:
-            self.gateways = SimpleNamespace(_last_progress=None)
+            self.gateways = SimpleNamespace(progress=lambda *_: None)
             self.provision_started = asyncio.Event()
             self.provision_cancelled = asyncio.Event()
             self.shutdowns: list[tuple[str, str]] = []
@@ -548,7 +671,9 @@ async def test_install_starts_stopped_windows_desktop(
     monkeypatch.setattr(gateway, "_start_docker_desktop", start_desktop)
     monkeypatch.setattr(gateway.WechatPadProProvisioner, "_pull_with_progress", fake_pull)
 
-    await gateway.WechatPadProProvisioner().install("wechat-1", {"bot_url": "http://bot"})
+    await gateway.WechatPadProProvisioner().install(
+        "wechat-1", {"bot_url": "http://bot", "install_dependencies": True}
+    )
 
     assert starts == [True]
     assert pulled[0][0] == docker
