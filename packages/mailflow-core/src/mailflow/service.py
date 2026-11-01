@@ -46,6 +46,7 @@ from mailflow.contracts import (
     MailProcessor,
     MailSource,
     Notifier,
+    ReplyPreflightSource,
     StorageBackend,
 )
 from mailflow.domain import (
@@ -89,6 +90,7 @@ from mailflow.plugins import PluginManager
 from mailflow.processors import LLMImportanceProcessor as _BUILTIN_LLM_IMPORTANCE
 from mailflow.processors import register_builtin_processors
 from mailflow.registry import ComponentRegistry
+from mailflow.replies import ReplyError, ReplySourceError
 from mailflow.runtime import MailFlowRuntime
 from mailflow.settings import (
     OptionSpec,
@@ -543,8 +545,7 @@ def _bind_llm_processor(config: MailFlowConfig) -> MailFlowConfig:
 
 
 class _DraftLocks:
-    """One async lock per draft id, created on demand; bounds memory to the
-    number of drafts confirmed concurrently during this service's life."""
+    """Serialize every mutation of a draft, including the provider send."""
 
     def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
@@ -3575,9 +3576,7 @@ Return every candidate in this batch."""
     # -- reply workflow ---------------------------------------------------------------------
 
     async def create_reply(self, mail_id: str) -> ReplyDraft:
-        record = await self.storage.get_mail(mail_id)
-        if record is None:
-            raise KeyError(f"mail {mail_id} not found")
+        record = await self._reply_record(mail_id)
         draft = ReplyDraft(
             draft_id=uuid4().hex[:16],
             mail_id=mail_id,
@@ -3586,9 +3585,9 @@ Return every candidate in this batch."""
             subject=f"Re: {record.mail.subject}",
             body=record.analysis.suggested_reply if record.analysis else "",
         )
-        await self.storage.save_draft(draft)
+        await self._save_reply_draft(draft)
         await self.events.emit("reply.created", draft_id=draft.draft_id, mail_id=mail_id)
-        return draft
+        return draft.model_copy(deep=True)
 
     async def create_letter_draft(
         self,
@@ -3603,9 +3602,7 @@ Return every candidate in this batch."""
         (``"cn"`` or ``"en"``): the date is filled automatically and the
         signature block is right-aligned. Empty parts keep placeholders for
         the user to fill in."""
-        record = await self.storage.get_mail(mail_id)
-        if record is None:
-            raise KeyError(f"mail {mail_id} not found")
+        record = await self._reply_record(mail_id)
         tz = ZoneInfo(self.config.general.timezone)
         today = datetime.now(tz).date()
         recipient = record.mail.sender.display or record.mail.sender.address
@@ -3625,85 +3622,163 @@ Return every candidate in this batch."""
             subject=f"Re: {record.mail.subject}",
             body=body_html,
         )
-        await self.storage.save_draft(draft)
+        await self._save_reply_draft(draft)
         await self.events.emit("reply.created", draft_id=draft.draft_id, mail_id=mail_id)
-        return draft
+        return draft.model_copy(deep=True)
 
     async def get_draft(self, draft_id: str) -> ReplyDraft | None:
-        return await self.storage.get_draft(draft_id)
+        try:
+            draft = await self.storage.get_draft(draft_id)
+        except Exception:
+            raise self._reply_error("reply.storage_failed") from None
+        return draft.model_copy(deep=True) if draft is not None else None
+
+    def _reply_error(self, code: str, **params: Any) -> ReplyError:
+        return ReplyError(code, self.t(code, **params), **params)
+
+    def _require_editable_reply(self, draft: ReplyDraft) -> None:
+        if draft.state is ReplyState.SENDING:
+            raise self._reply_error("reply.send_uncertain")
+        if draft.state in (ReplyState.SENT, ReplyState.CANCELLED):
+            raise self._reply_error(
+                "reply.state_locked", state=self.t(f"reply.state_{draft.state.value}")
+            )
+
+    async def _save_reply_draft(self, draft: ReplyDraft) -> None:
+        try:
+            await self.storage.save_draft(draft.model_copy(deep=True))
+        except Exception:
+            raise self._reply_error("reply.storage_failed") from None
+
+    async def _reply_record(self, mail_id: str) -> MailRecord:
+        try:
+            record = await self.storage.get_mail(mail_id)
+        except Exception:
+            raise self._reply_error("reply.storage_failed") from None
+        if record is None:
+            raise KeyError(self.t("reply.mail_not_found", mail_id=mail_id))
+        return record
+
+    async def _reply_source(self, draft: ReplyDraft) -> MailSource:
+        record = await self._reply_record(draft.mail_id)
+        account = next((a for a in self.config.accounts if a.account_id == draft.account_id), None)
+        if account is None or record.mail.account_id != draft.account_id:
+            raise self._reply_error("reply.account_missing", account_id=draft.account_id)
+        if not account.enabled:
+            raise self._reply_error("reply.account_disabled", account_id=draft.account_id)
+        source = self.sources.get(draft.account_id)
+        if source is None:
+            raise self._reply_error("reply.source_missing", account_id=draft.account_id)
+        if getattr(source, "supports_reply", True) is False:
+            raise self._reply_error("reply.source_read_only", account_id=draft.account_id)
+        if isinstance(source, ReplyPreflightSource):
+            try:
+                await source.check_reply_ready()
+            except ReplySourceError as exc:
+                raise self._reply_error(
+                    "reply.source_config", account_id=draft.account_id, option=exc.option
+                ) from None
+            except Exception:
+                raise self._reply_error(
+                    "reply.source_not_ready", account_id=draft.account_id
+                ) from None
+        return source
 
     async def edit_draft(self, draft_id: str, subject: str, body: str) -> ReplyDraft:
-        draft = await self._require_draft(draft_id)
-        if draft.state in (ReplyState.SENT, ReplyState.CANCELLED):
-            raise ValueError(f"draft {draft_id} is {draft.state.value}; cannot edit")
-        draft.subject = subject
-        draft.body = body
-        draft.updated_at = utcnow()
-        if draft.state == ReplyState.PREPARED:
-            draft.state = ReplyState.DRAFT  # editing invalidates the confirmation token
-            draft.token = None
-            draft.token_expires_at = None
-        await self.storage.save_draft(draft)
-        return draft
+        async with self._reply_locks.for_draft(draft_id):
+            draft = await self._require_draft(draft_id)
+            self._require_editable_reply(draft)
+            draft.subject, draft.body = subject, body
+            draft.state = ReplyState.DRAFT
+            draft.token = draft.token_expires_at = None
+            draft.error_code = ""
+            draft.updated_at = utcnow()
+            await self._save_reply_draft(draft)
+            await self.events.emit("reply.changed", draft_id=draft_id)
+            return draft
 
     async def prepare_reply(self, draft_id: str) -> ReplyDraft:
-        draft = await self._require_draft(draft_id)
-        if draft.state in (ReplyState.SENT, ReplyState.CANCELLED):
-            raise ValueError(f"draft {draft_id} is {draft.state.value}; cannot prepare")
-        draft.token = secrets.token_urlsafe(16)
-        draft.token_expires_at = utcnow() + _REPLY_TOKEN_TTL
-        draft.state = ReplyState.PREPARED
-        draft.updated_at = utcnow()
-        await self.storage.save_draft(draft)
-        return draft
+        async with self._reply_locks.for_draft(draft_id):
+            draft = await self._require_draft(draft_id)
+            self._require_editable_reply(draft)
+            await self._reply_source(draft)
+            draft.token = secrets.token_urlsafe(16)
+            draft.token_expires_at = utcnow() + _REPLY_TOKEN_TTL
+            draft.state = ReplyState.PREPARED
+            draft.error_code = ""
+            draft.updated_at = utcnow()
+            await self._save_reply_draft(draft)
+            await self.events.emit("reply.changed", draft_id=draft_id)
+            return draft
 
     async def confirm_reply(self, draft_id: str, token: str) -> ReplyDraft:
-        # Two concurrent confirms with the same token must not both pass the
-        # validity check before either persists SENT (a double send). The
-        # per-draft lock serializes claim → re-check → send.
         async with self._reply_locks.for_draft(draft_id):
-            return await self._confirm_reply_locked(draft_id, token)
+            # SMTP can keep running in its thread after the requesting UI is
+            # cancelled. Keep ownership until the actual send and save finish.
+            task = asyncio.create_task(self._confirm_reply_locked(draft_id, token))
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                with contextlib.suppress(Exception):
+                    await task
+                raise
 
     async def _confirm_reply_locked(self, draft_id: str, token: str) -> ReplyDraft:
         draft = await self._require_draft(draft_id)
         if not draft.is_confirmation_valid(token):
-            raise PermissionError("invalid or expired confirmation token")
-        # Persist SENT before sending: a crash between send and save cannot
-        # cause a double send, because the token is consumed here.
-        draft.state = ReplyState.SENT
-        draft.token = None
-        draft.token_expires_at = None
+            raise PermissionError(self.t("reply.confirm_invalid"))
+        source = await self._reply_source(draft)
+        draft.state = ReplyState.SENDING
+        draft.token = draft.token_expires_at = None
         draft.updated_at = utcnow()
-        await self.storage.save_draft(draft)
-        source = self.sources.get(draft.account_id)
-        if source is None:
-            raise RuntimeError(f"no source for account {draft.account_id!r}")
+        await self._save_reply_draft(draft)
+        await self.events.emit("reply.changed", draft_id=draft_id)
         try:
-            await source.send_reply(draft.mail_id, draft)
-        except Exception:
-            # Revert to an un-tokenized draft so the user must prepare again.
-            draft.state = ReplyState.DRAFT
+            await source.send_reply(draft.mail_id, draft.model_copy(deep=True))
+        except asyncio.CancelledError:
+            # Delivery may already have reached the provider. SENDING prevents
+            # an uncertain attempt from being automatically sent again.
+            raise self._reply_error("reply.send_uncertain") from None
+        except Exception as exc:
+            logger.warning(
+                "reply %s failed through account %s (%s)",
+                draft_id,
+                draft.account_id,
+                type(exc).__name__,
+            )
+            draft.state = ReplyState.FAILED
+            draft.error_code = "reply.send_failed"
             draft.updated_at = utcnow()
-            await self.storage.save_draft(draft)
-            raise
+            await self._save_reply_draft(draft)
+            await self.events.emit("reply.changed", draft_id=draft_id)
+            raise self._reply_error("reply.send_failed") from None
+        draft.state = ReplyState.SENT
+        draft.updated_at = utcnow()
+        try:
+            await self._save_reply_draft(draft)
+        except ReplyError:
+            raise self._reply_error("reply.send_unrecorded") from None
         await self.events.emit("reply.sent", draft_id=draft_id, mail_id=draft.mail_id)
         return draft
 
     async def cancel_reply(self, draft_id: str) -> ReplyDraft:
-        draft = await self._require_draft(draft_id)
-        if draft.state == ReplyState.SENT:
-            raise ValueError(f"draft {draft_id} was already sent; cannot cancel")
-        draft.state = ReplyState.CANCELLED
-        draft.token = None
-        draft.token_expires_at = None
-        draft.updated_at = utcnow()
-        await self.storage.save_draft(draft)
-        return draft
+        async with self._reply_locks.for_draft(draft_id):
+            draft = await self._require_draft(draft_id)
+            if draft.state is ReplyState.CANCELLED:
+                return draft
+            self._require_editable_reply(draft)
+            draft.state = ReplyState.CANCELLED
+            draft.token = draft.token_expires_at = None
+            draft.error_code = ""
+            draft.updated_at = utcnow()
+            await self._save_reply_draft(draft)
+            await self.events.emit("reply.changed", draft_id=draft_id)
+            return draft
 
     async def _require_draft(self, draft_id: str) -> ReplyDraft:
-        draft = await self.storage.get_draft(draft_id)
+        draft = await self.get_draft(draft_id)
         if draft is None:
-            raise KeyError(f"draft {draft_id} not found")
+            raise KeyError(self.t("reply.draft_not_found", draft_id=draft_id))
         return draft
 
 

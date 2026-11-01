@@ -21,6 +21,7 @@ from mailflow.contracts import (
     MailProcessor,
     MailSource,
     Notifier,
+    ReplyPreflightSource,
     StorageBackend,
     TextNotifier,
 )
@@ -81,6 +82,8 @@ def validate_component(kind: ComponentKind, component: Any) -> None:
         _check_method(component, name, contract)
     if kind is ComponentKind.MAIL_SOURCE and hasattr(component, "fetch_history"):
         _check_method(component, "fetch_history", HistoryCapableSource.fetch_history)
+    if kind is ComponentKind.MAIL_SOURCE and hasattr(component, "check_reply_ready"):
+        _check_method(component, "check_reply_ready", ReplyPreflightSource.check_reply_ready)
     if kind is ComponentKind.NOTIFIER and hasattr(component, "push_text"):
         _check_method(component, "push_text", TextNotifier.push_text)
 
@@ -143,6 +146,8 @@ def validate_result(kind: ComponentKind, method: str, result: Any) -> None:
     protocol = _PROTOCOLS[kind]
     if kind is ComponentKind.MAIL_SOURCE and method == "fetch_history":
         protocol = HistoryCapableSource
+    if kind is ComponentKind.MAIL_SOURCE and method == "check_reply_ready":
+        protocol = ReplyPreflightSource
     if kind is ComponentKind.NOTIFIER and method == "push_text":
         protocol = TextNotifier
     contract = getattr(protocol, method)

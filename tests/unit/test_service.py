@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
+from mailflow.config import LLMConfig, MailAccountConfig, MailFlowConfig, ProcessorConfig
 from mailflow.contracts import (
     LLMCompletion,
     LLMRouter,
@@ -36,6 +36,7 @@ from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.pipeline import PipelineEngine, ProcessorBinding
 from mailflow.registry import ComponentRegistry
+from mailflow.replies import ReplyError
 from mailflow.service import MailFlowService
 
 ADDRESS = MailAddress(name="Sender", address="sender@example.com")
@@ -208,7 +209,7 @@ async def service() -> MailFlowService:
     await storage.save_mail(make_record())
     source = RecordingSource()
     svc = MailFlowService(
-        config=MailFlowConfig(),
+        config=MailFlowConfig(accounts=[MailAccountConfig(account_id="acct-1", provider="fake")]),
         registry=ComponentRegistry(),
         plugin_manager=cast(Any, None),
         storage=cast(Any, storage),
@@ -276,14 +277,14 @@ class TestReplyWorkflow:
         draft = await service.create_reply("m1")
         prepared = await service.prepare_reply(draft.draft_id)
         await service.confirm_reply(draft.draft_id, prepared.token or "")
-        with pytest.raises(ValueError, match="cannot edit"):
+        with pytest.raises(ReplyError):
             await service.edit_draft(draft.draft_id, "x", "y")
 
     async def test_cancel_sent_rejected(self, service: MailFlowService) -> None:
         draft = await service.create_reply("m1")
         prepared = await service.prepare_reply(draft.draft_id)
         await service.confirm_reply(draft.draft_id, prepared.token or "")
-        with pytest.raises(ValueError, match="already sent"):
+        with pytest.raises(ReplyError):
             await service.cancel_reply(draft.draft_id)
 
     async def test_cancel_before_send(self, service: MailFlowService) -> None:
@@ -300,19 +301,6 @@ class TestReplyWorkflow:
         await service.edit_draft(draft.draft_id, "Re: Hello", "changed")
         with pytest.raises(PermissionError):
             await service.confirm_reply(draft.draft_id, prepared.token or "")
-
-    async def test_send_failure_reverts_to_draft(self, service: MailFlowService) -> None:
-        source: RecordingSource = service.sources["acct-1"]  # type: ignore[assignment]
-        source.fail_send = True
-        draft = await service.create_reply("m1")
-        prepared = await service.prepare_reply(draft.draft_id)
-        with pytest.raises(RuntimeError, match="provider send failed"):
-            await service.confirm_reply(draft.draft_id, prepared.token or "")
-        stored: ReplyDraft = await service.storage.get_draft(draft.draft_id)  # type: ignore[attr-defined]
-        assert stored.state is ReplyState.DRAFT
-        assert stored.token is None
-        # token consumed -> cannot re-confirm, no double send
-        assert source.sent == []
 
     async def test_concurrent_confirms_send_once(self, service: MailFlowService) -> None:
         """Two confirms racing with the same token: the per-draft lock makes

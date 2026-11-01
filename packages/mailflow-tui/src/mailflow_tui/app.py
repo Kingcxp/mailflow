@@ -21,6 +21,7 @@ from mailflow.domain import (
     MailRecord,
     PendingOperation,
     ReplyDraft,
+    ReplyState,
     SmartActionResult,
     Urgency,
 )
@@ -211,6 +212,7 @@ class ReplyModal(ModalScreen[Any]):
         self._service = service
         self._record = record
         self._draft: ReplyDraft | None = None
+        self._reply_busy = False
         self._bindings.bind("escape", "dismiss", self._t("tui.btn_close"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -279,8 +281,55 @@ class ReplyModal(ModalScreen[Any]):
             yield Static(self._t("tui.reply_confirm_hint"), id="reply-status")
 
     async def on_mount(self) -> None:
-        self._draft = await self._service.create_reply(self._record.record_id)
+        try:
+            self._draft = await self._service.create_reply(self._record.record_id)
+        except (ValueError, KeyError, PermissionError) as exc:
+            self._set_status(escape(error_message(self._service, exc)))
+            self._sync_reply_controls()
+            return
         self.query_one("#reply-body", TextArea).text = self._draft.body
+        self._sync_reply_controls()
+
+    def _sync_reply_controls(self) -> None:
+        draft = self._draft
+        locked = draft is None or draft.state in (
+            ReplyState.SENDING,
+            ReplyState.SENT,
+            ReplyState.CANCELLED,
+        )
+        self.query_one("#reply-body", TextArea).read_only = self._reply_busy or locked
+        for button in self.query(Button):
+            button.disabled = self._reply_busy or locked
+        confirm = self.query_one("#reply-confirm", Button)
+        confirm.disabled = (
+            self._reply_busy
+            or draft is None
+            or not draft.token
+            or draft.state is not ReplyState.PREPARED
+            or self.query_one("#reply-body", TextArea).text != draft.body
+        )
+        if not self._reply_busy and (
+            draft is None or draft.state in (ReplyState.SENT, ReplyState.CANCELLED)
+        ):
+            self.query_one("#reply-cancel", Button).disabled = False
+            self.query_one("#reply-cancel", Button).label = self._t("tui.btn_close")
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id != "reply-body" or self._reply_busy:
+            return
+        self._sync_reply_controls()
+        if (
+            self._draft is not None
+            and self._draft.token
+            and event.text_area.text != self._draft.body
+        ):
+            self._set_status(self._t("reply.body_changed"))
+
+    async def _reply_failed(self, exc: Exception) -> None:
+        if self._draft is not None:
+            with contextlib.suppress(ValueError, KeyError, PermissionError):
+                self._draft = await self._service.get_draft(self._draft.draft_id)
+        self._set_status(escape(error_message(self._service, exc)))
 
     def _set_status(self, text: str) -> None:
         self.query_one("#reply-status", Static).update(text)
@@ -337,9 +386,21 @@ class ReplyModal(ModalScreen[Any]):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
-        assert self._draft is not None
+        if self._reply_busy:
+            return
         if button_id == "reply-cancel":
+            if self._draft is None or self._draft.state in (ReplyState.SENT, ReplyState.CANCELLED):
+                self.dismiss(None)
+                return
+            try:
+                self._draft = await self._service.cancel_reply(self._draft.draft_id)
+            except (ValueError, KeyError, PermissionError) as exc:
+                await self._reply_failed(exc)
+                self._sync_reply_controls()
+                return
             self.dismiss(None)
+            return
+        if self._draft is None:
             return
         if button_id in ("reply-tpl-cn", "reply-tpl-en"):
             self._apply_template("cn" if button_id == "reply-tpl-cn" else "en")
@@ -358,17 +419,22 @@ class ReplyModal(ModalScreen[Any]):
             return
         if button_id == "reply-save":
             body = self.query_one("#reply-body", TextArea).text
+            self._reply_busy = True
+            self._sync_reply_controls()
             try:
                 self._draft = await self._service.edit_draft(
                     self._draft.draft_id, self._draft.subject, body
                 )
                 self._set_status(self._t("tui.reply_saved"))
-            except ValueError as exc:
-                self._set_status(escape(error_message(self._service, exc)))
+            except (ValueError, KeyError, PermissionError) as exc:
+                await self._reply_failed(exc)
+            finally:
+                self._reply_busy = False
+                self._sync_reply_controls()
             return
         if button_id == "reply-prepare":
-            # prepare calls the LLM (seconds to minutes with retries):
-            # a worker keeps the modal painting while it runs
+            self._reply_busy = True
+            self._sync_reply_controls()
             draft_id = self._draft.draft_id
             self._set_status(self._t("tui.reply_preparing"))
             self.run_worker(
@@ -379,9 +445,11 @@ class ReplyModal(ModalScreen[Any]):
             )
             return
         if button_id == "reply-confirm":
-            assert self._draft is not None and self._draft.token is not None
+            if not self._draft.token:
+                return
             draft = self._draft
-            self.query_one("#reply-confirm", Button).disabled = True
+            self._reply_busy = True
+            self._sync_reply_controls()
             self._set_status(self._t("tui.reply_sending"))
             self.run_worker(
                 self._confirm_reply(draft),
@@ -392,24 +460,36 @@ class ReplyModal(ModalScreen[Any]):
 
     async def _prepare_reply(self, draft_id: str) -> None:
         try:
+            draft = await self._service.get_draft(draft_id)
+            if draft is None:
+                raise ValueError(self._t("reply.draft_not_found", draft_id=draft_id))
+            body = self.query_one("#reply-body", TextArea).text
+            if body != draft.body:
+                await self._service.edit_draft(draft_id, draft.subject, body)
             self._draft = await self._service.prepare_reply(draft_id)
-        except ValueError as exc:
-            self._set_status(escape(error_message(self._service, exc)))
-            return
-        self._set_status(self._t("tui.reply_prepared", token=self._draft.token or ""))
-        self.query_one("#reply-confirm", Button).disabled = False
+            self._set_status(self._t("tui.reply_prepared", token=self._draft.token or ""))
+        except (ValueError, KeyError, PermissionError) as exc:
+            await self._reply_failed(exc)
+        finally:
+            self._reply_busy = False
+            self._sync_reply_controls()
 
     async def _confirm_reply(self, draft: ReplyDraft) -> None:
-        token = draft.token
-        if token is None:  # pragma: no cover - confirm is gated on prepare
-            return
         try:
-            await self._service.confirm_reply(draft.draft_id, token)
-        except PermissionError as exc:
-            self._set_status(escape(error_message(self._service, exc)))
-            self.query_one("#reply-confirm", Button).disabled = False
-            return
-        self._set_status(self._t("tui.reply_sent"))
+            if not draft.token:
+                return
+            body = self.query_one("#reply-body", TextArea).text
+            if body != draft.body:
+                self._draft = await self._service.edit_draft(draft.draft_id, draft.subject, body)
+                self._set_status(self._t("reply.body_changed"))
+                return
+            self._draft = await self._service.confirm_reply(draft.draft_id, draft.token)
+            self._set_status(self._t("tui.reply_sent"))
+        except (ValueError, KeyError, PermissionError) as exc:
+            await self._reply_failed(exc)
+        finally:
+            self._reply_busy = False
+            self._sync_reply_controls()
 
 
 class ActionModal(ModalScreen[Any]):

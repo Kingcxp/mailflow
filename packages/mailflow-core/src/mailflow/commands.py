@@ -1423,12 +1423,22 @@ class CommandRouter:
             StyleSpan(text=f"\n{self._t('reply.field_mail')}: {draft.mail_id}"),
             StyleSpan(text=f"\n{self._t('reply.field_to')}: {draft.to.display}"),
             StyleSpan(text=f"\n{self._t('reply.field_subject')}: {draft.subject}"),
-            StyleSpan(text=f"\n{self._t('reply.field_state')}: {draft.state.value}"),
+            StyleSpan(
+                text=f"\n{self._t('reply.field_state')}: {self._t(f'reply.state_{draft.state.value}')}"
+            ),
             StyleSpan(
                 text=f"\n{self._t('reply.field_body')}:\n{html_to_text(draft.body)}",
                 style=_STYLE_MUTED,
             ),
         ]
+        if draft.error_code:
+            spans.insert(
+                -1,
+                StyleSpan(
+                    text=f"\n{self._t('reply.field_error')}: {self._t(draft.error_code)}",
+                    style=_STYLE_ERROR,
+                ),
+            )
         return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
 
     # -- feedback -------------------------------------------------------------------------------------

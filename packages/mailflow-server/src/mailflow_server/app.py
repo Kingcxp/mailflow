@@ -38,6 +38,7 @@ from fastapi import (  # pyright: ignore[reportMissingTypeStubs]
     WebSocketDisconnect,
 )
 from fastapi.responses import JSONResponse  # pyright: ignore[reportMissingTypeStubs]
+from mailflow.replies import ReplyError
 
 from mailflow_server.auth import check_basic_auth, require_credentials
 
@@ -82,6 +83,70 @@ def create_app(service: MailFlowService) -> FastAPI:
         check_basic_auth(request, username, password)
 
     # ------------------------------------------------------------------ REST
+
+    @app.exception_handler(ReplyError)
+    async def reply_failure(_: Request, exc: ReplyError) -> JSONResponse:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": {
+                    "code": exc.code,
+                    "params": exc.params,
+                    "message": str(exc),
+                }
+            },
+        )
+
+    async def reply_result(operation: Any) -> Any:
+        try:
+            return _jsonable(await operation)
+        except PermissionError:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "reply.confirm_invalid",
+                    "message": service.t("reply.confirm_invalid"),
+                },
+            ) from None
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "reply.not_found",
+                    "message": str(exc),
+                },
+            ) from None
+
+    @app.post("/mails/{record_id}/replies")
+    async def create_reply(record_id: str, _: None = Depends(guard)) -> Any:
+        return await reply_result(service.create_reply(record_id))
+
+    @app.get("/drafts/{draft_id}")
+    async def get_draft(draft_id: str, _: None = Depends(guard)) -> Any:
+        draft = await service.get_draft(draft_id)
+        if draft is None:
+            raise HTTPException(
+                status_code=404, detail=service.t("reply.draft_not_found", draft_id=draft_id)
+            )
+        return _jsonable(draft)
+
+    @app.put("/drafts/{draft_id}")
+    async def edit_draft(draft_id: str, body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return await reply_result(
+            service.edit_draft(draft_id, str(body.get("subject", "")), str(body.get("body", "")))
+        )
+
+    @app.post("/drafts/{draft_id}/prepare")
+    async def prepare_reply(draft_id: str, _: None = Depends(guard)) -> Any:
+        return await reply_result(service.prepare_reply(draft_id))
+
+    @app.post("/drafts/{draft_id}/confirm")
+    async def confirm_reply(draft_id: str, body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return await reply_result(service.confirm_reply(draft_id, str(body.get("token", ""))))
+
+    @app.post("/drafts/{draft_id}/cancel")
+    async def cancel_reply(draft_id: str, _: None = Depends(guard)) -> Any:
+        return await reply_result(service.cancel_reply(draft_id))
 
     @app.get("/snapshot")
     def snapshot(_: None = Depends(guard)) -> Any:

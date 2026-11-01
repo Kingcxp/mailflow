@@ -514,7 +514,9 @@ class TrashRecord(BaseModel):
 class ReplyState(StrEnum):
     DRAFT = "draft"
     PREPARED = "prepared"
+    SENDING = "sending"
     SENT = "sent"
+    FAILED = "failed"
     CANCELLED = "cancelled"
 
 
@@ -532,6 +534,7 @@ class ReplyDraft(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     token: str | None = None
     token_expires_at: datetime | None = None
+    error_code: str = ""
 
     def is_confirmation_valid(self, token: str, now: datetime | None = None) -> bool:
         if self.state != ReplyState.PREPARED or self.token is None or self.token_expires_at is None:
@@ -539,7 +542,7 @@ class ReplyDraft(BaseModel):
         if token != self.token:
             return False
         now = now or datetime.now(UTC)
-        return now <= self.token_expires_at
+        return to_utc(now) <= to_utc(self.token_expires_at)
 
 
 # ---------------------------------------------------------------------------

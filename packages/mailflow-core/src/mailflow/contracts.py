@@ -62,6 +62,17 @@ class MailSource(Protocol):
 
 
 @runtime_checkable
+class ReplyPreflightSource(Protocol):
+    """Optional local send-readiness check, without connecting to a provider.
+
+    Read-only sources expose ``supports_reply = False``. Sources requiring
+    outgoing configuration raise ``ReplySourceError(option)`` on failure.
+    """
+
+    async def check_reply_ready(self) -> None: ...
+
+
+@runtime_checkable
 class HistoryCapableSource(Protocol):
     """A mail source that can list already-received mail on demand.
 
@@ -336,6 +347,7 @@ __all__ = [
     "ProcessingContext",
     "ProcessorDecision",
     "ProcessorResult",
+    "ReplyPreflightSource",
     "StorageBackend",
     "TextNotifier",
     "ToolCall",

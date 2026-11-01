@@ -12,7 +12,7 @@ import pytest
 from mailflow.commands import CommandRouter
 from mailflow.config import LLMConfig, MailAccountConfig, MailFlowConfig
 from mailflow.contracts import MailSource
-from mailflow.domain import ComponentKind, MailRecord, Urgency
+from mailflow.domain import ComponentKind, MailRecord, ReplyState, Urgency
 from mailflow.plugins import PluginInfo, PluginManager
 from mailflow.registry import PluginRegistrar
 from mailflow.service import start_service
@@ -954,7 +954,9 @@ async def test_bot_export_wizard(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reply_letter_template_and_toolbar(tmp_path: Path) -> None:
+async def test_reply_letter_template_and_toolbar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The reply modal applies CN/EN letter templates (auto date, right-aligned
     signature) and the toolbar wraps selections in bold/italic and aligns."""
     from mailflow.plugin_market import PluginMarket
@@ -1008,6 +1010,43 @@ async def test_reply_letter_template_and_toolbar(tmp_path: Path) -> None:
             # saving persists the templated body
             cast(Button, app.screen.query_one("#reply-save")).press()
             await pilot.pause(0.1)
+            modal = app.screen
+            assert isinstance(modal, ReplyModal)
+            draft = modal._draft  # pyright: ignore[reportPrivateUsage]
+            assert draft is not None
+            stored = await service.get_draft(draft.draft_id)
+            assert stored is not None and stored.body == textarea.text
+            # Preparing saves the editor contents, and later edits disable confirm.
+            modal.query_one("#reply-prepare", Button).press()
+            await pilot.pause(0.1)
+            assert not modal.query_one("#reply-confirm", Button).disabled
+            textarea.text = "Updated reply from the editor"
+            await pilot.pause(0.05)
+            assert modal.query_one("#reply-confirm", Button).disabled
+            modal.query_one("#reply-prepare", Button).press()
+            await pilot.pause(0.1)
+            source = service.sources[record.mail.account_id]
+            original_send = source.send_reply
+
+            async def fail_send(*_: Any) -> None:
+                raise OSError("fake send failure")
+
+            monkeypatch.setattr(source, "send_reply", fail_send)
+            modal.query_one("#reply-confirm", Button).press()
+            await pilot.pause(0.1)
+            failed = await service.get_draft(draft.draft_id)
+            assert failed is not None and failed.state is ReplyState.FAILED
+            assert failed.body == textarea.text
+            assert modal.query_one("#reply-confirm", Button).disabled
+            assert not modal.query_one("#reply-prepare", Button).disabled
+            monkeypatch.setattr(source, "send_reply", original_send)
+            modal.query_one("#reply-prepare", Button).press()
+            await pilot.pause(0.1)
+            modal.query_one("#reply-confirm", Button).press()
+            await pilot.pause(0.1)
+            sent = await service.get_draft(draft.draft_id)
+            assert sent is not None and sent.state is ReplyState.SENT
+            assert modal.query_one("#reply-confirm", Button).disabled
             app.exit()
             await pilot.pause()
     finally:

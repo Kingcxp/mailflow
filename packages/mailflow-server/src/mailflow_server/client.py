@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import httpx
+from mailflow.replies import ReplyError
 
 _UNSET = object()
 
@@ -78,6 +79,14 @@ class RemoteClient:
                 detail = response.json().get("detail", "")
             except Exception:
                 detail = response.text[:200]
+            if isinstance(detail, dict):
+                failure = cast("dict[str, Any]", detail)
+                code = str(failure.get("code", ""))
+                message = str(failure.get("message", code))
+                if code == "reply.confirm_invalid":
+                    raise PermissionError(message)
+                if code.startswith("reply."):
+                    raise ReplyError(code, message, **dict(failure.get("params") or {}))
             raise RuntimeError(f"HTTP {response.status_code}: {detail}")
         if not response.content:
             return None
@@ -211,6 +220,39 @@ class RemoteClient:
 
     async def list_actions(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = await self._request("GET", "/actions")
+        return result
+
+    async def create_reply(self, mail_id: str) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request("POST", f"/mails/{mail_id}/replies")
+        return result
+
+    async def get_draft(self, draft_id: str) -> dict[str, Any] | None:
+        try:
+            result: dict[str, Any] = await self._request("GET", f"/drafts/{draft_id}")
+            return result
+        except RuntimeError as exc:
+            if "404" in str(exc):
+                return None
+            raise
+
+    async def edit_draft(self, draft_id: str, subject: str, body: str) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request(
+            "PUT", f"/drafts/{draft_id}", {"subject": subject, "body": body}
+        )
+        return result
+
+    async def prepare_reply(self, draft_id: str) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request("POST", f"/drafts/{draft_id}/prepare")
+        return result
+
+    async def confirm_reply(self, draft_id: str, token: str) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request(
+            "POST", f"/drafts/{draft_id}/confirm", {"token": token}
+        )
+        return result
+
+    async def cancel_reply(self, draft_id: str) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request("POST", f"/drafts/{draft_id}/cancel")
         return result
 
     async def list_trash(self) -> list[dict[str, Any]]:

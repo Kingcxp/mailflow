@@ -14,6 +14,8 @@ from typing import Any, ClassVar, cast
 
 import httpx
 from httpx import AsyncClient
+from mailflow.domain import ReplyDraft
+from mailflow.replies import ReplyError
 from mailflow_server.client import RemoteClient, RemoteUnsupported
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
@@ -249,6 +251,41 @@ class RemoteServiceAdapter:
 
     async def restore_mail(self, record_id: str) -> dict[str, Any] | None:
         return await self.client.restore_mail(record_id)
+
+    async def _reply_call(self, operation: Any) -> Any:
+        try:
+            return await operation
+        except ReplyError as exc:
+            raise ReplyError(exc.code, self.t(exc.code, **exc.params), **exc.params) from None
+        except PermissionError:
+            raise PermissionError(self.t("reply.confirm_invalid")) from None
+        except (httpx.HTTPError, RuntimeError):
+            raise ReplyError("reply.connection_failed", self.t("reply.connection_failed")) from None
+
+    async def create_reply(self, mail_id: str) -> ReplyDraft:
+        return ReplyDraft.model_validate(await self._reply_call(self.client.create_reply(mail_id)))
+
+    async def get_draft(self, draft_id: str) -> ReplyDraft | None:
+        data = await self._reply_call(self.client.get_draft(draft_id))
+        return ReplyDraft.model_validate(data) if data is not None else None
+
+    async def edit_draft(self, draft_id: str, subject: str, body: str) -> ReplyDraft:
+        return ReplyDraft.model_validate(
+            await self._reply_call(self.client.edit_draft(draft_id, subject, body))
+        )
+
+    async def prepare_reply(self, draft_id: str) -> ReplyDraft:
+        return ReplyDraft.model_validate(
+            await self._reply_call(self.client.prepare_reply(draft_id))
+        )
+
+    async def confirm_reply(self, draft_id: str, token: str) -> ReplyDraft:
+        return ReplyDraft.model_validate(
+            await self._reply_call(self.client.confirm_reply(draft_id, token))
+        )
+
+    async def cancel_reply(self, draft_id: str) -> ReplyDraft:
+        return ReplyDraft.model_validate(await self._reply_call(self.client.cancel_reply(draft_id)))
 
     async def settings_sections(self) -> list[_SectionView]:
         return [_SectionView(section) for section in await self.client.settings_sections()]

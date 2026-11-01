@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 from mailflow.commands import CommandRouter
-from mailflow.config import MailFlowConfig
+from mailflow.config import MailAccountConfig, MailFlowConfig
 from mailflow.contracts import LLMRouter, MailMessage, ReplyDraft
 from mailflow.domain import (
     ActionItem,
@@ -255,7 +255,7 @@ async def router() -> tuple[CommandRouter, MemoryStorage]:
             pass
 
     service = MailFlowService(
-        config=MailFlowConfig(),
+        config=MailFlowConfig(accounts=[MailAccountConfig(account_id="acct-1", provider="fake")]),
         registry=ComponentRegistry(),
         plugin_manager=PluginManager(),
         storage=cast(Any, storage),

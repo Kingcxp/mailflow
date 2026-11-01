@@ -40,6 +40,7 @@ from mailflow.domain import (
 )
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
+from mailflow.replies import ReplySourceError
 
 logger = logging.getLogger("mailflow.mail.imap")
 
@@ -535,7 +536,23 @@ class IMAPSource:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop_event.wait(), timeout=self._interval)
 
+    async def check_reply_ready(self) -> None:
+        for option, value in (
+            ("smtp_host", self._settings.get("smtp_host")),
+            ("username", self._username),
+            ("password", self._password),
+        ):
+            if not value:
+                raise ReplySourceError(option)
+        try:
+            port = int(self._settings.get("smtp_port", 465))
+        except (ValueError, TypeError):
+            raise ReplySourceError("smtp_port") from None
+        if not 1 <= port <= 65535:
+            raise ReplySourceError("smtp_port")
+
     async def send_reply(self, mail_id: str, draft: Any) -> None:
+        await self.check_reply_ready()
         await asyncio.to_thread(self._send_smtp, draft)
 
     def _send_smtp(self, draft: Any) -> None:
@@ -570,7 +587,12 @@ class IMAPSource:
             client.login(self._username, self._password)
             client.send_message(message)
         finally:
-            client.quit()
+            # A failed QUIT after SMTP accepted the message is not a failed
+            # delivery; surfacing it as one would invite a duplicate retry.
+            try:
+                client.quit()
+            except (OSError, smtplib.SMTPException):
+                client.close()
 
     async def close(self) -> None:
         pass
