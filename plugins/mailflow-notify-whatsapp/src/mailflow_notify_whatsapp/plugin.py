@@ -97,8 +97,15 @@ class WhatsappNotifier:
         """Return only after every configured destination accepted the push."""
         if not self._url or not self._targets:
             raise ValueError("whatsapp notifier requires gateway_url and targets")
+        failure: Exception | None = None
         for kind, name in self._targets:
-            await self.push_to_target(f"{kind}:{name}", text)
+            try:
+                await self.push_to_target(f"{kind}:{name}", text)
+            except Exception as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            raise failure
 
     async def push_to_target(self, target: str, text: str) -> None:
         """Push one plain-text message to a single ``user:<jid>`` or

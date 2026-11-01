@@ -99,8 +99,15 @@ class TelegramNotifier:
         """Return only after every configured destination accepted the push."""
         if not self._token or not self._targets:
             raise ValueError("telegram notifier requires bot_token and targets")
+        failure: Exception | None = None
         for target in self._targets:
-            await self.push_to_target(target, text)
+            try:
+                await self.push_to_target(target, text)
+            except Exception as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            raise failure
 
     async def push_to_target(self, target: str, text: str) -> None:
         """Push one message to a single chat (per-chat hourly briefing)."""

@@ -76,7 +76,7 @@ async def test_deleted_mail_action_disappears_from_search_reminders_and_digest()
     assert await service.delete_action(item.item_id)
     assert await service.list_actions() == await service.list_actions_all() == []
     assert await service.runtime.run_reminder_tick() == 0
-    assert await service.runtime._approaching_actions(datetime.now(UTC), 3) == []
+    assert await service.runtime._approaching_actions(datetime.now(UTC), 3) == []  # pyright: ignore[reportPrivateUsage]
     assert notifier.sent == []
 
 
@@ -114,6 +114,20 @@ async def test_concurrent_scans_deliver_one_reminder() -> None:
     assert sum(fired) == len(notifier.sent) == 1
 
 
+async def test_replacing_duplicate_action_id_does_not_send_same_reminder_again() -> None:
+    storage = MemoryStorage()
+    item = await schedule(storage)
+    notifier = FakeNotifier()
+    service = make_service(storage, notifier)
+    assert await service.runtime.run_reminder_tick() == 1
+    record = storage.mails["m1"]
+    assert record.analysis is not None
+    record.analysis.action_items = [item.model_copy(update={"item_id": "replacement"})]
+    fresh = make_service(storage, notifier)
+    assert await fresh.runtime.run_reminder_tick() == 0
+    assert len(notifier.sent) == 1
+
+
 async def test_partial_target_failure_does_not_resend_successful_chat() -> None:
     class TargetNotifier(FakeNotifier):
         async def push_to_target(self, target: str, text: str) -> None:
@@ -126,7 +140,7 @@ async def test_partial_target_failure_does_not_resend_successful_chat() -> None:
     await schedule(storage)
     notifier = TargetNotifier(failures=1)
     service = make_service(storage, notifier)
-    service.runtime._notifier_configs[0].options["targets"] = ["group:1", "group:2"]
+    service.runtime._notifier_configs[0].options["targets"] = ["group:1", "group:2"]  # pyright: ignore[reportPrivateUsage]
     assert await service.runtime.run_reminder_tick() == 0
     assert await service.runtime.run_reminder_tick() == 1
     assert notifier.sent == ["group:1", "group:2"]
@@ -148,9 +162,11 @@ async def test_rejected_gateway_push_raises_for_scheduler_retry(
     notifier_class = getattr(module, klass)
     client_class = httpx.AsyncClient
     transport = httpx.MockTransport(lambda request: httpx.Response(503))
-    monkeypatch.setattr(
-        httpx, "AsyncClient", lambda **kwargs: client_class(transport=transport, **kwargs)
-    )
+
+    def fake_client(**kwargs: Any) -> httpx.AsyncClient:
+        return client_class(transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", fake_client)
     notifier = notifier_class(
         NotifierConfig(
             notifier_id="n",
@@ -219,10 +235,10 @@ async def test_daily_digest_uses_local_dates_and_retries_failed_delivery() -> No
     service.config.general.timezone = "America/New_York"
     service.config.general.reminder_days_before = 0
     runtime = service.runtime
-    assert await runtime._fire_daily_digest(now, service.config.general) == 0
+    assert await runtime._fire_daily_digest(now, service.config.general) == 0  # pyright: ignore[reportPrivateUsage]
     assert await storage.get_preference("digest.2099-03-08") is None
-    assert await runtime._fire_daily_digest(now, service.config.general) == 1
-    assert await runtime._fire_daily_digest(now, service.config.general) == 0
+    assert await runtime._fire_daily_digest(now, service.config.general) == 1  # pyright: ignore[reportPrivateUsage]
+    assert await runtime._fire_daily_digest(now, service.config.general) == 0  # pyright: ignore[reportPrivateUsage]
     assert len(notifier.sent) == 1
     assert "ongoing" in notifier.sent[0] and "today" in notifier.sent[0]
     assert "tomorrow" not in notifier.sent[0]

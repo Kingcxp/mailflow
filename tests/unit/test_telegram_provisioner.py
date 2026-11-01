@@ -316,7 +316,8 @@ async def test_one_failing_target_does_not_abort_the_rest(
         delivered.append(chat_id)
 
     monkeypatch.setattr(plugin_module, "send_text", flaky)
-    await _notifier(bot_token="t", targets=["user:1", "user:2"]).push_text("x")
+    with pytest.raises(RuntimeError, match="chat not found"):
+        await _notifier(bot_token="t", targets=["user:1", "user:2"]).push_text("x")
     assert delivered == ["2"]
 
 

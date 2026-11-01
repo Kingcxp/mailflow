@@ -52,8 +52,15 @@ class OneBotNotifier:
         """Return only after every configured destination accepted the push."""
         if not self._url or not self._targets:
             raise ValueError("onebot notifier requires http_url and targets")
+        failure: Exception | None = None
         for kind, identifier in self._targets:
-            await self.push_to_target(f"{kind}:{identifier}", text)
+            try:
+                await self.push_to_target(f"{kind}:{identifier}", text)
+            except Exception as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            raise failure
 
     async def push_to_target(self, target: str, text: str) -> None:
         """Push one plain-text message to a single ``user:<id>`` or

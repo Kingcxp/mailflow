@@ -880,7 +880,16 @@ class MailFlowRuntime:
             if when > now:
                 continue
             start, end = action_time_window(item)
-            key = f"reminder.{item.item_id}.{start.isoformat()}.{end.isoformat()}.{kind}"
+            identity = json.dumps(
+                [
+                    " ".join(item.summary.split()).casefold(),
+                    start.isoformat(),
+                    end.isoformat(),
+                ],
+                ensure_ascii=False,
+            )
+            reminder_id = hashlib.sha256(identity.encode()).hexdigest()[:32]
+            key = f"reminder.{reminder_id}.{kind}"
             legacy_key = f"reminder.{item.item_id}.{item.due_at.date().isoformat()}.{kind}"
             if await self._storage.get_preference(key) or await self._storage.get_preference(
                 legacy_key

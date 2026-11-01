@@ -402,9 +402,12 @@ async def test_malformed_targets_are_skipped_but_valid_ones_still_send(
 
 
 @pytest.mark.asyncio
-async def test_push_to_target_skips_without_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_push_to_target_reports_missing_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     notifier = _notifier(monkeypatch, targets=["user:67890"])
-    await notifier.push_to_target("user:67890", "hourly briefing")
+    with pytest.raises(ValueError, match="gateway_url"):
+        await notifier.push_to_target("user:67890", "hourly briefing")
     assert _NotifierClient.calls == []
 
 
