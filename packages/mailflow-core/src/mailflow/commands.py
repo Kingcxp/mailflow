@@ -315,6 +315,8 @@ class CommandRouter:
             return self._err(str(exc))
         except PermissionError as exc:
             return self._err(str(exc))
+        except NotImplementedError:
+            return self._err(self._t("common.unsupported"))
         except Exception as exc:
             logger.error("command %r failed: %s", command, exc)
             return self._err(self._t("common.error", message=str(exc)))

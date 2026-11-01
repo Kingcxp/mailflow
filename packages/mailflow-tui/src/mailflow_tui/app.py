@@ -2586,6 +2586,8 @@ class RuntimePane(Vertical):
             await self._refresh_runtime_unlocked()
 
     async def _refresh_runtime_unlocked(self) -> None:
+        if getattr(self._service, "remote", False):
+            await cast(Any, self._service).refresh_snapshot()
         snapshot = self._service.snapshot()
         service = self._service
         table = self._plugins_table()
@@ -3346,7 +3348,11 @@ class MarketDetailScreen(ModalScreen[Any]):
         href = str(getattr(event, "href", "") or "")
         if not href:
             return
-        result = self._service.open_url(href)
+        try:
+            result = self._service.open_url(href)
+        except RuntimeError as exc:
+            self._set_status(escape(error_message(self._service, exc)))
+            return
         link = self.query_one_optional("#market-detail-link", Static)
         if link is not None:
             link.update(f"[cyan]{escape(result)}[/cyan]")
@@ -3899,7 +3905,12 @@ class MailFlowApp(App[None]):
         The readme stays empty: importing the plugin module and rendering
         its docstring is deferred to the detail dialog's worker, so neither
         tab's click path ever blocks on it."""
-        for info in self._service.plugin_manager.enabled_infos():
+        infos = (
+            self._service.snapshot().plugins
+            if self._remote
+            else self._service.plugin_manager.enabled_infos()
+        )
+        for info in infos:
             if info.plugin_id != plugin_id:
                 continue
             return MarketPlugin(
@@ -3934,7 +3945,14 @@ class MailFlowApp(App[None]):
                 with TabPane(self._service.t("tui.tab_market"), id="tab-market"):
                     yield MarketPane(self._service)
             with TabPane(self._service.t("tui.tab_notifications"), id="tab-notifications"):
-                yield NotificationsPane(self._service)
+                if self._remote:
+                    yield Static(
+                        self._service.t(
+                            "remote.unsupported", operation=self._service.t("tui.tab_notifications")
+                        )
+                    )
+                else:
+                    yield NotificationsPane(self._service)
             with TabPane(self._service.t("tui.tab_settings"), id="tab-settings"):
                 yield SettingsPane(self._service)
             with TabPane(self._service.t("tui.tab_logs"), id="tab-logs"):
@@ -3968,15 +3986,13 @@ class MailFlowApp(App[None]):
             self.push_screen(SplashScreen(self._service.t, self._version_string()))  # pyright: ignore[reportUnknownMemberType]
 
     def _version_string(self) -> str:
-        """App version for the title bar; remote adapter snapshots are
-        plain dicts (``snapshot_sync``) while the local service returns a
-        typed :class:`RuntimeSnapshot`."""
-        if self._remote:
-            return f"v{self._service.snapshot_sync().get('version', '')}"
+        """Both local and remote services expose the same snapshot type."""
         return f"v{self._service.snapshot().version}"
 
     async def _preload_market_cache(self) -> None:
         """Load persisted marketplace entries into the shared cache."""
+        if self._remote:
+            return
         try:
             entries: list[tuple[Repository, MarketPlugin]] = await self._service.market_cache_load()
         except Exception:
@@ -3988,6 +4004,8 @@ class MailFlowApp(App[None]):
         """Background marketplace fetch at startup: fills the shared cache
         (and the persisted cache) so the Runtime tab's plugin detail shows
         translated readmes without the user opening the Market tab."""
+        if self._remote:
+            return
         try:
             entries = await asyncio.to_thread(self._service.market.list_plugins)
         except Exception:

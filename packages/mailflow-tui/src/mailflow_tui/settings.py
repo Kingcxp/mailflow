@@ -1236,6 +1236,12 @@ class SettingsPane(Vertical):
             await self._reload_unlocked()
 
     async def _reload_unlocked(self) -> None:
+        if getattr(self._service, "remote", False):
+            try:
+                await cast(Any, self._service).refresh_settings()
+            except Exception as exc:
+                self.query_one("#settings-status", Static).update(str(exc))
+                return
         self._sections = self._service.settings_sections()
         # the sidebar ListView may not exist yet when reload is triggered by
         # on_mount or an event handler racing compose — wait briefly instead

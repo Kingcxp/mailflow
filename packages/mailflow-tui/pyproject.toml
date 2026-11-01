@@ -5,7 +5,9 @@ description = "MailFlow Textual terminal UI host"
 requires-python = ">=3.11"
 dependencies = [
   "mailflow-core",
+  "mailflow-server",
   "mailflow-bundled",
+  "httpx>=0.27",
   "rich>=13.7",
   "textual>=0.80",
 ]

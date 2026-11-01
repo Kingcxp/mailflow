@@ -1,0 +1,322 @@
+"""Remote values, frames and operations preserve the local service contract."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import Mock
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+from mailflow.domain import (
+    ActionItem,
+    ActionOrigin,
+    Attachment,
+    MailMessage,
+    MailRecord,
+    ProcessorBindingSnapshot,
+    ProcessorNote,
+    RuntimeSnapshot,
+    Urgency,
+)
+from mailflow.i18n import I18n
+from mailflow.protocol import event_frame
+from mailflow_server.app import _jsonable, create_app
+from mailflow_server.client import RemoteClient, RemoteUnsupported, _ws_connect, _ws_headers
+from mailflow_tui.remote import RemoteServiceAdapter
+from starlette.websockets import WebSocketDisconnect
+from test_commands import commands_service, make_record
+
+
+def test_recursive_values_include_models_dates_enums_and_settings() -> None:
+    @dataclass
+    class Nested:
+        when: date
+        urgency: Urgency
+
+    record = make_record()
+    record.mail.attachments = [Attachment(filename="image.png", data=b"\x89PNG\x00\xff")]
+    payload = {
+        "nested": [{"record": record, "meta": Nested(date(2026, 11, 2), Urgency.URGENT)}],
+        "when": datetime(2026, 11, 2, tzinfo=UTC),
+        "settings": commands_service().settings_sections(),
+    }
+    result = json.loads(json.dumps(_jsonable(payload)))
+    assert result["nested"][0]["meta"] == {"when": "2026-11-02", "urgency": "urgent"}
+    restored = MailRecord.model_validate(result["nested"][0]["record"])
+    assert restored.mail.attachments[0].filename == "image.png"
+    assert restored.mail.attachments[0].data is None
+    assert record.mail.attachments[0].data == b"\x89PNG\x00\xff"
+    assert restored.mail.date == record.mail.date
+    assert result["settings"][0]["options"][0]["editor"]
+
+
+def test_rest_history_live_logs_and_service_events_share_frames() -> None:
+    service = commands_service()
+    service.config.server.username, service.config.server.password = "admin", "secret"
+    app = create_app(service)
+    feed = app.state.log_feed
+    record = make_record()
+    first = logging.LogRecord("mailflow.test", logging.WARNING, "", 0, "historic", (), None)
+    feed.handle(first)
+    from mailflow_server.client import _basic
+
+    with (
+        TestClient(app, headers=_basic("admin", "secret")) as client,
+        client.websocket_connect("/ws") as ws,
+    ):
+        history = client.get("/logs").json()
+        ws.send_json({"type": "logs"})
+        assert ws.receive_json() == history[0]
+        second = logging.LogRecord("mailflow.test", logging.ERROR, "", 0, "live", (), None)
+        feed.handle(second)
+        frame = ws.receive_json()
+        assert frame == client.get("/logs").json()[-1]
+        assert frame["event"] == "log" and "|ERROR|mailflow.test|live" in frame["payload"]["line"]
+        assert client.portal is not None
+        client.portal.call(lambda: service.events.emit("example", nested={"record": record}))
+        frame = ws.receive_json()
+        assert frame["event"] == "example"
+        assert MailRecord.model_validate(frame["payload"]["nested"]["record"]) == record
+    assert not feed.queues
+    assert not service.events._subscribers.get("*")
+
+
+def test_websocket_rejects_missing_credentials() -> None:
+    service = commands_service()
+    service.config.server.username, service.config.server.password = "admin", "secret"
+    with (
+        TestClient(create_app(service)) as client,
+        pytest.raises(WebSocketDisconnect) as error,
+        client.websocket_connect("/ws"),
+    ):
+        pass
+    assert error.value.code == 4401
+
+
+@pytest.mark.parametrize("modern", [False, True])
+def test_websocket_connect_sends_only_supported_header_keyword(
+    monkeypatch: pytest.MonkeyPatch, modern: bool
+) -> None:
+    import sys
+
+    captured: list[dict[str, Any]] = []
+
+    def legacy(url: str, *, extra_headers: Any = None, **kwargs: Any) -> object:
+        captured.append({"headers": extra_headers, **kwargs})
+        return object()
+
+    def current(url: str, *, additional_headers: Any = None, **kwargs: Any) -> object:
+        captured.append({"headers": additional_headers, **kwargs})
+        return object()
+
+    connect = current if modern else legacy
+    auth = {"Authorization": "Basic fake"}
+    monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=connect))
+    _ws_connect("ws://fake/ws", auth)
+    assert captured == [{"headers": auth}]
+    assert set(_ws_headers(auth, connect)) == {"additional_headers" if modern else "extra_headers"}
+
+
+async def test_fake_websocket_live_logs_typed_events_and_repeat_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.incoming: asyncio.Queue[str] = asyncio.Queue()
+            self.sent: list[dict[str, Any]] = []
+            self.connected = asyncio.Event()
+
+        async def __aenter__(self) -> FakeWebSocket:
+            self.connected.set()
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def send(self, frame: str) -> None:
+            self.sent.append(json.loads(frame))
+
+        def __aiter__(self) -> FakeWebSocket:
+            return self
+
+        async def __anext__(self) -> str:
+            return await self.incoming.get()
+
+    ws = FakeWebSocket()
+    connect = Mock(return_value=ws)
+    monkeypatch.setattr("mailflow_server.client._ws_connect", connect)
+    client = RemoteClient("http://fake", "admin", "secret")
+    record = make_record()
+    records: list[MailRecord] = []
+    received = asyncio.Event()
+    mails: list[MailMessage] = []
+    mail_received = asyncio.Event()
+
+    def processed(event: str, **payload: Any) -> None:
+        records.append(payload["record"])
+        received.set()
+
+    def incoming(event: str, **payload: Any) -> None:
+        mails.append(payload["mail"])
+        mail_received.set()
+
+    client.on("mailflow.mail.processed", processed)
+    client.on("mailflow.mail.received", incoming)
+    await client.start_events()
+    await client.start_events()
+    try:
+        await asyncio.wait_for(ws.connected.wait(), 1)
+        await client.enable_logs()
+        await client.enable_logs()
+        assert ws.sent == [{"type": "logs"}]
+        await ws.incoming.put(
+            json.dumps(event_frame("log", {"line": "10:00|ERROR|mailflow.test|live"}))
+        )
+        await ws.incoming.put(
+            json.dumps(event_frame("mailflow.mail.processed", {"record": record}))
+        )
+        await ws.incoming.put(
+            json.dumps(event_frame("mailflow.mail.received", {"mail": record.mail}))
+        )
+        assert await asyncio.wait_for(client.log_queue.get(), 1) == "10:00|ERROR|mailflow.test|live"
+        await asyncio.wait_for(received.wait(), 1)
+        assert records == [record]
+        assert isinstance(records[0].mail.date, datetime)
+        await asyncio.wait_for(mail_received.wait(), 1)
+        assert mails == [record.mail]
+        assert isinstance(mails[0].date, datetime)
+        assert connect.call_count == 1
+    finally:
+        await client.stop_events()
+    assert client._ws is None
+
+
+async def test_remote_adapter_uses_real_domain_and_setting_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = commands_service()
+    service.config.server.username, service.config.server.password = "admin", "secret"
+    record = make_record()
+    record.received_at = record.mail.received_at
+    record.manual_urgency = Urgency.IMPORTANT
+    now = datetime.now(UTC)
+    record.processor_notes = [
+        ProcessorNote(
+            processor_id="rules",
+            plugin_id="core",
+            status="success",
+            started_at=now,
+            finished_at=now,
+        )
+    ]
+    await service.storage.save_mail(record)
+    real_client = httpx.AsyncClient
+    transport = httpx.ASGITransport(app=create_app(service))
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs)
+    )
+    initial = service.snapshot()
+    initial.processors = [
+        ProcessorBindingSnapshot(
+            processor_id="importance",
+            plugin_id="core",
+            priority=10,
+            llm_id="primary",
+            fallback_llm_ids=["fallback"],
+        )
+    ]
+    adapter = RemoteServiceAdapter(
+        RemoteClient("http://fake", "admin", "secret"), _jsonable(initial), I18n()
+    )
+    assert isinstance(adapter.snapshot(), RuntimeSnapshot)
+    assert adapter.snapshot().processors == initial.processors
+    assert adapter.snapshot().processors[0].fallback_llm_ids == ["fallback"]
+    assert await adapter.get_mail(record.record_id) == record
+    assert (await adapter.list_mails())[0].mail.sender.display == record.mail.sender.display
+    assert (await adapter.list_mails())[0].processor_notes[0].duration_ms == 0
+    item = await adapter.add_action("remote action", now + timedelta(days=5), notes="saved")
+    assert isinstance(item, ActionItem) and item.origin is ActionOrigin.CUSTOM
+    edited = await adapter.edit_action(item.item_id, due_end=item.due_at + timedelta(hours=1))
+    assert edited == (await service.list_actions())[0]
+    assert edited.time_range_in("Asia/Shanghai")
+    assert await adapter.list_actions() == await service.list_actions()
+    assert await adapter.delete_action(item.item_id)
+    assert not await adapter.list_actions()
+    assert await adapter.delete_mail(record.record_id)
+    assert (await adapter.list_trash())[0].to_mail_record() == record
+    assert await adapter.restore_mail(record.record_id) == record
+    assert await adapter.get_mail("missing") is None
+    assert not await adapter.delete_mail("missing")
+    await adapter.refresh_settings()
+    sections = adapter.settings_sections()
+    assert _jsonable(sections) == _jsonable(service.settings_sections())
+    assert (
+        sections[0].options[0].display_value()
+        == service.settings_sections()[0].options[0].display_value()
+    )
+    assert not hasattr(adapter, "invented_operation")
+    adapter.i18n.set_language("zh-CN")
+    assert adapter.display_text("Advertisement detected by rules") == "规则判定为广告"
+    assert adapter.display_text("领学生证需要本人到场") == "领学生证需要本人到场"
+    with pytest.raises(RemoteUnsupported, match="本地服务"):
+        await adapter.fetch_history("account")
+
+
+async def test_httpx_mock_does_not_confuse_error_text_with_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(503, json={"detail": "worker 404 failed"})
+    )
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs)
+    )
+    with pytest.raises(RuntimeError, match="worker 404 failed"):
+        await RemoteClient("http://fake", "admin", "secret").get_mail("mail")
+
+
+async def test_remote_tui_renders_mail_actions_runtime_and_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import queue
+
+    from mailflow_tui.app import ActionsPane, MailFlowApp, MailPane, RuntimePane
+    from mailflow_tui.settings import SettingsPane
+    from textual.widgets import DataTable, Static
+
+    service = commands_service()
+    service.config.server.username, service.config.server.password = "admin", "secret"
+    record = make_record()
+    await service.storage.save_mail(record)
+    await service.add_action("remote schedule", datetime.now(UTC) + timedelta(days=1))
+    real_client = httpx.AsyncClient
+    transport = httpx.ASGITransport(app=create_app(service))
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs)
+    )
+    adapter = RemoteServiceAdapter(
+        RemoteClient("http://fake", "admin", "secret"), _jsonable(service.snapshot()), I18n()
+    )
+    app = MailFlowApp(adapter, queue.Queue(), remote=True)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        mail = app.query_one(MailPane)
+        await mail.refresh_mail()
+        assert app.query_one("#mail-table", DataTable).row_count == 1
+        mail._selected_id = record.record_id
+        await mail._show_selected()
+        assert record.summary in str(app.query_one("#mail-summary", Static).render())
+        await app.query_one(ActionsPane).refresh_actions()
+        assert app.query_one("#actions-table", DataTable).row_count == 1
+        await app.query_one(RuntimePane).refresh_runtime()
+        await app.query_one(SettingsPane).reload()
+        assert adapter.settings_sections()
+        assert app.sub_title == f"v{service.snapshot().version}"

@@ -15,7 +15,8 @@ import hmac
 import os
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
+from starlette.requests import HTTPConnection
 
 
 def resolve_password(server_config: Any) -> str:
@@ -38,7 +39,7 @@ def require_credentials(server_config: Any) -> tuple[str, str]:
     return username, password
 
 
-def check_basic_auth(request: Request, username: str, password: str) -> None:
+def check_basic_auth(request: HTTPConnection, username: str, password: str) -> None:
     header = request.headers.get("Authorization", "")
     if not header.startswith("Basic "):
         raise HTTPException(status_code=401, detail="unauthorized")
@@ -47,8 +48,8 @@ def check_basic_auth(request: Request, username: str, password: str) -> None:
         got_user, _, got_pass = decoded.partition(":")
     except Exception:
         raise HTTPException(status_code=401, detail="unauthorized") from None
-    user_ok = hmac.compare_digest(got_user, username)
-    pass_ok = hmac.compare_digest(got_pass, password)
+    user_ok = hmac.compare_digest(got_user.encode(), username.encode())
+    pass_ok = hmac.compare_digest(got_pass.encode(), password.encode())
     if not (user_ok and pass_ok):
         raise HTTPException(status_code=401, detail="unauthorized")
 

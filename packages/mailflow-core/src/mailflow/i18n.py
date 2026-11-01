@@ -18,6 +18,11 @@ logger = logging.getLogger("mailflow.i18n")
 
 _DEFAULT_LANGUAGE = "en"
 _BUILTIN_PACKS = {"en", "zh-CN"}
+_CANNED_TEXT_KEYS = {
+    "Advertisement detected by rules": "analysis.summary_ad_rules",
+    "matches advertising keywords": "analysis.reason_ad_keywords",
+    "sender is on the important-senders list": "analysis.reason_important_sender",
+}
 
 
 class LanguageInfo:
@@ -122,6 +127,16 @@ class I18n:
 
     def available_languages(self) -> list[LanguageInfo]:
         return [LanguageInfo(code, self._names.get(code, code)) for code in sorted(self._packs)]
+
+    def display_text(self, text: str | None) -> str:
+        """Localize stored processor phrases without rewriting analysis data."""
+        if not text:
+            return ""
+        key = _CANNED_TEXT_KEYS.get(text)
+        if key is None:
+            return text
+        translated = self.t(key)
+        return text if translated == key else translated
 
     def available_codes(self) -> list[str]:
         return sorted(self._packs)

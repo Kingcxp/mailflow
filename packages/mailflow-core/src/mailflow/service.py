@@ -2665,24 +2665,9 @@ Return every candidate in this batch."""
             return f"{type(exc).__name__}: {exc}"
         return self.t("tui.browser_system_open")
 
-    # Stored analyses carry canned processor prose in English (data, not UI);
-    # render-time mapping keeps the display localized without rewriting
-    # records on every language switch.
-    _CANNED_TEXT_KEYS: ClassVar[dict[str, str]] = {
-        "Advertisement detected by rules": "analysis.summary_ad_rules",
-        "matches advertising keywords": "analysis.reason_ad_keywords",
-        "sender is on the important-senders list": "analysis.reason_important_sender",
-    }
-
     def display_text(self, text: str | None) -> str:
         """Localize known canned processor phrases; anything else passes through."""
-        if not text:
-            return text or ""
-        key = self._CANNED_TEXT_KEYS.get(text)
-        if key is None:
-            return text
-        translated = self.t(key)
-        return text if translated == key else translated
+        return self.i18n.display_text(text)
 
     # -- configuration inspection and mutation ------------------------------------
 

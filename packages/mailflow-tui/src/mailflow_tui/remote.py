@@ -9,13 +9,19 @@ import base64
 import contextlib
 import json
 import queue as queue_module
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
 import httpx
 from httpx import AsyncClient
-from mailflow.domain import ReplyDraft
+from mailflow.action_store import action_has_ended
+from mailflow.config import MailFlowConfig
+from mailflow.domain import ActionItem, MailRecord, ReplyDraft, RuntimeSnapshot, TrashRecord
+from mailflow.i18n import I18n
+from mailflow.permissions import AccessDenied
 from mailflow.replies import ReplyError
+from mailflow.settings import EditorKind, OptionSpec, SettingsSection
 from mailflow_server.client import RemoteClient, RemoteUnsupported
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
@@ -102,8 +108,6 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
     def __init__(self, session: dict[str, Any]) -> None:
         super().__init__()
         self._session = session
-        from mailflow.i18n import I18n
-
         self._i18n = I18n(language=str(session.get("language") or "en"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -180,20 +184,22 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
 class RemoteServiceAdapter:
     """Duck-typed stand-in for :class:`MailFlowService` backed by REST.
 
-    Panes keep working against JSON payloads via small view wrappers;
+    Domain models and settings use the same types as the local service;
     operations that require a local service raise :class:`RemoteUnsupported`,
     which panes surface in their status lines.
     """
 
     remote = True
 
-    def __init__(self, client: RemoteClient, snapshot: dict[str, Any], i18n: Any) -> None:
+    def __init__(self, client: RemoteClient, snapshot: dict[str, Any], i18n: I18n) -> None:
         self.client = client
         self.i18n = i18n
-        self._snapshot = snapshot
+        self._snapshot = RuntimeSnapshot.model_validate(snapshot)
         self.commands = None
         self.log_queue: queue_module.Queue[Any] = queue_module.Queue()
-        self.config = _StaticConfig(snapshot)
+        self.config = MailFlowConfig()
+        self.config.general.timezone = self._snapshot.timezone
+        self._sections: list[SettingsSection] = []
         self.events = _EventProxy(client)
 
         self._apply_language(str(snapshot.get("language") or ""))
@@ -203,7 +209,8 @@ class RemoteServiceAdapter:
         """Keep the client-side pack aligned with the remote service."""
         if language and language in self.i18n.available_codes():
             self.i18n.set_language(language)
-            self._snapshot["language"] = language
+            self._snapshot.language = language
+            self.config.general.language = language
 
     def _on_language_changed(self, event: str, **payload: Any) -> None:
         self._apply_language(str(payload.get("language") or ""))
@@ -217,46 +224,90 @@ class RemoteServiceAdapter:
         return self.events.on(event, handler)
 
     # -- reads -----------------------------------------------------------------
-    async def snapshot(self) -> dict[str, Any]:
-        self._snapshot = await self.client.snapshot()
-        self._apply_language(str(self._snapshot.get("language") or ""))
+    def snapshot(self) -> RuntimeSnapshot:
+        return self._snapshot
+
+    async def refresh_snapshot(self) -> RuntimeSnapshot:
+        self._snapshot = RuntimeSnapshot.model_validate(await self.client.snapshot())
+        self.config.general.timezone = self._snapshot.timezone
+        self._apply_language(self._snapshot.language)
         return self._snapshot
 
     def snapshot_sync(self) -> dict[str, Any]:
-        return self._snapshot
+        return self._snapshot.model_dump(mode="json")
 
-    async def list_mails(self, limit: int | None = None) -> list[_RecordView]:
-        return [_RecordView(item) for item in await self.client.list_mails(limit)]
+    async def list_mails(self, limit: int | None = None) -> list[MailRecord]:
+        return [MailRecord.model_validate(item) for item in await self.client.list_mails(limit)]
 
-    async def get_mail(self, record_id: str) -> _RecordView | None:
+    async def get_mail(self, record_id: str) -> MailRecord | None:
         data = await self.client.get_mail(record_id)
-        return _RecordView(data) if data else None
+        return MailRecord.model_validate(data) if data is not None else None
 
     async def count_mails(self) -> int:
         return len(await self.client.list_mails())
 
-    async def list_actions(self) -> list[dict[str, Any]]:
-        return await self.client.list_actions()
+    async def list_actions(self) -> list[ActionItem]:
+        return [ActionItem.model_validate(item) for item in await self.client.list_actions()]
 
-    async def list_trash(self) -> list[dict[str, Any]]:
-        return await self.client.list_trash()
+    async def list_trash(self) -> list[TrashRecord]:
+        return [TrashRecord.model_validate(item) for item in await self.client.list_trash()]
+
+    async def list_failed_mails(self) -> list[MailRecord]:
+        return [MailRecord.model_validate(item) for item in await self.client.list_failed_mails()]
+
+    async def list_expired_mails(self) -> list[MailRecord]:
+        return [MailRecord.model_validate(item) for item in await self.client.list_expired_mails()]
+
+    def display_text(self, text: str | None) -> str:
+        return self.i18n.display_text(text)
+
+    def is_action_expired(self, item: ActionItem) -> bool:
+        return action_has_ended(item, datetime.now(UTC))
 
     # -- writes -----------------------------------------------------------------
-    async def set_mail_urgency(self, record_id: str, urgency: Any) -> _RecordView | None:
+    async def set_mail_urgency(self, record_id: str, urgency: Any) -> MailRecord | None:
         data = await self.client.set_mail_urgency(record_id, urgency)
-        return _RecordView(data) if data else None
+        return MailRecord.model_validate(data) if data is not None else None
 
     async def delete_mail(self, record_id: str) -> bool:
         return await self.client.delete_mail(record_id)
 
-    async def restore_mail(self, record_id: str) -> dict[str, Any] | None:
-        return await self.client.restore_mail(record_id)
+    async def delete_mails(self, record_ids: list[str]) -> int:
+        return await self.client.delete_mails(record_ids)
+
+    async def purge_expired_mails(self, record_ids: list[str] | None = None) -> int:
+        return await self.client.purge_expired_mails(record_ids)
+
+    async def restore_mail(self, record_id: str) -> MailRecord | None:
+        data = await self.client.restore_mail(record_id)
+        return MailRecord.model_validate(data) if data is not None else None
+
+    async def add_action(self, summary: str, due_at: datetime, **values: Any) -> ActionItem:
+        return ActionItem.model_validate(
+            await self.client.add_action(
+                {
+                    "summary": summary,
+                    "due_at": due_at,
+                    **values,
+                }
+            )
+        )
+
+    async def edit_action(self, item_id: str, **values: Any) -> ActionItem:
+        return ActionItem.model_validate(await self.client.edit_action(item_id, values))
+
+    async def delete_action(self, item_id: str) -> bool:
+        return await self.client.delete_action(item_id)
 
     async def _reply_call(self, operation: Any) -> Any:
         try:
             return await operation
         except ReplyError as exc:
             raise ReplyError(exc.code, self.t(exc.code, **exc.params), **exc.params) from None
+        except AccessDenied:
+            raise AccessDenied(self.t("permission.denied")) from None
+        except RemoteUnsupported:
+            raise
         except PermissionError:
             raise PermissionError(self.t("reply.confirm_invalid")) from None
         except (httpx.HTTPError, RuntimeError):
@@ -287,32 +338,105 @@ class RemoteServiceAdapter:
     async def cancel_reply(self, draft_id: str) -> ReplyDraft:
         return ReplyDraft.model_validate(await self._reply_call(self.client.cancel_reply(draft_id)))
 
-    async def settings_sections(self) -> list[_SectionView]:
-        return [_SectionView(section) for section in await self.client.settings_sections()]
+    def settings_sections(self) -> list[SettingsSection]:
+        return self._sections
 
-    async def set_setting(self, key: str, value: Any) -> None:
-        await self.client.set_setting(key, value)
+    async def refresh_settings(self) -> None:
+        self._sections = [_section(item) for item in await self.client.settings_sections()]
+
+    async def set_setting(self, key: str, value: Any) -> OptionSpec | None:
+        data = await self.client.set_setting(key, value)
+        await self.refresh_snapshot()
+        return _option(data) if data is not None else None
+
+    async def reset_setting(self, key: str) -> OptionSpec | None:
+        data = await self.client.reset_setting(key)
+        await self.refresh_snapshot()
+        return _option(data) if data is not None else None
 
     async def plugin_enable(self, plugin_id: str) -> str:
-        return await self.client.plugin_enable(plugin_id)
+        created = await self.client.plugin_enable(plugin_id)
+        await self.refresh_snapshot()
+        return created
 
     async def plugin_disable(self, plugin_id: str) -> None:
         await self.client.plugin_disable(plugin_id)
+        await self.refresh_snapshot()
+
+    async def plugin_uninstall(self, plugin_id: str) -> str:
+        output = await self.client.plugin_uninstall(plugin_id)
+        await self.refresh_snapshot()
+        return output
+
+    async def plugin_install(self, plugin_id: str) -> str:
+        output = await self.client.plugin_install(plugin_id)
+        await self.refresh_snapshot()
+        return output
 
     def plugin_status(self, plugin_id: str) -> str:
-        for plugin in self._snapshot.get("plugins", []):
-            if plugin.get("plugin_id") == plugin_id:
-                return str(plugin.get("status", "enabled"))
-        return "not_loaded"
+        plugin = self._snapshot.plugin(plugin_id)
+        return plugin.status if plugin is not None else "not_loaded"
 
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith("_"):
-            raise AttributeError(name)
+    def _unsupported(self, operation: str) -> RemoteUnsupported:
+        return RemoteUnsupported(self.t("remote.unsupported", operation=operation))
 
-        def _unsupported(*args: Any, **kwargs: Any) -> Any:
-            raise RemoteUnsupported(f"{name} requires a locally attached service (omit --remote)")
+    async def fetch_history(self, account_id: str, *, limit: int = 50, offset: int = 0) -> Any:
+        raise self._unsupported("fetch_history")
 
-        return _unsupported
+    async def process_mail(self, mail: Any, *, force: bool = False) -> Any:
+        raise self._unsupported("process_mail")
+
+    async def plugin_install_local(self, root: Path) -> str:
+        raise self._unsupported("plugin_install_local")
+
+    async def gateway_provision(
+        self, provider: str, instance_id: str, options: dict[str, Any], *, autostart: bool = True
+    ) -> Any:
+        raise self._unsupported("gateway_provision")
+
+    async def gateway_shutdown(self, provider: str, instance_id: str) -> None:
+        raise self._unsupported("gateway_shutdown")
+
+    async def gateway_instances(self) -> list[Any]:
+        raise self._unsupported("gateway_instances")
+
+    async def gateway_detect(self, provider: str) -> str:
+        raise self._unsupported("gateway_detect")
+
+    async def gateway_qr(self, provider: str, instance_id: str) -> str:
+        raise self._unsupported("gateway_qr")
+
+    def gateway_providers(self) -> list[str]:
+        raise self._unsupported("gateway_providers")
+
+    async def chat_about_mail(self, record_id: str, messages: list[dict[str, str]]) -> Any:
+        raise self._unsupported("chat_about_mail")
+
+    async def apply_mail_correction(
+        self, record_id: str, corrections: dict[str, Any], *, note: str = ""
+    ) -> Any:
+        raise self._unsupported("apply_mail_correction")
+
+    async def smart_action(self, instruction: str, *, progress: Any = None) -> Any:
+        raise self._unsupported("smart_action")
+
+    async def list_seminar_candidates(self, **options: Any) -> list[Any]:
+        raise self._unsupported("list_seminar_candidates")
+
+    async def import_seminar(self, candidate_id: str, **options: Any) -> Any:
+        raise self._unsupported("import_seminar")
+
+    async def reject_seminar(self, candidate_id: str) -> bool:
+        raise self._unsupported("reject_seminar")
+
+    async def user_profile(self) -> str:
+        raise self._unsupported("user_profile")
+
+    async def set_user_profile(self, text: str) -> str:
+        raise self._unsupported("set_user_profile")
+
+    def open_url(self, url: str) -> str:
+        raise self._unsupported("open_url")
 
 
 class _EventProxy:
@@ -327,127 +451,24 @@ class _EventProxy:
     on = subscribe
 
 
-class _StaticConfig:
-    """Minimal config view: timezone for display plus passthrough defaults."""
-
-    def __init__(self, snapshot: dict[str, Any]) -> None:
-        self.snapshot = snapshot
-        from mailflow.config import MailFlowConfig
-
-        self._base = MailFlowConfig()
-        self.general = _GeneralProxy(str(snapshot.get("timezone") or "UTC"))
-        self.plugins = self._base.plugins
-        self.server = self._base.server
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._base, name)
+def _option(data: dict[str, Any]) -> OptionSpec:
+    return OptionSpec(
+        **{
+            **data,
+            "editor": EditorKind(data["editor"]),
+            "choices": tuple(data.get("choices") or ()),
+            "item_fields": tuple(_option(item) for item in data.get("item_fields") or ()),
+        }
+    )
 
 
-class _GeneralProxy:
-    def __init__(self, timezone: str) -> None:
-        from mailflow.config import GeneralConfig
-
-        self.timezone = timezone
-        self._defaults = GeneralConfig()
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._defaults, name)
-
-
-class _SectionView:
-    """Attribute adapter over one settings-section payload."""
-
-    def __init__(self, data: dict[str, Any]) -> None:
-        self.section_id = str(data.get("section_id", ""))
-        self.title = str(data.get("title", ""))
-        self.plugin_id = str(data.get("plugin_id", ""))
-        self.options = [_OptionView(option) for option in data.get("options", [])]
-
-
-def _as_str_lines(value: Any) -> str:
-    """Render a JSON list/dict as editor text; typed via Any intermediates so
-    both mypy and pyright treat element types as known-any."""
-    if isinstance(value, list):
-        items: list[Any] = value  # pyright: ignore[reportUnknownVariableType]
-        return "\n".join(str(item) for item in items)
-    if isinstance(value, dict):
-        mapping: dict[Any, Any] = value  # pyright: ignore[reportUnknownVariableType]
-        return "\n".join(f"{k} = {v}" for k, v in mapping.items())
-    return ""
-
-
-class _OptionView:
-    _SECRET_MARKERS = ("api_key", "token", "password", "secret")
-
-    def __init__(self, data: dict[str, Any]) -> None:
-        self.key = str(data.get("key", ""))
-        self.section = str(data.get("section", ""))
-        self.label = str(data.get("label", ""))
-        self.editor = str(data.get("editor", "text"))
-        self.description = str(data.get("description", ""))
-        self.default = data.get("default")
-        self.value = data.get("value")
-        self.required = bool(data.get("required"))
-        self.choices = tuple(str(c) for c in data.get("choices") or ())
-
-    @property
-    def secret(self) -> bool:
-        lowered = self.key.lower()
-        return any(marker in lowered for marker in self._SECRET_MARKERS)
-
-    def is_default(self) -> bool:
-        return self.value == self.default
-
-    def display_value(self) -> str:
-        value: Any = self.value
-        return _as_str_lines(value)
-
-
-class _RecordView:
-    """Attribute wrapper over one /mails JSON payload."""
-
-    def __init__(self, data: dict[str, Any]) -> None:
-        self.record_id = str(data.get("record_id", ""))
-        self.mail = _Namespace(dict(data.get("mail") or {}))
-        analysis = data.get("analysis")
-        self.analysis = _Namespace(dict(analysis)) if analysis else None
-        self.auto_urgency = data.get("auto_urgency")
-        self.manual_urgency = data.get("manual_urgency")
-        self.processor_notes = list(data.get("processor_notes") or [])
-
-    @property
-    def effective_urgency(self) -> Any:
-        from mailflow.domain import Urgency
-
-        value = (
-            self.manual_urgency
-            if self.manual_urgency is not None
-            else (self.auto_urgency or "info")
-        )
-        return Urgency(str(value))
-
-    @property
-    def summary(self) -> str:
-        if self.analysis is not None:
-            return str(self.analysis.__dict__.get("summary", ""))
-        return str(self.mail.subject)
-
-    @property
-    def action_items(self) -> list[dict[str, Any]]:
-        if self.analysis is None:
-            return []
-        items: list[dict[str, Any]] = list(self.analysis.action_items or [])
-        return items
-
-
-class _Namespace:
-    """Attribute access over a JSON payload; unknown keys are a caller bug."""
-
-    def __init__(self, data: dict[str, Any]) -> None:
-        self.__dict__.update(data)
-
-    def __getattr__(self, name: str) -> Any:
-        return self.__dict__.get(name)
+def _section(data: dict[str, Any]) -> SettingsSection:
+    return SettingsSection(
+        **{
+            **data,
+            "options": [_option(item) for item in data.get("options", [])],
+        }
+    )
 
 
 async def pump_async_to_thread(source: asyncio.Queue[Any], target: queue_module.Queue[Any]) -> None:

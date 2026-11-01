@@ -4,6 +4,11 @@ version = "0.1.0"
 description = "REST + WebSocket host for MailFlow: remote TUI clients and bots"
 requires-python = ">=3.11"
 dependencies = [
+  "mailflow-core",
+  "pydantic>=2.7",
+  "starlette",
+  "httpx>=0.27",
+  "websockets>=13.0,<16",
   "fastapi>=0.115",
   "uvicorn>=0.30",
 ]
