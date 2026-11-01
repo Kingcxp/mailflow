@@ -115,7 +115,7 @@ def ensure_default_config(config_path: str | None) -> str | None:
 async def _run_local(config_path: str | None, *, with_server: bool) -> None:
     config_path = ensure_default_config(config_path)
     config = tui_logging_config(load_config(config_path) if config_path else MailFlowConfig())
-    manager = create_plugin_manager(config, discover_external=False)
+    manager = create_plugin_manager(config)
     log_queue: queue_module.Queue[Any] = queue_module.Queue()
     service = await start_service(
         config,

@@ -65,7 +65,12 @@ class AnthropicBackend:
 
     def __init__(self, config: LLMConfig) -> None:
         self._config = config
-        self._base_url = str(config.options.get("base_url", _DEFAULT_URL)).rstrip("/")
+        base = config.base_url.rstrip("/")
+        if not base or base == "https://api.openai.com/v1":
+            base = _DEFAULT_URL
+        elif not base.endswith("/messages"):
+            base += "/messages" if base.endswith("/v1") else "/v1/messages"
+        self._base_url = str(config.options.get("base_url", base)).rstrip("/")
         self._max_tokens = int(config.options.get("max_tokens", 1024))
         self._thinking_budget = int(config.options.get("thinking_budget", 0) or 0)
         if self._thinking_budget:
@@ -75,7 +80,7 @@ class AnthropicBackend:
     def _url(self) -> str:
         return self._base_url
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, options: dict[str, Any] | None = None) -> dict[str, str]:
         headers: dict[str, str] = {
             "content-type": "application/json",
             "anthropic-version": _VERSION_HEADER,
@@ -84,6 +89,8 @@ class AnthropicBackend:
             headers["x-api-key"] = self._config.api_key
         for name, value in self._config.headers.items():
             headers[str(name).lower()] = str(value)
+        if options and isinstance(options.get("headers"), dict):
+            headers.update({str(k).lower(): str(v) for k, v in options["headers"].items()})
         return headers
 
     def _body(
@@ -149,8 +156,18 @@ class AnthropicBackend:
                 "budget_tokens": self._thinking_budget,
             }
         if tools:
-            body["tools"] = tools
+            body["tools"] = [
+                {
+                    "name": tool["function"]["name"],
+                    "description": tool["function"].get("description", ""),
+                    "input_schema": tool["function"].get("parameters", {"type": "object"}),
+                }
+                if isinstance(tool.get("function"), dict)
+                else tool
+                for tool in tools
+            ]
             body.setdefault("tool_choice", {"type": "auto"})
+        body.update(self._config.extra_body)
         return body
 
     @staticmethod
@@ -212,6 +229,8 @@ class AnthropicBackend:
             # openai-compatible option convention (body/headers/query/path)
             # must not leak unknown top-level keys into the Messages API
             allowed = (
+                "model",
+                "temperature",
                 "system",
                 "max_tokens",
                 "metadata",
@@ -221,15 +240,18 @@ class AnthropicBackend:
                 "tools",
                 "tool_choice",
             )
-            body.update({k: v for k, v in options.items() if k in allowed and k not in body})
-        headers = self._headers()
+            body.update({k: v for k, v in options.items() if k in allowed})
+            if isinstance(options.get("body"), dict):
+                body.update(options["body"])
+        headers = self._headers(options)
+        query = {**self._config.query, **(options or {}).get("query", {})}
         url = self._url()
         max_retries = max(0, min(self._config.max_retries, 20))
         last_error: Exception | None = None
         for attempt in range(max_retries + 1):
             try:
                 async with httpx.AsyncClient(timeout=self._config.timeout_seconds) as client:
-                    response = await client.post(url, json=body, headers=headers)
+                    response = await client.post(url, json=body, headers=headers, params=query)
                     if response.status_code >= 400:
                         # status code only: the response body may echo the
                         # request (including the API key) and must never

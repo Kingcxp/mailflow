@@ -21,6 +21,7 @@ from mailflow.bot_export import available_frameworks, export_bot_plugin
 from mailflow.commands import CommandRouter
 from mailflow.config import MailFlowConfig, load_config
 from mailflow.domain import ComponentKind
+from mailflow.i18n import I18n
 from mailflow.plugins import PluginManager
 from mailflow.service import start_service
 from mailflow_bundled import create_plugin_manager
@@ -61,7 +62,12 @@ def run(
 
     async def _run() -> None:
         config = _load_config(config_path)
-        service = await start_service(config, config_path=config_path)
+        service = await start_service(
+            config,
+            config_path=config_path,
+            plugin_manager=create_plugin_manager(config),
+            discover_plugins=False,
+        )
         try:
             console.print(service.t("cli.started"))
             await service.wait()
@@ -86,7 +92,7 @@ def command(
 
     async def _run() -> None:
         config = _load_config(config_path)
-        manager = create_plugin_manager(config, discover_external=False)
+        manager = create_plugin_manager(config)
         service = await start_service(
             config,
             plugin_manager=manager,
@@ -119,7 +125,7 @@ def shell(
 
     async def _run() -> None:
         config = _load_config(config_path)
-        manager = create_plugin_manager(config, discover_external=False)
+        manager = create_plugin_manager(config)
         service = await start_service(
             config,
             config_path=config_path,
@@ -175,7 +181,7 @@ def snapshot(
     config = _load_config(config_path)
 
     async def _run() -> None:
-        manager = create_plugin_manager(config, discover_external=False)
+        manager = create_plugin_manager(config)
         service = await start_service(
             config, plugin_manager=manager, discover_plugins=False, enable_logging=False
         )
@@ -192,7 +198,12 @@ def snapshot(
             table.add_column(service.t("plugin.header_name"))
             table.add_column(service.t("account.header_status"))
             for plugin in snapshot_data.plugins:
-                table.add_row(plugin.plugin_id, plugin.name, "")
+                status = service.t(f"tui.plugin_status_{plugin.status}")
+                table.add_row(
+                    plugin.plugin_id,
+                    plugin.name,
+                    status + (f"\n{plugin.error}" if plugin.error else ""),
+                )
             console.print(table)
             account_table = Table(
                 title=service.t("account.title", count=len(snapshot_data.accounts))
@@ -287,6 +298,9 @@ def service_doctor(config: MailFlowConfig, manager: PluginManager, registry: Any
     text.append(f"  processors configured: {len(config.processors)}\n")
     text.append(f"  notifiers configured: {len(config.notifiers)}\n")
     text.append(f"  storage provider: {config.storage.provider}\n")
+    t = I18n(config.i18n.language).t
+    for plugin_id, reason in manager.failures.items():
+        text.append(t("plugin.load_failed", plugin_id=plugin_id, reason=reason) + "\n", style="red")
     return text
 
 
@@ -311,7 +325,12 @@ def serve(
         from mailflow_server.auth import require_credentials
 
         require_credentials(config.server)
-        service = await start_service(config, config_path=config_path)
+        service = await start_service(
+            config,
+            config_path=config_path,
+            plugin_manager=create_plugin_manager(config),
+            discover_plugins=False,
+        )
         app = create_app(service)
         uv_config = uvicorn.Config(
             app,

@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 
 [project.entry-points."mailflow.plugins"]
-sqlite = "mailflow_storage_sqlite.plugin:plugin"
+mailflow-storage-sqlite = "mailflow_storage_sqlite.plugin:plugin"
 
 [build-system]
 requires = ["hatchling"]

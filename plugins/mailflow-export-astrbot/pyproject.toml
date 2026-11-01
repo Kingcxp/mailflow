@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 
 [project.entry-points."mailflow.plugins"]
-astrbot-export = "mailflow_export_astrbot.plugin:plugin"
+mailflow-export-astrbot = "mailflow_export_astrbot.plugin:plugin"
 
 [build-system]
 requires = ["hatchling"]

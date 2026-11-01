@@ -262,12 +262,8 @@ class PluginConfig(BaseModel):
         "included by default — configure the list explicitly to replace it",
     )
 
-    @model_validator(mode="after")
-    def no_overlap(self) -> PluginConfig:
-        overlap = set(self.enabled) & set(self.disabled)
-        if overlap:
-            raise ValueError(f"plugin ids in both enabled and disabled: {sorted(overlap)}")
-        return self
+    # The denylist overrides the allowlist. Keeping an id in the allowlist
+    # while disabled avoids turning a one-plugin allowlist into "load all".
 
 
 class MailAccountConfig(BaseModel):

@@ -119,7 +119,7 @@ class PluginBuilder:
             name=name,
             version=version,
             description=description,
-            kinds=[registration.kind for registration in registrations],
+            kinds=list(dict.fromkeys(registration.kind for registration in registrations)),
         )
 
         class _DeclaredPlugin:

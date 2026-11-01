@@ -200,14 +200,14 @@ class VertexBackend:
             )
         self._tokens = _TokenCache()
 
-    def _url(self) -> str:
-        model = self._config.model.strip("/")
+    def _url(self, model: str | None = None) -> str:
+        model = (model or self._config.model).strip("/")
         return (
             f"{self._base}/v1/projects/{self._project}/locations/{self._location}"
             f"/publishers/google/models/{model}:generateContent"
         )
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, options: dict[str, Any] | None = None) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         token: str | None = None
         if self._service_account_file:
@@ -221,6 +221,8 @@ class VertexBackend:
             )
         headers["Authorization"] = f"Bearer {token}"
         headers.update({str(k): str(v) for k, v in self._config.headers.items()})
+        if options and isinstance(options.get("headers"), dict):
+            headers.update({str(k): str(v) for k, v in options["headers"].items()})
         return headers
 
     def _body(
@@ -228,6 +230,7 @@ class VertexBackend:
         messages: list[MessageDict],
         temperature: float | None,
         tools: list[dict[str, Any]] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         contents: list[dict[str, Any]] = []
         system: list[dict[str, Any]] = []
@@ -265,6 +268,18 @@ class VertexBackend:
         for key, value in self._config.extra_body.items():
             if key != "generationConfig":
                 body[key] = value
+        if options:
+            if isinstance(options.get("body"), dict):
+                body.update(options["body"])
+            generation = dict(body.get("generationConfig") or {})
+            if "temperature" in options:
+                generation["temperature"] = options["temperature"]
+            if "max_tokens" in options:
+                generation["maxOutputTokens"] = options["max_tokens"]
+            if "thinking_budget" in options:
+                generation["thinkingConfig"] = {"thinkingBudget": options["thinking_budget"]}
+            if generation:
+                body["generationConfig"] = generation
         return body
 
     @staticmethod
@@ -340,8 +355,10 @@ class VertexBackend:
         options: dict[str, Any] | None = None,
         tools: list[dict[str, Any]] | None = None,
     ) -> LLMCompletion:
-        url = self._url()
-        body = self._body(messages, temperature, tools)
+        options = options or {}
+        url = self._url(options.get("model"))
+        query = {**self._config.query, **options.get("query", {})}
+        body = self._body(messages, temperature, tools, options)
         max_retries = max(0, min(self._config.max_retries, 20))
 
         last_error: Exception | None = None
@@ -349,7 +366,9 @@ class VertexBackend:
             try:
                 # headers built per attempt so a refreshed token is picked up
                 async with httpx.AsyncClient(timeout=self._config.timeout_seconds) as client:
-                    response = await client.post(url, headers=self._headers(), json=body)
+                    response = await client.post(
+                        url, headers=self._headers(options), params=query, json=body
+                    )
                     response.raise_for_status()
                 return self._parse(response.json())
             except Exception as exc:

@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
-from mailflow.bot_export import BotExportContext, BotExportResult
 from mailflow.config import (
     LLMConfig,
     MailAccountConfig,
@@ -20,6 +19,7 @@ from mailflow.config import (
     StorageConfig,
 )
 from mailflow.contracts import (
+    BotExporter,
     GatewayProvisioner,
     LLMBackend,
     LLMEnhancer,
@@ -31,13 +31,14 @@ from mailflow.contracts import (
 )
 from mailflow.domain import ComponentKind, ComponentSnapshot
 from mailflow.forms import FormField
+from mailflow.plugin_validation import checked_factory
 
 SourceFactory = Callable[[MailAccountConfig], MailSource]
 LLMFactory = Callable[[LLMConfig], LLMBackend]
 ProcessorFactory = Callable[[ProcessorConfig, LLMRouter], MailProcessor]
 NotifierFactory = Callable[[NotifierConfig], Notifier]
 StorageFactory = Callable[[StorageConfig], StorageBackend]
-BotExporterFactory = Callable[[BotExportContext], BotExportResult]
+BotExporterFactory = BotExporter
 LLMEnhancerFactory = Callable[[ProcessorConfig], LLMEnhancer]
 GatewayProvisionerFactory = Callable[[], GatewayProvisioner]
 
@@ -82,10 +83,23 @@ class ComponentRegistry:
                 f"component {component_id!r} already registered by plugin "
                 f"{self._snapshots[key].plugin_id!r}"
             )
+        checked = checked_factory(kind, factory, plugin_id, component_id)
         self._snapshots[key] = ComponentSnapshot(
             component_id=component_id, kind=kind, plugin_id=plugin_id
         )
-        self._factories[kind][component_id] = factory
+        self._factories[kind][component_id] = checked
+
+    def merge(self, other: ComponentRegistry) -> None:
+        """Publish a plugin's registrations together, or none on conflict."""
+        for key in other._snapshots:
+            if key in self._snapshots:
+                owner = self._snapshots[key].plugin_id
+                raise ValueError(f"component {key[1]!r} already registered by plugin {owner!r}")
+        self._snapshots.update(other._snapshots)
+        for kind, factories in other._factories.items():
+            self._factories[kind].update(factories)
+        self._form_fields.update(other._form_fields)
+        self._probes.update(other._probes)
 
     def factory(self, kind: ComponentKind, component_id: str) -> Factory:
         try:
@@ -120,9 +134,9 @@ class ComponentRegistry:
             self.factory(ComponentKind.GATEWAY_PROVISIONER, component_id),
         )
 
-    def plugin_for(self, component_id: str) -> str | None:
+    def plugin_for(self, component_id: str, kind: ComponentKind | None = None) -> str | None:
         for snapshot in self._snapshots.values():
-            if snapshot.component_id == component_id:
+            if snapshot.component_id == component_id and (kind is None or snapshot.kind == kind):
                 return snapshot.plugin_id
         return None
 

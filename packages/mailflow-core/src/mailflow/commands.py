@@ -1136,7 +1136,7 @@ class CommandRouter:
             return self._err(self._t("plugin.enable_usage"))
         try:
             created = await self.service.plugin_enable(args[0])
-        except (KeyError, ValueError) as exc:
+        except (KeyError, ValueError, RuntimeError) as exc:
             return self._err(str(exc))
         text = self._t("plugin.enabled_ok", plugin_id=args[0])
         if created:
@@ -1220,6 +1220,10 @@ class CommandRouter:
                 kinds = ", ".join(kind.value for kind in plugin.kinds)
                 spans.append(StyleSpan(text=f"\n\n• {plugin.plugin_id} ({plugin.version})"))
                 spans.append(StyleSpan(text=f"\n  {plugin.name} · {kinds}", style=_STYLE_MUTED))
+                status = self._t(f"tui.plugin_status_{plugin.status}")
+                spans.append(StyleSpan(text=f"\n  {status}"))
+                if plugin.error:
+                    spans.append(StyleSpan(text=f"\n  {plugin.error}", style=_STYLE_ERROR))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         if args[0] == "show" and len(args) == 2:
             plugin_info = snapshot.plugin(args[1])
@@ -1233,6 +1237,9 @@ class CommandRouter:
                     text=f"\n{self._t('plugin.field_components')}: {', '.join(plugin_info.components) or '-'}"
                 ),
             ]
+            spans.append(StyleSpan(text=f"\n{self._t(f'tui.plugin_status_{plugin_info.status}')}"))
+            if plugin_info.error:
+                spans.append(StyleSpan(text=f"\n{plugin_info.error}", style=_STYLE_ERROR))
             return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
         return self._err(self._t("plugin.usage"))
 

@@ -1,6 +1,6 @@
 [project]
 name = "mailflow-notify-telegram"
-version = "0.1.0"
+version = "0.2.0"
 description = "MailFlow Telegram notifier: pushes mail alerts to a Telegram chat via the Bot API"
 requires-python = ">=3.11"
 dependencies = ["mailflow-core"]

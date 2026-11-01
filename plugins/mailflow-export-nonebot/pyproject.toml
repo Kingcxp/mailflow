@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 
 [project.entry-points."mailflow.plugins"]
-nonebot-export = "mailflow_export_nonebot.plugin:plugin"
+mailflow-export-nonebot = "mailflow_export_nonebot.plugin:plugin"
 
 [build-system]
 requires = ["hatchling"]

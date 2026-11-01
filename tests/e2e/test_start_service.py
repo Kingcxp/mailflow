@@ -21,7 +21,7 @@ from mailflow.config import (
     NotifierConfig,
 )
 from mailflow.contracts import LLMCompletion, MailSource
-from mailflow.domain import MailRecord, Urgency
+from mailflow.domain import ComponentKind, MailRecord, Urgency
 from mailflow.plugins import PluginInfo, PluginManager
 from mailflow.registry import PluginRegistrar
 from mailflow.service import MailFlowService, start_service
@@ -89,6 +89,7 @@ class E2EPlugin:
             name="E2E Test Components",
             version="0.0.0",
             description="deterministic source/llm/notifier for end-to-end tests",
+            kinds=[ComponentKind.MAIL_SOURCE, ComponentKind.LLM_BACKEND, ComponentKind.NOTIFIER],
         )
 
     def mailflow_register(self, registrar: PluginRegistrar, config: Any) -> None:

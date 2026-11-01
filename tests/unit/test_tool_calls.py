@@ -111,7 +111,7 @@ def _config(provider: str, **options: Any) -> LLMConfig:
     )
 
 
-TOOLS = [
+TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -453,7 +453,8 @@ def test_anthropic_body_translates_tool_turns(monkeypatch: pytest.MonkeyPatch) -
     )
 
     body = CapturingClient.instances[-1].calls[0]["json"]
-    assert body["tools"] == TOOLS
+    assert body["tools"][0]["name"] == "find_mail"
+    assert body["tools"][0]["input_schema"] == TOOLS[0]["function"]["parameters"]
     assistant = body["messages"][0]
     assert assistant["content"][0]["type"] == "tool_use"
     assert assistant["content"][0]["input"] == {"contains": "exam"}
@@ -515,6 +516,48 @@ def test_google_backends_map_function_calls(
     assert completion.tool_calls[0].name == "find_mail"
     assert completion.tool_calls[0].arguments == {"contains": "seminar"}
     assert completion.tool_calls[0].call_id  # synthesised: this protocol has no id
+
+
+@pytest.mark.parametrize(
+    ("backend_cls", "provider"),
+    [
+        (OpenAIBackend, "openai-compatible"),
+        (AnthropicBackend, "anthropic"),
+        (GeminiBackend, "google-generative-ai"),
+        (VertexBackend, "google-vertex"),
+    ],
+)
+def test_per_call_options_reach_each_transport(
+    monkeypatch: pytest.MonkeyPatch, backend_cls: Any, provider: str
+) -> None:
+    payload = {
+        **_gemini_payload(),
+        "content": [{"type": "text", "text": "ok"}],
+        "choices": [{"message": {"content": "ok"}}],
+    }
+    _install(monkeypatch, FakeHTTPResponse(payload))
+    config = _config(provider, project="demo", stream=False)
+    asyncio.run(
+        backend_cls(config).chat(
+            [{"role": "user", "content": "hi"}],
+            temperature=0.1,
+            options={
+                "temperature": 0.3,
+                "max_tokens": 4,
+                "headers": {"x-sample": "yes"},
+                "query": {"sample": "yes"},
+                "body": {"metadata": {"sample": True}},
+            },
+        )
+    )
+    request = CapturingClient.instances[-1].calls[0]
+    assert request["headers"]["x-sample"] == "yes"
+    assert request["params"]["sample"] == "yes"
+    body = request["json"]
+    assert body["metadata"] == {"sample": True}
+    generation = body.get("generationConfig", body)
+    assert generation["temperature"] == 0.3
+    assert generation.get("maxOutputTokens", generation.get("max_tokens")) == 4
 
 
 @pytest.mark.parametrize(

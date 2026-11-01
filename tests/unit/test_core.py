@@ -315,9 +315,15 @@ class TestConfigValidation:
         with pytest.raises(ValueError, match="log level"):
             MailFlowConfig.model_validate({"logging": {"level": "LOUD"}})
 
-    def test_plugin_enabled_disabled_overlap_rejected(self) -> None:
-        with pytest.raises(ValueError, match="both enabled and disabled"):
-            MailFlowConfig.model_validate({"plugins": {"enabled": ["a"], "disabled": ["a"]}})
+    def test_disabled_plugin_can_retain_its_allowlist_membership(self) -> None:
+        from mailflow.plugins import PluginManager
+
+        config = MailFlowConfig.model_validate({"plugins": {"enabled": ["a"], "disabled": ["a"]}})
+        manager = PluginManager(config)
+        manager.load("a", lambda: pytest.fail("disabled plugin must not be imported"))
+        manager.load("b", lambda: pytest.fail("allowlist must not expand"))
+        assert manager.build_registry().snapshots() == []
+        assert manager.status("a") == manager.status("b") == "disabled"
 
     def test_default_llm_accessor(self) -> None:
         llms = self._llms()

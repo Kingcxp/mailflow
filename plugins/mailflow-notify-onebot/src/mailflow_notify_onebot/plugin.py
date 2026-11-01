@@ -164,7 +164,7 @@ PLUGIN_INFO = PluginInfo(
     description=(
         "Pushes mail alerts to QQ users/groups via an OneBot v11 HTTP server (NapCat, go-cqhttp)"
     ),
-    kinds=[ComponentKind.NOTIFIER],
+    kinds=[ComponentKind.NOTIFIER, ComponentKind.GATEWAY_PROVISIONER],
 )
 
 

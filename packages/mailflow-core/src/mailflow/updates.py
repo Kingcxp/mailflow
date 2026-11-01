@@ -5,8 +5,8 @@
 - Plugin updates follow the marketplace ``plugin.json`` version for the
   plugin's recorded update source. Plugins without a remote source (local
   installs, or a repository that was removed) are never auto-updated.
-- Applying updates reuses :meth:`PluginMarket.install` (``uv pip install
-  --no-deps``); MailFlow itself is upgraded through ``uv pip install
+- Applying updates reuses :meth:`PluginMarket.install` (including declared
+  dependencies); MailFlow itself is upgraded through ``uv pip install
   --upgrade`` of the installed mailflow distributions.
 """
 

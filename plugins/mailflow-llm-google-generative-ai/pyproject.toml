@@ -3,10 +3,10 @@ name = "mailflow-llm-google-generative-ai"
 version = "0.1.0"
 description = "Google Generative AI (Gemini API) backend for MailFlow"
 requires-python = ">=3.11"
-dependencies = ["httpx>=0.27"]
+dependencies = ["mailflow-core", "httpx>=0.27"]
 
 [project.entry-points."mailflow.plugins"]
-google-generative-ai = "mailflow_llm_google_generative_ai.plugin:plugin"
+mailflow-llm-google-generative-ai = "mailflow_llm_google_generative_ai.plugin:plugin"
 
 [build-system]
 requires = ["hatchling"]

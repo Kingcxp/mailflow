@@ -313,7 +313,7 @@
       "repo_removed": "已移除仓库 {name}",
       "repo_title": "插件仓库（{count}）",
       "repo_usage": "plugin repo <list [--page <页码>]|add <名称> <url>|remove <名称>>",
-      "restart_note": "重启后生效",
+      "restart_note": "启用插件或重启后加载",
       "search_usage": "plugin search <关键词> [分类] [--page <页码>]",
       "template": {
         "llm_backend": "接入一个模型的对话补全服务",
@@ -326,7 +326,11 @@
       "uninstall_usage": "plugin uninstall <插件id>",
       "uninstalled_ok": "已卸载 {plugin_id}",
       "unknown_plugin": "插件 {plugin_id} 未加载或未安装",
-      "usage": "plugin <list [--page <页码>]|show <插件id>|repo <list [--page <页码>]|add <名称> <url>|remove <名称>>|market <list [分类] [--page <页码>]|show <id>|search <关键词> [分类] [--page <页码>]>|install|uninstall|enable|disable <id>>"
+      "usage": "plugin <list [--page <页码>]|show <插件id>|repo <list [--page <页码>]|add <名称> <url>|remove <名称>>|market <list [分类] [--page <页码>]|show <id>|search <关键词> [分类] [--page <页码>]>|install|uninstall|enable|disable <id>>",
+      "active_storage": "插件 {plugin_id} 正在提供当前存储，请先切换存储配置并重启。",
+      "not_installed_id": "{plugin_id} 未安装，已清理残留配置。",
+      "config_required": "未加载配置文件，请使用 --config 启动以保存插件设置。",
+      "load_failed": "插件 {plugin_id} 加载失败：{reason}"
     },
     "reply": {
       "cancelled": "草稿 {draft_id} 已取消",
@@ -581,7 +585,7 @@
       "market_provider": "提供商",
       "market_readme": "说明文档",
       "market_search_placeholder": "按名称或简介搜索插件...",
-      "plugin_status_disabled": "已禁用（下次启动）",
+      "plugin_status_disabled": "已禁用",
       "plugin_status_enabled": "已启用",
       "plugin_status_not_loaded": "未加载",
       "provider_section": "提供商设置（{provider}）",
@@ -969,7 +973,8 @@
       "smart_review_required": "摘要和类型不能为空。",
       "smart_review_invalid_time": "时间无效——请使用 YYYY-MM-DD HH:MM",
       "smart_review_invalid_window": "结束时间必须晚于开始时间",
-      "reparse_one_start": "正在重新解析 {subject}…"
+      "reparse_one_start": "正在重新解析 {subject}…",
+      "plugin_status_error": "加载失败"
     },
     "update": {
       "applied_title": "已应用的更新",

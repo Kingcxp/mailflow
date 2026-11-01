@@ -2515,6 +2515,7 @@ class RuntimePane(Vertical):
                 "enabled": service.t("tui.plugin_status_enabled"),
                 "disabled": service.t("tui.plugin_status_disabled"),
                 "not_loaded": service.t("tui.plugin_status_not_loaded"),
+                "error": service.t("tui.plugin_status_error"),
             }.get(status_key, status_key)
             table.add_row(
                 escape(plugin.plugin_id),
@@ -2572,8 +2573,10 @@ class RuntimePane(Vertical):
         plugin_id = cast(str, event.row_key.value)
         self._selected_plugin = plugin_id
         status = self._service.plugin_status(plugin_id)
+        plugin = self._service.snapshot().plugin(plugin_id)
+        detail = f"\n{plugin.error}" if plugin is not None and plugin.error else ""
         self.query_one("#runtime-status", Static).update(
-            f"{self._service.t('plugin.header_id')}: {plugin_id} — {status}"
+            escape(f"{plugin_id} — {self._service.t(f'tui.plugin_status_{status}')}{detail}")
         )
 
     def _open_plugin_detail(self, plugin_id: str) -> None:
@@ -3443,6 +3446,8 @@ class MarketPane(Vertical):
             return self._service.t("tui.plugin_status_disabled")
         if config_status == "enabled":
             return self._service.t("tui.plugin_status_enabled")
+        if config_status == "error":
+            return self._service.t("tui.plugin_status_error")
         return self._service.t("plugin.installed")
 
     async def refresh_market(self) -> None:

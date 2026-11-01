@@ -1,49 +1,39 @@
-"""MailFlow composition root.
+"""Shared composition root: bundled plugins first, then installed plugins.
 
-Registers the official built-in plugin set through static imports (frozen
-builds do not depend on entry-point metadata) and optionally discovers
-external entry-point plugins on top.
+Explicit module names also work in frozen builds. Imports are isolated so a
+missing dependency costs its plugin, not the whole host.
 """
 
 from __future__ import annotations
 
+from functools import partial
+from importlib import import_module
 from typing import Any
 
 from mailflow.config import MailFlowConfig
 from mailflow.plugins import PluginManager
-from mailflow_export_astrbot.plugin import plugin as astrbot_export_plugin
-from mailflow_export_nonebot.plugin import plugin as nonebot_export_plugin
-from mailflow_llm_anthropic.plugin import plugin as anthropic_plugin
-from mailflow_llm_google_generative_ai.plugin import plugin as google_gemini_plugin
-from mailflow_llm_google_vertex.plugin import plugin as google_vertex_plugin
-from mailflow_llm_openai_compatible.plugin import plugin as openai_plugin
-from mailflow_mail_fake.plugin import plugin as fake_plugin
-from mailflow_mail_imap.plugin import plugin as imap_plugin
-from mailflow_notify_console.plugin import plugin as notify_plugin
-from mailflow_notify_onebot.plugin import plugin as onebot_plugin
-from mailflow_notify_openwechat.plugin import plugin as openwechat_plugin
-from mailflow_notify_telegram.plugin import plugin as telegram_plugin
-from mailflow_notify_wechatpadpro.plugin import plugin as wechatpadpro_plugin
-from mailflow_notify_whatsapp.plugin import plugin as whatsapp_plugin
-from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 
-BUNDLED_PLUGINS: tuple[Any, ...] = (
-    fake_plugin,
-    imap_plugin,
-    storage_plugin,
-    openai_plugin,
-    anthropic_plugin,
-    google_gemini_plugin,
-    google_vertex_plugin,
-    notify_plugin,
-    onebot_plugin,
-    openwechat_plugin,
-    telegram_plugin,
-    wechatpadpro_plugin,
-    whatsapp_plugin,
-    nonebot_export_plugin,
-    astrbot_export_plugin,
+BUNDLED_PLUGINS: tuple[str, ...] = (
+    "mailflow_mail_fake",
+    "mailflow_mail_imap",
+    "mailflow_storage_sqlite",
+    "mailflow_llm_openai_compatible",
+    "mailflow_llm_anthropic",
+    "mailflow_llm_google_generative_ai",
+    "mailflow_llm_google_vertex",
+    "mailflow_notify_console",
+    "mailflow_notify_onebot",
+    "mailflow_notify_openwechat",
+    "mailflow_notify_telegram",
+    "mailflow_notify_wechatpadpro",
+    "mailflow_notify_whatsapp",
+    "mailflow_export_nonebot",
+    "mailflow_export_astrbot",
 )
+
+
+def _import_plugin(module: str) -> Any:
+    return import_module(f"{module}.plugin").plugin
 
 
 def create_plugin_manager(
@@ -53,8 +43,12 @@ def create_plugin_manager(
 ) -> PluginManager:
     """The standard manager: bundled set first, optional external discovery."""
     manager = PluginManager(config)
-    for plugin in BUNDLED_PLUGINS:
-        manager.register(plugin, bundled=True)
+    for module in BUNDLED_PLUGINS:
+        manager.load(
+            module.replace("_", "-"),
+            partial(_import_plugin, module),
+            bundled=True,
+        )
     if discover_external:
         manager.discover()
     return manager

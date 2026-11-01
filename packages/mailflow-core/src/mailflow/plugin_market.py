@@ -31,6 +31,7 @@ import logging
 import re
 import shutil
 import subprocess
+import sys
 import urllib.request
 from dataclasses import dataclass, field
 from importlib import metadata
@@ -447,9 +448,7 @@ class PluginMarket:
         uv = shutil.which("uv")
         if uv is None:
             raise RuntimeError("uv executable not found on PATH; cannot install plugins")
-        # --no-deps: the host already provides mailflow-core; plugins may be
-        # installed from local directories or unpublished git refs.
-        command = [uv, "pip", "install", "--no-deps", plugin.source]
+        command = [uv, "pip", "install", "--python", sys.executable, plugin.source]
         logger.info("installing plugin %r via %s", plugin.id, " ".join(command))
         result = await asyncio.to_thread(
             subprocess.run,
@@ -460,7 +459,7 @@ class PluginMarket:
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"uv pip install failed: {(result.stderr or result.stdout).strip()[:500]}"
+                f"plugin {plugin.id!r}: uv pip install failed: {(result.stderr or result.stdout).strip()[:500]}"
             )
         return (result.stdout or result.stderr or "").strip()
 
@@ -471,7 +470,7 @@ class PluginMarket:
         uv = shutil.which("uv")
         if uv is None:
             raise RuntimeError("uv executable not found on PATH; cannot uninstall plugins")
-        command = [uv, "pip", "uninstall", "-q", plugin.package]
+        command = [uv, "pip", "uninstall", "--python", sys.executable, "-q", plugin.package]
         logger.info("uninstalling plugin %r via %s", plugin.id, " ".join(command))
         result = await asyncio.to_thread(
             subprocess.run,
@@ -482,7 +481,7 @@ class PluginMarket:
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"uv pip uninstall failed: {(result.stderr or result.stdout).strip()[:500]}"
+                f"plugin {plugin.id!r}: uv pip uninstall failed: {(result.stderr or result.stdout).strip()[:500]}"
             )
         return (result.stdout or result.stderr or "").strip()
 
@@ -503,14 +502,18 @@ __all__ = [
 
 
 def detect_plugin_folders(root: str | Path) -> list[Path]:
-    """Locate plugin folders under ``root``: the root itself when it is a
-    plugin (has ``plugin.json``), otherwise its immediate subfolders that
-    look like plugins (``plugin.json`` or a pip-installable ``pyproject``)."""
+    """Find a plugin, a flat collection, or a categorized local repository."""
     base = Path(root)
-    if (base / "plugin.json").is_file():
+
+    def is_plugin(folder: Path) -> bool:
+        return (folder / "plugin.json").is_file() or (folder / "pyproject.toml").is_file()
+
+    if is_plugin(base):
         return [base]
     candidates = sorted(p for p in base.iterdir() if p.is_dir())
-    with_metadata = [p for p in candidates if (p / "plugin.json").is_file()]
-    if with_metadata:
-        return with_metadata
-    return [p for p in candidates if (p / "pyproject.toml").is_file()]
+    direct = [p for p in candidates if is_plugin(p)]
+    if direct:
+        return direct
+    return sorted(
+        p for category in candidates for p in category.iterdir() if p.is_dir() and is_plugin(p)
+    )

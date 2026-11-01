@@ -3,10 +3,10 @@ name = "mailflow-notify-openwechat"
 version = "0.1.0"
 description = "openwechat WeChat gateway for MailFlow (scan-to-login, no token)"
 requires-python = ">=3.11"
-dependencies = ["httpx>=0.27"]
+dependencies = ["mailflow-core", "httpx>=0.27"]
 
 [project.entry-points."mailflow.plugins"]
-openwechat = "mailflow_notify_openwechat.plugin:plugin"
+mailflow-notify-openwechat = "mailflow_notify_openwechat.plugin:plugin"
 
 [build-system]
 requires = ["hatchling"]

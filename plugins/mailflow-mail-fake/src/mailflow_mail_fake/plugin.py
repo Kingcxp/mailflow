@@ -15,7 +15,8 @@ from mailflow.config import MailAccountConfig
 from mailflow.domain import ComponentKind, MailAddress, MailMessage
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
-from mailflow_testkit.fakes import FakeMailSource
+
+from .fakes import FakeMailSource
 
 _BASE = datetime(2026, 1, 1, 8, 0, tzinfo=UTC)
 

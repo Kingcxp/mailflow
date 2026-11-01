@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import secrets
+import tomllib
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -802,14 +803,10 @@ class MailFlowService:
         timeout, a notifier target, a reordered list), which is what made those
         edits take seconds to appear. Plugin (un)loads pass ``True`` because an
         adapter implementation can change under an unchanged provider id."""
-        registry = self.plugin_manager.build_registry()
+        registry = self.plugin_manager.build_registry(self.config)
         register_builtin_processors(registry)
-        self.registry = registry
-        self.gateways = GatewayManager(self.config, registry, self.storage)
-        self.gateways._service_ref = self  # pyright: ignore[reportPrivateUsage]
         from mailflow.subscriptions import Subscriptions
 
-        self.subscriptions = Subscriptions(self.storage)
         sources = _build_sources(self.config, registry)
         backends, llm_configs = _build_llms(self.config, registry)
         router = LLMRouterImpl(backends, llm_configs)
@@ -829,6 +826,9 @@ class MailFlowService:
                 continue
             notifiers.append(registry.notifier_factory(notifier.provider)(notifier))
             notifier_configs.append(notifier)
+        await self.gateways.reconfigure(self.config, registry, running=self.started)
+        self.registry = registry
+        self.subscriptions = Subscriptions(self.storage)
         self.router = router
         self.pipeline = pipeline
         self.sources = sources
@@ -892,7 +892,10 @@ class MailFlowService:
             processors=[
                 ProcessorBindingSnapshot(
                     processor_id=processor.processor_id,
-                    plugin_id=self.registry.plugin_for(processor.processor_id) or "",
+                    plugin_id=self.registry.plugin_for(
+                        processor.provider, ComponentKind.MAIL_PROCESSOR
+                    )
+                    or "",
                     priority=processor.priority,
                     llm_id=processor.llm,
                     fallback_llm_ids=list(processor.fallback_llms),
@@ -3021,15 +3024,19 @@ Return every candidate in this batch."""
         failed: list[str] = []
         for folder in folders:
             plugin_id = self._plugin_id_of(folder)
-            plugin = MarketPlugin(
-                id=plugin_id,
-                name=folder.name,
-                version="",
-                categories=[],
-                package=plugin_id,
-                source=str(folder),
-            )
             try:
+                project_path = folder / "pyproject.toml"
+                project: dict[str, Any] = (
+                    tomllib.loads(project_path.read_text(encoding="utf-8")).get("project", {})
+                    if project_path.is_file()
+                    else {}
+                )
+                plugin = MarketPlugin(
+                    id=plugin_id,
+                    name=folder.name,
+                    package=project.get("name", plugin_id),
+                    source=str(folder),
+                )
                 _output, already = await self._install_plugin(plugin, source=str(folder))
                 if already:
                     failed.append(
@@ -3072,20 +3079,15 @@ Return every candidate in this batch."""
         """The plugin must be loaded (registry) or installed (entry point/package)."""
         from mailflow.plugin_market import PluginMarket
 
-        loaded = {p.plugin_id for p in self.plugin_manager.enabled_infos()}
-        if plugin_id in loaded:
+        if plugin_id in self.plugin_manager.known_plugin_ids:
             return
         if PluginMarket.is_installed(plugin_id):
             return
         # bundled plugins: the distribution package name equals the plugin id
         if PluginMarket.is_installed(plugin_id, package=plugin_id):
             return
-        try:
-            found = await asyncio.to_thread(self.market.find, plugin_id)
-        except OSError as exc:  # URLError/timeout: marketplace unreachable
-            logger.warning("marketplace lookup for %r failed: %s", plugin_id, exc)
-            found = None
-        if found is not None and PluginMarket.is_installed(found[1].id, package=found[1].package):
+        package = await self.storage.get_preference(f"plugin.package.{plugin_id}")
+        if package and PluginMarket.is_installed(plugin_id, package=package):
             return
         raise KeyError(self.t("plugin.unknown_plugin", plugin_id=plugin_id))
 
@@ -3093,37 +3095,49 @@ Return every candidate in this batch."""
         """Disable a plugin; its components unload immediately (config
         entries stay, so re-enabling restores them)."""
         if self.config_path is None:
-            raise ValueError("no config file loaded; start with --config to persist changes")
-        from mailflow.config import write_config
-
+            raise ValueError(self.t("plugin.config_required"))
         await self._require_known_plugin(plugin_id)
-        plugins = self.config.plugins
+        if (
+            self.registry.plugin_for(self.config.storage.provider, ComponentKind.STORAGE)
+            == plugin_id
+        ):
+            raise ValueError(self.t("plugin.active_storage", plugin_id=plugin_id))
+        updated = self.config.model_copy(deep=True)
+        plugins = updated.plugins
         if plugin_id not in plugins.disabled:
             plugins.disabled.append(plugin_id)
-        plugins.enabled = [p for p in plugins.enabled if p != plugin_id]
-        write_config(self.config, self.config_path)
+        await self._apply_plugin_config(updated)
         await self.events.emit("plugin.disabled", plugin_id=plugin_id)
-        await self.reload_runtime(restart_sources=True)
 
-    def _auto_instances_for(self, plugin_id: str) -> int:
+    async def _apply_plugin_config(self, updated: MailFlowConfig) -> None:
+        from mailflow.config import write_config
+
+        previous = self.config
+        self.config = updated
+        try:
+            await self.reload_runtime(restart_sources=True)
+            write_config(updated, cast(Path, self.config_path))
+        except Exception:
+            self.config = previous
+            await self.reload_runtime(restart_sources=True)
+            raise
+
+    def _auto_instances_for(
+        self, plugin_id: str, config: MailFlowConfig, registry: ComponentRegistry
+    ) -> int:
         """Ensure every notifier component of ``plugin_id`` has at least one
         [[notifiers]] instance so enabling it has an observable effect;
         returns how many instances were created. Sources and LLM backends
         need credentials and are deliberately left to the user."""
         created = 0
-        # The live registry only holds *loaded* plugins: a plugin that was
-        # disabled (or installed since startup) has no components in it, so
-        # build the registry the way reload_runtime will, with this plugin
-        # enabled, and derive its notifier components from that.
-        registry = self.plugin_manager.build_registry()
         for component in registry.snapshots():
             if component.plugin_id != plugin_id:
                 continue
             if component.kind != ComponentKind.NOTIFIER:
                 continue
-            if any(n.provider == component.component_id for n in self.config.notifiers):
+            if any(n.provider == component.component_id for n in config.notifiers):
                 continue
-            self.config.notifiers.append(
+            config.notifiers.append(
                 NotifierConfig(
                     notifier_id=f"{component.component_id}", provider=component.component_id
                 )
@@ -3136,55 +3150,56 @@ Return every candidate in this batch."""
         get a default instance when none exists. Returns the id of the
         auto-created instance ('' when none was needed)."""
         if self.config_path is None:
-            raise ValueError("no config file loaded; start with --config to persist changes")
-        from mailflow.config import write_config
-
+            raise ValueError(self.t("plugin.config_required"))
         await self._require_known_plugin(plugin_id)
-        plugins = self.config.plugins
+        updated = self.config.model_copy(deep=True)
+        plugins = updated.plugins
         plugins.disabled = [p for p in plugins.disabled if p != plugin_id]
         # an explicit `enabled` list acts as an allowlist: make sure the
         # plugin is part of it
         if plugins.enabled and plugin_id not in plugins.enabled:
             plugins.enabled.append(plugin_id)
+        # Also discover packages installed since this host started.
+        self.plugin_manager.discover(updated)
+        registry = self.plugin_manager.build_registry(updated)
+        if self.plugin_manager.status(plugin_id) != "enabled":
+            reason = self.plugin_manager.failures.get(
+                plugin_id, self.t("tui.plugin_status_not_loaded")
+            )
+            self.plugin_manager.build_registry(self.config)
+            raise RuntimeError(self.t("plugin.load_failed", plugin_id=plugin_id, reason=reason))
         created_instance = ""
-        if self._auto_instances_for(plugin_id):
-            created_instance = f"{self.config.notifiers[-1].notifier_id}"
-        write_config(self.config, self.config_path)
+        if self._auto_instances_for(plugin_id, updated, registry):
+            created_instance = updated.notifiers[-1].notifier_id
+        await self._apply_plugin_config(updated)
         await self.events.emit("plugin.enabled", plugin_id=plugin_id)
-        await self.reload_runtime(restart_sources=True)
         return created_instance
 
     def plugin_status(self, plugin_id: str) -> str:
-        """'enabled' | 'disabled' | 'not_loaded' for the given plugin id."""
+        """Return enabled, disabled, error or not_loaded for a plugin."""
         plugins = self.config.plugins
         if plugin_id in plugins.disabled:
             return "disabled"
         if plugins.enabled and plugin_id not in plugins.enabled:
             return "disabled"
-        loaded = {p.plugin_id for p in self.plugin_manager.enabled_infos()}
-        return "enabled" if plugin_id in loaded else "not_loaded"
+        return self.plugin_manager.status(plugin_id)
 
     async def _find_market_plugin(self, plugin_id: str) -> MarketPlugin | None:
         """Resolve plugin metadata without making uninstall depend on network."""
         from mailflow.plugin_market import MarketPlugin
 
-        lookup_error: Exception | None = None
-        try:
-            found = await asyncio.to_thread(self.market.find, plugin_id)
-        except Exception as exc:
-            lookup_error = exc
-            found = None
-        if found is not None:
-            return found[1]
+        source = await self.storage.get_preference(f"plugin.source.{plugin_id}")
+        if source:
+            package = await self.storage.get_preference(f"plugin.package.{plugin_id}")
+            return MarketPlugin(id=plugin_id, package=package or plugin_id, source=source)
         for _repository, cached_plugin in await self.market_cache_load():
             if cached_plugin.id == plugin_id:
                 return cached_plugin
-        source = await self.storage.get_preference(f"plugin.source.{plugin_id}")
-        if source:
-            return MarketPlugin(id=plugin_id, package=plugin_id, source=source)
-        if lookup_error is not None:
-            raise RuntimeError(safe_failure_reason(lookup_error)) from lookup_error
-        return None
+        try:
+            found = await asyncio.to_thread(self.market.find, plugin_id)
+        except Exception as exc:
+            raise RuntimeError(safe_failure_reason(exc)) from exc
+        return found[1] if found is not None else None
 
     async def plugin_uninstall(self, plugin_id: str) -> str:
         """Uninstall one marketplace plugin and clean its configuration."""
@@ -3195,6 +3210,18 @@ Return every candidate in this batch."""
         )
         if plugin_id in bundled_ids:
             raise ValueError(self.t("plugin.bundled_uninstall_forbidden", plugin_id=plugin_id))
+        if (
+            self.registry.plugin_for(self.config.storage.provider, ComponentKind.STORAGE)
+            == plugin_id
+        ):
+            raise ValueError(self.t("plugin.active_storage", plugin_id=plugin_id))
+        owned = self._plugin_components(plugin_id)
+        if self.config_path is None and any(
+            (kind, entry.provider) in owned
+            for group, kind in self._PLUGIN_CONFIG_KINDS.items()
+            for entry in getattr(self.config, group)
+        ):
+            raise ValueError(self.t("plugin.config_required"))
         plugin = await self._find_market_plugin(plugin_id)
         if plugin is None:
             raise KeyError(self.t("plugin.market_not_found", plugin_id=plugin_id))
@@ -3208,17 +3235,20 @@ Return every candidate in this batch."""
         if not PluginMarket.is_installed(plugin_id, package=package):
             await self.clear_plugin_source(plugin_id)
             await self.storage.set_preference(f"plugin.package.{plugin_id}", "")
-            removed = await self._drop_config_entries_for(plugin_id)
+            removed = await self._drop_config_entries_for(owned)
             if removed:
                 await self._persist_config(self.config, f"plugin.{plugin_id}")
-            return f"{plugin_id} is not installed"
+            self.plugin_manager.unregister(plugin_id)
+            await self.reload_runtime(restart_sources=True)
+            return self.t("plugin.not_installed_id", plugin_id=plugin_id)
         try:
             output = await self.market.uninstall(plugin)
         except Exception as exc:
             raise RuntimeError(safe_failure_reason(exc)) from exc
         await self.clear_plugin_source(plugin_id)
         await self.storage.set_preference(f"plugin.package.{plugin_id}", "")
-        removed = await self._drop_config_entries_for(plugin_id)
+        removed = await self._drop_config_entries_for(owned)
+        self.plugin_manager.unregister(plugin_id)
         if removed:
             await self._persist_config(self.config, f"plugin.{plugin_id}")
             logger.info(
@@ -3227,31 +3257,35 @@ Return every candidate in this batch."""
                 len(removed),
                 ", ".join(removed),
             )
+        await self.reload_runtime(restart_sources=True)
         return output
 
-    async def _drop_config_entries_for(self, plugin_id: str) -> list[str]:
+    async def _drop_config_entries_for(self, owned: set[tuple[ComponentKind, str]]) -> list[str]:
         """Remove config entries owned by an uninstalled plugin."""
-        owned = {c.component_id for c in self.registry.snapshots() if c.plugin_id == plugin_id}
-        component_ids_for = getattr(self.plugin_manager, "component_ids_for", None)
-        if callable(component_ids_for):
-            owned.update(cast(Sequence[str], component_ids_for(plugin_id)))
         removed: list[str] = []
-        for group in ("accounts", "llms", "processors", "notifiers"):
+        for group, kind in self._PLUGIN_CONFIG_KINDS.items():
             entries = getattr(self.config, group)
-            kept = [entry for entry in entries if entry.provider not in owned]
+            kept = [entry for entry in entries if (kind, entry.provider) not in owned]
             if len(kept) != len(entries):
                 removed.extend(
                     f"{group}:{entry.provider}" for entry in entries if entry not in kept
                 )
                 setattr(self.config, group, kept)
-        plugins = self.config.plugins
-        for field in ("enabled", "disabled"):
-            values = list(getattr(plugins, field))
-            filtered = [value for value in values if value != plugin_id]
-            if len(filtered) != len(values):
-                removed.append(f"plugins:{field}")
-                setattr(plugins, field, filtered)
+        # Filters are user intent, independent of package installation. Keep
+        # them for reinstalls and to preserve the meaning of an allowlist.
         return removed
+
+    _PLUGIN_CONFIG_KINDS: ClassVar[dict[str, ComponentKind]] = {
+        "accounts": ComponentKind.MAIL_SOURCE,
+        "llms": ComponentKind.LLM_BACKEND,
+        "processors": ComponentKind.MAIL_PROCESSOR,
+        "notifiers": ComponentKind.NOTIFIER,
+    }
+
+    def _plugin_components(self, plugin_id: str) -> set[tuple[ComponentKind, str]]:
+        components = [c for c in self.registry.snapshots() if c.plugin_id == plugin_id]
+        components.extend(self.plugin_manager.components_for(plugin_id))
+        return {(c.kind, c.component_id) for c in components}
 
     # -- gateway provisioning (Bots tab) ----------------------------------------------
 

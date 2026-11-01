@@ -5,7 +5,7 @@ Usage:
     python tools/build_exe.py --mode onefile      # only after a standalone smoke test
 
 The official plugin set is included explicitly (mailflow-bundled registers it
-via static imports), so frozen builds do not depend on entry-point metadata.
+via explicit module names), so frozen builds do not depend on entry-point metadata.
 Data files (locale JSON, TUI stylesheet) are bundled with their packages.
 
 Note: arbitrary post-build Python plugin discovery is not promised for frozen
@@ -18,17 +18,15 @@ import argparse
 import subprocess
 import sys
 
+from mailflow_bundled import BUNDLED_PLUGINS
+
 INCLUDE_PACKAGES = (
     "mailflow",
     "mailflow_bundled",
     "mailflow_cli",
+    "mailflow_server",
     "mailflow_tui",
-    "mailflow_mail_fake",
-    "mailflow_storage_sqlite",
-    "mailflow_llm_openai_compatible",
-    "mailflow_processor_rules",
-    "mailflow_processor_llm_importance",
-    "mailflow_notify_console",
+    *BUNDLED_PLUGINS,
 )
 
 

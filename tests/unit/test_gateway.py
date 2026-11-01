@@ -89,6 +89,29 @@ def _manager(provisioner: FakeProvisioner) -> tuple[GatewayManager, FakeStorage]
     return GatewayManager(config, registry, storage), storage
 
 
+async def test_plugin_reload_keeps_supervisor_and_disable_stops_gateway() -> None:
+    provisioner = FakeProvisioner()
+    manager, storage = _manager(provisioner)
+    await manager.provision("fake-gw", "gw-1", {})
+    tasks = dict(manager._supervise_tasks)  # pyright: ignore[reportPrivateUsage]
+    config = MailFlowConfig()
+    registry = ComponentRegistry()
+    PluginRegistrar(registry, config, "test-plugin").add_gateway_provisioner(
+        "fake-gw", lambda: provisioner
+    )
+    await manager.reconfigure(config, registry, running=True)
+    assert manager._supervise_tasks == tasks  # pyright: ignore[reportPrivateUsage]
+    assert provisioner.stopped == []
+    await manager.reconfigure(config, ComponentRegistry(), running=True)
+    assert provisioner.stopped == ["gw-1"]
+    assert all(task.done() for task in tasks.values())
+    assert await manager.instances() == []
+    assert '"running"' in storage.preferences["gateway.instance.fake-gw.gw-1"]
+    await manager.reconfigure(config, registry, running=True)
+    assert manager.instance("fake-gw", "gw-1") is not None
+    await manager.stop()
+
+
 @pytest.mark.asyncio
 async def test_provision_installs_starts_and_persists() -> None:
     provisioner = FakeProvisioner()

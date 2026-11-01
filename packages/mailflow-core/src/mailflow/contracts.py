@@ -2,8 +2,8 @@
 
 Protocols define the seams every plugin implements. The LLM router is typed as
 a Protocol here so that ``registry`` (Stage 03) never imports the concrete
-router implementation (Stage 05) — the dependency direction is contracts →
-domain only.
+router implementation (Stage 05). Contracts depend on shared domain and
+export types, not runtime implementations.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
+from mailflow.bot_export import BotExportContext, BotExportResult
 from mailflow.domain import (
     ActionItem,
     MailAddress,
@@ -205,6 +206,18 @@ class Notifier(Protocol):
     async def notify(self, record: MailRecord) -> None: ...
 
 
+class TextNotifier(Protocol):
+    """Optional plain-text delivery for chat-capable notifiers."""
+
+    async def push_text(self, text: str) -> None: ...
+
+
+class BotExporter(Protocol):
+    """Write a framework plugin using the supplied export context."""
+
+    def __call__(self, context: BotExportContext, /) -> BotExportResult: ...
+
+
 class GatewayInstance(BaseModel):
     """One managed gateway instance: provider + instance id + state."""
 
@@ -306,11 +319,13 @@ class StorageBackend(Protocol):
 
 
 __all__ = [
+    "BotExporter",
     "GatewayInstance",
     "GatewayProvisioner",
     "HistoryCapableSource",
     "LLMBackend",
     "LLMCompletion",
+    "LLMEnhancer",
     "LLMRouter",
     "MailAddress",
     "MailEmitter",
@@ -322,5 +337,6 @@ __all__ = [
     "ProcessorDecision",
     "ProcessorResult",
     "StorageBackend",
+    "TextNotifier",
     "ToolCall",
 ]

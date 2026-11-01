@@ -3,10 +3,10 @@ name = "mailflow-mail-fake"
 version = "0.1.0"
 description = "MailFlow fake mail source plugin for local development and demos"
 requires-python = ">=3.11"
-dependencies = ["mailflow-core", "mailflow-testkit"]
+dependencies = ["mailflow-core"]
 
 [project.entry-points."mailflow.plugins"]
-fake-mail = "mailflow_mail_fake.plugin:plugin"
+mailflow-mail-fake = "mailflow_mail_fake.plugin:plugin"
 
 [build-system]
 requires = ["hatchling"]

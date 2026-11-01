@@ -21,6 +21,7 @@ from mailflow.domain import (
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.pipeline import PipelineEngine
+from mailflow.plugins import PluginManager
 from mailflow.registry import ComponentRegistry
 from mailflow.service import MailFlowService
 
@@ -34,7 +35,7 @@ def commands_service(
     service = MailFlowService(
         config=config or MailFlowConfig(),
         registry=ComponentRegistry(),
-        plugin_manager=cast(Any, FakePluginManager()),
+        plugin_manager=PluginManager(),
         storage=cast(Any, MemoryStorage()),
         sources={},
         router=cast(LLMRouter, None),
@@ -192,17 +193,6 @@ class MemoryStorage:
         return self.custom_actions.pop(item_id, None) is not None
 
 
-class FakePluginManager:
-    def snapshots(self, registry: ComponentRegistry) -> list[Any]:
-        return []
-
-    def build_registry(self) -> ComponentRegistry:
-        return ComponentRegistry()
-
-    def enabled_infos(self) -> list[Any]:
-        return []
-
-
 def make_record(
     record_id: str = "m1",
     urgency: Urgency = Urgency.IMPORTANT,
@@ -267,7 +257,7 @@ async def router() -> tuple[CommandRouter, MemoryStorage]:
     service = MailFlowService(
         config=MailFlowConfig(),
         registry=ComponentRegistry(),
-        plugin_manager=cast(Any, FakePluginManager()),
+        plugin_manager=PluginManager(),
         storage=cast(Any, storage),
         sources={"acct-1": NoopSource()},
         router=cast(LLMRouter, None),
@@ -769,19 +759,23 @@ class TestCommandRouter:
         assert "mailflow-searchable" not in response.text  # category mismatch
 
     async def test_plugin_enable_disable_persists(self, tmp_path: Path) -> None:
-        from mailflow.plugins import PluginInfo
+        from mailflow.plugin_api import define_plugin
 
         service = commands_service(MailFlowConfig(), config_path=str(tmp_path / "config.toml"))
         from mailflow.plugin_market import PluginMarket
 
         service.market = PluginMarket([])  # keep the ghost lookup offline
-        service.plugin_manager = cast(Any, FakePluginManager())
+        plugin = define_plugin("fake-plugin")
 
-        class KnownManager(FakePluginManager):
-            def enabled_infos(self):
-                return [PluginInfo(plugin_id="fake-plugin")]
+        @plugin.notifier("fake-notifier")
+        class FakeNotifier:  # pyright: ignore[reportUnusedClass]
+            def __init__(self, config: Any) -> None:
+                pass
 
-        service.plugin_manager = cast(Any, KnownManager())
+            async def notify(self, record: Any) -> None:
+                pass
+
+        service.plugin_manager.register(plugin.build())
         commands = CommandRouter(service)
         response = await commands.execute("plugin disable fake-plugin")
         assert response.ok
@@ -915,7 +909,7 @@ class TestPaginationAndFeedback:
         service = MailFlowService(
             config=MailFlowConfig(),
             registry=ComponentRegistry(),
-            plugin_manager=cast(Any, FakePluginManager()),
+            plugin_manager=PluginManager(),
             storage=cast(Any, storage),
             sources={},
             router=cast(LLMRouter, None),

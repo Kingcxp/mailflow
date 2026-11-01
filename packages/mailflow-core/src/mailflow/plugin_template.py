@@ -267,7 +267,7 @@ class {Category}Backend:
     async def chat(self, messages, *, temperature=None, options=None, tools=None):
         # TODO: call your LLM provider with messages (list of {"role",
         # "content", and for tool calling "tool_calls"/"tool_call_id"}) and
-        # return an LLMCompletion(text=..., model=..., backend_id=
+        # return an LLMCompletion(text=..., model=..., backend=
         # self.backend_id). Pass `tools` (JSON-schema list) through when the
         # provider supports function calling, and put the model's calls into
         # LLMCompletion(tool_calls=[...]).
@@ -321,7 +321,10 @@ class {Category}Storage:
     async def set_manual_urgency(self, record_id, urgency):
         raise NotImplementedError
 
-    async def delete_mail(self, record_id):
+    async def update_mail_analysis(self, record_id, *, urgency=None, summary=None, reason=None):
+        raise NotImplementedError
+
+    async def delete_mail(self, record_id, *, refresh_deleted_at=False):
         raise NotImplementedError
 
     async def list_trash(self):
@@ -349,6 +352,15 @@ class {Category}Storage:
         raise NotImplementedError
 
     async def set_preference(self, key, value):
+        raise NotImplementedError
+
+    async def save_custom_action(self, item):
+        raise NotImplementedError
+
+    async def list_custom_actions(self):
+        raise NotImplementedError
+
+    async def delete_custom_action(self, item_id):
         raise NotImplementedError
 
 

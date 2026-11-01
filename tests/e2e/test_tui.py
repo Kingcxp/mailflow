@@ -12,7 +12,7 @@ import pytest
 from mailflow.commands import CommandRouter
 from mailflow.config import LLMConfig, MailAccountConfig, MailFlowConfig
 from mailflow.contracts import MailSource
-from mailflow.domain import MailRecord, Urgency
+from mailflow.domain import ComponentKind, MailRecord, Urgency
 from mailflow.plugins import PluginInfo, PluginManager
 from mailflow.registry import PluginRegistrar
 from mailflow.service import start_service
@@ -98,6 +98,7 @@ class TUIPlugin:
             plugin_id="mailflow-tui-test",
             name="TUI Test Components",
             version="0.0.0",
+            kinds=[ComponentKind.MAIL_SOURCE, ComponentKind.LLM_BACKEND],
         )
 
     def mailflow_register(self, registrar: PluginRegistrar, config: Any) -> None:

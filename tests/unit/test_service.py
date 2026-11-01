@@ -1988,10 +1988,12 @@ class TestMarketplaceService:
     def _service(
         storage: MemoryStorage, *, config: MailFlowConfig | None = None
     ) -> MailFlowService:
+        from mailflow.plugins import PluginManager
+
         return MailFlowService(
             config=config or MailFlowConfig(),
             registry=ComponentRegistry(),
-            plugin_manager=cast(Any, None),
+            plugin_manager=PluginManager(config),
             storage=cast(Any, storage),
             sources={},
             router=cast(LLMRouter, None),
@@ -2052,11 +2054,15 @@ class TestMarketplaceService:
                     raise RuntimeError("broken package")
                 return "installed"
 
+        (root / "alpha-local/pyproject.toml").write_text(
+            '[project]\nname = "alpha-distribution"\n', encoding="utf-8"
+        )
         service.market = cast(Any, FakeMarket())
         result = await service.plugin_install_local(root)
         assert "alpha-local" in result
         assert "beta-local" in result
         assert storage.preferences["plugin.source.alpha-local"] == str(root / "alpha-local")
+        assert storage.preferences["plugin.package.alpha-local"] == "alpha-distribution"
         assert "plugin.source.beta-local" not in storage.preferences
 
     async def test_uninstall_clears_source(self, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 
 [project.entry-points."mailflow.plugins"]
-console-notify = "mailflow_notify_console.plugin:plugin"
+mailflow-notify-console = "mailflow_notify_console.plugin:plugin"
 
 [build-system]
 requires = ["hatchling"]

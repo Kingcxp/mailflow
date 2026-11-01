@@ -187,6 +187,9 @@ class GatewayManager:
         # scan preferences for known instances
         for instance in await self._list_persisted():
             key = self._key(instance.provider, instance.instance_id)
+            task = self._supervise_tasks.get(key)
+            if task is not None and not task.done():
+                continue
             # migrate states saved by older MailFlow whose extra lost the
             # options dict (the pre-merge status-poll bug): without
             # options.bot_url the bridge can never come back — heal the
@@ -226,6 +229,31 @@ class GatewayManager:
                     self._supervise(instance, resume=True),
                     name=f"gateway-{instance.instance_id}",
                 )
+
+    async def reconfigure(
+        self, config: MailFlowConfig, registry: ComponentRegistry, *, running: bool
+    ) -> None:
+        """Unload removed provisioners while preserving their saved instances."""
+        removed = {
+            provider
+            for provider in self.providers()
+            if self._registry.plugin_for(provider, ComponentKind.GATEWAY_PROVISIONER)
+            != registry.plugin_for(provider, ComponentKind.GATEWAY_PROVISIONER)
+        }
+        for key, instance in list(self._instances.items()):
+            if instance.provider not in removed:
+                continue
+            await self._cancel_supervisor(instance.provider, instance.instance_id)
+            try:
+                await self.provisioner(instance.provider).stop(instance.instance_id)
+            except Exception as exc:
+                raise RuntimeError(f"gateway {key}: {exc}") from exc
+            self._instances.pop(key, None)
+        for provider in removed:
+            self._provisioners.pop(provider, None)
+        self._config, self._registry = config, registry
+        if running:
+            await self.start()
 
     async def _list_persisted(self) -> list[GatewayInstance]:
         found: list[GatewayInstance] = []

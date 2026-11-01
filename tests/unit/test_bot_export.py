@@ -3,7 +3,13 @@ the built-in NoneBot/AstrBot exporters (file generation + config round-trip)."""
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from collections.abc import Awaitable, Callable
+from importlib import metadata
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import Mock
 
 import pytest
 from mailflow.bot_export import (
@@ -16,8 +22,11 @@ from mailflow.config import MailFlowConfig, load_config
 from mailflow.domain import ComponentKind
 from mailflow.plugins import PluginInfo
 from mailflow.registry import ComponentRegistry, PluginRegistrar
+from mailflow.service import MailFlowService
 from mailflow_export_astrbot.exporter import export_astrbot
 from mailflow_export_nonebot.exporter import export_nonebot
+
+LifecycleHook = Callable[[], Awaitable[None]]
 
 
 class FakeExporterPlugin:
@@ -167,14 +176,69 @@ class TestNonebotExporter:
         assert "mailflow-storage-sqlite" in pyproject
         assert "mailflow-notify-console" in pyproject
 
-    def test_plugin_init_registers_driver_hooks(self, tmp_path: Path) -> None:
-        export_nonebot(_context(tmp_path))
-        init = (tmp_path / "src/nonebot_plugin_mailflow/__init__.py").read_text(encoding="utf-8")
-        assert "driver.on_startup" in init
-        assert "driver.on_shutdown" in init
-        assert "start_service(config, plugin_manager=create_plugin_manager(config))" in init
-        assert "config.toml" in init
-        compile(init, "generated_nonebot_plugin.py", "exec")
+    async def test_generated_plugin_lifecycle_discovers_external_plugins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class Driver:
+            def __init__(self) -> None:
+                self.startups: list[LifecycleHook] = []
+                self.shutdowns: list[LifecycleHook] = []
+
+            def on_startup(self, hook: LifecycleHook) -> LifecycleHook:
+                self.startups.append(hook)
+                return hook
+
+            def on_shutdown(self, hook: LifecycleHook) -> LifecycleHook:
+                self.shutdowns.append(hook)
+                return hook
+
+        driver = Driver()
+
+        def register_handler(
+            handler: Callable[..., Awaitable[None]],
+        ) -> Callable[..., Awaitable[None]]:
+            return handler
+
+        matcher = Mock()
+        matcher.handle.return_value = register_handler
+        nonebot = ModuleType("nonebot")
+        nonebot.__dict__.update(
+            get_driver=Mock(return_value=driver), on_message=Mock(return_value=matcher)
+        )
+        monkeypatch.setitem(sys.modules, "nonebot", nonebot)
+        external = ModuleType("mailflow_generated_fixture")
+        external.__dict__["plugin"] = FakeExporterPlugin()
+        monkeypatch.setitem(sys.modules, external.__name__, external)
+        entry = metadata.EntryPoint(
+            name="mailflow-export-fake",
+            value=f"{external.__name__}:plugin",
+            group="mailflow.plugins",
+        )
+        monkeypatch.setattr(
+            metadata, "entry_points", Mock(return_value=metadata.EntryPoints([entry]))
+        )
+        context = _context(tmp_path)
+        context.config.storage.path = str(tmp_path / "mail.db")
+        context.config.logging.file = context.config.logging.console = False
+        export_nonebot(context)
+        spec = importlib.util.spec_from_file_location(
+            "generated_nonebot", tmp_path / "src/nonebot_plugin_mailflow/__init__.py"
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert len(driver.startups) == len(driver.shutdowns) == 1
+        await driver.startups[0]()
+        service = module.__dict__["_service"]
+        try:
+            assert isinstance(service, MailFlowService)
+            assert service.registry.has(ComponentKind.BOT_EXPORTER, "fake")
+            await driver.startups[0]()
+            assert module.__dict__["_service"] is service
+        finally:
+            await driver.shutdowns[0]()
+        assert module.__dict__["_service"] is None
+        assert not service.started
 
     def test_embedded_config_round_trips(self, tmp_path: Path) -> None:
         export_nonebot(_context(tmp_path))

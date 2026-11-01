@@ -564,6 +564,8 @@ class PluginSnapshot(BaseModel):
     description: str = ""
     kinds: list[ComponentKind] = Field(default_factory=lambda: [])
     components: list[str] = Field(default_factory=lambda: [])
+    status: str = "enabled"
+    error: str = ""
 
 
 class ComponentSnapshot(BaseModel):

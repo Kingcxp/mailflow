@@ -313,7 +313,7 @@
       "repo_removed": "Repository {name} removed",
       "repo_title": "Plugin repositories ({count})",
       "repo_usage": "plugin repo <list [--page <n>]|add <name> <url>|remove <name>>",
-      "restart_note": "restart to load it",
+      "restart_note": "enable the plugin or restart to load it",
       "search_usage": "plugin search <query> [category] [--page <n>]",
       "template": {
         "llm_backend": "Chat-completions transport for a model provider",
@@ -326,7 +326,11 @@
       "uninstall_usage": "plugin uninstall <plugin_id>",
       "uninstalled_ok": "Uninstalled {plugin_id}",
       "unknown_plugin": "Plugin {plugin_id} is not loaded or installed",
-      "usage": "plugin <list [--page <n>]|show <plugin_id>|repo <list [--page <n>]|add <name> <url>|remove <name>>|market <list [category] [--page <n>]|show <id>|search <query> [category] [--page <n>]>|install|uninstall|enable|disable <id>>"
+      "usage": "plugin <list [--page <n>]|show <plugin_id>|repo <list [--page <n>]|add <name> <url>|remove <name>>|market <list [category] [--page <n>]|show <id>|search <query> [category] [--page <n>]>|install|uninstall|enable|disable <id>>",
+      "active_storage": "Plugin {plugin_id} provides the active storage. Change storage configuration and restart first.",
+      "not_installed_id": "{plugin_id} is not installed; stale configuration has been removed.",
+      "config_required": "No config file loaded; start with --config to save plugin settings.",
+      "load_failed": "Plugin {plugin_id} failed to load: {reason}"
     },
     "reply": {
       "cancelled": "Draft {draft_id} cancelled",
@@ -581,7 +585,7 @@
       "market_provider": "provider",
       "market_readme": "Readme",
       "market_search_placeholder": "Search plugins by name or description...",
-      "plugin_status_disabled": "disabled (next start)",
+      "plugin_status_disabled": "disabled",
       "plugin_status_enabled": "enabled",
       "plugin_status_not_loaded": "not loaded",
       "provider_section": "Provider settings ({provider})",
@@ -969,7 +973,8 @@
       "smart_review_required": "Summary and type are required.",
       "smart_review_invalid_time": "Invalid date/time — use YYYY-MM-DD HH:MM",
       "smart_review_invalid_window": "End time must be after start time",
-      "reparse_one_start": "Re-analyzing {subject}…"
+      "reparse_one_start": "Re-analyzing {subject}…",
+      "plugin_status_error": "load failed"
     },
     "update": {
       "applied_title": "Applied updates",

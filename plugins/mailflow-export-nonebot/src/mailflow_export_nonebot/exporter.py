@@ -80,7 +80,9 @@ async def _start_mailflow() -> None:
     from mailflow_bundled import create_plugin_manager
 
     config = load_config(Path(__file__).resolve().parent / "config.toml")
-    _service = await start_service(config, plugin_manager=create_plugin_manager(config))
+    _service = await start_service(
+        config, plugin_manager=create_plugin_manager(config), discover_plugins=False
+    )
     _router = CommandRouter(_service)
     _service.on("mailflow.action.digest", _send_digest)
 

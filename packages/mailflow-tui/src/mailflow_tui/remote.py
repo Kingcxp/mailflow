@@ -265,7 +265,7 @@ class RemoteServiceAdapter:
     def plugin_status(self, plugin_id: str) -> str:
         for plugin in self._snapshot.get("plugins", []):
             if plugin.get("plugin_id") == plugin_id:
-                return "enabled"
+                return str(plugin.get("status", "enabled"))
         return "not_loaded"
 
     def __getattr__(self, name: str) -> Any:
