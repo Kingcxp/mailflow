@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -34,6 +36,41 @@ def make_record(record_id: str = "r1", *, urgency: Urgency = Urgency.IMPORTANT) 
         mail=make_mail(message_id=record_id, subject=f"Subject {record_id}"),
         auto_urgency=urgency,
     )
+
+
+async def test_existing_database_rows_survive_initialize_and_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "existing.db"
+    record = make_record("legacy-message-id")
+    record.manual_urgency = Urgency.URGENT
+    payload = record.model_dump(mode="json")
+    payload.pop("processor_notes")
+    if payload["analysis"] is not None:
+        payload["analysis"].pop("summary_is_fallback", None)
+    raw = json.dumps(payload, ensure_ascii=False)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            "CREATE TABLE mails(record_id TEXT PRIMARY KEY, record_json TEXT NOT NULL, "
+            "received_ts REAL NOT NULL);"
+            "CREATE TABLE preferences(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+            "CREATE TABLE user_notes(note TEXT);"
+        )
+        conn.execute("INSERT INTO mails VALUES(?, ?, ?)", (record.record_id, raw, 1.0))
+        conn.execute("INSERT INTO preferences VALUES(?, ?)", ("language", "zh-CN"))
+        conn.execute("INSERT INTO user_notes VALUES(?)", ("保留用户扩展数据",))
+    for _ in range(2):
+        backend = SQLiteStorage(StorageConfig(path=str(path)))
+        await backend.initialize()
+        try:
+            restored = await backend.get_mail(record.record_id)
+            assert restored is not None
+            assert restored.effective_urgency is Urgency.URGENT
+            assert restored.summary == record.summary
+            assert await backend.get_preference("language") == "zh-CN"
+        finally:
+            await backend.close()
+        with sqlite3.connect(path) as conn:
+            assert conn.execute("SELECT record_json FROM mails").fetchone() == (raw,)
+            assert conn.execute("SELECT note FROM user_notes").fetchone() == ("保留用户扩展数据",)
 
 
 class TestSQLiteStorage:

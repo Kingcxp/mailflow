@@ -139,7 +139,7 @@
         "general.workers": "并行分析邮件的数量。调大可提升大模型处理吞吐。",
         "i18n.extra_dirs": "存放额外纯数据 JSON 语言包的目录，每行一个路径。",
         "i18n.language": "启动时实际使用的界面语言；设置后优先于 general.language。",
-        "llms[].api_key": "API 令牌。建议改用 api_key_env 或 ${环境变量} 占位符，避免明文写入配置文件。",
+        "llms[].api_key": "API 令牌。建议改用 api_key_env 或 ${ENV_VAR} 占位符，避免明文写入配置文件。",
         "llms[].api_key_env": "存放令牌的环境变量名，每次启动时解析。",
         "llms[].base_url": "API 基础地址，后面会拼接对话路径（如 https://api.openai.com/v1）。",
         "llms[].default": "作为未显式指定模型的处理器的默认模型。列表中第一项即为默认。",

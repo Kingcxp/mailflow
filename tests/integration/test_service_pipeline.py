@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import queue
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from mailflow.commands import CommandRouter
 from mailflow.config import (
@@ -23,11 +25,19 @@ from mailflow.config import (
 from mailflow.contracts import LLMCompletion, MailSource
 from mailflow.domain import ComponentKind, MailRecord, Urgency
 from mailflow.plugins import PluginInfo, PluginManager
+from mailflow.protocol import json_value
 from mailflow.registry import PluginRegistrar
 from mailflow.service import MailFlowService, start_service
 from mailflow_notify_console.plugin import plugin as notify_plugin
+from mailflow_server.app import create_app
+from mailflow_server.client import RemoteClient
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import FakeMailSource, make_mail
+from mailflow_tui.app import ActionsPane, MailFlowApp, MailPane
+from mailflow_tui.remote import RemoteServiceAdapter
+from textual.widgets import DataTable, Static
+
+from mailflow_test_support.ui import mock_http_client
 
 # The deadline is far in the future on purpose: the processor drops any action
 # item whose due_at has already passed, so a fixed past date would make this
@@ -157,7 +167,7 @@ async def wait_until(predicate: Any, timeout_seconds: float = 5.0) -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_service_flow(tmp_path: Path) -> None:
+async def test_full_service_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[Any] = []
     notified: list[MailRecord] = []
     manager = PluginManager(build_config(tmp_path / "unused.db"))
@@ -209,6 +219,24 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         # -- notifier invoked with the computed analysis ------------------------
         await wait_until(lambda: len(notified) == 1)
         assert notified[0].record_id == record_id
+
+        # The real HTTP and TUI layers consume the result saved by this pipeline.
+        service.config.server.username, service.config.server.password = "admin", "secret"
+        mock_http_client(monkeypatch, httpx.ASGITransport(app=create_app(service)))
+        client = RemoteClient("http://fake", "admin", "secret")
+        adapter = RemoteServiceAdapter(client, json_value(service.snapshot()), service.i18n)
+        assert await adapter.get_mail(record_id) == record
+        assert (await adapter.list_actions())[0] == item
+        remote_app = MailFlowApp(adapter, queue.Queue(), remote=True)
+        async with remote_app.run_test(size=(140, 45)) as pilot:
+            await remote_app.query_one(MailPane).refresh_mail()
+            await remote_app.query_one(ActionsPane).refresh_actions()
+            assert remote_app.query_one("#mail-table", DataTable).row_count == 1
+            assert remote_app.query_one("#actions-table", DataTable).row_count == 1
+            remote_app.query_one("#mail-table", DataTable).focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert record.summary in str(remote_app.query_one("#mail-summary", Static).render())
 
         # -- snapshot maps components to their providing plugins ----------------
         snapshot = service.snapshot()
@@ -273,7 +301,15 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         assert await service.get_mail(record_id) is not None
     finally:
         if service is not None:
+            sources = list(service.sources.values())
+            tasks = {
+                task
+                for task in asyncio.all_tasks()
+                if task.get_name().startswith(("source-", "worker-", "reminder-", "cleanup-"))
+            }
             await service.stop()
+            assert all(task.done() for task in tasks)
+            assert all(isinstance(source, FakeMailSource) and source.closed for source in sources)
 
 
 @pytest.mark.asyncio

@@ -36,6 +36,7 @@ and checks signatures and sample results through `mailflow-core` contracts.
 The companion repository's validator invokes this same runner from the paired core/testkit checkout.
 
 Optional local OCR recognition skips when its engine is absent. Creating filesystem
-links may require an OS permission. Strict expected failures retain two known product
-bugs: invalid NoneBot dependency TOML and imported seminars reappearing for review.
-They must become strict unexpected passes when those bugs are fixed.
+links may require an OS permission. The NoneBot TOML and resolved-seminar regressions
+run as ordinary passing tests. The composed service test follows source ingestion,
+analysis, SQLite persistence and notification delivery into REST and the remote TUI.
+Legacy database checks reopen existing rows without rewriting them or removing custom tables.
