@@ -303,7 +303,7 @@ class MailFlowRuntime:
             self._tasks = []
             await asyncio.gather(*(self._close_source(source) for source in self._sources.values()))
             for account_id in self._account_status:
-                if self._account_status[account_id] in {"running", "starting"}:
+                if self._account_status[account_id] in {"running", "starting", "retrying"}:
                     self._account_status[account_id] = "stopped"
             logger.info("runtime stopped")
 
@@ -530,6 +530,7 @@ class MailFlowRuntime:
                         raise asyncio.CancelledError
                     try:
                         await self._process_one(mail)
+                        self._pending_mail_accounts.pop(mail.normalized_message_id(), None)
                         completed = True
                         break
                     except Exception as exc:
