@@ -91,7 +91,7 @@ async def test_fake_websocket_live_logs_typed_events_and_repeat_start(
 ) -> None:
     class FakeWebSocket:
         def __init__(self) -> None:
-            self.incoming: asyncio.Queue[str] = asyncio.Queue()
+            self.incoming: asyncio.Queue[str | None] = asyncio.Queue()
             self.sent: list[dict[str, Any]] = []
             self.connected = asyncio.Event()
 
@@ -109,10 +109,14 @@ async def test_fake_websocket_live_logs_typed_events_and_repeat_start(
             return self
 
         async def __anext__(self) -> str:
-            return await self.incoming.get()
+            frame = await self.incoming.get()
+            if frame is None:
+                raise StopAsyncIteration
+            return frame
 
     ws = FakeWebSocket()
-    connect = Mock(return_value=ws)
+    next_ws = FakeWebSocket()
+    connect = Mock(side_effect=[ws, OSError("private network detail"), next_ws])
     monkeypatch.setattr("mailflow_server.client._ws_connect", connect)
     client = RemoteClient("http://fake", "admin", "secret")
     record = make_record()
@@ -120,6 +124,10 @@ async def test_fake_websocket_live_logs_typed_events_and_repeat_start(
     received = asyncio.Event()
     mails: list[MailMessage] = []
     mail_received = asyncio.Event()
+    states: list[tuple[str, float]] = []
+
+    def connection_changed(event: str, **payload: Any) -> None:
+        states.append((payload["state"], payload["retry_after"]))
 
     def processed(event: str, **payload: Any) -> None:
         records.append(payload["record"])
@@ -131,6 +139,7 @@ async def test_fake_websocket_live_logs_typed_events_and_repeat_start(
 
     client.on("mailflow.mail.processed", processed)
     client.on("mailflow.mail.received", incoming)
+    client.on("remote.connection.changed", connection_changed)
     await client.start_events()
     await client.start_events()
     try:
@@ -157,11 +166,22 @@ async def test_fake_websocket_live_logs_typed_events_and_repeat_start(
         assert mails == [record.mail]
         assert isinstance(mails[0].date, datetime)
         assert connect.call_count == 1
+        # A normal close also backs off; a failed reconnect retries and re-subscribes logs.
+        await ws.incoming.put(None)
+        await asyncio.wait_for(next_ws.connected.wait(), 5)
+        assert client.connection_state == "connected"
+        assert [(state, delay) for state, delay in states if state == "retrying"] == [
+            ("retrying", 1.0),
+            ("retrying", 2.0),
+        ]
+        assert next_ws.sent == [{"type": "logs"}]
+        assert connect.call_count == 3
     finally:
         await client.stop_events()
-    sent = list(ws.sent)
+    assert client.connection_state == "stopped"
+    sent = list(next_ws.sent)
     await client.enable_logs()
-    assert ws.sent == sent
+    assert next_ws.sent == sent
 
 
 async def test_remote_adapter_uses_real_domain_and_setting_types(

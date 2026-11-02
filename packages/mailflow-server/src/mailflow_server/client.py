@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import inspect
 import json
 from collections.abc import Callable
@@ -82,6 +83,8 @@ class RemoteClient:
         self._logs_sent = False
         self._ws: Any = None
         self._logs_lock = asyncio.Lock()
+        self.connection_state = "stopped"
+        self.retry_after = 0.0
 
     # -- low level -------------------------------------------------------------
 
@@ -156,6 +159,7 @@ class RemoteClient:
 
     async def start_events(self) -> None:
         if self._ws_task is None or self._ws_task.done():
+            await self._set_connection_state("connecting")
             self._ws_task = asyncio.create_task(self._ws_loop())
 
     async def stop_events(self) -> None:
@@ -163,6 +167,17 @@ class RemoteClient:
             self._ws_task.cancel()
             await asyncio.gather(self._ws_task, return_exceptions=True)
             self._ws_task = None
+        await self._set_connection_state("stopped")
+
+    async def _set_connection_state(self, state: str, retry_after: float = 0.0) -> None:
+        if (state, retry_after) == (self.connection_state, self.retry_after):
+            return
+        self.connection_state, self.retry_after = state, retry_after
+        # A view callback must not interrupt connection recovery.
+        with contextlib.suppress(Exception):
+            await self._dispatch(
+                "remote.connection.changed", {"state": state, "retry_after": retry_after}
+            )
 
     async def enable_logs(self) -> None:
         """Ask the persistent event connection to also stream log lines."""
@@ -185,9 +200,12 @@ class RemoteClient:
         url = self.base_url.replace("http", "ws", 1) + "/ws"
         backoff = 1.0
         while True:
+            await self._set_connection_state("connecting")
             try:
                 async with _ws_connect(url, self._auth) as ws:
                     self._ws, self._logs_sent = ws, False
+                    backoff = 1.0
+                    await self._set_connection_state("connected")
                     # request log streaming once per connection so the remote
                     # TUI's log pane fills even though nothing calls
                     # enable_logs() explicitly today
@@ -213,17 +231,16 @@ class RemoteClient:
                         except Exception:
                             # a single bad handler must not kill the stream
                             continue
-                    # connection closed cleanly by the server
-                    backoff = 1.0
             except asyncio.CancelledError:
                 raise
             except Exception:
-                # server down / restart / network blip: reconnect with backoff
-                self._ws = None
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                pass
             finally:
                 self._ws = None
+            # A clean close needs the same delay as a network failure.
+            await self._set_connection_state("retrying", backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
 
     # -- service-like surface ----------------------------------------------------
 

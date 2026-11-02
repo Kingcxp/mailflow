@@ -26,6 +26,23 @@ def urgency_label(service: Any, urgency: Urgency | str) -> str:
     return service.t(key) if key else value
 
 
+def remote_connection_status(service: Any) -> str:
+    if not getattr(service, "remote", False):
+        return ""
+    client = service.client
+    keys = {
+        "stopped": "tui.remote_events_stopped",
+        "connecting": "tui.remote_events_connecting",
+        "connected": "tui.remote_events_connected",
+        "retrying": "tui.remote_events_retrying",
+    }
+    return str(
+        service.t(
+            keys.get(client.connection_state, keys["stopped"]), seconds=int(client.retry_after)
+        )
+    )
+
+
 def relabel_buttons(owner: Any, labels: Mapping[str, str]) -> None:
     from textual.widgets import Button
 

@@ -102,4 +102,5 @@ async def test_remote_tui_renders_mail_actions_runtime_and_settings(
         await app.query_one(RuntimePane).refresh_runtime()
         await app.query_one(SettingsPane).reload()
         assert adapter.settings_sections()
-        assert app.sub_title == f"v{service.snapshot().version}"
+        assert f"v{service.snapshot().version}" in app.sub_title
+        assert adapter.t("tui.remote_events_stopped") in app.sub_title

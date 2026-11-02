@@ -160,6 +160,8 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         app.query_one("#btn-trash", Button).press()
         await settle(pilot)
         assert await service.count_mails() == 1
+        await app.query_one(MailPane).refresh_mail()
+        assert "Ctrl+Z" in text(app, "#mail-operation-status")
         table.focus()
         await pilot.press("ctrl+z")
         await settle(pilot)
@@ -373,7 +375,8 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
     # Use the same mock HTTP boundary as the parametrized local/remote tests.
     service = commands_service()
     service.config.server.username, service.config.server.password = "admin", "secret"
-    await service.storage.save_mail(make_record())
+    record = make_record()
+    await service.storage.save_mail(record)
     await service.add_action("Remote todo", datetime.now(UTC) + timedelta(days=1))
     asgi = httpx.ASGITransport(app=create_app(service))
     failures: set[str] = set()
@@ -412,16 +415,34 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         assert app.query_one("#mail-table", DataTable).row_count == 1
         assert app.query_one("#actions-table", DataTable).row_count == 1
         failures.add("/mails/m1")
+        await view.client._set_connection_state("retrying", 2)  # pyright: ignore[reportPrivateUsage]
+        assert view.t("tui.remote_events_retrying", seconds=2) in app.sub_title
+        assert view.t("tui.remote_events_retrying", seconds=2) in text(app, "#runtime-plugins")
+        # Filtering the loaded data stays usable without an HTTP connection.
+        app.query_one("#mail-search", Input).value = "no match"
+        app.query_one("#actions-search", Input).value = "no match"
+        await settle(pilot)
+        assert app.query_one("#mail-table", DataTable).row_count == 0
+        assert app.query_one("#actions-table", DataTable).row_count == 0
+        app.query_one("#mail-search", Input).value = "Exam"
+        app.query_one("#actions-search", Input).value = "Remote"
+        await settle(pilot)
+        assert app.query_one("#mail-table", DataTable).row_count == 1
+        assert app.query_one("#actions-table", DataTable).row_count == 1
+        assert record.analysis is not None and record.analysis.summary in text(app, "#mail-summary")
+        assert service.t("errors.connection") not in text(app, "#mail-analysis-status")
         app.query_one("#btn-trash", Button).press()
         await pilot.pause()
         assert view.t("errors.connection") in text(app, "#mail-operation-status")
         assert "offline [retry]" not in text(app, "#mail-operation-status")
         assert await service.storage.get_mail("m1") is not None
         failures.clear()
-        await app.query_one(MailPane).refresh_mail()
-        await app.query_one(ActionsPane).refresh_actions()
-        await app.query_one(RuntimePane).refresh_runtime()
+        await service.storage.save_mail(make_record("during-outage"))
+        await view.client._set_connection_state("connected")  # pyright: ignore[reportPrivateUsage]
         await settle(pilot)
+        assert view.t("tui.remote_events_connected") in app.sub_title
+        assert app.query_one("#mail-table", DataTable).row_count == 2
+        assert app.query_one("#mail-search", Input).value == "Exam"
         for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
             assert "offline" not in text(app, ident)
         assert not app.query("#smart-action, #btn-reparse, #btn-ask-correct, #btn-profile")
