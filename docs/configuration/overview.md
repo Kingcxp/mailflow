@@ -41,7 +41,7 @@ rule processing remains available.
 | Setting | Default behavior |
 | --- | --- |
 | Language / timezone | English / UTC; the example file uses Asia/Shanghai |
-| Mail / trash retention | 30 / 7 days, with daily cleanup at 04:00 local time |
+| Mail / trash retention | Mail kept indefinitely (`mail_retention_days = 0`); trash kept 7 days; enabled cleanup runs at 04:00 local time |
 | Workers / queue | 2 / 500 |
 | Reminder scan | Every 60 seconds; early reminder 2 days before at 08:00, plus the due-day reminder |
 | Storage | SQLite at `data/mailflow.db` |
@@ -57,6 +57,11 @@ when empty, it follows the selected language.
 Plugin installations and enable/disable changes can require a restart; follow
 the operation's result message. Runtime replacement stops the previous account,
 processor, notifier and gateway tasks before starting new ones.
+
+Account setup offers new mail only, recent history or all history. History imports
+and reanalysis do not send notifications unless requested. Notification kinds and
+channels are independent; tasks can mute or snooze reminders. The daily digest has
+its own optional hour/minute settings, falling back to existing reminder settings.
 
 ## Credentials and saving
 
@@ -80,9 +85,10 @@ uv run mailflow tui --remote http://127.0.0.1:8800
 ```
 
 The remote login screen asks for credentials. The remote client has no local
-mail service; it shows the server's mail, tasks and reply state. Smart actions,
-mail correction chat, local plugin installation and process management are
-currently local features. For access beyond localhost, terminate HTTPS at your
+mail service; it shows the server's mail, tasks and reply state. Smart actions and
+mail correction chat run on the server. Plugin installation, process management and backup/restore
+run locally. Remembered remote passwords use the operating system credential store;
+backups contain local configuration and data. For access beyond localhost, terminate HTTPS at your
 existing proxy and restrict network access to the service.
 
 For chat delivery, use the notifier's guided setup to select an instance,

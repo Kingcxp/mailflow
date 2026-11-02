@@ -23,9 +23,12 @@ The core stays host-independent: only this package imports FastAPI.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
+import secrets
+import time
 from collections import deque
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -43,8 +46,16 @@ from fastapi import (  # pyright: ignore[reportMissingTypeStubs]
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse  # pyright: ignore[reportMissingTypeStubs]
-from mailflow.errors import error_info
-from mailflow.permissions import AccessDenied, PermissionContext, permission_scope, require_admin
+from mailflow.domain import PendingOperation
+from mailflow.errors import error_info, error_text
+from mailflow.mail_query import MailQuery
+from mailflow.permissions import (
+    AccessDenied,
+    PermissionContext,
+    current_context,
+    permission_scope,
+    require_admin,
+)
 from mailflow.protocol import event_frame, json_value
 from mailflow.replies import ReplyError
 from mailflow.service import ConfigReloadError
@@ -64,6 +75,9 @@ _LOG_BUFFER = 500
 class ActionCreate(BaseModel):
     summary: str
     due_at: datetime | None = None
+    reminder_enabled: bool = True
+    mail_id: str = ""
+    reply_task: bool = False
     action_type: str = "errand"
     due_end: datetime | None = None
     notes: str = ""
@@ -83,6 +97,7 @@ class ActionEdit(BaseModel):
     clear_due: bool = False
     completed: bool | None = None
     reminder_enabled: bool | None = None
+    reply_task: bool | None = None
     snoozed_until: datetime | None = None
     clear_snooze: bool = False
 
@@ -129,6 +144,7 @@ def _jsonable(payload: Any) -> Any:
 
 def create_app(service: MailFlowService) -> FastAPI:
     feed = _LogFeed()
+    jobs: dict[str, dict[str, Any]] = {}
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -142,6 +158,11 @@ def create_app(service: MailFlowService) -> FastAPI:
         finally:
             mailflow_logger.removeHandler(feed)
             feed.close()
+            tasks = [job["task"] for job in jobs.values()]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            jobs.clear()
 
     app = FastAPI(title="MailFlow server", version="0.1.0", lifespan=lifespan)
     app.state.log_feed = feed
@@ -169,6 +190,11 @@ def create_app(service: MailFlowService) -> FastAPI:
     identity_dependency = Depends(authenticate)
 
     async def guard(context: PermissionContext = identity_dependency) -> AsyncIterator[None]:
+        if service.restoring:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "ux.restore_running", "message": service.t("ux.restore_running")},
+            )
         with permission_scope(context):
             yield
 
@@ -274,6 +300,130 @@ def create_app(service: MailFlowService) -> FastAPI:
     async def cancel_reply(draft_id: str, _: None = Depends(guard)) -> Any:
         return await reply_result(service.cancel_reply(draft_id))
 
+    def query_job(job_id: str) -> dict[str, Any]:
+        job = jobs.get(job_id)
+        if job is None or job["owner"] != current_context():
+            raise http_failure(404, "ux.query_missing")
+        return job
+
+    @app.post("/smart/jobs")
+    async def start_smart_job(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        for key in list(jobs):
+            if jobs[key]["state"] != "running" and time.monotonic() - jobs[key]["created"] > 1200:
+                jobs.pop(key)
+        if sum(job["state"] == "running" for job in jobs.values()) >= 8:
+            raise http_failure(409, "ux.query_busy")
+        job_id = secrets.token_urlsafe(24)
+        job: dict[str, Any] = {
+            "owner": current_context(),
+            "created": time.monotonic(),
+            "state": "running",
+            "events": [],
+            "seq": 0,
+        }
+
+        def progress(stage: str, done: int, total: int, detail: Any) -> None:
+            job["seq"] += 1
+            job["events"].append(
+                {
+                    "seq": job["seq"],
+                    "stage": stage,
+                    "done": done,
+                    "total": total,
+                    "detail": _jsonable(detail),
+                }
+            )
+            job["events"] = job["events"][-300:]
+
+        async def run() -> None:
+            try:
+                job["result"] = await service.smart_action(
+                    str(body.get("instruction", "")),
+                    record_ids=body.get("record_ids"),
+                    account_id=str(body.get("account_id", "")),
+                    progress=progress,
+                )
+                job["state"] = "done"
+            except asyncio.CancelledError:
+                job["state"] = "cancelled"
+                raise
+            except Exception as exc:
+                logger.warning("smart query failed: %s", exc)
+                job["state"], job["error"] = "failed", error_text(exc, service.t)
+
+        job["task"] = asyncio.create_task(run(), name=f"smart-{job_id}")
+        jobs[job_id] = job
+        return {"job_id": job_id}
+
+    @app.get("/profile")
+    async def profile(_: None = Depends(guard)) -> Any:
+        return {
+            "profile": await service.user_profile(),
+            "guidelines": await service.feedback_guidelines(),
+        }
+
+    @app.put("/profile")
+    async def save_profile(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        require_admin(service.t)
+        if "profile" in body:
+            await service.set_user_profile(str(body["profile"]))
+        if "guidelines" in body:
+            await service.set_feedback_guidelines(str(body["guidelines"]))
+        return await profile()
+
+    @app.post("/mails/{record_id}/chat")
+    async def mail_chat(record_id: str, body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return await service.chat_about_mail(record_id, body.get("messages", []))
+
+    @app.post("/mails/{record_id}/correction")
+    async def correct_mail(record_id: str, body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return _jsonable(
+            await service.apply_mail_correction(
+                record_id,
+                body.get("corrections", {}),
+                note=str(body.get("note", "")),
+                remember=bool(body.get("remember", False)),
+            )
+        )
+
+    @app.get("/deliveries/failed")
+    async def failed_deliveries(_: None = Depends(guard)) -> Any:
+        return await service.failed_deliveries()
+
+    @app.post("/deliveries/retry")
+    async def retry_deliveries(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return {"delivered": await service.retry_deliveries(body.get("delivery_ids", []))}
+
+    @app.get("/smart/jobs/{job_id}")
+    async def smart_job(job_id: str, after: int = 0, _: None = Depends(guard)) -> Any:
+        job = query_job(job_id)
+        return _jsonable(
+            {
+                "state": job["state"],
+                "cursor": job["seq"],
+                "events": [event for event in job["events"] if event["seq"] > after],
+                "result": job.get("result"),
+                "error": job.get("error", ""),
+            }
+        )
+
+    @app.delete("/smart/jobs/{job_id}")
+    async def cancel_smart_job(job_id: str, _: None = Depends(guard)) -> Any:
+        job = query_job(job_id)
+        job["task"].cancel()
+        await asyncio.gather(job["task"], return_exceptions=True)
+        jobs.pop(job_id, None)
+        return {"ok": True}
+
+    @app.post("/smart/plans/{plan_id}")
+    async def apply_smart_plan(plan_id: str, body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return _jsonable(
+            await service.apply_smart_plan(
+                plan_id,
+                [PendingOperation.model_validate(row) for row in body.get("operations", [])],
+            )
+        )
+
     @app.get("/snapshot")
     def snapshot(_: None = Depends(guard)) -> Any:
         return _jsonable(service.snapshot())
@@ -290,6 +440,55 @@ def create_app(service: MailFlowService) -> FastAPI:
         else:
             records = await service.list_mails(limit=limit)
         return JSONResponse(_jsonable(records))
+
+    @app.post("/mails/query")
+    async def query_mails(body: MailQuery, _: None = Depends(guard)) -> Any:
+        return _jsonable(await service.query_mails(body))
+
+    @app.post("/mails/batch")
+    async def batch_mail(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return _jsonable(
+            await service.batch_mail(
+                body.get("record_ids", []),
+                operation=body.get("operation", "delete"),
+                delete_actions=bool(body.get("delete_actions", False)),
+            )
+        )
+
+    @app.post("/mails/state")
+    async def mail_state(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return _jsonable(
+            await service.set_mail_state(
+                body.get("record_ids", []),
+                **{key: body[key] for key in ("is_read", "starred", "archived") if key in body},
+            )
+        )
+
+    @app.get("/mails/{record_id}/attachments/{index}")
+    async def attachment(record_id: str, index: int, _: None = Depends(guard)) -> Any:
+        return {
+            "data": base64.b64encode(await service.fetch_attachment(record_id, index)).decode(
+                "ascii"
+            )
+        }
+
+    @app.get("/drafts")
+    async def drafts(state: str = "", _: None = Depends(guard)) -> Any:
+        return _jsonable(await service.list_drafts(state=state))
+
+    @app.get("/cleanup/preview")
+    async def cleanup_preview(_: None = Depends(guard)) -> Any:
+        require_admin(service.t)
+        return _jsonable(await service.cleanup_preview())
+
+    @app.post("/cleanup/selected")
+    async def cleanup_selected(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return _jsonable(await service.cleanup_selected(body.get("record_ids", [])))
+
+    @app.post("/cleanup")
+    async def cleanup(_: None = Depends(guard)) -> Any:
+        moved, purged = await service.run_cleanup()
+        return {"moved": moved, "purged": purged}
 
     @app.get("/mails/{record_id}")
     async def get_mail(record_id: str, _: None = Depends(guard)) -> Any:
@@ -324,8 +523,8 @@ def create_app(service: MailFlowService) -> FastAPI:
         return {"count": await service.purge_expired_mails(body.get("record_ids"))}
 
     @app.get("/actions")
-    async def actions(_: None = Depends(guard)) -> Any:
-        return _jsonable(await service.list_actions())
+    async def actions(include_completed: bool = False, _: None = Depends(guard)) -> Any:
+        return _jsonable(await service.list_actions(include_completed=include_completed))
 
     @app.post("/actions")
     async def add_action(body: ActionCreate, _: None = Depends(guard)) -> Any:

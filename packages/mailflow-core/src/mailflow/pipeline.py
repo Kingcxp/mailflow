@@ -206,6 +206,7 @@ class PipelineEngine:
             finished_at = now or utcnow()
             if result.analysis is not None:
                 accumulated = merge_analysis(accumulated, result.analysis)
+            accumulated.archive_requested = accumulated.archive_requested or result.archive
             if result.llm_used:
                 llm_used = result.llm_used
             if result.llm_backend:

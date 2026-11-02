@@ -19,10 +19,10 @@ service methods and permission rules.
 
 ## Mail processing
 
-An enabled source emits a normalized `MailMessage` into the runtime queue. Workers
-apply the configured processor chain, merge analysis, persist a `MailRecord`
-and publish events and eligible notifications. Without a usable model, rule
-processing remains available.
+An enabled source hands a normalized `MailMessage` to the runtime. The original is
+persisted and visible before it enters the analysis queue. Workers apply OCR and
+the processor chain, save analysis and publish eligible notifications. History
+imports and reanalysis are quiet by default. Without a usable model, rules remain available.
 
 Mail identity includes its source/account scope: identical Message-ID values
 from different accounts remain separate. Retrying the same mail is idempotent.
@@ -33,7 +33,8 @@ or unaccepted items available for retry.
 Attachment bytes remain available during extraction and optional OCR. SQLite
 stores attachment metadata and extracted `image_text`, not attachment binaries.
 Search includes subjects, senders, bodies, summaries, filenames and OCR text.
-Smart search uses excerpts, so a detail outside those excerpts can be missed.
+Smart search applies exact filters before checking complete bodies in chunks;
+an incomplete search is reported and cannot authorize deletion of unchecked mail.
 
 Reanalysis preserves user feedback, manual urgency and local task state.
 Failure preserves the last valid analysis; retrying does not create duplicate
@@ -44,7 +45,9 @@ mail-derived tasks.
 Mail-derived and custom tasks retain their own storage/deletion rules.
 Their shared effective view drives lists, search, reminders, digests and cleanup,
 so a deleted task cannot reappear in another view. Due dates and reminder
-windows use the configured timezone. Delivery receipts are saved after a
+windows use the configured timezone. Deadlines are optional, overdue unfinished
+tasks remain available, and completed tasks can be reopened. Deleting mail keeps
+linked task history unless the user explicitly deletes both. Delivery receipts are saved after a
 notification succeeds; failed targets remain retryable.
 
 Reply drafts retain their content across preparation and send failures. Sending

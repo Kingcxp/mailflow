@@ -26,23 +26,25 @@ without one, deterministic rules remain available.
 
 | Area | Available behavior |
 |---|---|
-| Mail | Multiple accounts, historical browsing, body/attachment-name/OCR search, manual urgency and reanalysis |
+| Mail | Read originals before background analysis; account/date/sender filters, read/star/archive states, full text, attachments and OCR search |
 | Batch actions | Check rows, Shift-select a range, Ctrl+A for visible results, delete expired mail and undo the last deletion |
-| Tasks | Mail obligations, custom tasks, reminders and summaries |
-| Replies | Continue saved drafts; prepare and confirm before sending; failed sends remain retryable |
+| Tasks | Optional deadlines, overdue and completed history, reopen, mute or snooze reminders |
+| Replies | Search drafts and sent replies; prepare and confirm before sending; failed sends remain retryable |
 | Notifications | Configure chat-platform instances and notification targets; export NoneBot or AstrBot plugins |
 | Plugins | Install, enable or disable mail sources, model backends, processors, notifiers, storage and gateways |
 | Language | English and Simplified Chinese; additional JSON language packs |
 
-Mail deletion moves records to recoverable trash. Defaults are 30-day mail retention,
-7-day trash retention and cleanup at 04:00 in the configured timezone. Automatic updates
-are disabled by default.
+Deletion moves mail to MailFlow trash and leaves the source mailbox unchanged. Restore,
+search and permanent deletion are available in Mail → More. Mail is kept indefinitely by
+default; automatic cleanup is opt-in and protects starred, important and unfinished-task
+mail. Trash is kept for 7 days. Backup and restore are under Settings. Automatic updates
+are disabled by default; existing retention settings are preserved.
 
 Smart query finds or deletes mail, manages tasks and shows live progress. Changes
-require confirmation. Search evaluates mail excerpts,
-so long messages can contain relevant text outside the excerpt. Remote TUI supports
-mail, tasks and reply workflows; smart query, conversational correction and
-local plugin/process management are currently local-only.
+require confirmation and can be excluded individually. Select the scope from Mail → More.
+Long messages are checked in chunks; incomplete searches are reported. Remote TUI supports
+mail, tasks, replies, smart query and conversational correction. Plugin/process management
+and backup/restore run locally.
 
 ## Other entry points
 

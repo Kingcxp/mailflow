@@ -4,8 +4,8 @@ packs — a missing key renders as the raw key string, which is exactly the
 
 from __future__ import annotations
 
+import ast
 import json
-import re
 from pathlib import Path
 from string import Formatter
 from typing import Any, cast
@@ -16,8 +16,6 @@ _TUI = _ROOT / "packages" / "mailflow-tui" / "src" / "mailflow_tui"
 _CLI = _ROOT / "packages" / "mailflow-cli" / "src" / "mailflow_cli"
 _CORE_COMMANDS = _ROOT / "packages" / "mailflow-core" / "src" / "mailflow" / "commands.py"
 
-_KEY = re.compile(r"""(?:\b_t|\b_rt|\bservice\.t|\bself\.t)\(\s*["']([a-z][\w.]+)["']""")
-_USED = re.compile(r"""(?:\b_t|\b_rt|\bservice\.t|\bself\.t)\(\s*f?["']([a-z][\w.]+)["']""")
 _RUNTIME = _ROOT / "packages" / "mailflow-core" / "src" / "mailflow" / "runtime.py"
 
 
@@ -41,16 +39,30 @@ def _locale_keys(code: str) -> set[str]:
 def _referenced_keys() -> set[str]:
     keys: set[str] = set()
     for root in (_TUI, _CLI, _CORE_COMMANDS, _RUNTIME):
-        for path in root.rglob("*.py"):
-            text = path.read_text(encoding="utf-8")
-            keys |= set(_KEY.findall(text))
-            keys |= set(_USED.findall(text))
+        for path in [root] if root.is_file() else root.rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.Call) or not node.args:
+                    continue
+                name = (
+                    node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else node.func.id
+                    if isinstance(node.func, ast.Name)
+                    else ""
+                )
+                key = node.args[0]
+                if (
+                    name in {"t", "_t", "_rt"}
+                    and isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                ):
+                    keys.add(key.value)
     return keys
 
 
 def test_every_referenced_key_exists_in_both_packs() -> None:
     referenced = _referenced_keys()
-    assert referenced, "key scan found nothing — the regex broke"
+    assert referenced, "key scan found nothing"
     zh = _locale_keys("zh-CN")
     en = _locale_keys("en")
     missing_zh = sorted(k for k in referenced if k not in zh)
@@ -70,7 +82,7 @@ def test_form_and_gateway_states_render_with_matching_parameters() -> None:
     keys = {
         key
         for key in english.keys("en")
-        if key.startswith(("tui.form_", "tui.gateway_phase_", "tui.remote_"))
+        if key.startswith(("tui.form_", "tui.gateway_phase_", "tui.remote_", "ux.", "reply.state_"))
     }
     assert keys
     for key in keys:

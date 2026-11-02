@@ -281,6 +281,8 @@ def actions_duplicate(left: ActionItem, right: ActionItem) -> bool:
     Windows are half-open. Point actions match only an equal point or a point
     inside a window; windows match only when their overlap has positive length.
     """
+    if (left.completed_at is None) != (right.completed_at is None):
+        return False
     left_summary = " ".join(left.summary.split()).casefold()
     right_summary = " ".join(right.summary.split()).casefold()
     if not left_summary or left_summary != right_summary:
@@ -335,6 +337,7 @@ class MailAnalysis(BaseModel):
     action_items: list[ActionItem] = Field(default_factory=lambda: [])
     notes: str = ""
     backend: str = ""  # llm backend plugin id actually used ("" if rule-based)
+    archive_requested: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +447,8 @@ class SmartActionResult(BaseModel):
     how many a confirmed call actually moved to the trash.
     """
 
+    plan_id: str = ""
+    actions: list[ActionItem] = Field(default_factory=lambda: [])
     records: list[MailRecord] = Field(default_factory=lambda: [])
     total_mails: int = 0
     failed_mails: int = 0

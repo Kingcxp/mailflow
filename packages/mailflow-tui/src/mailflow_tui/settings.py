@@ -32,6 +32,7 @@ from mailflow.config import LLMConfig
 from mailflow.domain import ComponentKind, MailMessage
 from mailflow.service import ConfigReloadError, MailFlowService
 from mailflow.settings import (
+    LIVE_CONFIG_GROUPS,
     EditorKind,
     OptionSpec,
     SettingsError,
@@ -483,6 +484,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 self._values["provider"] = gateway
         self._initial_provider = str(self._values.get("provider") or self._default_provider)
         self._active_provider = self._initial_provider
+        self._preset_values: dict[str, str] = {}
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -523,6 +525,22 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         return translated if translated != key else value
 
     def _extras_for(self, provider: str) -> tuple[_Extra, ...]:
+        extras = self._provider_extras_for(provider)
+        if self._group != "notifiers":
+            return extras
+        existing = {field.field_id for field in extras}
+        return extras + tuple(
+            _Extra(name, kind="boolean", default=default, label_key="ux." + name)
+            for name, default in (
+                ("mail_notifications", "true"),
+                ("task_reminders", "true"),
+                ("daily_digest", "true"),
+                ("hourly_summary", "false"),
+            )
+            if name not in existing
+        )
+
+    def _provider_extras_for(self, provider: str) -> tuple[_Extra, ...]:
         plugin_extras = self._plugin_extras(provider)
         if plugin_extras is not None:
             return plugin_extras
@@ -645,6 +663,15 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             pool: dict[str, Any] = dict(original.get("options") or {})
             fallback = original.get(extra.field_id)
             raw = fallback if not extra.into_options else pool.get(extra.field_id, fallback)
+            if (
+                raw is None
+                and self._group == "accounts"
+                and extra.field_id.startswith(("imap_", "smtp_"))
+            ):
+                from mailflow_mail_imap.plugin import PRESETS
+
+                preset = str(pool.get("preset") or (provider if provider in PRESETS else "qq"))
+                raw = PRESETS.get(preset, {}).get(extra.field_id)
             if extra.field_id == "preset":
                 raw = _imap_preset(pool)
             if raw is None or raw == "":
@@ -756,9 +783,20 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 yield Static(escape(translated_desc), classes="field-desc")
             if extra.kind == "choice":
                 _choice_names = tuple(extra.choices) or tuple(_IMAP_PRESET_HOSTS)
+                value = self._extra_value(extra) or (_choice_names[0] if _choice_names else "")
+                if extra.field_id == "preset":
+                    self._preset_values[provider] = value
                 yield SafeSelect(
-                    [(name, name) for name in _choice_names],
-                    value=self._extra_value(extra) or (_choice_names[0] if _choice_names else ""),
+                    [
+                        (
+                            self._t("ux.initial_" + name)
+                            if extra.field_id == "initial_sync"
+                            else name,
+                            name,
+                        )
+                        for name in _choice_names
+                    ],
+                    value=value,
                     id=widget_id,
                     allow_blank=False,
                 )
@@ -1080,10 +1118,14 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 escape(error_detail(self._service, message, extra_secrets=self._secrets()))
             )
             return
-        if provider != "imap":
+        if provider not in {"imap", "gmail", "outlook"}:
             status.update(f"[yellow]{self._t('tui.account_test_skip')}[/yellow]")
             return
         opts = dict(values.get("options") or {})
+        from mailflow_mail_imap.plugin import PRESETS
+
+        preset = str(opts.get("preset") or (provider if provider in PRESETS else ""))
+        opts = {**PRESETS.get(preset, {}), **opts}
         host = str(opts.get("imap_host") or "")
         port = int(opts.get("imap_port") or 993)
         user = str(opts.get("username") or values.get("email") or "")
@@ -1098,6 +1140,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             )
         status.update(self._t("tui.account_testing", host=host))
         import imaplib
+        import smtplib
         import threading
 
         clients: list[Any] = []
@@ -1111,14 +1154,41 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 if cancelled.is_set():
                     return "cancelled"
                 client.login(user, password)
-                return "ok"
             finally:
                 with contextlib.suppress(Exception):
                     client.logout()
+            if cancelled.is_set():
+                return "cancelled"
+            smtp_host = str(opts.get("smtp_host") or "")
+            if not smtp_host:
+                return self._t("ux.account_send_missing")
+            sender: Any = None
+            try:
+                smtp_ssl = bool(opts.get("smtp_ssl", True))
+                sender = (smtplib.SMTP_SSL if smtp_ssl else smtplib.SMTP)(
+                    smtp_host,
+                    int(opts.get("smtp_port") or (465 if smtp_ssl else 587)),
+                    timeout=10,
+                )
+                clients.append(sender)
+                if cancelled.is_set():
+                    return "cancelled"
+                if not smtp_ssl:
+                    sender.starttls()
+                sender.login(user, password)
+                return self._t("ux.account_send_ready")
+            except Exception as exc:
+                return self._t(
+                    "ux.account_send_failed",
+                    error=error_detail(self._service, exc, extra_secrets=(password,)),
+                )
+            finally:
+                if sender is not None:
+                    with contextlib.suppress(Exception):
+                        sender.quit()
 
-        started = datetime.now()
         try:
-            await asyncio.wait_for(asyncio.to_thread(_probe), timeout=20.0)
+            send_status = await asyncio.wait_for(asyncio.to_thread(_probe), timeout=25.0)
         except TimeoutError:
             status.update(f"[red]{self._t('tui.account_test_timeout')}[/red]")
             return
@@ -1132,9 +1202,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             cancelled.set()
             for client in clients:
                 with contextlib.suppress(Exception):
-                    client.shutdown()
-        elapsed = (datetime.now() - started).total_seconds()
-        status.update(f"[green]{self._t('tui.account_test_ok', seconds=f'{elapsed:.1f}')}[/green]")
+                    close = getattr(client, "shutdown", None) or getattr(client, "close", None)
+                    if callable(close):
+                        close()
+        status.update(escape(self._t("ux.account_receive_ready") + " · " + send_status))
 
     async def _test_notifier(self) -> None:
         """Use the current provider's credentials and declared probe."""
@@ -1215,18 +1286,21 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             self.query_one("#entry-form-status", Static).update("")
             self._sync_actions()
         elif event.select.id == "extra-preset":
+            provider, selected = self._current_provider(), _select_text(event.select)
+            if self._preset_values.get(provider) == selected:
+                return
+            self._preset_values[provider] = selected
             await self._cancel_test()
-            preset = _IMAP_PRESET_HOSTS.get(_select_text(event.select))
+            from mailflow_mail_imap.plugin import PRESETS
+
+            preset = PRESETS.get(selected)
             if preset:
-                host, port, ssl_flag = preset
-                for field_id, value in (
-                    ("imap_host", host),
-                    ("imap_port", str(port)),
-                    ("imap_ssl", "true" if ssl_flag else "false"),
-                ):
+                for field_id, value in preset.items():
                     node = self.query_one_optional(f"#extra-{_slug(field_id)}")
                     if isinstance(node, Input):
-                        node.value = value
+                        node.value = str(value)
+                    elif isinstance(node, Switch):
+                        node.value = bool(value)
 
     async def on_input_changed(self, event: Input.Changed) -> None:
         if (
@@ -1386,6 +1460,9 @@ class SettingsPane(Vertical):
             )
             yield SearchToggle("regex", ident="settings-search-regex")
             yield SearchToggle("case", ident="settings-search-case")
+            if not getattr(self._service, "remote", False):
+                yield Button(self._t("ux.backup_title"), id="settings-backup")
+                yield Button(self._t("ux.remote_connection"), id="settings-connection")
         with Horizontal(id="settings-body"):
             with Vertical(id="settings-sidebar"):
                 yield Static(self._t("tui.settings_sections"), id="settings-sidebar-title")
@@ -1602,6 +1679,16 @@ class SettingsPane(Vertical):
         return node
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id in {"settings-backup", "settings-connection"}:
+            from mailflow_tui.mail_workflows import DataManagementScreen, RemoteConnectionScreen
+
+            screen = (
+                DataManagementScreen
+                if event.button.id == "settings-backup"
+                else RemoteConnectionScreen
+            )
+            cast("Any", self).app.push_screen(screen(self._service))
+            return
         button_id = event.button.id or ""
         card = self._card_of(event.button)
         if card is None:
@@ -1666,6 +1753,12 @@ class SettingsPane(Vertical):
             message = warning or self._t(
                 "tui.settings_reset_done" if reset else "tui.settings_saved", option=key
             )
+            if not warning:
+                message += " · " + self._t(
+                    "ux.config_active"
+                    if key.split(".")[0] in LIVE_CONFIG_GROUPS
+                    else "ux.config_restart"
+                )
             self._set_status(escape(message))
         except Exception as exc:
             message = error_message(self._service, exc, extra_secrets=secrets)

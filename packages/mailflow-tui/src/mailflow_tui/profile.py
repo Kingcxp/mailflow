@@ -26,12 +26,13 @@ class UserProfileModal(ModalScreen[bool]):
 
     BINDINGS: ClassVar[list[Any]] = []
 
-    def __init__(self, service: MailFlowService, profile: str) -> None:
+    def __init__(self, service: MailFlowService, profile: str, guidelines: str = "") -> None:
         super().__init__()
         self._service = service
         self._bindings.bind("escape", "cancel", self._service.t("tui.btn_cancel"))
         self._bindings.bind("ctrl+s", "save", self._service.t("tui.btn_save"))
         self._initial = profile
+        self._guidelines = guidelines
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -43,6 +44,8 @@ class UserProfileModal(ModalScreen[bool]):
             yield Static(self._t("tui.profile_label"), classes="todo-label")
             with ScrollableContainer(id="profile-scroll"):
                 yield TextArea(self._initial, id="profile-text")
+                yield Static(self._t("ux.preferences_hint"))
+                yield TextArea(self._guidelines, id="profile-guidelines")
             yield Static("", id="profile-status")
             with Horizontal(id="profile-buttons"):
                 yield Button(self._t("tui.btn_save"), id="profile-save", variant="success")
@@ -68,6 +71,9 @@ class UserProfileModal(ModalScreen[bool]):
         text = self.query_one("#profile-text", TextArea).text
         try:
             stored = await self._service.set_user_profile(text)
+            await self._service.set_feedback_guidelines(
+                self.query_one("#profile-guidelines", TextArea).text
+            )
         except Exception as exc:
             self.query_one("#profile-status", Static).update(
                 f"[red]{escape(self._t('tui.profile_save_failed', error=error_detail(self._service, exc)))}[/red]"

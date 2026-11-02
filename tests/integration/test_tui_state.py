@@ -137,7 +137,10 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         await settle(pilot)
         assert keys(table) == ["old-1"]
         app.query_one("#btn-trash", Button).press()
-        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        await until(
+            pilot,
+            lambda: isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run")),
+        )
         assert "old-1" in text(app.screen, "#confirm-body") and "old-2" in text(
             app.screen, "#confirm-body"
         )
@@ -147,7 +150,10 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         await settle(pilot)
         assert await service.count_mails() == 3
         app.query_one("#btn-trash", Button).press()
-        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        await until(
+            pilot,
+            lambda: isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run")),
+        )
         app.screen.query_one("#confirm-run", Button).press()
         await settle(pilot)
         assert await service.storage.get_mail("old-1") is None
@@ -177,7 +183,10 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         todos.focus()
         await pilot.press("ctrl+a", "escape", "space", "shift+down")
         app.query_one("#actions-delete", Button).press()
-        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        await until(
+            pilot,
+            lambda: isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run")),
+        )
         app.screen.query_one("#confirm-run", Button).press()
         await settle(pilot)
         assert [item.item_id for item in await service.list_actions()] == [future.item_id]
@@ -391,7 +400,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         RemoteClient("http://fake", "admin", "secret"), json_value(service.snapshot()), I18n()
     )
     app = MailFlowApp(view, queue.Queue(), remote=True)
-    failures.update({"/mails", "/actions", "/snapshot"})
+    failures.update({"/mails", "/mails/query", "/actions", "/snapshot"})
     async with app.run_test(size=(140, 45)) as pilot:
         await pilot.pause()
         assert app.query_one("#mail-table", DataTable).row_count == 0
@@ -404,7 +413,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         await app.query_one(ActionsPane).refresh_actions()
         await app.query_one(RuntimePane).refresh_runtime()
         await settle(pilot)
-        failures.update({"/mails", "/actions", "/snapshot"})
+        failures.update({"/mails", "/mails/query", "/actions", "/snapshot"})
         await app.query_one(MailPane).refresh_mail()
         await app.query_one(ActionsPane).refresh_actions()
         await app.query_one(RuntimePane).refresh_runtime()
@@ -445,7 +454,8 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         assert app.query_one("#mail-search", Input).value == "Exam"
         for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
             assert "offline" not in text(app, ident)
-        assert not app.query("#smart-action, #btn-reparse, #btn-ask-correct, #btn-profile")
+        assert not app.query("#btn-reparse")
+        assert app.query("#smart-action, #btn-ask-correct, #btn-profile")
         assert not app.query("#tab-mailboxes, #tab-llms, #tab-notifications, #tab-market")
         app.query_one("#btn-reply", Button).press()
         await until(
@@ -486,12 +496,18 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         assert len(cast(MemoryStorage, service.storage).drafts) == 1
         # Discard is explicit, confirmed, and no longer confused with closing.
         reopened.query_one("#reply-cancel", Button).press()
-        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        await until(
+            pilot,
+            lambda: isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run")),
+        )
         app.screen.query_one("#confirm-cancel", Button).press()
         await settle(pilot)
         assert app.screen is reopened
         reopened.query_one("#reply-cancel", Button).press()
-        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        await until(
+            pilot,
+            lambda: isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run")),
+        )
         app.screen.query_one("#confirm-run", Button).press()
         await settle(pilot)
         app.query_one("#btn-reply", Button).press()

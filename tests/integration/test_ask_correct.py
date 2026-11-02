@@ -174,7 +174,7 @@ async def test_chat_about_mail_proposes_without_writing() -> None:
 
     # applying it (what the host does after the user confirms) writes both
     applied = await service.apply_mail_correction(
-        "ask-1", result["corrections"], note="This is important, please raise it."
+        "ask-1", result["corrections"], note="This is important, please raise it.", remember=True
     )
 
     assert applied is not None

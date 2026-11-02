@@ -9,7 +9,7 @@
 [general]
 language = "en"                 # default display language (en | zh-CN | custom packs)
 timezone = "Asia/Shanghai"      # IANA timezone for display and the daily cleanup
-mail_retention_days = 30        # mails older than this are moved to trash daily
+mail_retention_days = 0         # keep mail until automatic cleanup is explicitly enabled
 trash_retention_days = 7        # trash records older than this are purged
 cleanup_hour = 4                # local-time cleanup hour
 cleanup_minute = 0

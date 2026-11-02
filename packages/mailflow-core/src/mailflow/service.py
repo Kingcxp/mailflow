@@ -54,6 +54,7 @@ from mailflow.domain import (
     LLMSnapshot,
     MailMessage,
     MailRecord,
+    PendingOperation,
     ProcessorBindingSnapshot,
     ReplyDraft,
     ReplyState,
@@ -74,12 +75,15 @@ from mailflow.letters import build_letter
 from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.llm import LLMRouterImpl
 from mailflow.logging import LoggingRuntime, configure_logging
+from mailflow.mail_query import MailPage, MailQuery
 from mailflow.permissions import (
     PermissionContext,
     admin_operation,
     authorize_command,
+    current_context,
     normalize_provider,
     permission_scope,
+    require_admin,
 )
 from mailflow.pipeline import PipelineEngine, build_bindings
 from mailflow.plugin_market import (
@@ -96,6 +100,7 @@ from mailflow.registry import ComponentRegistry
 from mailflow.replies import ReplyError, ReplySourceError
 from mailflow.runtime import MailFlowRuntime
 from mailflow.settings import (
+    LIVE_CONFIG_GROUPS,
     OptionSpec,
     SettingsSection,
     add_entry,
@@ -114,7 +119,7 @@ logger = logging.getLogger("mailflow.service")
 
 _LANGUAGE_PREFERENCE = "language"
 _REPLY_TOKEN_TTL = timedelta(minutes=10)
-_LIVE_GROUPS = frozenset({"accounts", "llms", "processors", "notifiers", "general"})
+_LIVE_GROUPS = LIVE_CONFIG_GROUPS
 """Config groups whose changes hot-apply to the running runtime."""
 
 _CHAT_REPLY_MAX_UTF8_BYTES = 1_600
@@ -387,6 +392,7 @@ class MailFlowService:
     ) -> None:
         self.config = config
         self.config_path: Path | None = None
+        self.restoring = False
         self.registry = registry
         self.plugin_manager = plugin_manager
         self.storage = storage
@@ -423,6 +429,7 @@ class MailFlowService:
         self._resources_closed = False
         self._needs_rebuild = False
         self._lifecycle_lock = asyncio.Lock()
+        self._backup_lock = asyncio.Lock()
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
@@ -430,6 +437,10 @@ class MailFlowService:
         self.bot_server: Any | None = None
         self.commands: Any | None = None  # CommandRouter wired by mailflow.commands
         self._reply_locks = _DraftLocks()
+        self._smart_plans: dict[
+            str, tuple[PermissionContext, datetime, list[PendingOperation]]
+        ] = {}
+        self._smart_plan_lock = asyncio.Lock()
         self._reply_create_lock = asyncio.Lock()
 
     # -- lifecycle ---------------------------------------------------------------
@@ -703,6 +714,85 @@ class MailFlowService:
         store = self.runtime.action_store
         return store.mail_view([record], await store.read())[0]
 
+    async def query_mails(self, query: MailQuery) -> MailPage:
+        query = query.model_copy(
+            update={"limit": min(500, max(1, query.limit)), "offset": max(0, query.offset)}
+        )
+        search = getattr(self.storage, "query_mails", None)
+        if search is not None:
+            page: MailPage = await search(query)
+            entries = await self.runtime.action_store.read(records=page.records)
+            page.records = self.runtime.action_store.mail_view(page.records, entries)
+            return page
+        records = [r for r in await self.list_mails() if query.matches(r)]
+        records.sort(key=lambda r: (r.mail.received_at, r.record_id), reverse=True)
+        end = query.offset + query.limit
+        return MailPage(
+            records=records[query.offset : end],
+            total=len(records),
+            next_offset=end if end < len(records) else None,
+        )
+
+    async def fetch_attachment(self, record_id: str, index: int) -> bytes:
+        from mailflow.contracts import AttachmentSource
+
+        record = await self.storage.get_mail(record_id)
+        if record is None:
+            raise translated_error(ValueError, self.t, "mail.not_found", mail_id=record_id)
+        if not 0 <= index < len(record.mail.attachments):
+            raise translated_error(ValueError, self.t, "ux.attachment_missing")
+        attachment = record.mail.attachments[index]
+        if attachment.data is not None:
+            return attachment.data
+        source = self.sources.get(record.mail.account_id)
+        if not isinstance(source, AttachmentSource):
+            raise translated_error(RuntimeError, self.t, "ux.attachment_unavailable")
+        try:
+            return await source.fetch_attachment(record.mail, index)
+        except Exception as exc:
+            logger.warning("attachment download for %s: %s", record_id, exc)
+            raise translated_error(RuntimeError, self.t, "ux.attachment_failed") from None
+
+    async def list_drafts(self, *, state: str = "") -> list[ReplyDraft]:
+        read = getattr(self.storage, "list_all_drafts", None)
+        if read is not None:
+            drafts = await read()
+        else:
+            drafts = [
+                draft
+                for record in await self.storage.list_mails()
+                for draft in await self.storage.list_drafts(record.record_id)
+            ]
+        return [draft for draft in drafts if not state or draft.state.value == state]
+
+    async def failed_deliveries(self) -> list[dict[str, Any]]:
+        return await self.runtime.failed_deliveries()
+
+    @admin_operation
+    async def retry_deliveries(self, delivery_ids: list[str]) -> int:
+        return await self.runtime.retry_deliveries(delivery_ids)
+
+    async def cleanup_preview(self) -> list[MailRecord]:
+        return await self.runtime.cleanup_candidates()
+
+    @admin_operation
+    async def create_backup(self, destination: str, *, overwrite: bool = False) -> str:
+        from mailflow.backup import create_backup
+
+        async with self._backup_lock:
+            return await create_backup(self, destination, overwrite=overwrite)
+
+    @admin_operation
+    async def restore_backup(self, source: str) -> str:
+        from mailflow.backup import restore_backup
+
+        async with self._backup_lock:
+            return await restore_backup(self, source)
+
+    @admin_operation
+    async def cleanup_selected(self, record_ids: list[str]) -> BatchResult:
+        return await self.batch_mail(record_ids, operation="cleanup")
+
     async def list_failed_mails(self) -> list[MailRecord]:
         """Records whose analysis did not complete: no analysis at all, or
         any processor note marked failed (e.g. an LLM rate limit). These are
@@ -755,6 +845,8 @@ class MailFlowService:
         """
         if record.manual_urgency is not None or record.starred:
             return False
+        if record.analysis_state != "ready":
+            return False
         if record.analysis is None or record.analysis_is_fallback:
             return False
         if any(note.status == "failed" for note in record.processor_notes):
@@ -800,20 +892,7 @@ class MailFlowService:
             if record_ids is not None
             else [record.record_id for record in await self.storage.list_mails()]
         )
-        linked = await self._actions_by_mail()
-        moved = 0
-        for record_id in ids:
-            fresh = await self.storage.get_mail(record_id)
-            if fresh is None:  # already gone (trashed elsewhere, or cleaned up)
-                continue
-            now = datetime.now(UTC)
-            if not self._is_expired(fresh, now, linked=linked.get(record_id, [])):
-                logger.info("kept %r: it stopped looking expired before deletion", record_id)
-                continue
-            moved += (await self.batch_mail([record_id])).count
-        if moved:
-            logger.info("purged %d expired mail(s) to the trash", moved)
-        return moved
+        return (await self.batch_mail(ids, operation="expired")).count
 
     async def user_profile(self) -> str:
         """The recipient's own description, used to personalize analysis."""
@@ -974,6 +1053,7 @@ class MailFlowService:
         url: str = "",
         mail_id: str = "",
         reply_task: bool = False,
+        reminder_enabled: bool = True,
     ) -> ActionItem:
         """Create a user-owned timed action and add it to the reminder schedule."""
         final_summary = summary.strip()
@@ -993,10 +1073,13 @@ class MailFlowService:
                 raise translated_error(ValueError, self.t, "action.invalid_end")
         else:
             final_end = None
+        source = await self.storage.get_mail(mail_id) if mail_id else None
         item = ActionItem(
             item_id=uuid4().hex,
             mail_id=mail_id,
+            source_subject=source.mail.subject if source is not None else "",
             reply_task=reply_task,
+            reminder_enabled=reminder_enabled,
             summary=final_summary,
             action_type=final_type,
             due_at=final_due,
@@ -1032,6 +1115,7 @@ class MailFlowService:
         clear_due: bool = False,
         completed: bool | None = None,
         reminder_enabled: bool | None = None,
+        reply_task: bool | None = None,
         snoozed_until: datetime | None = None,
         clear_snooze: bool = False,
         notes: str | None = None,
@@ -1073,6 +1157,7 @@ class MailFlowService:
                     "reminder_enabled": item.reminder_enabled
                     if reminder_enabled is None
                     else reminder_enabled,
+                    "reply_task": item.reply_task if reply_task is None else reply_task,
                     "snoozed_until": None
                     if clear_snooze
                     else (snoozed_until or item.snoozed_until),
@@ -1116,16 +1201,13 @@ class MailFlowService:
     # -- user feedback (filter tuning) -------------------------------------------
 
     @admin_operation
-    async def record_feedback(self, mail_id: str, reason: str) -> None:
-        """Store a user note on why a mail was irrelevant or unwanted.
-
-        The note joins the rolling guidelines that are injected into every
-        LLM analysis, so the model adjusts its filtering strategy with a
-        grounded rationale (kept to the most recent entries).
-        """
+    async def record_feedback(self, mail_id: str, reason: str, *, remember: bool = False) -> None:
+        """Keep a per-mail note; change future analysis only when explicitly requested."""
         if not reason.strip():
             raise translated_error(ValueError, self.t, "errors.feedback_reason")
         await self.storage.set_preference(f"feedback.{mail_id}", reason.strip())
+        if not remember:
+            return
         guidelines = await self.storage.get_preference("feedback.guidelines") or ""
         note = reason.strip()
         lines = [line for line in guidelines.splitlines() if line.strip()]
@@ -1141,6 +1223,11 @@ class MailFlowService:
 
     async def feedback_guidelines(self) -> str:
         return await self.storage.get_preference("feedback.guidelines") or ""
+
+    @admin_operation
+    async def set_feedback_guidelines(self, text: str) -> None:
+        await self.storage.set_preference("feedback.guidelines", text.strip())
+        await self.events.emit("feedback.guidelines.changed")
 
     # -- plugin update sources --------------------------------------------------
 
@@ -1278,9 +1365,16 @@ class MailFlowService:
                 results["mailflow"] = await upgrade_mailflow()
             except Exception as exc:
                 logger.error("mailflow upgrade failed: %s", exc)
-                results["mailflow"] = f"failed: {exc}"
+                results["mailflow"] = f"failed: {error_text(exc, self.t)}"
         if report.plugin_updates:
             results.update(await apply_plugin_updates(self.market, report.plugin_updates))
+        for name, outcome in results.items():
+            if outcome.startswith("failed:"):
+                results[name] = f"failed: {self.t('errors.operation')}"
+        if results:
+            MailFlowConfig.model_validate(self.config.model_dump(mode="python"))
+            await self.storage.list_mails(limit=1)
+            await self.events.emit("mailflow.update.verified", restart_required=True)
         return results
 
     async def list_trash(self) -> list[TrashRecord]:
@@ -1432,7 +1526,7 @@ relative dates inside the mail refer to its own sent time instead.
 
     @admin_operation
     async def apply_mail_correction(
-        self, record_id: str, corrections: dict[str, Any], *, note: str = ""
+        self, record_id: str, corrections: dict[str, Any], *, note: str = "", remember: bool = False
     ) -> MailRecord | None:
         """Apply a confirmed Ask & Correct proposal to a stored analysis.
 
@@ -1451,7 +1545,7 @@ relative dates inside the mail refer to its own sent time instead.
         note = note.strip()
         if note:
             with contextlib.suppress(Exception):
-                await self.record_feedback(record_id, note)
+                await self.record_feedback(record_id, note, remember=remember)
         return record
 
     _SMART_RANK_PROMPT = """You are MailFlow's smart mail finder. The user
@@ -1536,8 +1630,6 @@ Return every candidate in this batch."""
             from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
 
             body = " ".join(_plain_body(record.mail).split())
-            if len(body) > 1600:
-                body = f"{body[:1100]} … {body[-400:]}"
             return (
                 f"candidate={candidate_id}\n"
                 f"sent_at={record.mail.date.isoformat()}\n"
@@ -1550,11 +1642,48 @@ Return every candidate in this batch."""
                 f"body={body}"
             )
 
-        batch_size = 15
-        batches = [
-            records[index : index + batch_size] for index in range(0, len(records), batch_size)
-        ]
-        total = len(records)
+        from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
+
+        originals = {r.record_id: r for r in records}
+        parts_by_id: dict[str, int] = {}
+        scan_records: list[MailRecord] = []
+        for record in records:
+            body = _plain_body(record.mail) + (
+                "\n" + record.mail.image_text if record.mail.image_text else ""
+            )
+            chunks = [body[index : index + 12000] for index in range(0, len(body), 11700)] or [""]
+            parts_by_id[record.record_id] = len(chunks)
+            for chunk in chunks:
+                scan_records.append(
+                    record.model_copy(
+                        update={
+                            "mail": record.mail.model_copy(
+                                update={"body_text": chunk, "body_html": "", "image_text": ""}
+                            )
+                        }
+                    )
+                )
+        batches: list[list[MailRecord]] = []
+        batch: list[MailRecord] = []
+        chars = 0
+        for record in scan_records:
+            size = len(record.mail.body_text) + len(record.summary or "") + 500
+            if batch and (len(batch) >= 15 or chars + size > 36000):
+                batches.append(batch)
+                batch, chars = [], 0
+            batch.append(record)
+            chars += size
+        if batch:
+            batches.append(batch)
+        total = len(originals)
+        completed_parts: dict[str, int] = {}
+        failed_ids: set[str] = set()
+
+        def finish_batch(batch: list[MailRecord]) -> int:
+            for record in batch:
+                completed_parts[record.record_id] = completed_parts.get(record.record_id, 0) + 1
+            return sum(count >= parts_by_id[rid] for rid, count in completed_parts.items())
+
         _report("match", 0, total, "smart_start", count=total, batches=len(batches))
         matched: list[tuple[MailRecord, float | None]] = []
         completed_mails = 0
@@ -1566,8 +1695,9 @@ Return every candidate in this batch."""
         async def _mark_failed(batch: list[MailRecord], batch_number: int, key: str) -> None:
             nonlocal completed_mails, failed_mails, failed_batches
             async with progress_lock:
-                completed_mails += len(batch)
-                failed_mails += len(batch)
+                completed_mails = finish_batch(batch)
+                failed_ids.update(r.record_id for r in batch)
+                failed_mails = len(failed_ids)
                 failed_batches += 1
                 failure_reasons.append(
                     self.t(f"tui.{key}", batch=batch_number, batches=len(batches), count=len(batch))
@@ -1660,7 +1790,7 @@ Return every candidate in this batch."""
                         and (relevance is None or relevance >= _SMART_MATCH_RELEVANCE_FLOOR)
                     ]
                 async with progress_lock:
-                    completed_mails += len(batch)
+                    completed_mails = finish_batch(batch)
                     matched.extend(batch_matched)
                     done = completed_mails
                 _report(
@@ -1697,7 +1827,11 @@ Return every candidate in this batch."""
             reverse=True,
         )
         return SmartSearchResult(
-            records=[record for record, _relevance in matched],
+            records=list(
+                {
+                    record.record_id: originals[record.record_id] for record, _relevance in matched
+                }.values()
+            ),
             total_mails=total,
             failed_mails=failed_mails,
             failed_batches=failed_batches,
@@ -1736,7 +1870,14 @@ Return every candidate in this batch."""
             return SmartSearchResult()
         return await self._smart_match(query, records=records, progress=progress)
 
-    async def smart_action(self, instruction: str, *, progress: Any = None) -> SmartActionResult:
+    async def smart_action(
+        self,
+        instruction: str,
+        *,
+        progress: Any = None,
+        record_ids: list[str] | None = None,
+        account_id: str = "",
+    ) -> SmartActionResult:
         """Carry out one free-form instruction by letting the model call tools.
 
         The model — not this method — decides which operations the request
@@ -1753,7 +1894,148 @@ Return every candidate in this batch."""
             return SmartActionResult()
         if not self.config.llms:
             raise translated_error(RuntimeError, self.t, "smart.no_llm")
-        return await run_agent(self, self.router, text, progress=progress)
+        scoped = None
+        if record_ids is not None or account_id:
+            selected = set(record_ids) if record_ids is not None else None
+            scoped = [
+                r
+                for r in await self.list_mails()
+                if (selected is None or r.record_id in selected)
+                and (not account_id or r.mail.account_id == account_id)
+            ]
+        result = await run_agent(self, self.router, text, progress=progress, records=scoped)
+        if result.pending:
+            self._smart_plans = {
+                key: value for key, value in self._smart_plans.items() if value[1] > utcnow()
+            }
+            if len(self._smart_plans) >= 32:
+                self._smart_plans.pop(next(iter(self._smart_plans)))
+            result.plan_id = secrets.token_urlsafe(24)
+            self._smart_plans[result.plan_id] = (
+                current_context(),
+                utcnow() + timedelta(minutes=20),
+                [operation.model_copy(deep=True) for operation in result.pending],
+            )
+        return result
+
+    @admin_operation
+    async def apply_smart_plan(
+        self, plan_id: str, operations: list[PendingOperation]
+    ) -> dict[str, Any]:
+        """One confirmation authority for local and remote clients; successful changes cannot replay."""
+        async with self._smart_plan_lock:
+            plan = self._smart_plans.get(plan_id)
+            if plan is None or plan[0] != current_context() or plan[1] <= utcnow():
+                raise translated_error(ValueError, self.t, "ux.plan_expired")
+            remaining = list(plan[2])
+            result: dict[str, Any] = {"applied": 0, "deleted": [], "failed": [], "errors": []}
+            selected: list[tuple[PendingOperation, PendingOperation]] = []
+            for operation in operations:
+                original = next(
+                    (
+                        candidate
+                        for candidate in remaining
+                        if candidate.tool == operation.tool
+                        and (
+                            candidate.tool == "add_action"
+                            or candidate.arguments.get("item_id")
+                            == operation.arguments.get("item_id")
+                        )
+                        and (
+                            candidate.tool != "delete_mail"
+                            or set(operation.arguments.get("record_ids", [])).issubset(
+                                candidate.record_ids
+                            )
+                        )
+                    ),
+                    None,
+                )
+                if original is None:
+                    raise translated_error(ValueError, self.t, "ux.plan_expired")
+                remaining.remove(original)
+                selected.append((operation, original))
+            # Validate the entire confirmation before making any changes. Consume
+            # it before awaiting writes so cancellation cannot replay a success.
+            self._smart_plans.pop(plan_id, None)
+            for operation, original in selected:
+                try:
+                    arguments = dict(operation.arguments)
+                    if operation.tool == "delete_mail":
+                        moved = await self.batch_mail(arguments.get("record_ids", []))
+                        result["applied"] += len(moved.succeeded)
+                        result["deleted"].extend(moved.succeeded)
+                        if moved.failed:
+                            retry = original.model_copy(
+                                update={
+                                    "record_ids": list(moved.failed),
+                                    "arguments": {"record_ids": list(moved.failed)},
+                                }
+                            )
+                            remaining.append(retry)
+                            result["failed"].append(retry)
+                            result["errors"].extend(moved.failed.values())
+                    else:
+                        for key in ("due_at", "due_end", "snoozed_until"):
+                            if key in arguments:
+                                arguments[key] = (
+                                    datetime.fromisoformat(str(arguments[key]))
+                                    if arguments[key]
+                                    else None
+                                )
+                        if operation.tool == "add_action":
+                            allowed = {
+                                "summary",
+                                "due_at",
+                                "due_end",
+                                "action_type",
+                                "notes",
+                                "location",
+                                "url",
+                                "mail_id",
+                                "reply_task",
+                                "reminder_enabled",
+                            }
+                            await self.add_action(
+                                **{k: v for k, v in arguments.items() if k in allowed}
+                            )
+                        elif operation.tool == "edit_action":
+                            allowed = {
+                                "item_id",
+                                "summary",
+                                "due_at",
+                                "due_end",
+                                "clear_due",
+                                "clear_end",
+                                "completed",
+                                "reminder_enabled",
+                                "reply_task",
+                                "snoozed_until",
+                                "clear_snooze",
+                                "action_type",
+                                "notes",
+                                "location",
+                                "url",
+                            }
+                            await self.edit_action(
+                                **{k: v for k, v in arguments.items() if k in allowed}
+                            )
+                        elif operation.tool == "delete_action":
+                            if not await self.delete_action(str(arguments["item_id"])):
+                                continue
+                        else:
+                            raise translated_error(ValueError, self.t, "ux.unsupported")
+                        result["applied"] += 1
+                except Exception as exc:
+                    remaining.append(original)
+                    result["failed"].append(operation)
+                    result["errors"].append(error_text(exc, self.t))
+            # Unchecked operations are cancelled; only failed operations can be retried.
+            retries: list[PendingOperation] = result["failed"]
+            if retries:
+                self._smart_plans[plan_id] = (plan[0], plan[1], retries)
+            else:
+                self._smart_plans.pop(plan_id, None)
+            return result
 
     @admin_operation
     async def update_mail_analysis(
@@ -1775,7 +2057,6 @@ Return every candidate in this batch."""
             await self.events.emit("mail.analysis.changed", record_id=record_id)
         return record
 
-    @admin_operation
     async def set_mail_state(
         self,
         record_ids: list[str],
@@ -1784,6 +2065,8 @@ Return every candidate in this batch."""
         starred: bool | None = None,
         archived: bool | None = None,
     ) -> BatchResult:
+        if starred is not None or archived is not None:
+            require_admin(self.t)
         result = BatchResult()
         for record_id in dict.fromkeys(record_ids):
             try:
@@ -1821,12 +2104,24 @@ Return every candidate in this batch."""
                     if purge is None:
                         raise translated_error(RuntimeError, self.t, "ux.unsupported")
                     changed = await purge([record_id])
-                elif operation == "delete":
+                elif operation in {"delete", "cleanup", "expired"}:
                     async with self.runtime.action_store.lock, self.runtime.write_lock:
                         record = await self.storage.get_mail(record_id)
                         if record is None:
                             result.skipped.append(record_id)
                             continue
+                        if operation == "cleanup" and record_id not in {
+                            row.record_id for row in await self.runtime.cleanup_candidates()
+                        }:
+                            result.skipped.append(record_id)
+                            continue
+                        if operation == "expired":
+                            linked = await self._actions_by_mail()
+                            if not self._is_expired(
+                                record, utcnow(), linked=linked.get(record_id, [])
+                            ):
+                                result.skipped.append(record_id)
+                                continue
                         await self.runtime.action_store.trash_mail(
                             record, delete_actions=delete_actions
                         )

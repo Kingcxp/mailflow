@@ -71,9 +71,7 @@ async def _start_embedded_server(
         # fixed-for-this-session credential so remote clients can connect
         # without weakening any persisted configuration
         config.server.password = secrets.token_urlsafe(12)
-        log_queue.put(
-            f"admin server: user={config.server.username} password={config.server.password}"
-        )
+        log_queue.put(service.t("ux.temporary_credentials"))
     app = create_app(service)
     uv_config = uvicorn.Config(
         app, host=config.server.host, port=config.server.port, log_level="warning"

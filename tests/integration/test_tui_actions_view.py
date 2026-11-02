@@ -66,11 +66,9 @@ async def test_refresh_keeps_the_cursor_row_and_the_scroll_offset(tmp_path: Path
     service = await start_service_quiet(tmp_path)
     service.config.general.timezone = "Asia/Shanghai"
     await _seed_actions(service, 30)
-    expected_due = (
-        (await service.list_actions())[0]
-        .due_at.astimezone(ZoneInfo("Asia/Shanghai"))
-        .strftime("%Y-%m-%d %H:%M")
-    )
+    first_due = (await service.list_actions())[0].due_at
+    assert first_due is not None
+    expected_due = first_due.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
     app = MailFlowApp(cast(Any, service), queue_module.Queue())
     try:
         async with app.run_test(size=(140, 50)) as pilot:

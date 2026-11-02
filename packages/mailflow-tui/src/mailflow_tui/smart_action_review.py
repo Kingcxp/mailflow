@@ -11,7 +11,7 @@ from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Static, TextArea
+from textual.widgets import Button, Checkbox, Input, Static, TextArea
 
 
 class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
@@ -76,6 +76,17 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
             yield Static(self._t("tui.smart_review_title"), id="smart-review-title")
             with ScrollableContainer(id="smart-review-operations"):
                 for index, operation in enumerate(self._operations):
+                    yield Checkbox(
+                        self._t("ux.include_change"), value=True, id=f"smart-review-include-{index}"
+                    )
+                    if operation.tool == "delete_mail":
+                        subjects = operation.arguments.get("subjects", [])
+                        for position, record_id in enumerate(operation.record_ids):
+                            yield Checkbox(
+                                str(subjects[position]) if position < len(subjects) else record_id,
+                                value=True,
+                                id=f"smart-review-mail-{index}-{position}",
+                            )
                     with Horizontal(classes="smart-review-row"):
                         label = Static(
                             self._description(index, operation),
@@ -98,7 +109,22 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
         if ident == "smart-review-cancel":
             self.dismiss(None)
         elif ident == "smart-review-apply":
-            self.dismiss(self._operations)
+            selected: list[PendingOperation] = []
+            for index, operation in enumerate(self._operations):
+                if not self.query_one(f"#smart-review-include-{index}", Checkbox).value:
+                    continue
+                if operation.tool == "delete_mail":
+                    ids = [
+                        rid
+                        for pos, rid in enumerate(operation.record_ids)
+                        if self.query_one(f"#smart-review-mail-{index}-{pos}", Checkbox).value
+                    ]
+                    if not ids:
+                        continue
+                    operation.record_ids = ids
+                    operation.arguments["record_ids"] = ids
+                selected.append(operation)
+            self.dismiss(selected)
         elif ident.startswith("smart-review-edit-"):
             index = int(ident.rsplit("-", 1)[1])
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
@@ -189,9 +215,12 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
             return
         try:
             zone = ZoneInfo(self._service.config.general.timezone)
-            start = datetime.strptime(
-                self.query_one("#smart-review-start", Input).value.strip(), "%Y-%m-%d %H:%M"
-            ).replace(tzinfo=zone)
+            start_raw = self.query_one("#smart-review-start", Input).value.strip()
+            start = (
+                datetime.strptime(start_raw, "%Y-%m-%d %H:%M").replace(tzinfo=zone)
+                if start_raw
+                else None
+            )
             end_raw = self.query_one("#smart-review-end", Input).value.strip()
             end = (
                 datetime.strptime(end_raw, "%Y-%m-%d %H:%M").replace(tzinfo=zone)
@@ -201,12 +230,12 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
         except ValueError:
             error.update(self._t("tui.smart_review_invalid_time"))
             return
-        if end is not None and end <= start:
+        if end is not None and (start is None or end <= start):
             error.update(self._t("tui.smart_review_invalid_window"))
             return
         values: dict[str, Any] = {
             "summary": summary,
-            "due_at": start.isoformat(),
+            "due_at": start.isoformat() if start else None,
             "due_end": end.isoformat() if end else None,
             "action_type": action_type,
             "notes": self.query_one("#smart-review-notes", TextArea).text.strip(),
@@ -215,6 +244,7 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
         }
         if self._operation.tool == "edit_action":
             values["clear_end"] = end is None
+            values["clear_due"] = start is None
         self.dismiss(values)
 
     def action_cancel(self) -> None:

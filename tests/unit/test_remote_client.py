@@ -226,6 +226,7 @@ async def test_remote_adapter_uses_real_domain_and_setting_types(
     assert (await adapter.list_mails())[0].processor_notes[0].duration_ms == 0
     item = await adapter.add_action("remote action", now + timedelta(days=5), notes="saved")
     assert isinstance(item, ActionItem) and item.origin is ActionOrigin.CUSTOM
+    assert item.due_at is not None
     edited = await adapter.edit_action(item.item_id, due_end=item.due_at + timedelta(hours=1))
     assert edited == (await service.list_actions())[0]
     assert edited.time_range_in("Asia/Shanghai")

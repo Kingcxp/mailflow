@@ -227,7 +227,7 @@ class TestDailyUpdateLoop:
         await service._run_daily_update()  # pyright: ignore[reportPrivateUsage]
         assert events_captured[0][0] == "mailflow.update.checked"
         assert events_captured[1][0] == "mailflow.update.applied"
-        assert "finished" in await service.update_status()
+        assert await service.update_status() == service.t("update.state_applied")
         storage = service.storage
         assert any(k.startswith("update.check.") for k in storage.preferences)  # pyright: ignore[reportUnknownMemberType]
         # once per day

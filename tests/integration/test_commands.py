@@ -196,14 +196,20 @@ class TestCommandRouter:
         assert (await commands.execute(f"action delete {item_id[:10]}")).ok
         assert item_id not in storage.custom_actions
         assert not (await commands.execute(f"action delete {item_id}")).ok
-        assert not (await commands.execute("action delete a1")).ok
+        assert (await commands.execute("action delete a1")).ok
+        assert "Final calculus exam" not in (await commands.execute("action list")).text
 
     async def test_action_add_validation(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
         commands, storage = router
-        # missing --due
         response = await commands.execute('action add "no due"')
-        assert not response.ok
-        assert "requires --due" in response.text
+        assert response.ok
+        undated = next(iter(storage.custom_actions.values()))
+        assert undated.due_at is None
+        assert (await commands.execute(f"action complete {undated.item_id}")).ok
+        assert "no due" not in (await commands.execute("action list")).text
+        assert "no due" in (await commands.execute("action list --state completed")).text
+        assert (await commands.execute(f"action reopen {undated.item_id}")).ok
+        assert (await commands.execute(f"action delete {undated.item_id}")).ok
         # malformed due time
         response = await commands.execute('action add "bad" --due "not-a-time"')
         assert not response.ok
@@ -584,6 +590,11 @@ class TestPaginationAndFeedback:
         response = await commands.execute("feedback m1 'Promotions are noise; I never need them'")
         assert response.ok
         assert storage.preferences["feedback.m1"] == "Promotions are noise; I never need them"
+        assert "feedback.guidelines" not in storage.preferences
+        remembered = await commands.execute(
+            "feedback m1 'Promotions are noise; I never need them' --remember"
+        )
+        assert remembered.ok
         guidelines = storage.preferences["feedback.guidelines"]
         assert "m1: Promotions are noise" in guidelines
         # shown in mail detail

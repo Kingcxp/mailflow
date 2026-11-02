@@ -118,6 +118,16 @@ async def test_provider_drafts_do_not_cross_and_save_failure_keeps_input(
             "access_token": "draft-secret",
             "retry_delay": 2.5,
             "instructions": "first line\nsecond line",
+            **(
+                {
+                    "mail_notifications": True,
+                    "task_reminders": True,
+                    "daily_digest": True,
+                    "hourly_summary": False,
+                }
+                if group == "notifiers"
+                else {}
+            ),
         }
         assert attempts[0].get("api_key", "") == ""
         assert not attempts[0].get("extra_body")
@@ -250,6 +260,26 @@ async def test_mailbox_probe_uses_account_options_and_cancel_closes_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import imaplib
+    import smtplib
+
+    class Sender:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def login(self, *args: Any) -> None:
+            pass
+
+        def quit(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+        def starttls(self) -> None:
+            pass
+
+    monkeypatch.setattr(smtplib, "SMTP_SSL", Sender)
+    monkeypatch.setattr(smtplib, "SMTP", Sender)
 
     service = commands_service()
     clients: list[Any] = []

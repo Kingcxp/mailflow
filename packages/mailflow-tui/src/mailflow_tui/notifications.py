@@ -174,6 +174,7 @@ class NotificationsPane(Vertical):
             yield Button(
                 self._service.t("tui.notifications_check"), id="notif-check", variant="primary"
             )
+            yield Button(self._service.t("ux.failed_deliveries"), id="notif-failed")
         yield Static("", id="notifications-status")
 
     # -- data -----------------------------------------------------------------
@@ -361,6 +362,11 @@ class NotificationsPane(Vertical):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
+        if button_id == "notif-failed":
+            from mailflow_tui.mail_workflows import DeliveriesScreen
+
+            self.app.push_screen(DeliveriesScreen(self._service))
+            return
         if button_id == "notif-add":
             from mailflow_tui.settings import EntryFormScreen
 

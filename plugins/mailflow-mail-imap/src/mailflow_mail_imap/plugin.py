@@ -38,6 +38,7 @@ from mailflow.domain import (
     MailAddress,
     MailMessage,
 )
+from mailflow.forms import FormField
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 from mailflow.replies import ReplySourceError
@@ -341,6 +342,8 @@ class _FetchedBatch:
     messages: list[tuple[int, MailMessage]]
     uidvalidity: str
     baseline: int
+    history_until: int = 0
+    error: str = ""
 
 
 class IMAPSource:
@@ -354,10 +357,12 @@ class IMAPSource:
         self._interval = max(0.01, float(account.options.get("interval_seconds", 300)))
         self._limit = max(1, int(account.options.get("limit", 20)))
         self._status_callback: Any = None
+        self._last_poll_error = ""
         self._last_uid: int | None = None
         self._uidvalidity = ""
         self._checkpoint_scope = ""
         self._watermark_save: Any = None
+        self._history_until = 0
         self._analyze_backlog = bool(account.options.get("analyze_backlog", False))
         self._ocr_images = bool(account.options.get("ocr_images", False))
         self._username = str(account.options.get("username") or account.email)
@@ -388,6 +393,7 @@ class IMAPSource:
                 self._last_uid = int(stored)
                 return
             checkpoint = json.loads(str(stored))
+            self._history_until = int(checkpoint.get("history_until", 0))
             self._last_uid = int(checkpoint["uid"])
             self._uidvalidity = str(checkpoint.get("uidvalidity", ""))
             self._checkpoint_scope = str(checkpoint.get("scope", ""))
@@ -441,7 +447,7 @@ class IMAPSource:
             raw,
             self._account.account_id,
             provider=self.provider,
-            ocr_enabled=self._ocr_images,
+            ocr_enabled=False,  # OCR runs only after the runtime saves the original.
             internal_date=_internal_date(fetched),
         )
         mail.provider_message_id = f"{self._folder}:{validity}:{uid}"
@@ -492,22 +498,43 @@ class IMAPSource:
                 # Deliberately excluded setup backlog; even an empty mailbox
                 # needs baseline 0 so its very first new message is ingested.
                 baseline = max(uids, default=0)
+            history_until = max(uids, default=0) if changed else self._history_until
+            if self._last_uid is None and (
+                self._analyze_backlog
+                or self._account.options.get("initial_sync") in {"all", "recent"}
+            ):
+                history_until = max(uids, default=0)
             messages: list[tuple[int, MailMessage]] = []
+            fetch_error = ""
             for uid in [uid for uid in uids if uid > baseline][: self._limit]:
                 try:
-                    messages.append((uid, self._read_mail(client, uid, validity)))
+                    mail = self._read_mail(client, uid, validity)
+                    if uid <= history_until:
+                        mail.ingestion = "history"
+                        mail.include_past_actions = bool(
+                            self._account.options.get("include_past_actions", False)
+                        )
+                    messages.append((uid, mail))
                 except Exception as exc:
                     # Return the successful prefix. Do not consume this UID or
                     # fetch past it; it must be retried on the next connection.
                     logger.warning("IMAP account %r UID %d: %s", self._account.account_id, uid, exc)
+                    fetch_error = type(exc).__name__
                     break
-            return _FetchedBatch(messages, validity, baseline)
+            return _FetchedBatch(messages, validity, baseline, history_until, fetch_error)
         finally:
             with contextlib.suppress(Exception):
                 client.logout()
 
     async def _commit(self, uid: int, validity: str) -> None:
-        value = json.dumps({"uid": uid, "uidvalidity": validity, "scope": self._scope})
+        value = json.dumps(
+            {
+                "uid": uid,
+                "uidvalidity": validity,
+                "scope": self._scope,
+                "history_until": self._history_until,
+            }
+        )
         if self._watermark_save is not None:
             result = self._watermark_save(value)
             if inspect.isawaitable(result):
@@ -515,8 +542,10 @@ class IMAPSource:
         self._last_uid, self._uidvalidity = uid, validity
         self._checkpoint_scope = self._scope
 
-    async def _poll_once(self, emit: MailEmitter) -> None:
+    async def _poll_once(self, emit: MailEmitter) -> int:
         batch = await asyncio.to_thread(self._fetch_once)
+        self._last_poll_error = batch.error
+        self._history_until = batch.history_until
         if (
             self._last_uid != batch.baseline
             or self._uidvalidity != batch.uidvalidity
@@ -526,6 +555,7 @@ class IMAPSource:
         for uid, mail in batch.messages:
             await emit(mail)
             await self._commit(uid, batch.uidvalidity)
+        return len(batch.messages)
 
     def _fetch_history(self, limit: int, offset: int) -> list[MailMessage]:
         client = self._imap_client()
@@ -540,15 +570,66 @@ class IMAPSource:
             with contextlib.suppress(Exception):
                 client.logout()
 
+    def _download_attachment(self, mail: MailMessage, index: int) -> bytes:
+        client = self._imap_client()
+        try:
+            folder, validity, uid = mail.provider_message_id.rsplit(":", 2)
+            if folder != self._folder:
+                raise ValueError("mail folder changed")
+            if validity != self._validity(client):
+                message_id = mail.headers.get("Message-ID") or mail.message_id
+                message_id = message_id.replace("\r", "").replace("\n", "").replace('"', "")
+                status, data = client.uid(
+                    "search", cast(Any, None), "HEADER", "Message-ID", f'"{message_id}"'
+                )
+                if status != "OK" or not data or not data[0]:
+                    raise FileNotFoundError("source mail is no longer available")
+                uid = data[0].split()[-1].decode("ascii")
+            status, fetched = client.uid("fetch", uid, "(BODY.PEEK[])")
+            raw = next(
+                (
+                    part[1]
+                    for part in fetched or []
+                    if isinstance(part, tuple) and isinstance(part[1], bytes)
+                ),
+                None,
+            )
+            if status != "OK" or raw is None:
+                raise FileNotFoundError("source mail is no longer available")
+            parsed = parse_mime(raw, mail.account_id, provider=self.provider)
+            if parsed.message_id != mail.message_id and not mail.message_id.startswith("imap-"):
+                raise FileNotFoundError("source identity changed")
+            message = message_from_bytes(raw)
+            attachments = [
+                part
+                for part in message.walk()
+                if part.get_content_maintype() != "multipart"
+                and not (
+                    part.get_content_maintype() == "text"
+                    and part.get_content_disposition() != "attachment"
+                    and not part.get_filename()
+                )
+            ]
+            payload = attachments[index].get_payload(decode=True)
+            if not isinstance(payload, bytes):
+                raise ValueError("attachment has no payload")
+            return payload
+        finally:
+            with contextlib.suppress(Exception):
+                client.logout()
+
+    async def fetch_attachment(self, mail: MailMessage, index: int) -> bytes:
+        return await asyncio.to_thread(self._download_attachment, mail, index)
+
     async def fetch_history(self, limit: int = 50, offset: int = 0) -> list[MailMessage]:
         return await asyncio.to_thread(self._fetch_history, limit, offset)
 
     async def run(self, emit: MailEmitter, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
             try:
-                await self._poll_once(emit)
+                count = await self._poll_once(emit)
                 if self._status_callback is not None:
-                    self._status_callback(True)
+                    self._status_callback(not self._last_poll_error, count, self._last_poll_error)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -620,6 +701,42 @@ class IMAPSource:
         pass
 
 
+def account_form(preset: str = "qq") -> tuple[FormField, ...]:
+    return (
+        FormField(
+            "preset",
+            kind="select",
+            default=preset,
+            choices=("qq", "163", "gmail", "outlook", "custom"),
+        ),
+        FormField("username"),
+        FormField("password", kind="password", required=True, secret=True),
+        FormField("imap_host"),
+        FormField("imap_port", kind="number", default=993),
+        FormField("imap_ssl", kind="boolean", default=True),
+        FormField("imap_folder", default="INBOX"),
+        FormField("smtp_host"),
+        FormField("smtp_port", kind="number", default=465),
+        FormField("smtp_ssl", kind="boolean", default=True),
+        FormField(
+            "initial_sync",
+            kind="select",
+            default="new",
+            choices=("new", "recent", "all"),
+            label_key="ux.initial_sync",
+        ),
+        FormField("initial_days", kind="number", default=30, label_key="ux.initial_days"),
+        FormField(
+            "include_past_actions",
+            kind="boolean",
+            default=False,
+            label_key="ux.include_past_actions",
+        ),
+        FormField("interval_seconds", kind="number", default=300),
+        FormField("limit", kind="number", default=20),
+    )
+
+
 PLUGIN_INFO = PluginInfo(
     plugin_id="mailflow-mail-imap",
     name="IMAP Mail Source",
@@ -635,6 +752,7 @@ class MailPlugin:
 
     def mailflow_register(self, registrar: PluginRegistrar, config: Any) -> None:
         registrar.add_source("imap", IMAPSource)
+        registrar.add_form_fields(ComponentKind.MAIL_SOURCE, "imap", account_form())
 
 
 plugin = MailPlugin()

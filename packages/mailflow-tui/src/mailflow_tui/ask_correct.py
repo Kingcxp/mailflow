@@ -8,11 +8,8 @@ corrections (urgency / summary / reason — never the body). A proposal is
 shown in a confirmation dialog and reaches the stored record only once the
 user accepts it.
 
-The conversation is intentionally ephemeral: closing the modal discards it
-(a reminder is shown in the header). An accepted correction is persisted,
-matching the old Reject flow's "feedback becomes a guideline" behaviour — the
-user's stated preference is recorded into the feedback guidelines so future
-analyses tune the same way.
+The conversation is ephemeral. Accepted corrections change this mail;
+future analysis changes only when the user explicitly remembers a preference.
 """
 
 import asyncio
@@ -26,10 +23,10 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Input, Markdown, Static
+from textual.widgets import Button, Checkbox, Footer, Input, Markdown, Static
 
 from mailflow_tui.confirm import ConfirmModal
-from mailflow_tui.labels import urgency_label
+from mailflow_tui.labels import mail_status, urgency_label
 
 if TYPE_CHECKING:
     from mailflow_tui.app import MailFlowApp
@@ -80,6 +77,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
             yield Input(placeholder=self._t("tui.ask_correct_placeholder"), id="ask-correct-input")
             yield Button(self._t("tui.ask_correct_send"), id="ask-correct-send", variant="primary")
             yield Button(self._t("tui.btn_close"), id="ask-correct-close", variant="default")
+        yield Checkbox(self._t("ux.remember_correction"), id="remember-correction")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -105,21 +103,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         self.query_one("#ask-correct-urgency", Static).update(  # pyright: ignore[reportUnknownMemberType]
             urgency_line
         )
-        failed_notes = [note for note in record.processor_notes if note.status == "failed"]
-        failure_detail = "; ".join(
-            f"{note.processor_id}: {note.message}" for note in failed_notes[:2]
-        )
-        if failure_detail:
-            status_key = (
-                "tui.detail_analysis_failed"
-                if record.analysis_is_fallback
-                else "tui.detail_analysis_partial"
-            )
-            status = self._t(status_key, error=failure_detail)
-        elif record.analysis_is_fallback:
-            status = self._t("tui.detail_analysis_unavailable")
-        else:
-            status = ""
+        status = mail_status(self._service, record)
         self.query_one("#ask-correct-analysis-status", Static).update(  # pyright: ignore[reportUnknownMemberType]
             RichText(status, style="red") if status else RichText("")
         )
@@ -312,7 +296,10 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
                 break
         try:
             await self._service.apply_mail_correction(
-                self._record.record_id, corrections, note=note
+                self._record.record_id,
+                corrections,
+                note=note,
+                remember=self.query_one("#remember-correction", Checkbox).value,
             )
         except Exception as exc:  # the user must learn the write did not land
             logger.warning("ask & correct apply failed (%s)", type(exc).__name__)

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
 import json
 import queue as queue_module
 import tempfile
@@ -19,9 +20,19 @@ import httpx
 from httpx import AsyncClient
 from mailflow.action_store import action_has_ended
 from mailflow.config import MailFlowConfig
-from mailflow.domain import ActionItem, MailRecord, ReplyDraft, RuntimeSnapshot, TrashRecord
+from mailflow.domain import (
+    ActionItem,
+    BatchResult,
+    MailRecord,
+    PendingOperation,
+    ReplyDraft,
+    RuntimeSnapshot,
+    SmartActionResult,
+    TrashRecord,
+)
 from mailflow.errors import error_text
 from mailflow.i18n import I18n
+from mailflow.mail_query import MailPage, MailQuery
 from mailflow.permissions import AccessDenied
 from mailflow.replies import ReplyError
 from mailflow.settings import EditorKind, OptionSpec, SettingsSection
@@ -38,6 +49,7 @@ from textual.widgets import (
 )
 from textual.worker import WorkerCancelled
 
+from mailflow_tui import credentials
 from mailflow_tui.labels import error_detail, redact_operation_logs
 
 _SESSION_FILE = Path.home() / ".mailflow" / "tui-session.json"
@@ -53,10 +65,40 @@ def load_session() -> dict[str, Any]:
         mapping = cast("dict[str, Any]", loaded)
         for raw_key, raw_value in mapping.items():
             session[str(raw_key)] = raw_value
+    if session.get("saved_password"):
+        # Migrate older plaintext sessions on the first successful vault write.
+        try:
+            save_session(session)
+        except OSError:
+            session.pop("saved_password", None)
+            session["autologin"] = False
+            save_session(session)
+    elif session.get("credential_ref") and session.get("autologin"):
+        with contextlib.suppress(OSError):
+            secret = credentials.get_password(str(session["credential_ref"]))
+            if secret:
+                session["saved_password"] = secret
     return session
 
 
 def save_session(data: dict[str, Any]) -> None:
+    data = dict(data)
+    secret = data.pop("saved_password", None)
+    target = (
+        "MailFlow/remote/"
+        + hashlib.sha256(f"{data.get('url', '')}|{data.get('username', '')}".encode()).hexdigest()
+    )
+    if data.get("autologin") and secret:
+        try:
+            credentials.set_password(target, str(secret), str(data.get("username", "")))
+        except Exception:
+            raise OSError(
+                I18n(str(data.get("language") or "en")).t("ux.secure_store_failed")
+            ) from None
+        data["credential_ref"] = target
+    elif not data.get("autologin"):
+        credentials.delete_password(str(data.get("credential_ref") or target))
+        data.pop("credential_ref", None)
     _SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -331,8 +373,14 @@ class RemoteServiceAdapter:
     async def count_mails(self) -> int:
         return len(await self.client.list_mails())
 
-    async def list_actions(self) -> list[ActionItem]:
-        return [ActionItem.model_validate(item) for item in await self.client.list_actions()]
+    async def list_actions(self, *, include_completed: bool = False) -> list[ActionItem]:
+        return [
+            ActionItem.model_validate(item)
+            for item in await self.client.list_actions(include_completed=include_completed)
+        ]
+
+    async def list_actions_all(self) -> list[ActionItem]:
+        return await self.list_actions(include_completed=True)
 
     async def list_trash(self) -> list[TrashRecord]:
         return [TrashRecord.model_validate(item) for item in await self.client.list_trash()]
@@ -353,6 +401,48 @@ class RemoteServiceAdapter:
     async def set_mail_urgency(self, record_id: str, urgency: Any) -> MailRecord | None:
         data = await self.client.set_mail_urgency(record_id, urgency)
         return MailRecord.model_validate(data) if data is not None else None
+
+    async def smart_action(
+        self, instruction: str, *, progress: Any = None, **scope: Any
+    ) -> SmartActionResult:
+        return SmartActionResult.model_validate(
+            await self.client.smart_action(instruction, progress=progress, **scope)
+        )
+
+    async def apply_smart_plan(
+        self, plan_id: str, operations: list[PendingOperation]
+    ) -> dict[str, Any]:
+        data = await self.client.apply_smart_plan(
+            plan_id, [operation.model_dump(mode="json") for operation in operations]
+        )
+        data["failed"] = [PendingOperation.model_validate(row) for row in data.get("failed", [])]
+        return data
+
+    async def query_mails(self, query: MailQuery) -> MailPage:
+        return MailPage.model_validate(await self.client.query_mails(query.model_dump(mode="json")))
+
+    async def batch_mail(self, record_ids: list[str], **values: Any) -> BatchResult:
+        return BatchResult.model_validate(await self.client.batch_mail(record_ids, **values))
+
+    async def set_mail_state(self, record_ids: list[str], **values: Any) -> BatchResult:
+        return BatchResult.model_validate(await self.client.set_mail_state(record_ids, **values))
+
+    async def fetch_attachment(self, record_id: str, index: int) -> bytes:
+        return await self.client.fetch_attachment(record_id, index)
+
+    async def list_drafts(self, *, state: str = "") -> list[ReplyDraft]:
+        return [
+            ReplyDraft.model_validate(row) for row in await self.client.list_drafts(state=state)
+        ]
+
+    async def cleanup_preview(self) -> list[MailRecord]:
+        return [MailRecord.model_validate(row) for row in await self.client.cleanup_preview()]
+
+    async def cleanup_selected(self, record_ids: list[str]) -> BatchResult:
+        return BatchResult.model_validate(await self.client.cleanup_selected(record_ids))
+
+    async def run_cleanup(self) -> tuple[int, int]:
+        return await self.client.run_cleanup()
 
     async def delete_mail(self, record_id: str) -> bool:
         return await self.client.delete_mail(record_id)
@@ -499,21 +589,33 @@ class RemoteServiceAdapter:
         raise self._unsupported("gateway_providers")
 
     async def chat_about_mail(self, record_id: str, messages: list[dict[str, str]]) -> Any:
-        raise self._unsupported("chat_about_mail")
+        return await self.client.chat_about_mail(record_id, messages)
 
     async def apply_mail_correction(
-        self, record_id: str, corrections: dict[str, Any], *, note: str = ""
+        self, record_id: str, corrections: dict[str, Any], *, note: str = "", remember: bool = False
     ) -> Any:
-        raise self._unsupported("apply_mail_correction")
-
-    async def smart_action(self, instruction: str, *, progress: Any = None) -> Any:
-        raise self._unsupported("smart_action")
+        data = await self.client.apply_mail_correction(
+            record_id, corrections, note=note, remember=remember
+        )
+        return MailRecord.model_validate(data) if data is not None else None
 
     async def user_profile(self) -> str:
-        raise self._unsupported("user_profile")
+        return str((await self.client.profile())["profile"])
 
     async def set_user_profile(self, text: str) -> str:
-        raise self._unsupported("set_user_profile")
+        return str((await self.client.profile({"profile": text}))["profile"])
+
+    async def feedback_guidelines(self) -> str:
+        return str((await self.client.profile())["guidelines"])
+
+    async def set_feedback_guidelines(self, text: str) -> None:
+        await self.client.profile({"guidelines": text})
+
+    async def failed_deliveries(self) -> list[dict[str, Any]]:
+        return await self.client.failed_deliveries()
+
+    async def retry_deliveries(self, delivery_ids: list[str]) -> int:
+        return await self.client.retry_deliveries(delivery_ids)
 
     def open_url(self, url: str) -> str:
         raise self._unsupported("open_url")

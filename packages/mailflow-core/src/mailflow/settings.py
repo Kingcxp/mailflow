@@ -31,6 +31,7 @@ from mailflow.config import MailFlowConfig, is_secret_key
 # ---------------------------------------------------------------------------
 
 CORE_SECTION = "general"
+LIVE_CONFIG_GROUPS = frozenset({"accounts", "llms", "processors", "notifiers", "general"})
 """Section id holding the options that belong to MailFlow itself."""
 
 _CORE_GROUPS = ("general", "logging", "plugins", "storage", "i18n")

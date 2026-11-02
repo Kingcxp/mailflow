@@ -34,6 +34,7 @@ from mailflow.domain import (
     action_sort_time,
     to_utc,
 )
+from mailflow.mail_query import MailQuery
 from mailflow.prompts import prompt_context
 
 logger = logging.getLogger("mailflow.tools")
@@ -102,7 +103,7 @@ Choose tools from the user's actual request; there is no fixed topic or workflow
 - Use Current local time, Default timezone and Response language from the context.
   Answer in the user's language. Relative dates in a mail refer to its sent_at.
 - Find mail with find_mail. Use contains only for an explicitly required literal
-  substring; query expresses meaning, dates or field-specific conditions. When
+  substring; query expresses meaning. Use account_id, sender, after and before for precise conditions. All tools are restricted to the scope selected by the user. When
   both are supplied, every result must satisfy both. Do not invent keyword
   restrictions from a natural-language description.
 - Results are paginated. Follow next_offset with the same filters to inspect
@@ -234,9 +235,17 @@ class ToolRegistry:
     """
 
     def __init__(
-        self, service: ToolService, *, allow_mail_delete: bool = False, progress: Any = None
+        self,
+        service: ToolService,
+        *,
+        allow_mail_delete: bool = False,
+        progress: Any = None,
+        records: list[MailRecord] | None = None,
     ) -> None:
         self._service = service
+        self._scoped_records = records
+        self._allowed_ids = {r.record_id for r in records} if records is not None else None
+        self.matched_actions: dict[str, ActionItem] = {}
         self._allow_mail_delete = allow_mail_delete
         self._searches: dict[str, list[MailRecord]] = {}
         self.matched_record_ids: list[str] = []
@@ -271,6 +280,19 @@ class ToolRegistry:
                     "one of the two. Returns one line per match plus the mail ids."
                 ),
                 {
+                    "account_id": {"type": "string", "description": "Exact account id."},
+                    "sender": {
+                        "type": "string",
+                        "description": "Sender name or address substring.",
+                    },
+                    "after": {
+                        "type": "string",
+                        "description": "Inclusive received date/time, ISO-8601.",
+                    },
+                    "before": {
+                        "type": "string",
+                        "description": "Exclusive received date/time, ISO-8601.",
+                    },
                     "contains": {
                         "type": "string",
                         "description": "Literal substring every returned mail must contain.",
@@ -323,6 +345,7 @@ class ToolRegistry:
                         "description": "Start row; use next_offset for remaining tasks.",
                     },
                     "limit": {"type": "integer", "description": "Page size, at most 40."},
+                    "state": {"type": "string", "enum": ["open", "completed", "all"]},
                 },
                 [],
             ),
@@ -348,7 +371,7 @@ class ToolRegistry:
                     "location": {"type": "string", "description": "Optional place."},
                     "url": {"type": "string", "description": "Optional link."},
                 },
-                ["summary", "due_at"],
+                ["summary"],
             ),
             _tool_schema(
                 "edit_action",
@@ -358,6 +381,19 @@ class ToolRegistry:
                     "summary": {"type": "string", "description": "New title."},
                     "due_at": {"type": "string", "description": "New ISO-8601 start time."},
                     "due_end": {"type": "string", "description": "New ISO-8601 end time."},
+                    "clear_due": {
+                        "type": "boolean",
+                        "description": "Remove deadline and end time.",
+                    },
+                    "completed": {
+                        "type": "boolean",
+                        "description": "Complete (true) or reopen (false) the task.",
+                    },
+                    "reminder_enabled": {"type": "boolean"},
+                    "snoozed_until": {
+                        "type": "string",
+                        "description": "ISO-8601 time to remind again.",
+                    },
                     "clear_end": {"type": "boolean", "description": "Remove the current end time."},
                     "action_type": {
                         "type": "string",
@@ -404,7 +440,8 @@ class ToolRegistry:
     ) -> tuple[str, PendingOperation | None]:
         contains = _as_str(arguments, "contains").casefold()
         query = _as_str(arguments, "query")
-        if not contains and not query:
+        hard = {key: _as_str(arguments, key) for key in ("account_id", "sender", "after", "before")}
+        if not contains and not query and not any(hard.values()):
             raise ToolError(
                 "give `contains` (a literal word the mail must contain) or "
                 "`query` (a description of what to find), or both"
@@ -413,10 +450,11 @@ class ToolRegistry:
         limit = _MAX_RESULT_ROWS
         if isinstance(raw_limit, (int, float)) and not isinstance(raw_limit, bool):
             limit = max(1, min(_MAX_RESULT_ROWS, int(raw_limit)))
-        result = self.search_results.get((contains, query))
+        cache_query = query + (json.dumps(hard, sort_keys=True) if any(hard.values()) else "")
+        result = self.search_results.get((contains, cache_query))
         if result is None or not result.is_complete:
-            result = await self._find(contains=contains, query=query)
-        self.search_results[(contains, query)] = result
+            result = await self._find(contains=contains, query=query, filters=hard)
+        self.search_results[(contains, cache_query)] = result
         note = self._failure_note(result)
         for record in result.records:
             if record.record_id not in self.matched_record_ids:
@@ -452,13 +490,33 @@ class ToolRegistry:
             lines.append(f"incomplete search; no deletion token was created{note}")
         return "\n".join(lines), None
 
-    async def _find(self, *, contains: str, query: str) -> SmartSearchResult:
+    async def _find(
+        self, *, contains: str, query: str, filters: dict[str, str] | None = None
+    ) -> SmartSearchResult:
         """Literal pre-filter, then optional semantic ranking of what is left.
 
         A literal condition narrows candidates. Additional semantic or date
         conditions still filter those candidates rather than merely sorting them.
         """
-        records = await self._service.list_mails()
+        records = (
+            self._scoped_records
+            if self._scoped_records is not None
+            else await self._service.list_mails()
+        )
+        if filters and any(filters.values()):
+            zone = self._service.config.general.timezone
+            hard_query = MailQuery(
+                state="all",
+                account_id=filters.get("account_id", ""),
+                sender=filters.get("sender", ""),
+                after=_parse_instant(filters["after"], "after", zone)
+                if filters.get("after")
+                else None,
+                before=_parse_instant(filters["before"], "before", zone)
+                if filters.get("before")
+                else None,
+            )
+            records = [r for r in records if hard_query.matches(r)]
         if contains:
             records = [record for record in records if _matches_literal(record, contains)]
         if not query:
@@ -466,9 +524,7 @@ class ToolRegistry:
             return SmartSearchResult(records=records, total_mails=len(records))
         if not records:
             return SmartSearchResult(total_mails=0)
-        if contains:
-            return await self._service.smart_search(query, records=records, progress=self._progress)
-        return await self._service.smart_search(query, progress=self._progress)
+        return await self._service.smart_search(query, records=records, progress=self._progress)
 
     async def _tool_read_mail(
         self, arguments: dict[str, Any]
@@ -476,6 +532,8 @@ class ToolRegistry:
         from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
 
         record_id = _as_str(arguments, "record_id")
+        if self._allowed_ids is not None and record_id not in self._allowed_ids:
+            raise ToolError("mail is outside the user-selected scope")
         record = await self._service.get_mail(record_id)
         if record is None:
             raise ToolError("mail not found; use an id returned by find_mail")
@@ -497,6 +555,7 @@ class ToolRegistry:
             "offset": offset,
             "next_offset": offset + len(body) if truncated else None,
             "attachments": [attachment.filename for attachment in mail.attachments],
+            "image_text": mail.image_text,
             "urgency": record.effective_urgency.value,
             "analysis": record.analysis.model_dump(mode="json") if record.analysis else None,
         }
@@ -518,15 +577,22 @@ class ToolRegistry:
         self, arguments: dict[str, Any]
     ) -> tuple[str, PendingOperation | None]:
         query = _as_str(arguments, "query").casefold()
+        state = _as_str(arguments, "state") or "open"
         items = [
             item
-            for item in await self._service.list_actions()
-            if not query
-            or query
-            in " ".join(
-                (item.summary, item.notes, item.location, item.url, item.action_type)
-            ).casefold()
+            for item in await self._service.list_actions_all()
+            if (state == "all" or (item.completed_at is not None) == (state == "completed"))
+            and (
+                not query
+                or query
+                in " ".join(
+                    (item.summary, item.notes, item.location, item.url, item.action_type)
+                ).casefold()
+            )
         ]
+        if self._allowed_ids is not None:
+            items = [item for item in items if item.mail_id in self._allowed_ids]
+        self.matched_actions.update({item.item_id: item for item in items})
         items.sort(key=lambda item: (action_sort_time(item), item.item_id))
         if not items:
             return "no matching tasks", None
@@ -538,6 +604,7 @@ class ToolRegistry:
             lines.append(
                 f"- id={item.item_id} at={item.due_at.isoformat() if item.due_at else 'none'} "
                 f"type={item.action_type} summary={item.summary}"
+                + (" completed=true" if item.completed_at else " completed=false")
                 + (f" due_end={to_utc(item.due_end).isoformat()}" if item.due_end else "")
                 + (f" notes={_snippet(item.notes)}" if item.notes else "")
                 + (f" location={item.location}" if item.location else "")
@@ -572,6 +639,8 @@ class ToolRegistry:
         known: list[str] = []
         subjects: list[str] = []
         for record_id in requested:
+            if self._allowed_ids is not None and record_id not in self._allowed_ids:
+                raise ToolError("mail is outside the user-selected scope")
             record = await self._service.get_mail(record_id)
             if record is None:
                 raise ToolError(f"no mail with id {record_id!r}; use ids returned by find_mail")
@@ -601,22 +670,23 @@ class ToolRegistry:
         if not summary:
             raise ToolError("`summary` is required")
         zone = self._service.config.general.timezone
-        due_at = _parse_instant(_as_str(arguments, "due_at"), "due_at", zone)
+        due_value = _as_str(arguments, "due_at")
+        due_at = _parse_instant(due_value, "due_at", zone) if due_value else None
+        due_text = due_at.isoformat() if due_at else ""
         due_raw = _as_optional_str(arguments, "due_end")
         due_end = _parse_instant(due_raw, "due_end", zone) if due_raw else None
-        if due_end is not None and due_end <= due_at:
+        if due_end is not None and (due_at is None or due_end <= due_at):
             raise ToolError("`due_end` must be after `due_at`")
         action_type = _as_str(arguments, "action_type", default="errand")
         if not action_type:
             raise ToolError("`action_type` must not be empty")
         return (
-            f"staged: schedule entry {summary!r} due {due_at.isoformat()} "
-            "will be added on confirmation",
+            f"staged: schedule entry {summary!r} due {due_text} will be added on confirmation",
             PendingOperation(
                 tool="add_action",
                 arguments={
                     "summary": summary,
-                    "due_at": due_at.isoformat(),
+                    "due_at": due_text,
                     "due_end": due_end.isoformat() if due_end else "",
                     "action_type": action_type,
                     "notes": _as_str(arguments, "notes"),
@@ -625,14 +695,14 @@ class ToolRegistry:
                 },
                 record_ids=[],
                 summary_key="tui.agent_pending_action",
-                summary_params={"summary": summary, "due_at": due_at.isoformat()},
+                summary_params={"summary": summary, "due_at": due_text},
             ),
         )
 
     async def _tool_edit_action(
         self, arguments: dict[str, Any]
     ) -> tuple[str, PendingOperation | None]:
-        target = await self._find_action(_as_str(arguments, "item_id"))
+        target = await self._find_action(_as_str(arguments, "item_id"), include_hidden=True)
         changes: dict[str, Any] = {}
         for field in ("summary", "action_type", "notes", "location", "url"):
             if field not in arguments:
@@ -657,6 +727,20 @@ class ToolRegistry:
                 raise ToolError("`due_end` must be an ISO-8601 timestamp")
             new_end = _parse_instant(due_end_raw, "due_end", self._service.config.general.timezone)
             changes["due_end"] = new_end.isoformat()
+        for field in ("clear_due", "completed", "reminder_enabled"):
+            if field in arguments:
+                if not isinstance(arguments[field], bool):
+                    raise ToolError(f"`{field}` must be a boolean")
+                changes[field] = arguments[field]
+        if changes.get("clear_due"):
+            new_start = new_end = None
+            changes["clear_end"] = True
+        if arguments.get("snoozed_until"):
+            changes["snoozed_until"] = _parse_instant(
+                _as_str(arguments, "snoozed_until"),
+                "snoozed_until",
+                self._service.config.general.timezone,
+            ).isoformat()
         clear_end = arguments.get("clear_end", False)
         if not isinstance(clear_end, bool):
             raise ToolError("`clear_end` must be a boolean")
@@ -710,6 +794,8 @@ class ToolRegistry:
             if include_hidden
             else await self._service.list_actions()
         )
+        if self._allowed_ids is not None:
+            items = [item for item in items if item.mail_id in self._allowed_ids]
         target = next((item for item in items if item.item_id == item_id), None)
         if target is None:
             matches = [item for item in items if item.item_id.startswith(item_id)]
@@ -787,6 +873,7 @@ async def run_agent(
     instruction: str,
     *,
     progress: Any = None,
+    records: list[MailRecord] | None = None,
 ) -> SmartActionResult:
     """Execute one free-form instruction as a bounded tool-calling loop.
 
@@ -810,7 +897,10 @@ async def run_agent(
     result = SmartActionResult()
     step = 0
     registry = ToolRegistry(
-        service, allow_mail_delete=_explicit_delete_intent(instruction), progress=progress
+        service,
+        allow_mail_delete=_explicit_delete_intent(instruction),
+        progress=progress,
+        records=records,
     )
     specs = registry.specs()
     llm_ids = [llm.llm_id for llm in service.config.llms]
@@ -895,7 +985,8 @@ async def run_agent(
         result.failed_batches += search.failed_batches
         result.failure_reasons.extend(search.failure_reasons)
     result.failure_reasons = list(dict.fromkeys(result.failure_reasons))
-    result.total_mails = await service.count_mails()
+    result.actions = list(registry.matched_actions.values())
+    result.total_mails = len(records) if records is not None else await service.count_mails()
     if not result.is_complete:
         result.pending.clear()
     return result

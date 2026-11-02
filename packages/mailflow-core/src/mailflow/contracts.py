@@ -62,6 +62,13 @@ class MailSource(Protocol):
 
 
 @runtime_checkable
+class AttachmentSource(Protocol):
+    """Optional on-demand attachment access, independent of the OCR byte budget."""
+
+    async def fetch_attachment(self, mail: MailMessage, index: int) -> bytes: ...
+
+
+@runtime_checkable
 class ReplyPreflightSource(Protocol):
     """Optional local send-readiness check, without connecting to a provider.
 
@@ -164,6 +171,7 @@ class ProcessorResult(BaseModel):
 
     decision: ProcessorDecision = ProcessorDecision.CONTINUE
     analysis: MailAnalysis | None = None  # partial overlay, merged by the pipeline
+    archive: bool = False  # host-local archive, never deletes from the source mailbox
     llm_used: str = ""  # named llm actually used
     llm_backend: str = ""  # backend plugin id actually used
     notes: list[str] = Field(default_factory=lambda: [])

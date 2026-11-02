@@ -52,6 +52,18 @@ def relabel_buttons(owner: Any, labels: Mapping[str, str]) -> None:
             button.label = owner._service.t(key)
 
 
+def mail_status(service: Any, record: MailRecord) -> str:
+    source = service.t(
+        "ux.mail_source", account=record.mail.account_id, sender=record.mail.sender.display
+    )
+    status = (
+        service.t("ux.analysis_" + record.analysis_state)
+        if record.analysis_state in {"pending", "analysing"}
+        else analysis_status(service, record)
+    )
+    return str(source + ("\n" + status if status else ""))
+
+
 def analysis_status(service: Any, record: MailRecord) -> str:
     """Use the same failure/fallback status in mail and action details."""
     failed = [note for note in record.processor_notes if note.status == "failed"]

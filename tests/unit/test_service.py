@@ -684,12 +684,13 @@ class TestExpiredMail:
 
         expired = await service.list_expired_mails()
 
-        assert sorted(record.record_id for record in expired) == ["old-ad", "past-info"]
-        assert await service.purge_expired_mails() == 2
+        assert sorted(record.record_id for record in expired) == ["old-ad"]
+        assert await service.purge_expired_mails() == 1
         # exactly the expired records were handed to the trash move (the real
         # backend keeps them restorable; the error-prone part is the rule)
-        assert sorted(storage.deleted) == ["old-ad", "past-info"]
-        assert storage.refresh_deleted_at_calls == [True, True]
+        assert sorted(storage.deleted) == ["old-ad"]
+        assert storage.refresh_deleted_at_calls == [True]
+        assert await service.storage.get_mail("past-info") is not None
         assert await service.purge_expired_mails() == 0
 
 
@@ -818,10 +819,10 @@ class TestFeedbackWindow:
 
     async def test_distinct_notes_survive_and_keep_the_newest(self) -> None:
         service = new_service()
-        await service.record_feedback("m1", "广告")
-        await service.record_feedback("m2", "考试通知请保留")
+        await service.record_feedback("m1", "广告", remember=True)
+        await service.record_feedback("m2", "考试通知请保留", remember=True)
         for _ in range(25):
-            await service.record_feedback("m1", "广告")
+            await service.record_feedback("m1", "广告", remember=True)
 
         guidelines = (await service.feedback_guidelines()).splitlines()
 

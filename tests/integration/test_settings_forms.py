@@ -735,7 +735,7 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             assert isinstance(item, ActionItem)
             assert item.summary == "给导师发进度报告"
             assert item.mail_id == ""  # user-created: no source mail
-            assert item.due_at.year == 2099
+            assert item.due_at is not None and item.due_at.year == 2099
 
             # shows up in the actions table
             table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
@@ -776,6 +776,7 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             )
             edited = await service.storage.list_custom_actions()
             assert [item.summary for item in edited] == ["给导师发周报"]
+            assert edited[0].due_at is not None
             assert edited[0].due_at.year == 2099 and edited[0].due_at.month == 2
             # the table shows the edited row without a manual refresh
             await _wait_until(

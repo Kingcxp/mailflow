@@ -68,8 +68,9 @@ async def test_malformed_action_items_do_not_drop_the_valid_item() -> None:
         }
     )
     assert analysis.summary == "Retained summary"
-    assert [item.summary for item in analysis.action_items] == ["Collect papers"]
+    assert [item.summary for item in analysis.action_items] == ["Collect papers", "Undated item"]
     assert analysis.action_items[0].due_at == datetime(2026, 6, 10, 9, tzinfo=UTC)
+    assert analysis.action_items[1].due_at is None
 
 
 @pytest.mark.parametrize("items", [{"oops": 1}, None, "not a list"])

@@ -204,7 +204,7 @@ async def test_full_service_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         assert item.action_type == "exam"
         assert item.notes == "Bring student ID"
         assert item.mail_id == record_id
-        assert item.due_at.tzinfo is not None
+        assert item.due_at is not None and item.due_at.tzinfo is not None
 
         # -- llm fallback: primary failed, backup handled -----------------------
         # two analysis calls for one mail (primary attempt + backup success);

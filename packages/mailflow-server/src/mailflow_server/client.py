@@ -274,6 +274,109 @@ class RemoteClient:
                 return None
             raise
 
+    async def smart_action(
+        self, instruction: str, *, progress: Any = None, **scope: Any
+    ) -> dict[str, Any]:
+        started = await self._request("POST", "/smart/jobs", {"instruction": instruction, **scope})
+        job_id, cursor = started["job_id"], 0
+        try:
+            while True:
+                status = await self._request("GET", f"/smart/jobs/{job_id}?after={cursor}")
+                cursor = int(status["cursor"])
+                for event in status["events"]:
+                    if progress is not None:
+                        detail = event["detail"]
+                        if isinstance(detail, list):
+                            detail = tuple(cast("list[Any]", detail))
+                        progress(event["stage"], event["done"], event["total"], detail)
+                if status["state"] == "done":
+                    result: dict[str, Any] = status["result"]
+                    return result
+                if status["state"] != "running":
+                    raise RemoteError(400, "smart.model_failed", str(status.get("error") or ""))
+                await asyncio.sleep(0.2)
+        finally:
+            with contextlib.suppress(Exception):
+                await self._request("DELETE", f"/smart/jobs/{job_id}")
+
+    async def apply_smart_plan(
+        self, plan_id: str, operations: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request(
+            "POST", f"/smart/plans/{plan_id}", {"operations": operations}
+        )
+        return result
+
+    async def query_mails(self, values: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request("POST", "/mails/query", values)
+        return result
+
+    async def profile(self, values: dict[str, Any] | None = None) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request(
+            "GET" if values is None else "PUT", "/profile", values
+        )
+        return result
+
+    async def chat_about_mail(
+        self, record_id: str, messages: list[dict[str, str]]
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request(
+            "POST", f"/mails/{record_id}/chat", {"messages": messages}
+        )
+        return result
+
+    async def apply_mail_correction(
+        self, record_id: str, corrections: dict[str, Any], **values: Any
+    ) -> dict[str, Any] | None:
+        result: dict[str, Any] | None = await self._request(
+            "POST", f"/mails/{record_id}/correction", {"corrections": corrections, **values}
+        )
+        return result
+
+    async def failed_deliveries(self) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = await self._request("GET", "/deliveries/failed")
+        return result
+
+    async def retry_deliveries(self, delivery_ids: list[str]) -> int:
+        result = await self._request("POST", "/deliveries/retry", {"delivery_ids": delivery_ids})
+        return int(result["delivered"])
+
+    async def batch_mail(self, record_ids: list[str], **values: Any) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request(
+            "POST", "/mails/batch", {"record_ids": record_ids, **values}
+        )
+        return result
+
+    async def set_mail_state(self, record_ids: list[str], **values: Any) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request(
+            "POST", "/mails/state", {"record_ids": record_ids, **values}
+        )
+        return result
+
+    async def fetch_attachment(self, record_id: str, index: int) -> bytes:
+        import base64
+
+        result = await self._request("GET", f"/mails/{record_id}/attachments/{index}")
+        return base64.b64decode(result["data"])
+
+    async def list_drafts(self, *, state: str = "") -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = await self._request("GET", "/drafts?state=" + state)
+        return result
+
+    async def cleanup_preview(self) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = await self._request("GET", "/cleanup/preview")
+        return result
+
+    async def cleanup_selected(self, record_ids: list[str]) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request(
+            "POST", "/cleanup/selected", {"record_ids": record_ids}
+        )
+        return result
+
+    async def run_cleanup(self) -> tuple[int, int]:
+        result = await self._request("POST", "/cleanup")
+        return int(result["moved"]), int(result["purged"])
+
     async def delete_mail(self, record_id: str) -> bool:
         try:
             await self._request("DELETE", f"/mails/{record_id}")
@@ -292,8 +395,10 @@ class RemoteClient:
                 return None
             raise
 
-    async def list_actions(self) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = await self._request("GET", "/actions")
+    async def list_actions(self, *, include_completed: bool = False) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = await self._request(
+            "GET", "/actions?include_completed=true" if include_completed else "/actions"
+        )
         return result
 
     async def list_failed_mails(self) -> list[dict[str, Any]]:

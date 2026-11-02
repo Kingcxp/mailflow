@@ -145,6 +145,21 @@ class GeneralConfig(BaseModel):
         le=3600,
         description="How often the reminder scheduler checks due action items",
     )
+    mail_notifications: bool = Field(default=True, description="Notify when new mail arrives")
+    task_reminders: bool = Field(default=True, description="Send task reminders")
+    daily_digest: bool = Field(default=True, description="Send a daily unfinished-task digest")
+    daily_digest_hour: int | None = Field(
+        default=None,
+        ge=0,
+        le=23,
+        description="Daily digest hour; empty preserves the reminder hour",
+    )
+    daily_digest_minute: int | None = Field(
+        default=None,
+        ge=0,
+        le=59,
+        description="Daily digest minute; empty preserves the reminder minute",
+    )
     hourly_summary: bool = Field(
         default=False,
         description=(
@@ -576,8 +591,13 @@ def load_config(path: str | Path | None = None) -> MailFlowConfig:
     else:
         with open(path, "rb") as handle:
             raw = tomllib.load(handle)
+    return parse_config(raw, str(path) if path else "<memory>")
+
+
+def parse_config(raw: dict[str, Any], origin: str = "<memory>") -> MailFlowConfig:
+    """Validate configuration data, preserving environment placeholders."""
     placeholders: PlaceholderMap = {}
-    interpolated = _interpolate(raw, str(path) if path else "<memory>", placeholders)
+    interpolated = _interpolate(raw, origin, placeholders)
     config = MailFlowConfig.model_validate(interpolated)
     config.env_placeholders = placeholders
     if migrate_legacy_timeouts(config):
@@ -797,7 +817,7 @@ def _restore_secret_placeholders(config: MailFlowConfig) -> MailFlowConfig:
     return restored
 
 
-def write_config(config: MailFlowConfig, path: str | Path) -> None:
+def config_text(config: MailFlowConfig) -> str:
     """Persist the current config to a TOML file (tomli-w).
 
     Secrets that entered through ``${VAR}`` placeholders or ``api_key_env``
@@ -819,9 +839,13 @@ def write_config(config: MailFlowConfig, path: str | Path) -> None:
         return value
 
     data: dict[str, Any] = _restore_secret_placeholders(config).model_dump(mode="python")
+    return tomli_w.dumps(strip_none(data))
+
+
+def write_config(config: MailFlowConfig, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    _write_atomic(path, tomli_w.dumps(strip_none(data)))
+    _write_atomic(path, config_text(config))
 
 
 def _write_atomic(path: Path, text: str) -> None:

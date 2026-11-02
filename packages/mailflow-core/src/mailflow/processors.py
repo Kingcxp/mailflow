@@ -218,7 +218,8 @@ Rules:
    optional, set `must_do: false` (or omit it from action_items). The system
    drops missing and false flags. Parse due_at from the mail (ISO-8601 with
    offset); with only a date use 09:00 in the mail's timezone and say so in
-   the notes; never invent a date (leave action_items empty instead).
+   the notes; never invent a date. Use null for due_at when an actual required
+   action has no stated deadline.
    action_type is a built-in type or any concise, non-empty user-defined label.
    Built-ins: exam = tests/quizzes; meeting = a required meeting, call, defense
    or interview; errand = pickups, payments, applications or submissions;
@@ -229,11 +230,9 @@ Rules:
 6. Resolve every relative date against the mail's own send time, never against
    the current time: "tomorrow", "next Friday", "明天", "下周一" mean the day
    after / week after the mail was sent. The send time, its local rendering and
-   the mail's age are given above. A past mail therefore describes a past
-   event: if the mail is old and its deadline already passed, emit NO action
-   item for it (the summary and reason already carry the information). Keep
-   absolute future deadlines that the mail states explicitly, even in an old
-   mail, and never shift a date forward to make it "current".
+   the mail's age are given above. Preserve the original dates, including past
+   deadlines. The host decides whether a historical import should create past
+   tasks. Never shift a date forward to make it "current".
 7. reason must agree with urgency: never describe an obligation inside an "info"
    or "ad" reason — raise the level instead.
 8. If a recipient profile is given, it decides relevance: mail matching what they
@@ -332,7 +331,7 @@ def _coerce_analysis_payload(raw: dict[str, Any]) -> dict[str, Any]:
 class ActionPayload(BaseModel):
     summary: str
     action_type: str = "other"
-    due_at: str
+    due_at: str | None = None
     due_end: str | None = None
     notes: str = ""
     must_do: bool = False
@@ -366,11 +365,6 @@ def extract_json(text: str) -> dict[str, Any]:
     for key, value in cast(dict[str, Any], parsed).items():
         result[str(key)] = value
     return result
-
-
-def _as_utc(value: datetime) -> datetime:
-    """Normalize a possibly-naive datetime to UTC-aware (providers vary)."""
-    return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def parse_due_at(value: str, timezone: str) -> datetime:
@@ -598,9 +592,9 @@ class LLMImportanceProcessor:
                 )
                 continue
             try:
-                due_at = parse_due_at(item.due_at, context.timezone)
+                due_at = parse_due_at(item.due_at, context.timezone) if item.due_at else None
                 due_end = parse_due_at(item.due_end, context.timezone) if item.due_end else None
-                if due_end is not None and due_end <= due_at:
+                if due_end is not None and (due_at is None or due_end <= due_at):
                     logger.info(
                         "dropping action item %d from %r because due_end is not after due_at",
                         position,

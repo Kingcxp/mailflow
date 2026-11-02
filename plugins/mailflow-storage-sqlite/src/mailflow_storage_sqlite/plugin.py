@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,10 @@ from mailflow.domain import (
     ReplyDraft,
     TrashRecord,
     Urgency,
+    to_utc,
 )
+from mailflow.mail_query import MailPage, MailQuery
+from mailflow.ocr import searchable_record_text
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -99,6 +103,53 @@ class SQLiteStorage:
                 self._conn.close()
                 self._conn = None
 
+    async def export_backup(self) -> bytes:
+        async with self._lock:
+            with tempfile.TemporaryDirectory(prefix="mailflow-backup-") as folder:
+                path = Path(folder) / "snapshot.db"
+                snapshot = sqlite3.connect(path)
+                try:
+                    self._check_conn().backup(snapshot)
+                    # Consolidate WAL into a portable database that needs no
+                    # sidecar files and can also be opened in memory.
+                    snapshot.execute("PRAGMA journal_mode=DELETE")
+                finally:
+                    snapshot.close()
+                return path.read_bytes()
+
+    @staticmethod
+    def _backup_connection(payload: bytes) -> sqlite3.Connection:
+        snapshot = sqlite3.connect(":memory:")
+        try:
+            snapshot.deserialize(payload)
+            if snapshot.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise ValueError("invalid database backup")
+            for table, column, model in (
+                ("mails", "record_json", MailRecord),
+                ("trash_records", "record_json", MailRecord),
+                ("drafts", "draft_json", ReplyDraft),
+                ("custom_actions", "item_json", ActionItem),
+            ):
+                for row in snapshot.execute(f"SELECT {column} FROM {table}"):
+                    model.model_validate_json(row[0])
+            snapshot.execute("SELECT key, value FROM preferences LIMIT 1")
+            return snapshot
+        except BaseException:
+            snapshot.close()
+            raise
+
+    async def validate_backup(self, payload: bytes) -> None:
+        self._backup_connection(payload).close()
+
+    async def restore_backup(self, payload: bytes) -> None:
+        snapshot = self._backup_connection(payload)
+        try:
+            async with self._lock:
+                snapshot.backup(self._check_conn())
+                self._check_conn().execute("PRAGMA journal_mode=WAL")
+        finally:
+            snapshot.close()
+
     def _check_conn(self) -> sqlite3.Connection:
         if self._conn is None:
             raise RuntimeError("storage not initialized")
@@ -123,6 +174,72 @@ class SQLiteStorage:
                 "SELECT record_json FROM mails WHERE record_id = ?", (record_id,)
             ).fetchone()
         return MailRecord.model_validate_json(row[0]) if row else None
+
+    async def query_mails(self, query: MailQuery) -> MailPage:
+        clauses: list[str] = []
+        values: list[Any] = []
+
+        def where(clause: str, value: Any) -> None:
+            clauses.append(clause)
+            values.append(value)
+
+        if query.account_id:
+            where("json_extract(record_json, '$.mail.account_id') = ?", query.account_id)
+        if query.after:
+            where("received_ts >= ?", to_utc(query.after).timestamp())
+        if query.before:
+            where("received_ts < ?", to_utc(query.before).timestamp())
+        if query.urgency:
+            where(
+                "COALESCE(json_extract(record_json, '$.manual_urgency'), json_extract(record_json, '$.auto_urgency')) = ?",
+                query.urgency,
+            )
+        states = {
+            "inbox": "COALESCE(json_extract(record_json, '$.archived'), 0) = 0",
+            "archived": "json_extract(record_json, '$.archived') = 1",
+            "unread": "COALESCE(json_extract(record_json, '$.is_read'), 0) = 0",
+            "starred": "json_extract(record_json, '$.starred') = 1",
+            "pending": "json_extract(record_json, '$.analysis_state') IN ('pending', 'analysing')",
+            "failed": "json_extract(record_json, '$.analysis_state') = 'failed'",
+        }
+        if query.state in states:
+            clauses.append(states[query.state])
+
+        # Python casefold supports non-ASCII senders and text consistently with other backends.
+        def fold(text: Any) -> str:
+            return str(text or "").casefold()
+
+        self._check_conn().create_function("casefold", 1, fold)
+        if query.sender:
+            where(
+                "instr(casefold(COALESCE(json_extract(record_json, '$.mail.sender.name'), '') || ' <' || json_extract(record_json, '$.mail.sender.address') || '>'), ?) > 0",
+                query.sender.casefold(),
+            )
+        if query.text:
+
+            def searchable(raw: str) -> str:
+                return searchable_record_text(MailRecord.model_validate_json(raw)).casefold()
+
+            self._check_conn().create_function("mail_search", 1, searchable)
+            where("instr(mail_search(record_json), ?) > 0", query.text.casefold())
+        condition = " WHERE " + " AND ".join(clauses) if clauses else ""
+        offset, limit = max(0, query.offset), min(500, max(1, query.limit))
+        async with self._lock:
+            conn = self._check_conn()
+            total = int(
+                conn.execute("SELECT COUNT(*) FROM mails" + condition, values).fetchone()[0]
+            )
+            rows = conn.execute(
+                "SELECT record_json FROM mails"
+                + condition
+                + " ORDER BY received_ts DESC, record_id LIMIT ? OFFSET ?",
+                [*values, limit, offset],
+            ).fetchall()
+        return MailPage(
+            records=[MailRecord.model_validate_json(row[0]) for row in rows],
+            total=total,
+            next_offset=offset + limit if offset + limit < total else None,
+        )
 
     async def list_mails(self, limit: int | None = None) -> list[MailRecord]:
         async with self._lock:

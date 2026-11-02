@@ -137,15 +137,19 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
             hint = app.query_one("#mail-empty-hint", Static)
             # The inner scan reports the actual candidate count while it runs.
             assert "0/3" in str(hint.render())
-            # Changing the request cancels its old result and keeps the new input.
+            # Editing a new request keeps the active run; cancellation is explicit.
             search.value = "lecture"
+            await pilot.pause(0.1)
+            assert pane._smart_action_running  # pyright: ignore[reportPrivateUsage]
+            assert not router.cancelled.is_set()
+            button.press()
             for _ in range(60):
-                if not pane._smart_action_running and int(table.row_count) == 1:  # pyright: ignore[reportPrivateUsage]
+                if not pane._smart_action_running:  # pyright: ignore[reportPrivateUsage]
                     break
                 await asyncio.sleep(0.05)
             assert not pane._smart_action_running  # pyright: ignore[reportPrivateUsage]
             assert search.value == "lecture"
-            assert table.row_count == 1
+            assert router.cancelled.is_set()
             router.release.set()
 
             search.value = "the student ID invitation"
@@ -299,6 +303,7 @@ async def test_smart_query_task_crud_requires_confirmation(tmp_path: Path) -> No
             scheduled = await service.storage.list_custom_actions()
             assert [item.summary for item in scheduled] == ["Project review"]
             assert scheduled[0].action_type == "meeting"
+            assert scheduled[0].due_at is not None
             assert "2099-10-15T06:00:00+00:00" in scheduled[0].due_at.isoformat()
             assert scheduled[0].mail_id == ""  # a plain event, not a mail import
             assert scheduled[0].origin is ActionOrigin.CUSTOM
@@ -1296,7 +1301,7 @@ async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path
             double_dialog: ConfirmModal | None = None
             for _ in range(80):
                 current = app.screen
-                if isinstance(current, ConfirmModal):
+                if isinstance(current, ConfirmModal) and current.query("#confirm-cancel"):
                     double_dialog = current
                     break
                 await pilot.pause(0.05)

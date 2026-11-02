@@ -23,7 +23,6 @@ from zoneinfo import ZoneInfo
 from mailflow import __version__
 from mailflow.domain import (
     ActionItem,
-    ActionOrigin,
     CommandResponse,
     ComponentKind,
     MailRecord,
@@ -737,12 +736,22 @@ class CommandRouter:
             return await self._action_add(args[1:])
         if args[0] == "edit":
             return await self._action_edit(args[1:])
+        if args[0] in {"complete", "reopen"} and len(args) == 2:
+            action = await self._find_action(
+                args[1], state="completed" if args[0] == "reopen" else "open"
+            )
+            if action is None:
+                return self._err(self._t("action.not_found", item_id=args[1]))
+            await self.service.edit_action(action.item_id, completed=args[0] == "complete")
+            return self._ok(
+                self._t(
+                    "ux.task_completed" if args[0] == "complete" else "ux.task_reopened",
+                    summary=action.summary,
+                )
+            )
         if args[0] == "delete" and len(args) == 2:
             action = await self._find_action(args[1])
             if action is None:
-                return self._err(self._t("action.not_found", item_id=args[1]))
-            if action.origin is ActionOrigin.ANALYSIS and action.mail_id:
-                # mail-derived items are deleted with the source mail
                 return self._err(self._t("action.not_found", item_id=args[1]))
             if await self.service.delete_action(action.item_id):
                 return self._ok(self._t("action.deleted", item_id=action.item_id[:10]))
@@ -756,6 +765,12 @@ class CommandRouter:
             with contextlib.suppress(ValueError):
                 page = int(positionals[0])
         items = await self.service.list_actions()
+        if flags.get("state") in {"completed", "all"}:
+            items = [
+                item
+                for item in await self.service.list_actions(include_completed=True)
+                if flags["state"] == "all" or item.completed_at is not None
+            ]
         page_items, pages, page = _paginate(items, page)
         spans: list[StyleSpan] = [
             StyleSpan(
@@ -774,7 +789,9 @@ class CommandRouter:
                     text=f"\n#{start_index + offset} {due} [{item.action_type}] {item.summary}"
                 )
             )
-            detail = item.mail_id or self._t("action.source_user")
+            detail = f"id={item.item_id} · " + (
+                item.source_subject or item.mail_id or self._t("action.source_user")
+            )
             if item.notes:
                 detail += f" · {item.notes}"
             spans.append(StyleSpan(text=f"     {detail}", style=_STYLE_MUTED))
@@ -814,10 +831,8 @@ class CommandRouter:
             index += 1
         if summary is None:
             return self._err(self._t("action.add_usage"))
-        if due_raw is None:
-            return self._err(self._t("action.missing_due"))
-        due = self._parse_local_time(due_raw)
-        if due is None:
+        due = self._parse_local_time(due_raw) if due_raw is not None else None
+        if due_raw is not None and due is None:
             return self._err(self._t("action.invalid_due", value=due_raw))
         item = await self.service.add_action(summary, due, action_type=action_type, notes=notes)
         return self._ok(
@@ -916,7 +931,7 @@ class CommandRouter:
         except ValueError:
             return False
 
-    async def _find_action(self, item_id: str) -> ActionItem | None:
+    async def _find_action(self, item_id: str, *, state: str = "open") -> ActionItem | None:
         """Resolve one schedule entry.
 
         Resolution order: exact id, then the ``#n``/``n`` list index printed
@@ -929,7 +944,11 @@ class CommandRouter:
         clean = item_id.strip().lstrip("#")
         if not clean:
             return None
-        items = await self.service.list_actions()
+        items = [
+            item
+            for item in await self.service.list_actions(include_completed=True)
+            if (item.completed_at is not None) == (state == "completed")
+        ]
         for item in items:
             if item.item_id == item_id:
                 return item
@@ -1460,6 +1479,10 @@ class CommandRouter:
             report = await self.service.check_updates()
             return self._render_update_report(report)
         if sub == "now":
+            if args != ["now", "CONFIRM"]:
+                return self._err(
+                    self._t("ux.update_impact") + "\n" + self._t("ux.update_confirm_hint")
+                )
             results = await self.service.apply_updates()
             spans: list[StyleSpan] = [
                 StyleSpan(text=self._t("update.applied_title"), style=_STYLE_TITLE),
@@ -1530,9 +1553,10 @@ class CommandRouter:
         record = await self._find_mail(mail_id)
         if record is None:
             return self._err(self._t("mail.not_found", mail_id=mail_id))
-        reason = " ".join(args[1:]).strip()
+        remember = "--remember" in args[1:]
+        reason = " ".join(part for part in args[1:] if part != "--remember").strip()
         try:
-            await self.service.record_feedback(record.record_id, reason)
+            await self.service.record_feedback(record.record_id, reason, remember=remember)
         except ValueError as exc:
             return self._err(error_text(exc, self._t))
         return self._ok(self._t("feedback.added", mail_id=record.record_id))

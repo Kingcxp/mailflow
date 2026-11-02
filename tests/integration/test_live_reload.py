@@ -18,6 +18,8 @@ from mailflow.plugins import PluginInfo, PluginManager
 from mailflow.registry import PluginRegistrar
 from mailflow.service import MailFlowService
 
+from mailflow_test_support.commands import MemoryStorage
+
 
 class BeepNotifier:
     backend_id = "beep"
@@ -44,23 +46,6 @@ class BeepPlugin:
         registrar.add_notifier("beep", BeepNotifier)
 
 
-class _PrefStorage:
-    def __init__(self) -> None:
-        self.preferences: dict[str, str] = {}
-
-    async def initialize(self) -> None:
-        pass
-
-    async def close(self) -> None:
-        pass
-
-    async def get_preference(self, key: str) -> str | None:
-        return self.preferences.get(key)
-
-    async def set_preference(self, key: str, value: str) -> None:
-        self.preferences[key] = value
-
-
 def make_service(tmp_path: Path) -> MailFlowService:
     config = MailFlowConfig()
     config.notifiers.append(NotifierConfig(notifier_id="console", provider="console"))
@@ -70,7 +55,7 @@ def make_service(tmp_path: Path) -> MailFlowService:
         config=config,
         registry=manager.build_registry(),
         plugin_manager=manager,
-        storage=cast(Any, _PrefStorage()),
+        storage=cast(Any, MemoryStorage()),
         sources={},
         router=cast(Any, None),
         pipeline=PipelineEngine([]),
