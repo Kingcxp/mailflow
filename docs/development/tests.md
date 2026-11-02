@@ -11,6 +11,10 @@
 Shared doubles live under `tests/mailflow_test_support`; collected test modules do not import one another.
 Assertions should prove visible results, stored state, protocol data or resource cleanup.
 Avoid fixed prompt wording, widget-presence checks, private call sequences and machine-speed thresholds.
+Give each behavior one primary test boundary; higher layers should verify integration rather than
+repeat every lower-layer case. Share setup for a coherent workflow, while keeping independent
+failure and concurrency regressions. Count collected cases as well as test functions when reviewing
+the suite; parameterization should express meaningful input differences.
 
 ## Run
 

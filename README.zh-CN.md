@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1002%20collected-3776AB)]()
+[![Tests](https://img.shields.io/badge/tests-740%20collected-3776AB)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -54,7 +54,7 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
   即路由策略：第一项为默认，其后每一项都是前面的后备。
 - **浏览并解析已有邮件** —— 新用户可以分页浏览 MailFlow 配置之前就已收到的邮件，只
   勾选需要的进行解析；被选中的邮件走与实时邮件完全相同的处理流程，已解析过的会跳过。
-- **质量门槛** —— 当前收集 1002 个单元、集成和端到端用例；可选 OCR 与文件链接用例可能跳过。
+- **质量门槛** —— 当前收集 740 个单元、集成和端到端用例；可选 OCR 与文件链接用例可能跳过。
   Ruff、mypy 和 pyright 严格检查通过。内置与市场插件使用离线契约验证，集成测试覆盖邮件接收、
   分析、SQLite、通知、远程接口和远程终端界面的完整链路。
 - **远程访问** —— 支持带身份认证的 REST、WebSocket 服务和远程终端界面；进程管理仅在本地模式开放。
