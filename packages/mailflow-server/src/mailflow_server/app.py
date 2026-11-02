@@ -668,15 +668,18 @@ def create_app(service: MailFlowService) -> FastAPI:
                                 await websocket.send_json(historic)
                 if get_task in done:
                     await websocket.send_json(get_task.result())
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         finally:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # Release subscriptions before awaiting children: server shutdown
+            # may cancel the handler again while those tasks are settling.
             unsubscribe()
             if feed is not None:
                 feed.unsubscribe(queue)
+            for task in tasks:
+                task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     def _ws_relay(queue: asyncio.Queue[Any]) -> Any:
         async def relay(event: str, **payload: Any) -> None:
