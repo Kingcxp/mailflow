@@ -926,17 +926,23 @@ class MailFlowService:
         )
 
     async def list_mails(self, limit: int | None = None) -> list[MailRecord]:
-        return await self.storage.list_mails(limit=limit)
+        records = await self.storage.list_mails()
+        store = self.runtime.action_store
+        return store.mail_view(records, await store.read(records=records))[:limit]
 
     async def get_mail(self, record_id: str) -> MailRecord | None:
-        return await self.storage.get_mail(record_id)
+        record = await self.storage.get_mail(record_id)
+        if record is None:
+            return record
+        store = self.runtime.action_store
+        return store.mail_view([record], await store.read())[0]
 
     async def list_failed_mails(self) -> list[MailRecord]:
         """Records whose analysis did not complete: no analysis at all, or
         any processor note marked failed (e.g. an LLM rate limit). These are
         exactly the mails the bulk re-analysis targets."""
         failed: list[MailRecord] = []
-        for record in await self.storage.list_mails():
+        for record in await self.list_mails():
             if record.analysis is None:
                 failed.append(record)
                 continue
@@ -1004,7 +1010,7 @@ class MailFlowService:
         linked = await self._actions_by_mail()
         return [
             record
-            for record in await self.storage.list_mails()
+            for record in await self.list_mails()
             if self._is_expired(record, now, linked=linked.get(record.record_id, []))
         ]
 
@@ -1252,6 +1258,7 @@ class MailFlowService:
                 )
             )
         await self.storage.save_custom_action(item)
+        await self.events.emit("action.changed", item_id=item.item_id)
         return item
 
     @admin_operation
@@ -2273,9 +2280,11 @@ Return every candidate in this batch."""
             return (
                 f"candidate={candidate_id}\n"
                 f"date={record.mail.received_at.date().isoformat()}\n"
-                f"from={record.mail.sender.address}\n"
+                f"from={record.mail.sender.display}\n"
                 f"subject={record.mail.subject}\n"
                 f"summary={record.summary or ''}\n"
+                f"attachments={', '.join(a.filename for a in record.mail.attachments)}\n"
+                f"image_text={record.mail.image_text}\n"
                 f"body={body}"
             )
 

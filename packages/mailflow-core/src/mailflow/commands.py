@@ -391,11 +391,9 @@ class CommandRouter:
 
     @staticmethod
     def _matches_query(record: Any, query: str) -> bool:
-        from mailflow.ocr import searchable_mail_text
+        from mailflow.ocr import searchable_record_text
 
-        return (
-            query.casefold() in f"{record.summary}\n{searchable_mail_text(record.mail)}".casefold()
-        )
+        return query.casefold() in searchable_record_text(record).casefold()
 
     async def _mail_list(self, *, page: int = 1, query: str = "") -> CommandResponse:
         records = await self.service.list_mails()

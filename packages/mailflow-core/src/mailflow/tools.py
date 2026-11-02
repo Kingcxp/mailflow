@@ -260,8 +260,8 @@ class ToolRegistry:
                 "find_mail",
                 (
                     "Search stored mail. `contains` is a literal, case-insensitive "
-                    "substring every returned mail must contain (subject, body text "
-                    "or HTML) — use it when the user named an exact word. `query` is "
+                    "substring every returned mail must contain (subject, sender, body, "
+                    "summary, attachment names or image text) — use it for an exact word. `query` is "
                     "a meaning-based description ranked by the model. Give at least "
                     "one of the two. Returns one line per match plus the mail ids."
                 ),
@@ -1072,9 +1072,9 @@ def _haystack(record: MailRecord) -> str:
     subject is in the attachment.
 
     """
-    from mailflow.ocr import searchable_mail_text
+    from mailflow.ocr import searchable_record_text
 
-    return searchable_mail_text(record.mail).casefold()
+    return searchable_record_text(record).casefold()
 
 
 def _mail_line(record: MailRecord) -> str:

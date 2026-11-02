@@ -27,7 +27,7 @@ import re
 from html import unescape
 from typing import Any, cast
 
-from mailflow.domain import MAX_ATTACHMENT_BYTES, MailMessage
+from mailflow.domain import MAX_ATTACHMENT_BYTES, MailMessage, MailRecord
 
 logger = logging.getLogger("mailflow.ocr")
 
@@ -131,6 +131,11 @@ def searchable_mail_text(mail: MailMessage) -> str:
 def searchable_text(text: str) -> str:
     """Every searchable form joined, for callers that do a substring test."""
     return "\n".join(searchable_forms(text))
+
+
+def searchable_record_text(record: MailRecord) -> str:
+    """Canonical search scope for local, remote and model-assisted mail views."""
+    return f"{record.summary}\n{searchable_mail_text(record.mail)}"
 
 
 def _decode_image(data: bytes) -> Any | None:
@@ -320,6 +325,7 @@ __all__ = [
     "is_image_type",
     "searchable_forms",
     "searchable_mail_text",
+    "searchable_record_text",
     "searchable_text",
     "should_attempt",
 ]
