@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 
 import httpx
 from mailflow.domain import Urgency, parse_urgency
+from mailflow.errors import error_text
 from mailflow.service import ConfigReloadError, MailFlowService
 from rich.text import Text
 from textual.app import ComposeResult
@@ -125,7 +126,7 @@ class NotifierProbe:
             if provider == "console":
                 return str(t("tui.bots_online"))
         except Exception as exc:
-            return str(t("tui.bots_unreachable", error=type(exc).__name__))
+            return str(t("tui.bots_unreachable", error=error_text(exc, t)))
         return str(t("tui.notifications_no_probe"))
 
 
@@ -532,7 +533,7 @@ class NotificationsPane(Vertical):
             else:
                 await self._service.update_config_entry("notifiers", index, values)
         except ConfigReloadError as exc:
-            warning = str(exc)
+            warning = error_detail(self._service, exc)
         except Exception:
             if gateway is not None:
                 await self._service.gateway_shutdown(gateway, instance_id)
@@ -648,7 +649,7 @@ class NotificationsPane(Vertical):
         try:
             await self._service.remove_config_entry("notifiers", index)
         except ConfigReloadError as exc:
-            warning = str(exc)
+            warning = error_detail(self._service, exc)
         except Exception as exc:
             self._show_error(exc)
             return
@@ -720,7 +721,9 @@ class NotificationsPane(Vertical):
         for instance in instances:
             status = str(getattr(instance, "status", ""))
             if status == "error":
-                error = error_detail(self._service, getattr(instance, "error", "") or "")
+                error = error_detail(
+                    self._service, RuntimeError(getattr(instance, "error", "") or "")
+                )
                 gateway_by_id[str(instance.instance_id)] = (
                     f"{self._service.t('tui.bots_need_reconfig')} ({error})"
                 )

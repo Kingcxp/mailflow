@@ -495,6 +495,9 @@ async def test_failed_analysis_is_disclosed_without_a_fake_summary(tmp_path: Pat
             assert (
                 "http 500" in str(app.query_one("#mail-analysis-status", Static).render()).lower()
             )
+            assert "Internal Server Error" not in str(
+                app.query_one("#mail-analysis-status", Static).render()
+            )
             # the stored content stays visible, labelled as not generated
             summary = str(app.query_one("#mail-summary", Static).render()).lower()
             assert "source subject, not a summary" in summary

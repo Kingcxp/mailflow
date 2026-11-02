@@ -32,6 +32,7 @@ from mailflow.domain import (
     Urgency,
     parse_urgency,
 )
+from mailflow.errors import error_text
 from mailflow.letters import LETTER_LANGUAGES, html_to_text, markup_to_html
 from mailflow.permissions import (
     PermissionContext,
@@ -291,7 +292,7 @@ class CommandRouter:
         try:
             parts = shlex.split(line)
         except ValueError as exc:
-            return self._err(self._t("command.parse_error", reason=str(exc)))
+            return self._err(self._t("command.parse_error", reason=error_text(exc, self._t)))
         if not parts:
             return CommandResponse.plain("")
         command, *args = parts
@@ -310,16 +311,16 @@ class CommandRouter:
                 authorize_command(command, args, self._t)
                 return await handler(args)
         except KeyError as exc:
-            return self._err(str(exc))
+            return self._err(error_text(exc, self._t))
         except ValueError as exc:
-            return self._err(str(exc))
+            return self._err(error_text(exc, self._t))
         except PermissionError as exc:
-            return self._err(str(exc))
+            return self._err(error_text(exc, self._t))
         except NotImplementedError:
             return self._err(self._t("common.unsupported"))
         except Exception as exc:
             logger.error("command %r failed: %s", command, exc)
-            return self._err(self._t("common.error", message=str(exc)))
+            return self._err(self._t("common.error", message=error_text(exc, self._t)))
 
     # -- help -------------------------------------------------------------------------------
 
@@ -694,7 +695,7 @@ class CommandRouter:
         try:
             moved, purged = await self.service.purge_all_processed()
         except Exception as exc:
-            return self._err(self._t("common.error", message=str(exc)))
+            return self._err(self._t("common.error", message=error_text(exc, self._t)))
         return self._ok(
             self._t("mail.wipe_done", mails=moved, trash=purged)
             + f"\n({self._t('plugin.applies_now')})"
@@ -878,7 +879,7 @@ class CommandRouter:
                 notes=notes,
             )
         except ValueError as exc:
-            return self._err(str(exc))
+            return self._err(error_text(exc, self._t))
         return self._ok(
             self._t(
                 "action.updated",
@@ -965,13 +966,13 @@ class CommandRouter:
             try:
                 await self.service.plugin_repo_add(args[1], args[2])
             except ValueError as exc:
-                return self._err(str(exc))
+                return self._err(error_text(exc, self._t))
             return self._ok(self._t("plugin.repo_added", name=args[1]))
         if args[0] == "remove" and len(args) == 2:
             try:
                 await self.service.plugin_repo_remove(args[1])
             except KeyError as exc:
-                return self._err(str(exc))
+                return self._err(error_text(exc, self._t))
             return self._ok(self._t("plugin.repo_removed", name=args[1]))
         return self._err(self._t("plugin.repo_usage"))
 
@@ -984,7 +985,7 @@ class CommandRouter:
             try:
                 report = await self.service.market_fetch_report()
             except Exception as exc:
-                return self._err(str(exc))
+                return self._err(error_text(exc, self._t))
             entries = list(report.entries)
             if category:
                 entries = [entry for entry in entries if category in entry[1].categories]
@@ -1027,7 +1028,7 @@ class CommandRouter:
             try:
                 report = await self.service.market_fetch_report()
             except Exception as exc:
-                return self._err(str(exc))
+                return self._err(error_text(exc, self._t))
             found = next((entry for entry in report.entries if entry[1].id == args[1]), None)
             if found is None:
                 return self._err(self._t("plugin.market_not_found", plugin_id=args[1]))
@@ -1073,7 +1074,7 @@ class CommandRouter:
         try:
             report = await self.service.market_fetch_report()
         except Exception as exc:
-            return self._err(str(exc))
+            return self._err(error_text(exc, self._t))
         language = self.service.i18n.language
         needle = query.strip().casefold()
         entries = [
@@ -1125,9 +1126,9 @@ class CommandRouter:
         try:
             output = await self.service.plugin_uninstall(args[0])
         except KeyError as exc:
-            return self._err(str(exc.args[0]) if exc.args else str(exc))
+            return self._err(error_text(exc, self._t))
         except (ValueError, RuntimeError) as exc:
-            return self._err(str(exc))
+            return self._err(error_text(exc, self._t))
         return self._ok(
             self._t("plugin.uninstalled_ok", plugin_id=args[0]) + (f"\n{output}" if output else "")
         )
@@ -1138,7 +1139,7 @@ class CommandRouter:
         try:
             created = await self.service.plugin_enable(args[0])
         except (KeyError, ValueError, RuntimeError) as exc:
-            return self._err(str(exc))
+            return self._err(error_text(exc, self._t))
         text = self._t("plugin.enabled_ok", plugin_id=args[0])
         if created:
             text += "\n" + self._t("plugin.instance_created", notifier_id=created)
@@ -1150,7 +1151,7 @@ class CommandRouter:
         try:
             await self.service.plugin_disable(args[0])
         except (KeyError, ValueError) as exc:
-            return self._err(str(exc))
+            return self._err(error_text(exc, self._t))
         return self._ok(
             f"{self._t('plugin.disabled_ok', plugin_id=args[0])}\n({self._t('plugin.applies_now')})"
         )
@@ -1163,16 +1164,16 @@ class CommandRouter:
             try:
                 output = await self.service.plugin_install_local(local)
             except KeyError as exc:
-                return self._err(str(exc.args[0]) if exc.args else str(exc))
+                return self._err(error_text(exc, self._t))
             except (ValueError, RuntimeError) as exc:
-                return self._err(str(exc))
+                return self._err(error_text(exc, self._t))
             return self._ok(output)
         try:
             output = await self.service.plugin_install(args[0])
         except KeyError as exc:
-            return self._err(str(exc.args[0]) if exc.args else str(exc))
+            return self._err(error_text(exc, self._t))
         except (ValueError, RuntimeError) as exc:
-            return self._err(str(exc))
+            return self._err(error_text(exc, self._t))
         already = self._t("plugin.already_installed", plugin_id=args[0])
         if output == already:
             return self._ok(output)
@@ -1534,7 +1535,7 @@ class CommandRouter:
         try:
             await self.service.record_feedback(record.record_id, reason)
         except ValueError as exc:
-            return self._err(str(exc))
+            return self._err(error_text(exc, self._t))
         return self._ok(self._t("feedback.added", mail_id=record.record_id))
 
     async def _cmd_lang(self, args: list[str]) -> CommandResponse:
@@ -1585,7 +1586,7 @@ class CommandRouter:
             try:
                 mails, actions = await self.service.clear_all_records()
             except Exception as exc:
-                return self._err(self._t("common.error", message=str(exc)))
+                return self._err(self._t("common.error", message=error_text(exc, self._t)))
             return self._ok(self._t("clean.records_done", mails=mails, actions=actions))
         if sub == "trash":
             if rest != ["CONFIRM"]:
@@ -1600,7 +1601,7 @@ class CommandRouter:
             try:
                 purged = await self.service.purge_trash_now()
             except Exception as exc:
-                return self._err(self._t("common.error", message=str(exc)))
+                return self._err(self._t("common.error", message=error_text(exc, self._t)))
             return self._ok(self._t("clean.trash_done", count=purged))
         return self._err(self._t("clean.usage"))
 
@@ -1717,7 +1718,7 @@ class CommandRouter:
             try:
                 option = self.service.get_config_option(args[1])
             except KeyError as exc:
-                return self._err(str(exc))
+                return self._err(error_text(exc, self._t))
             marker = "*" if option.is_secret() else ""
             value = "***" if option.is_secret() else option.value
             return self._ok(f"{option.key}{marker} = {value}")
@@ -1725,7 +1726,7 @@ class CommandRouter:
             try:
                 option = await self.service.set_config_value(args[1], args[2])
             except (KeyError, ValueError) as exc:
-                return self._err(str(exc))
+                return self._err(error_text(exc, self._t))
             return self._ok(
                 self._t(
                     "config.set_ok",

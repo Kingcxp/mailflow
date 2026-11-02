@@ -72,6 +72,7 @@ from mailflow.domain import (
     to_utc,
     utcnow,
 )
+from mailflow.errors import error_text, translated_error
 from mailflow.events import EventBus
 from mailflow.gateway import GatewayManager
 from mailflow.i18n import I18n
@@ -92,7 +93,6 @@ from mailflow.plugin_market import (
     MarketPlugin,
     MarketRepositoryStatus,
     Repository,
-    safe_failure_reason,
 )
 from mailflow.plugins import PluginManager
 from mailflow.processors import LLMImportanceProcessor as _BUILTIN_LLM_IMPORTANCE
@@ -893,12 +893,18 @@ class MailFlowService:
             )
             for account in self.config.accounts
         ]
+        plugins = self.plugin_manager.snapshots(self.registry)
+        for plugin in plugins:
+            if plugin.error:
+                plugin.error = self.plugin_manager.failure_detail(plugin.plugin_id, self.t)[
+                    "message"
+                ]
         return RuntimeSnapshot(
             version=__version__,
             language=self.i18n.language,
             timezone=self.config.general.timezone,
             started_at=self.runtime.started_at or utcnow(),
-            plugins=self.plugin_manager.snapshots(self.registry),
+            plugins=plugins,
             components=self.registry.snapshots(),
             accounts=account_snapshots,
             llms=[
@@ -1099,12 +1105,12 @@ class MailFlowService:
         has no history capability.
         """
         if limit <= 0:
-            raise ValueError("history limit must be positive")
+            raise translated_error(ValueError, self.t, "errors.history_limit")
         if offset < 0:
-            raise ValueError("history offset must not be negative")
+            raise translated_error(ValueError, self.t, "errors.history_offset")
         source = self.sources.get(account_id)
         if source is None:
-            raise KeyError(self.t("account.not_found", account_id=account_id))
+            raise translated_error(KeyError, self.t, "account.not_found", account_id=account_id)
         if not isinstance(source, HistoryCapableSource):
             raise NotImplementedError(self.t("account.history_unsupported", account_id=account_id))
         return await source.fetch_history(limit=limit, offset=offset)
@@ -1226,18 +1232,18 @@ class MailFlowService:
         final_summary = summary.strip()
         final_type = action_type.strip()
         if not final_summary:
-            raise ValueError(self.t("action.missing_summary"))
+            raise translated_error(ValueError, self.t, "action.missing_summary")
         if not final_type:
-            raise ValueError(self.t("action.missing_type"))
+            raise translated_error(ValueError, self.t, "action.missing_type")
         if due_at.tzinfo is None or due_at.utcoffset() is None:
-            raise ValueError(self.t("action.invalid_due_edit"))
+            raise translated_error(ValueError, self.t, "action.invalid_due_edit")
         final_due = to_utc(due_at)
         if due_end is not None:
             if due_end.tzinfo is None or due_end.utcoffset() is None:
-                raise ValueError(self.t("action.invalid_due_edit"))
+                raise translated_error(ValueError, self.t, "action.invalid_due_edit")
             final_end = to_utc(due_end)
             if final_end <= final_due:
-                raise ValueError(self.t("action.invalid_end"))
+                raise translated_error(ValueError, self.t, "action.invalid_end")
         else:
             final_end = None
         item = ActionItem(
@@ -1254,12 +1260,12 @@ class MailFlowService:
         )
         duplicate = await self._find_duplicate_action(item)
         if duplicate is not None:
-            raise ValueError(
-                self.t(
-                    "action.duplicate",
-                    summary=duplicate.summary,
-                    time=duplicate.time_range,
-                )
+            raise translated_error(
+                ValueError,
+                self.t,
+                "action.duplicate",
+                summary=duplicate.summary,
+                time=duplicate.time_range,
             )
         await self.storage.save_custom_action(item)
         await self.events.emit("action.changed", item_id=item.item_id)
@@ -1288,26 +1294,26 @@ class MailFlowService:
         item = next((candidate for candidate in custom if candidate.item_id == item_id), None)
         if item is None:
             if any(candidate.item_id == item_id for candidate in await self.list_actions_all()):
-                raise ValueError(self.t("action.not_editable", item_id=item_id))
-            raise ValueError(self.t("action.not_found", item_id=item_id))
+                raise translated_error(ValueError, self.t, "action.not_editable", item_id=item_id)
+            raise translated_error(ValueError, self.t, "action.not_found", item_id=item_id)
         if clear_end and due_end is not None:
-            raise ValueError(self.t("action.invalid_end"))
+            raise translated_error(ValueError, self.t, "action.invalid_end")
         final_summary = item.summary if summary is None else summary.strip()
         if not final_summary:
-            raise ValueError(self.t("action.missing_summary"))
+            raise translated_error(ValueError, self.t, "action.missing_summary")
         final_type = item.action_type if action_type is None else action_type.strip()
         if not final_type:
-            raise ValueError(self.t("action.missing_type"))
+            raise translated_error(ValueError, self.t, "action.missing_type")
         if due_at is not None and (due_at.tzinfo is None or due_at.utcoffset() is None):
-            raise ValueError(self.t("action.invalid_due_edit"))
+            raise translated_error(ValueError, self.t, "action.invalid_due_edit")
         if due_end is not None and (due_end.tzinfo is None or due_end.utcoffset() is None):
-            raise ValueError(self.t("action.invalid_due_edit"))
+            raise translated_error(ValueError, self.t, "action.invalid_due_edit")
         final_due = item.due_at if due_at is None else to_utc(due_at)
         final_end = (
             None if clear_end else (to_utc(due_end) if due_end is not None else item.due_end)
         )
         if final_end is not None and to_utc(final_end) <= final_due:
-            raise ValueError(self.t("action.invalid_end"))
+            raise translated_error(ValueError, self.t, "action.invalid_end")
         updated = item.model_copy(
             update={
                 "summary": final_summary,
@@ -1321,12 +1327,12 @@ class MailFlowService:
         )
         duplicate = await self._find_duplicate_action(updated, exclude_item_id=item.item_id)
         if duplicate is not None:
-            raise ValueError(
-                self.t(
-                    "action.duplicate",
-                    summary=duplicate.summary,
-                    time=duplicate.time_range,
-                )
+            raise translated_error(
+                ValueError,
+                self.t,
+                "action.duplicate",
+                summary=duplicate.summary,
+                time=duplicate.time_range,
             )
         await self.storage.save_custom_action(updated)
         if updated.origin is ActionOrigin.SEMINAR:
@@ -1539,7 +1545,7 @@ class MailFlowService:
                 candidates=await self.list_seminar_candidates(), total_mails=0
             )
         if not self.config.llms:
-            raise RuntimeError(self.t("seminar.no_llm"))
+            raise translated_error(RuntimeError, self.t, "seminar.no_llm")
         llm_ids = [llm.llm_id for llm in self.config.llms]
         fallback_timezone = self.config.general.timezone
         now = datetime.now(UTC)
@@ -1773,10 +1779,10 @@ class MailFlowService:
                 None,
             )
             if index is None:
-                raise ValueError(self.t("seminar.candidate_not_found"))
+                raise translated_error(ValueError, self.t, "seminar.candidate_not_found")
             candidate = candidates[index]
             if candidate.status is SeminarStatus.REJECTED:
-                raise ValueError(self.t("seminar.rejected"))
+                raise translated_error(ValueError, self.t, "seminar.rejected")
             existing = next(
                 (
                     item
@@ -1789,7 +1795,7 @@ class MailFlowService:
                 return existing
             final_title = (title if title is not None else candidate.title).strip()
             if not final_title:
-                raise ValueError(self.t("seminar.missing_title"))
+                raise translated_error(ValueError, self.t, "seminar.missing_title")
             if not final_title.startswith(_SEMINAR_TITLE_MARKER):
                 # idempotent: the guard keeps a re-import (or a caller that
                 # already typed the marker) from stacking prefixes
@@ -1798,10 +1804,10 @@ class MailFlowService:
             try:
                 zone = ZoneInfo(final_timezone)
             except ZoneInfoNotFoundError as exc:
-                raise ValueError(self.t("seminar.invalid_timezone")) from exc
+                raise translated_error(ValueError, self.t, "seminar.invalid_timezone") from exc
             final_start = starts_at if starts_at is not None else candidate.starts_at
             if final_start is None:
-                raise ValueError(self.t("seminar.missing_start"))
+                raise translated_error(ValueError, self.t, "seminar.missing_start")
             if final_start.tzinfo is None:
                 final_start = final_start.replace(tzinfo=zone)
             final_start = final_start.astimezone(UTC)
@@ -1813,9 +1819,9 @@ class MailFlowService:
                     final_end = final_end.replace(tzinfo=zone)
                 final_end = final_end.astimezone(UTC)
                 if final_end <= final_start:
-                    raise ValueError(self.t("seminar.invalid_end"))
+                    raise translated_error(ValueError, self.t, "seminar.invalid_end")
             if final_start < datetime.now(UTC):
-                raise ValueError(self.t("seminar.past"))
+                raise translated_error(ValueError, self.t, "seminar.past")
             final_location = (location if location is not None else candidate.location).strip()
             final_url = (url if url is not None else candidate.url).strip()
             final_description = (
@@ -1872,12 +1878,12 @@ class MailFlowService:
                     # re-import raced): idempotent success, not an error —
                     # raising here is what produced duplicate schedule rows
                     return duplicate
-                raise ValueError(
-                    self.t(
-                        "action.duplicate",
-                        summary=duplicate.summary,
-                        time=duplicate.time_range,
-                    )
+                raise translated_error(
+                    ValueError,
+                    self.t,
+                    "action.duplicate",
+                    summary=duplicate.summary,
+                    time=duplicate.time_range,
                 )
             await self.storage.save_custom_action(item)
             candidates[index] = candidate.model_copy(
@@ -1909,7 +1915,7 @@ class MailFlowService:
         grounded rationale (kept to the most recent entries).
         """
         if not reason.strip():
-            raise ValueError("feedback reason must not be empty")
+            raise translated_error(ValueError, self.t, "errors.feedback_reason")
         await self.storage.set_preference(f"feedback.{mail_id}", reason.strip())
         guidelines = await self.storage.get_preference("feedback.guidelines") or ""
         note = reason.strip()
@@ -1975,7 +1981,7 @@ class MailFlowService:
         try:
             report = await self.check_updates()
         except Exception as exc:
-            await self._set_update_state("failed", error=safe_failure_reason(exc))
+            await self._set_update_state("failed", error=error_text(exc, self.t))
             raise
         # Mark the day as checked only after the check succeeded: a network
         # failure must not suppress today's remaining retry windows.
@@ -1998,7 +2004,7 @@ class MailFlowService:
         try:
             results = await self.apply_updates()
         except Exception as exc:
-            await self._set_update_state("failed", error=safe_failure_reason(exc))
+            await self._set_update_state("failed", error=error_text(exc, self.t))
             raise
         failed = any(value.startswith("failed:") for value in results.values())
         await self._set_update_state("failed" if failed else "applied", results=results)
@@ -2280,7 +2286,7 @@ Return every candidate in this batch."""
             _report("match", 0, 0, "smart_empty")
             return SmartSearchResult(total_mails=0)
         if not self.config.llms:
-            raise RuntimeError("No LLM is configured; add one in Settings → LLMs.")
+            raise translated_error(RuntimeError, self.t, "seminar.no_llm")
         llm_ids = [llm.llm_id for llm in self.config.llms]
 
         def _brief(candidate_id: str, record: MailRecord) -> str:
@@ -2497,7 +2503,7 @@ Return every candidate in this batch."""
         if not text:
             return SmartActionResult()
         if not self.config.llms:
-            raise RuntimeError(self.t("seminar.no_llm"))
+            raise translated_error(RuntimeError, self.t, "seminar.no_llm")
         return await run_agent(self, self.router, text, progress=progress)
 
     @admin_operation
@@ -2702,7 +2708,7 @@ Return every candidate in this batch."""
 
         option = find_option(self.config, key)
         if option is None:
-            raise KeyError(f"unknown config option {key!r}")
+            raise translated_error(KeyError, self.t, "errors.unknown_option", option=key)
         return option
 
     @admin_operation
@@ -2711,7 +2717,7 @@ Return every candidate in this batch."""
         from mailflow.config import patch_config_value, set_option_value, write_config
 
         if self.config_path is None:
-            raise ValueError("no config file loaded; start with --config to persist changes")
+            raise translated_error(ValueError, self.t, "errors.config_required")
         updated = set_option_value(self.config, key, raw_value)
         patched = patch_config_value(self.config_path, key, _config_value_of(updated, key))
         if not patched:
@@ -2741,7 +2747,7 @@ Return every candidate in this batch."""
     async def _persist_config(self, updated: MailFlowConfig, key: str) -> None:
         """Write ``updated`` back, preferring a comment-preserving patch."""
         if self.config_path is None:
-            raise ValueError("no config file loaded; start with --config to persist changes")
+            raise translated_error(ValueError, self.t, "errors.config_required")
         patched = False
         if "[" not in key and key.count(".") == 1:
             with contextlib.suppress(AttributeError, KeyError):
@@ -2762,8 +2768,15 @@ Return every candidate in this batch."""
                     if secret:
                         detail = detail.replace(secret, "***")
                 logger.error("hot reload failed after %s change: %s", key, detail)
-                await self.events.emit("config.reload_failed", key=key, error=detail)
-                raise ConfigReloadError(self.t("tui.settings_reload_failed", error=detail)) from exc
+                await self.events.emit(
+                    "config.reload_failed", key=key, error=error_text(exc, self.t)
+                )
+                raise translated_error(
+                    ConfigReloadError,
+                    self.t,
+                    "tui.settings_reload_failed",
+                    error=error_text(exc, self.t),
+                ) from exc
 
     @admin_operation
     async def set_setting(self, key: str, raw_value: Any) -> OptionSpec | None:
@@ -2866,16 +2879,16 @@ Return every candidate in this batch."""
     async def plugin_repo_add(self, name: str, url: str) -> None:
         """Register a marketplace repository without requiring network access."""
         if self.config_path is None:
-            raise ValueError("no config file loaded; start with --config to persist changes")
+            raise translated_error(ValueError, self.t, "errors.config_required")
         name = name.strip()
         url = url.strip()
         if not name or not url:
-            raise ValueError("repository name and URL must not be empty")
+            raise translated_error(ValueError, self.t, "errors.repository_fields")
         from mailflow.config import PluginRepositoryConfig, write_config
 
         repos = list(self.config.plugins.repositories)
         if any(repo.name == name for repo in repos):
-            raise ValueError(f"repository {name!r} already configured")
+            raise translated_error(ValueError, self.t, "errors.repository_exists", name=name)
         updated = self.config.model_copy(deep=True)
         updated.plugins.repositories = [*repos, PluginRepositoryConfig(name=name, url=url)]
         write_config(updated, self.config_path)
@@ -2891,19 +2904,21 @@ Return every candidate in this batch."""
     async def plugin_repo_edit(self, original_name: str, name: str, url: str) -> None:
         """Atomically replace one repository configuration entry."""
         if self.config_path is None:
-            raise ValueError("no config file loaded; start with --config to persist changes")
+            raise translated_error(ValueError, self.t, "errors.config_required")
         original_name = original_name.strip()
         name = name.strip()
         url = url.strip()
         if not original_name or not name or not url:
-            raise ValueError("repository name and URL must not be empty")
+            raise translated_error(ValueError, self.t, "errors.repository_fields")
         from mailflow.config import PluginRepositoryConfig, write_config
 
         repos = list(self.config.plugins.repositories)
         if not any(repo.name == original_name for repo in repos):
-            raise KeyError(f"repository {original_name!r} not configured")
+            raise translated_error(
+                KeyError, self.t, "errors.repository_missing", name=original_name
+            )
         if name != original_name and any(repo.name == name for repo in repos):
-            raise ValueError(f"repository {name!r} already configured")
+            raise translated_error(ValueError, self.t, "errors.repository_exists", name=name)
         updated = self.config.model_copy(deep=True)
         updated.plugins.repositories = [
             PluginRepositoryConfig(name=name, url=url) if repo.name == original_name else repo
@@ -2921,13 +2936,13 @@ Return every candidate in this batch."""
     @admin_operation
     async def plugin_repo_remove(self, name: str) -> None:
         if self.config_path is None:
-            raise ValueError("no config file loaded; start with --config to persist changes")
+            raise translated_error(ValueError, self.t, "errors.config_required")
         from mailflow.config import write_config
 
         repos = list(self.config.plugins.repositories)
         remaining = [repo for repo in repos if repo.name != name]
         if len(remaining) == len(repos):
-            raise KeyError(f"repository {name!r} not configured")
+            raise translated_error(KeyError, self.t, "errors.repository_missing", name=name)
         updated = self.config.model_copy(deep=True)
         updated.plugins.repositories = remaining
         write_config(updated, self.config_path)
@@ -3023,7 +3038,9 @@ Return every candidate in this batch."""
         try:
             output = await self.market.install(plugin)
         except Exception as exc:
-            raise RuntimeError(safe_failure_reason(exc)) from exc
+            raise translated_error(
+                RuntimeError, self.t, "errors.plugin_operation", error=error_text(exc, self.t)
+            ) from exc
         if str(output or "").strip() == f"{plugin.id} is already installed":
             return self.t("plugin.already_installed", plugin_id=plugin.id), True
         await self.record_plugin_source(plugin.id, source)
@@ -3037,9 +3054,11 @@ Return every candidate in this batch."""
         try:
             found = await asyncio.to_thread(self.market.find, plugin_id)
         except Exception as exc:
-            raise RuntimeError(safe_failure_reason(exc)) from exc
+            raise translated_error(
+                RuntimeError, self.t, "errors.plugin_operation", error=error_text(exc, self.t)
+            ) from exc
         if found is None:
-            raise KeyError(self.t("plugin.market_not_found", plugin_id=plugin_id))
+            raise translated_error(KeyError, self.t, "plugin.market_not_found", plugin_id=plugin_id)
         _repo, plugin = found
         output, _already = await self._install_plugin(plugin, source=plugin.source)
         return output
@@ -3051,7 +3070,7 @@ Return every candidate in this batch."""
 
         folders = await asyncio.to_thread(detect_plugin_folders, root)
         if not folders:
-            raise ValueError(self.t("plugin.local_none_found", path=str(root)))
+            raise translated_error(ValueError, self.t, "plugin.local_none_found", path=str(root))
         installed: list[str] = []
         failed: list[str] = []
         for folder in folders:
@@ -3076,11 +3095,13 @@ Return every candidate in this batch."""
                     )
                     continue
             except Exception as exc:
-                failed.append(f"{plugin_id}: {exc!s}")
+                failed.append(f"{plugin_id}: {error_text(exc, self.t)}")
                 continue
             installed.append(plugin_id)
         if not installed:
-            raise ValueError(self.t("plugin.local_failed", detail="; ".join(failed)))
+            raise translated_error(
+                ValueError, self.t, "plugin.local_failed", detail="; ".join(failed)
+            )
         result = self.t(
             "plugin.local_installed", count=len(installed), plugins=", ".join(installed)
         )
@@ -3121,20 +3142,20 @@ Return every candidate in this batch."""
         package = await self.storage.get_preference(f"plugin.package.{plugin_id}")
         if package and PluginMarket.is_installed(plugin_id, package=package):
             return
-        raise KeyError(self.t("plugin.unknown_plugin", plugin_id=plugin_id))
+        raise translated_error(KeyError, self.t, "plugin.unknown_plugin", plugin_id=plugin_id)
 
     @admin_operation
     async def plugin_disable(self, plugin_id: str) -> None:
         """Disable a plugin; its components unload immediately (config
         entries stay, so re-enabling restores them)."""
         if self.config_path is None:
-            raise ValueError(self.t("plugin.config_required"))
+            raise translated_error(ValueError, self.t, "plugin.config_required")
         await self._require_known_plugin(plugin_id)
         if (
             self.registry.plugin_for(self.config.storage.provider, ComponentKind.STORAGE)
             == plugin_id
         ):
-            raise ValueError(self.t("plugin.active_storage", plugin_id=plugin_id))
+            raise translated_error(ValueError, self.t, "plugin.active_storage", plugin_id=plugin_id)
         updated = self.config.model_copy(deep=True)
         plugins = updated.plugins
         if plugin_id not in plugins.disabled:
@@ -3184,7 +3205,7 @@ Return every candidate in this batch."""
         get a default instance when none exists. Returns the id of the
         auto-created instance ('' when none was needed)."""
         if self.config_path is None:
-            raise ValueError(self.t("plugin.config_required"))
+            raise translated_error(ValueError, self.t, "plugin.config_required")
         await self._require_known_plugin(plugin_id)
         updated = self.config.model_copy(deep=True)
         plugins = updated.plugins
@@ -3200,8 +3221,18 @@ Return every candidate in this batch."""
             reason = self.plugin_manager.failures.get(
                 plugin_id, self.t("tui.plugin_status_not_loaded")
             )
+            logger.error("plugin %s failed to load: %s", plugin_id, reason)
+            failure = self.plugin_manager.failure_detail(plugin_id, self.t)
             self.plugin_manager.build_registry(self.config)
-            raise RuntimeError(self.t("plugin.load_failed", plugin_id=plugin_id, reason=reason))
+            raise translated_error(
+                RuntimeError,
+                self.t,
+                "plugin.load_failed",
+                plugin_id=plugin_id,
+                reason=failure["message"],
+                reason_code=failure["code"],
+                reason_params=failure["params"],
+            )
         created_instance = ""
         if self._auto_instances_for(plugin_id, updated, registry):
             created_instance = updated.notifiers[-1].notifier_id
@@ -3232,7 +3263,9 @@ Return every candidate in this batch."""
         try:
             found = await asyncio.to_thread(self.market.find, plugin_id)
         except Exception as exc:
-            raise RuntimeError(safe_failure_reason(exc)) from exc
+            raise translated_error(
+                RuntimeError, self.t, "errors.plugin_operation", error=error_text(exc, self.t)
+            ) from exc
         return found[1] if found is not None else None
 
     @admin_operation
@@ -3244,22 +3277,24 @@ Return every candidate in this batch."""
             set[str], getattr(self.plugin_manager, "bundled_plugin_ids", set[str]())
         )
         if plugin_id in bundled_ids:
-            raise ValueError(self.t("plugin.bundled_uninstall_forbidden", plugin_id=plugin_id))
+            raise translated_error(
+                ValueError, self.t, "plugin.bundled_uninstall_forbidden", plugin_id=plugin_id
+            )
         if (
             self.registry.plugin_for(self.config.storage.provider, ComponentKind.STORAGE)
             == plugin_id
         ):
-            raise ValueError(self.t("plugin.active_storage", plugin_id=plugin_id))
+            raise translated_error(ValueError, self.t, "plugin.active_storage", plugin_id=plugin_id)
         owned = self._plugin_components(plugin_id)
         if self.config_path is None and any(
             (kind, entry.provider) in owned
             for group, kind in self._PLUGIN_CONFIG_KINDS.items()
             for entry in getattr(self.config, group)
         ):
-            raise ValueError(self.t("plugin.config_required"))
+            raise translated_error(ValueError, self.t, "plugin.config_required")
         plugin = await self._find_market_plugin(plugin_id)
         if plugin is None:
-            raise KeyError(self.t("plugin.market_not_found", plugin_id=plugin_id))
+            raise translated_error(KeyError, self.t, "plugin.market_not_found", plugin_id=plugin_id)
         package = (
             plugin.package
             or await self.storage.get_preference(f"plugin.package.{plugin_id}")
@@ -3279,7 +3314,9 @@ Return every candidate in this batch."""
         try:
             output = await self.market.uninstall(plugin)
         except Exception as exc:
-            raise RuntimeError(safe_failure_reason(exc)) from exc
+            raise translated_error(
+                RuntimeError, self.t, "errors.plugin_operation", error=error_text(exc, self.t)
+            ) from exc
         await self.clear_plugin_source(plugin_id)
         await self.storage.set_preference(f"plugin.package.{plugin_id}", "")
         removed = await self._drop_config_entries_for(owned)
@@ -3507,7 +3544,7 @@ Return every candidate in this batch."""
                 instance_id=instance_id,
             )
         except PermissionError as exc:
-            return str(exc)
+            return error_text(exc, self.t)
         except Exception:
             # A chat command must NEVER die silently: the user has no way
             # to tell 'crashed' from 'ignored'. Log the traceback (the
@@ -3861,7 +3898,7 @@ Return every candidate in this batch."""
         except Exception:
             raise self._reply_error("reply.storage_failed") from None
         if record is None:
-            raise KeyError(self.t("reply.mail_not_found", mail_id=mail_id))
+            raise translated_error(KeyError, self.t, "reply.mail_not_found", mail_id=mail_id)
         return record
 
     async def _reply_source(self, draft: ReplyDraft) -> MailSource:
@@ -3934,7 +3971,7 @@ Return every candidate in this batch."""
     async def _confirm_reply_locked(self, draft_id: str, token: str) -> ReplyDraft:
         draft = await self._require_draft(draft_id)
         if not draft.is_confirmation_valid(token):
-            raise PermissionError(self.t("reply.confirm_invalid"))
+            raise translated_error(PermissionError, self.t, "reply.confirm_invalid")
         source = await self._reply_source(draft)
         draft.state = ReplyState.SENDING
         draft.token = draft.token_expires_at = None
@@ -3987,7 +4024,7 @@ Return every candidate in this batch."""
     async def _require_draft(self, draft_id: str) -> ReplyDraft:
         draft = await self.get_draft(draft_id)
         if draft is None:
-            raise KeyError(self.t("reply.draft_not_found", draft_id=draft_id))
+            raise translated_error(KeyError, self.t, "reply.draft_not_found", draft_id=draft_id)
         return draft
 
 

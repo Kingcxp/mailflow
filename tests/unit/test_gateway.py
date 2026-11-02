@@ -552,8 +552,8 @@ async def test_notifier_pane_merge_gateway_error_shows_reconfig() -> None:
     pane = NotificationsPane(cast(Any, service))
     results = {"qq-1": "online", "plain-2": "ok"}
     await pane._merge_gateway_states(results)  # pyright: ignore[reportPrivateUsage]
-    assert "t(tui.bots_need_reconfig)" in results["qq-1"]
-    assert "is not installed" in results["qq-1"]
+    assert results["qq-1"] == "t(tui.bots_need_reconfig) (t(errors.operation))"
+    assert "is not installed" not in results["qq-1"]
     # non-gateway notifiers are untouched
     assert results["plain-2"] == "ok"
 

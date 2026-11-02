@@ -270,6 +270,9 @@ async def test_ensure_bridge_syncs_per_account_on_healthy_poll() -> None:
         _bot_url = "http://127.0.0.1:18789/bot/message"
         _token = ""
 
+        def matches_connection(self, bot_url: str, token: str) -> bool:
+            return self._bot_url == bot_url and self._token == token
+
     prov._bridges["napcat-1"] = cast(  # pyright: ignore[reportPrivateUsage]
         Any, _LiveBridge()
     )

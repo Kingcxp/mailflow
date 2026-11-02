@@ -41,10 +41,13 @@ from fastapi import (  # pyright: ignore[reportMissingTypeStubs]
     WebSocketDisconnect,
     WebSocketException,
 )
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse  # pyright: ignore[reportMissingTypeStubs]
+from mailflow.errors import error_info
 from mailflow.permissions import AccessDenied, PermissionContext, permission_scope, require_admin
 from mailflow.protocol import event_frame, json_value
 from mailflow.replies import ReplyError
+from mailflow.service import ConfigReloadError
 from pydantic import BaseModel
 from starlette.requests import HTTPConnection
 
@@ -151,6 +154,7 @@ def create_app(service: MailFlowService) -> FastAPI:
                 status_code=401,
                 detail={
                     "code": "permission.unauthorized",
+                    "params": {},
                     "message": service.t("permission.unauthorized"),
                 },
                 headers={"WWW-Authenticate": "Basic"},
@@ -168,44 +172,53 @@ def create_app(service: MailFlowService) -> FastAPI:
 
     # ------------------------------------------------------------------ REST
 
-    @app.exception_handler(AccessDenied)
-    async def permission_failure(_: Request, exc: AccessDenied) -> JSONResponse:
-        return JSONResponse(
-            status_code=403,
-            content={
-                "detail": {
-                    "code": exc.code,
-                    "params": exc.params,
-                    "message": str(exc),
-                }
-            },
+    def http_failure(status: int, code: str, **params: Any) -> HTTPException:
+        return HTTPException(
+            status_code=status,
+            detail={"code": code, "params": params, "message": service.t(code, **params)},
         )
 
-    @app.exception_handler(ValueError)
-    async def invalid_value(_: Request, exc: ValueError) -> JSONResponse:
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+    async def operation_failure(_: Request, exc: Exception) -> JSONResponse:
+        if isinstance(exc, PermissionError):
+            status = 403
+        elif isinstance(exc, NotImplementedError):
+            status = 501
+        elif isinstance(exc, KeyError):
+            status = 404
+        elif isinstance(exc, (ValueError, ReplyError)):
+            status = 400
+        elif isinstance(exc, ConfigReloadError):
+            status = 409
+        elif isinstance(exc, TimeoutError):
+            status = 504
+        else:
+            status = 500
+        if status >= 500:
+            logger.error("remote operation failed", exc_info=exc)
+        return JSONResponse(status_code=status, content={"detail": error_info(exc, service.t)})
 
-    @app.exception_handler(NotImplementedError)
-    async def unsupported_operation(_: Request, exc: NotImplementedError) -> JSONResponse:
+    for kind in (
+        AccessDenied,
+        PermissionError,
+        ValueError,
+        KeyError,
+        NotImplementedError,
+        ReplyError,
+        RuntimeError,
+        OSError,
+        Exception,
+    ):
+        app.add_exception_handler(kind, operation_failure)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
-            status_code=501,
+            status_code=422,
             content={
                 "detail": {
-                    "code": "common.unsupported",
-                    "message": service.t("common.unsupported"),
-                }
-            },
-        )
-
-    @app.exception_handler(ReplyError)
-    async def reply_failure(_: Request, exc: ReplyError) -> JSONResponse:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "detail": {
-                    "code": exc.code,
-                    "params": exc.params,
-                    "message": str(exc),
+                    "code": "errors.invalid_value",
+                    "params": {},
+                    "message": service.t("errors.invalid_value"),
                 }
             },
         )
@@ -220,17 +233,12 @@ def create_app(service: MailFlowService) -> FastAPI:
                 status_code=409,
                 detail={
                     "code": "reply.confirm_invalid",
+                    "params": {},
                     "message": service.t("reply.confirm_invalid"),
                 },
             ) from None
         except KeyError as exc:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "code": "reply.not_found",
-                    "message": str(exc),
-                },
-            ) from None
+            raise HTTPException(status_code=404, detail=error_info(exc, service.t)) from None
 
     @app.post("/mails/{record_id}/replies")
     async def create_reply(record_id: str, _: None = Depends(guard)) -> Any:
@@ -240,9 +248,7 @@ def create_app(service: MailFlowService) -> FastAPI:
     async def get_draft(draft_id: str, _: None = Depends(guard)) -> Any:
         draft = await service.get_draft(draft_id)
         if draft is None:
-            raise HTTPException(
-                status_code=404, detail=service.t("reply.draft_not_found", draft_id=draft_id)
-            )
+            raise http_failure(404, "reply.draft_not_found", draft_id=draft_id)
         return _jsonable(draft)
 
     @app.put("/drafts/{draft_id}")
@@ -284,9 +290,7 @@ def create_app(service: MailFlowService) -> FastAPI:
     async def get_mail(record_id: str, _: None = Depends(guard)) -> Any:
         record = await service.get_mail(record_id)
         if record is None:
-            raise HTTPException(
-                status_code=404, detail=service.t("mail.not_found", mail_id=record_id)
-            )
+            raise http_failure(404, "mail.not_found", mail_id=record_id)
         return _jsonable(record)
 
     @app.post("/mails/{record_id}/urgency")
@@ -297,17 +301,13 @@ def create_app(service: MailFlowService) -> FastAPI:
         urgency = None if level == "auto" else parse_urgency(level)
         record = await service.set_mail_urgency(record_id, urgency)
         if record is None:
-            raise HTTPException(
-                status_code=404, detail=service.t("mail.not_found", mail_id=record_id)
-            )
+            raise http_failure(404, "mail.not_found", mail_id=record_id)
         return _jsonable(record)
 
     @app.delete("/mails/{record_id}")
     async def delete_mail(record_id: str, _: None = Depends(guard)) -> Any:
         if not await service.delete_mail(record_id):
-            raise HTTPException(
-                status_code=404, detail=service.t("mail.not_found", mail_id=record_id)
-            )
+            raise http_failure(404, "mail.not_found", mail_id=record_id)
         return {"ok": True}
 
     @app.post("/mails/delete")
@@ -342,9 +342,7 @@ def create_app(service: MailFlowService) -> FastAPI:
     async def restore(record_id: str, _: None = Depends(guard)) -> Any:
         record = await service.restore_mail(record_id)
         if record is None:
-            raise HTTPException(
-                status_code=404, detail=service.t("trash.not_found", record_id=record_id)
-            )
+            raise http_failure(404, "trash.not_found", record_id=record_id)
         return _jsonable(record)
 
     @app.post("/commands")
@@ -364,14 +362,7 @@ def create_app(service: MailFlowService) -> FastAPI:
 
     @app.put("/settings/{key:path}")
     async def put_setting(key: str, body: dict[str, Any], _: None = Depends(guard)) -> Any:
-        from mailflow.settings import SettingsError
-
-        try:
-            spec = await service.set_setting(key, body.get("value"))
-        except SettingsError as exc:
-            raise HTTPException(status_code=400, detail=f"{exc.option}: {exc.message}") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        spec = await service.set_setting(key, body.get("value"))
         return _jsonable(spec)
 
     @app.post("/settings/{key:path}/reset")
@@ -403,7 +394,7 @@ def create_app(service: MailFlowService) -> FastAPI:
         router_any: Any = service.router
         resolved: Any | None = router_any.backend_for(llm_id) if router_any is not None else None
         if resolved is None:
-            raise HTTPException(status_code=404, detail=service.t("llm.not_found", llm_id=llm_id))
+            raise http_failure(404, "llm.not_found", llm_id=llm_id)
         backend: Any = resolved[0]
         loop = asyncio.get_running_loop()
         started = loop.time()
@@ -415,12 +406,7 @@ def create_app(service: MailFlowService) -> FastAPI:
         except NotImplementedError:
             raise
         except Exception as exc:
-            message = str(exc)
-            for cfg in getattr(service.router, "_configs", {}).values():
-                key = getattr(cfg, "api_key", "")
-                if key and key in message:
-                    message = message.replace(key, "***")
-            raise HTTPException(status_code=502, detail=message[:300]) from exc
+            raise HTTPException(status_code=502, detail=error_info(exc, service.t)) from exc
         return {
             "ok": True,
             "seconds": round(loop.time() - started, 2),
@@ -469,7 +455,7 @@ def create_app(service: MailFlowService) -> FastAPI:
                             require_admin(service.t)
                         except AccessDenied as exc:
                             await websocket.send_json(
-                                event_frame("error", {"code": exc.code, "message": str(exc)})
+                                event_frame("error", error_info(exc, service.t))
                             )
                         else:
                             history = feed.subscribe(queue)

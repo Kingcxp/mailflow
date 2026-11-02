@@ -445,7 +445,7 @@ class TestCommandRouter:
         commands, _ = router
         response = await commands.execute("config set general.reminder_hour 9")
         assert not response.ok
-        assert "config file" in response.text
+        assert response.text == commands.service.t("errors.config_required")
 
     async def test_plugin_search_filters_market(
         self, router: tuple[CommandRouter, MemoryStorage], tmp_path: Path

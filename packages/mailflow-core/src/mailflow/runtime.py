@@ -30,7 +30,9 @@ from mailflow.domain import (
     dedupe_actions,
     to_utc,
 )
+from mailflow.errors import error_text
 from mailflow.events import EventBus
+from mailflow.i18n import I18n
 from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.pipeline import PipelineEngine
 
@@ -195,8 +197,8 @@ class MailFlowRuntime:
             source = self._sources.get(account.account_id)
             if source is None:
                 self._account_status[account.account_id] = "error"
-                self._account_errors[account.account_id] = (
-                    f"no source adapter for provider {account.provider!r}"
+                self._account_errors[account.account_id] = (self._i18n or I18n()).t(
+                    "errors.source_missing", provider=account.provider
                 )
                 logger.error(
                     "account %r: no source adapter for provider %r",
@@ -338,8 +340,8 @@ class MailFlowRuntime:
                         continue
                     if account.account_id not in self._sources:
                         self._account_status[account.account_id] = "error"
-                        self._account_errors[account.account_id] = (
-                            f"no source adapter for provider {account.provider!r}"
+                        self._account_errors[account.account_id] = (self._i18n or I18n()).t(
+                            "errors.source_missing", provider=account.provider
                         )
                     else:
                         self._account_status[account.account_id] = "stopped"
@@ -426,12 +428,12 @@ class MailFlowRuntime:
             if generation != self._source_generation:
                 return
             self._account_status[account.account_id] = "error"
-            self._account_errors[account.account_id] = str(exc)
+            self._account_errors[account.account_id] = error_text(exc, (self._i18n or I18n()).t)
             logger.error("source for account %r failed: %s", account.account_id, exc)
             await self._events.emit(
                 f"{_EVENT_PREFIX}account.error",
                 account_id=account.account_id,
-                error=str(exc),
+                error=self._account_errors[account.account_id],
             )
         finally:
             if (

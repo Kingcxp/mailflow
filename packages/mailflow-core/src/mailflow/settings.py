@@ -329,10 +329,19 @@ def find_spec(config: MailFlowConfig, key: str, **kwargs: Any) -> OptionSpec | N
 class SettingsError(ValueError):
     """An edit was rejected; ``option`` names the offending config path."""
 
-    def __init__(self, option: str, message: str) -> None:
+    def __init__(
+        self,
+        option: str,
+        message: str,
+        *,
+        code: str = "errors.setting",
+        params: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.option = option
         self.message = message
+        self.code = code
+        self.params = {"option": option} if params is None else params
 
 
 def _split_key(key: str) -> list[str | int]:

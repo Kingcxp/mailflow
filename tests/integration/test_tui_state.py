@@ -250,7 +250,8 @@ async def test_failure_details_agree_and_missing_mail_has_visible_state(host: An
     await service.storage.save_mail(record)
     async with app.run_test(size=(140, 45)) as pilot:
         await pilot.pause()
-        assert "offline [retry]" in text(app, "#mail-analysis-status")
+        assert service.t("errors.operation") in text(app, "#mail-analysis-status")
+        assert "offline [retry]" not in text(app, "#mail-analysis-status")
         assert service.t("tui.detail_summary_fallback") in text(app, "#mail-summary")
         app.push_screen(ActionModal(app._service, action))
         await pilot.pause()
@@ -293,7 +294,8 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         assert app.query_one("#mail-table", DataTable).row_count == 0
         assert app.query_one("#actions-table", DataTable).row_count == 0
         for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
-            assert "offline [retry]" in text(app, ident)
+            assert view.t("errors.connection") in text(app, ident)
+            assert "offline [retry]" not in text(app, ident)
         failures.clear()
         await app.query_one(MailPane).refresh_mail()
         await app.query_one(ActionsPane).refresh_actions()
@@ -305,13 +307,15 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         await app.query_one(RuntimePane).refresh_runtime()
         await settle(pilot)
         for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
-            assert "offline [retry]" in text(app, ident)
+            assert view.t("errors.connection") in text(app, ident)
+            assert "offline [retry]" not in text(app, ident)
         assert app.query_one("#mail-table", DataTable).row_count == 1
         assert app.query_one("#actions-table", DataTable).row_count == 1
         failures.add("/mails/m1")
         app.query_one("#btn-trash", Button).press()
         await pilot.pause()
-        assert "offline [retry]" in text(app, "#mail-operation-status")
+        assert view.t("errors.connection") in text(app, "#mail-operation-status")
+        assert "offline [retry]" not in text(app, "#mail-operation-status")
         assert await service.storage.get_mail("m1") is not None
         failures.clear()
         await app.query_one(MailPane).refresh_mail()

@@ -14,6 +14,7 @@ Component ownership (plugin id) is stamped at registration time by the
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from importlib import metadata
 from typing import Any
@@ -22,6 +23,7 @@ import pluggy
 
 from mailflow.config import MailFlowConfig
 from mailflow.domain import ComponentKind, ComponentSnapshot, PluginSnapshot
+from mailflow.errors import error_code
 from mailflow.plugin_market import safe_failure_reason
 from mailflow.registry import ComponentRegistry, PluginRegistrar
 
@@ -86,6 +88,7 @@ class PluginManager:
         self._plugin_objects: dict[str, Any] = {}
         self._bundled_plugin_ids: set[str] = set()
         self._failures: dict[str, str] = {}
+        self._failure_details: dict[str, tuple[str, dict[str, Any]]] = {}
         self._loaded_ids: set[str] = set()
         self._loaders: dict[str, tuple[Callable[[], Any], bool]] = {}
 
@@ -96,8 +99,25 @@ class PluginManager:
     def _failed(self, plugin_id: str, stage: str, exc: Exception) -> None:
         reason = f"{stage}: {safe_failure_reason(exc)}"
         self._failures[plugin_id] = reason
+        if isinstance(exc, ModuleNotFoundError):
+            dependency = exc.name or str(exc)
+            if re.fullmatch(r"[\w.-]+", dependency):
+                self._failure_details[plugin_id] = (
+                    "errors.plugin_dependency",
+                    {"dependency": dependency},
+                )
+            else:
+                self._failure_details[plugin_id] = ("errors.plugin_contract", {})
+        elif isinstance(exc, (TypeError, ValueError)):
+            self._failure_details[plugin_id] = ("errors.plugin_contract", {})
+        else:
+            self._failure_details[plugin_id] = (error_code(exc), {})
         self._infos.setdefault(plugin_id, PluginInfo(plugin_id))
         logger.error("plugin %r failed: %s", plugin_id, reason)
+
+    def failure_detail(self, plugin_id: str, translate: Callable[..., str]) -> dict[str, Any]:
+        code, params = self._failure_details.get(plugin_id, ("errors.plugin_contract", {}))
+        return {"code": code, "params": dict(params), "message": translate(code, **params)}
 
     def load(
         self, plugin_id: str, loader: Callable[[], Any], *, bundled: bool = False

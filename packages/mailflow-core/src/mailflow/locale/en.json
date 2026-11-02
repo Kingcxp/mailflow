@@ -1148,6 +1148,29 @@
     },
     "remote": {
       "unsupported": "This feature requires a local service."
+    },
+    "errors": {
+      "timeout": "The operation timed out. Please try again.",
+      "connection": "Could not connect to the service. Check the connection and try again.",
+      "not_found": "The requested item no longer exists. Refresh and try again.",
+      "invalid_value": "The value or format is invalid. Check your input.",
+      "storage": "Could not read or save local data. Check access and available space.",
+      "operation": "The operation failed. Check the logs for details and try again.",
+      "history_limit": "The history batch size must be greater than zero.",
+      "history_offset": "The history offset cannot be negative.",
+      "feedback_reason": "Enter a reason for your feedback.",
+      "unknown_option": "Configuration option {option} does not exist.",
+      "config_required": "No configuration file is loaded. Start with --config to save changes.",
+      "repository_fields": "Enter the repository name and URL.",
+      "repository_exists": "Repository {name} is already configured.",
+      "repository_missing": "Repository {name} is not configured.",
+      "plugin_operation": "The plugin operation failed: {error}",
+      "plugin_contract": "The plugin could not be loaded. Check its interface and installed dependencies in the logs.",
+      "setting": "The value for {option} is invalid. Check the expected type and format.",
+      "plugin_dependency": "Missing dependency {dependency}. Reinstall the plugin with its dependencies.",
+      "source_missing": "No mail source is available for provider {provider}. Check the plugin and account settings.",
+      "http": "The upstream service returned HTTP {status}. Please try again.",
+      "access": "Access was denied. Check account permissions and local file access."
     }
   }
 }

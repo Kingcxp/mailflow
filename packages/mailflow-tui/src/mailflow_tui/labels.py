@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
 from typing import Any, cast
@@ -43,7 +44,18 @@ def analysis_status(service: Any, record: MailRecord) -> str:
             if record.analysis_is_fallback
             else "tui.detail_analysis_partial"
         )
-        error = "; ".join(f"{note.processor_id}: {note.message}" for note in failed[:2])
+        details: list[str] = []
+        for note in failed[:2]:
+            # Older stored notes contain only text. Retain an HTTP status number
+            # without exposing backend prose, URLs or credentials.
+            status = re.search(r"\bHTTP\s+([1-5]\d{2})\b", note.message, re.IGNORECASE)
+            detail = (
+                service.t("errors.http", status=status.group(1))
+                if status
+                else service.t("errors.operation")
+            )
+            details.append(f"{note.processor_id}: {detail}")
+        error = "; ".join(details)
         return str(service.t(key, error=error_detail(service, error)))
     return str(service.t("tui.detail_analysis_unavailable")) if record.analysis_is_fallback else ""
 
@@ -114,7 +126,9 @@ def error_detail(
     extra_secrets: Iterable[str] = (),
 ) -> str:
     """Return an error detail with every configured credential redacted."""
-    detail = str(error)
+    from mailflow.errors import error_text
+
+    detail = error_text(error, service.t) if isinstance(error, BaseException) else error
     secrets = secret_values(getattr(service, "config", None))
     secrets.update(secret for secret in extra_secrets if secret)
     for secret in sorted(secrets, key=len, reverse=True):

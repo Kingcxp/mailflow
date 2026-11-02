@@ -593,7 +593,11 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
             search.value = "把广告邮件都删掉"
 
             def modal() -> ConfirmModal | None:
-                screens = [s for s in app.screen_stack if isinstance(s, ConfirmModal)]
+                screens = [
+                    s
+                    for s in app.screen_stack
+                    if isinstance(s, ConfirmModal) and s.is_mounted and s.query("#confirm-run")
+                ]
                 return screens[-1] if screens else None
 
             app.query_one("#smart-action", Button).press()
@@ -1367,7 +1371,7 @@ async def test_notifications_pane_lists_all_notifiers_and_toggles(
             status = str(pane.query_one("#notifications-status", Static).render())
             assert "错误" in status
             assert "notify-token-secret" not in status
-            assert "***" in status
+            assert service.t("errors.invalid_value") in status
             app.exit()
             await pilot.pause()
     finally:

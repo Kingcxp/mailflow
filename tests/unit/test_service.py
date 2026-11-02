@@ -223,9 +223,9 @@ class TestMailboxHistory:
 
     async def test_fetch_history_rejects_invalid_pagination(self) -> None:
         service = self._service(HistorySource([make_mail("h1", minute=0)]))
-        with pytest.raises(ValueError, match="limit"):
+        with pytest.raises(ValueError, match=service.t("errors.history_limit")):
             await service.fetch_history("acct-1", limit=0)
-        with pytest.raises(ValueError, match="offset"):
+        with pytest.raises(ValueError, match=service.t("errors.history_offset")):
             await service.fetch_history("acct-1", offset=-1)
 
     async def test_process_mail_stores_and_dedups(self) -> None:

@@ -1148,6 +1148,29 @@
     },
     "remote": {
       "unsupported": "此功能需要连接本地服务。"
+    },
+    "errors": {
+      "timeout": "操作超时，请重试。",
+      "connection": "无法连接服务，请检查连接后重试。",
+      "not_found": "请求的内容已不存在，请刷新后重试。",
+      "invalid_value": "值或格式不正确，请检查输入。",
+      "storage": "无法读取或保存本地数据，请检查访问权限和可用空间。",
+      "operation": "操作失败，请查看日志了解原因后重试。",
+      "history_limit": "历史邮件批次数量必须大于零。",
+      "history_offset": "历史邮件偏移量不能为负数。",
+      "feedback_reason": "请填写反馈原因。",
+      "unknown_option": "配置项 {option} 不存在。",
+      "config_required": "尚未加载配置文件，请使用 --config 启动以保存修改。",
+      "repository_fields": "请填写仓库名称和地址。",
+      "repository_exists": "仓库 {name} 已配置。",
+      "repository_missing": "仓库 {name} 尚未配置。",
+      "plugin_operation": "插件操作失败：{error}",
+      "plugin_contract": "插件无法加载，请查看日志中的接口和依赖问题。",
+      "setting": "配置项 {option} 的值不正确，请检查所需类型和格式。",
+      "plugin_dependency": "缺少依赖 {dependency}，请重新安装插件及其依赖。",
+      "source_missing": "邮件源 {provider} 不可用，请检查插件和账户设置。",
+      "http": "上游服务返回 HTTP {status}，请稍后重试。",
+      "access": "访问被拒绝，请检查账户权限和本地文件访问权限。"
     }
   }
 }

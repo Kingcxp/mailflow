@@ -523,7 +523,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 # created yet, log tail). The first launch of an AppImage
                 # is slow (extract + QQ boot), so keep waiting — only log
                 # it once and do not abort the loop.
-                message = self._t("common.error", message=qr[len("ERROR:") :].strip())
+                message = self._t("common.error", message=self._t("errors.operation"))
                 if message != getattr(self, "_last_qr_diag", None):
                     self._log("WARN", message)
                     self._last_qr_diag = message

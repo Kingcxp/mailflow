@@ -28,12 +28,17 @@ _UNSET = object()
 class RemoteUnsupported(RuntimeError):
     """The operation requires a locally-attached service."""
 
+    code = "common.unsupported"
+
 
 class RemoteError(RuntimeError):
-    def __init__(self, status: int, code: str, message: str) -> None:
+    def __init__(
+        self, status: int, code: str, message: str, params: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
+        self.params = params or {}
 
 
 def _basic(username: str, password: str) -> dict[str, str]:
@@ -99,14 +104,18 @@ class RemoteClient:
                 code = str(failure.get("code", ""))
                 message = str(failure.get("message", code))
                 if code == "reply.confirm_invalid":
-                    raise PermissionError(message)
+                    error = PermissionError(message)
+                    error.__dict__.update(code=code, params=dict(failure.get("params") or {}))
+                    raise error
                 if code == "permission.denied":
                     raise AccessDenied(message)
                 if code in {"remote.unsupported", "common.unsupported"}:
                     raise RemoteUnsupported(message)
                 if code.startswith("reply."):
                     raise ReplyError(code, message, **dict(failure.get("params") or {}))
-                raise RemoteError(response.status_code, code, message)
+                raise RemoteError(
+                    response.status_code, code, message, dict(failure.get("params") or {})
+                )
             raise RemoteError(response.status_code, "", str(detail))
         if not response.content:
             return None
@@ -306,6 +315,10 @@ class RemoteClient:
         try:
             result: dict[str, Any] = await self._request("GET", f"/drafts/{draft_id}")
             return result
+        except ReplyError as exc:
+            if exc.code == "reply.draft_not_found":
+                return None
+            raise
         except RemoteError as exc:
             if exc.status == 404:
                 return None

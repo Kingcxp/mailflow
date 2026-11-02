@@ -48,10 +48,11 @@ def test_error_presentation_localizes_and_redacts_configured_secrets() -> None:
     )
 
     raw_error = ValueError(" / ".join(sorted(secrets)))
-    detail = error_detail(service, raw_error, extra_secrets=("draft-secret",))
+    detail = error_detail(service, str(raw_error), extra_secrets=("draft-secret",))
     rendered = error_message(service, raw_error, extra_secrets=("draft-secret",))
 
     assert all(secret not in detail for secret in secrets)
     assert detail.count("***") == len(secrets)
     assert rendered.startswith(service.t("common.error", message=""))
     assert all(secret not in rendered for secret in secrets)
+    assert error_detail(service, raw_error) == service.t("errors.invalid_value")

@@ -187,9 +187,9 @@ async def test_model_page_save_failure_is_retryable_without_retyping(
         assert [llm.llm_id for llm in service.config.llms] == ["local", "second"]
         assert "reload-secret" not in rendered(pane, "#llms-status")
         assert "reload-secret" not in caplog.text
-        assert service.t("tui.settings_reload_failed", error="apply ***") in rendered(
-            pane, "#llms-status"
-        )
+        assert service.t(
+            "tui.settings_reload_failed", error=service.t("errors.operation")
+        ) in rendered(pane, "#llms-status")
 
 
 async def test_probe_cancellation_closes_backend_and_errors_redact_new_credentials(
@@ -426,7 +426,8 @@ async def test_notifier_page_rename_and_delete_recover_from_save_errors(
         pane.query_one("#notif-delete", Button).press()
         await settle(pilot)
         assert service.config.notifiers
-        assert "read only" in rendered(pane, "#notifications-status")
+        assert service.t("errors.storage") in rendered(pane, "#notifications-status")
+        assert "read only" not in rendered(pane, "#notifications-status")
         monkeypatch.setattr(service, "remove_config_entry", remove)
         pane.query_one("#notif-delete", Button).press()
         await settle(pilot)
@@ -575,7 +576,7 @@ async def test_gateway_failure_redacts_unsaved_credentials_and_cleans_up() -> No
         app.push_screen(guide)
         await settle(pilot)
         assert secret not in rendered(guide, "#guide-status")
-        assert "***" in rendered(guide, "#guide-status")
+        assert service.t("errors.storage") in rendered(guide, "#guide-status")
         assert guide.query_one("#guide-done", Button).disabled
         service.gateway_shutdown.assert_awaited_with("napcat", "chat")
 
@@ -615,7 +616,8 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         pane.query_one("#reset-general-workers", Button).press()
         await settle(pilot)
         assert pane.query_one("#value-general-workers", Input).value == "7"
-        assert "read only" in rendered(pane, "#settings-status")
+        assert service.t("errors.storage") in rendered(pane, "#settings-status")
+        assert "read only" not in rendered(pane, "#settings-status")
         assert not pane.query_one("#save-general-workers", Button).disabled
 
 

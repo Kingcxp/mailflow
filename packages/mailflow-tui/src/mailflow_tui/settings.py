@@ -856,6 +856,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     raise SettingsError(
                         spec.label,
                         self._t("tui.field_required", field=self._field_label(spec.label)),
+                        code="tui.field_required",
+                        params={"field": self._field_label(spec.label)},
                     )
                 values[spec.label] = coerce_value(spec, text)
         return values
@@ -913,6 +915,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                             "tui.field_required",
                             field=self._field_label(extra.field_id, extra.label_key),
                         ),
+                        code="tui.field_required",
+                        params={"field": self._field_label(extra.field_id, extra.label_key)},
                     )
                 continue
             if isinstance(node, Switch):
@@ -933,6 +937,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                             "tui.field_required",
                             field=self._field_label(extra.field_id, extra.label_key),
                         ),
+                        code="tui.field_required",
+                        params={"field": self._field_label(extra.field_id, extra.label_key)},
                     )
                 continue
             numeric_fields = ("interval_seconds", "limit", "max_tokens", "thinking_budget")
@@ -956,6 +962,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                         "tui.field_must_be_number",
                         field=self._field_label(extra.field_id, extra.label_key),
                     ),
+                    code="tui.field_must_be_number",
+                    params={"field": self._field_label(extra.field_id, extra.label_key)},
                 ) from exc
         if (
             validate
@@ -963,7 +971,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             and not collected["options"].get("service_account_file")
             and not collected.get("api_key")
         ):
-            raise SettingsError("credential", self._t("tui.google_vertex_credentials"))
+            raise SettingsError(
+                "credential",
+                self._t("tui.google_vertex_credentials"),
+                code="tui.google_vertex_credentials",
+                params={},
+            )
         return collected
 
     def _collect(self) -> dict[str, Any]:
@@ -992,7 +1005,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         try:
             values = self._collect()
         except SettingsError as exc:
-            status.update(f"[red]{escape(exc.message)}[/red]")
+            status.update(f"[red]{escape(error_detail(self._service, exc))}[/red]")
             return
         llm_id = str(values.get("llm_id") or "test")
         config = LLMConfig(
@@ -1057,7 +1070,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         try:
             values = self._collect()
         except SettingsError as exc:
-            status.update(f"[red]{escape(exc.message)}[/red]")
+            status.update(f"[red]{escape(error_detail(self._service, exc))}[/red]")
             return
         provider = str(values.get("provider") or "")
         probe = self._service.registry.probe(ComponentKind.MAIL_SOURCE, provider)
@@ -1077,7 +1090,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         password = str(opts.get("password") or "")
         use_ssl = bool(opts.get("imap_ssl", True))
         if not host or not user or not password:
-            raise SettingsError("credentials", self._t("tui.account_credentials_required"))
+            raise SettingsError(
+                "credentials",
+                self._t("tui.account_credentials_required"),
+                code="tui.account_credentials_required",
+                params={},
+            )
         status.update(self._t("tui.account_testing", host=host))
         import imaplib
         import threading
@@ -1641,7 +1659,7 @@ class SettingsPane(Vertical):
                     else:
                         await self._service.set_setting(key, value)
             except ConfigReloadError as exc:
-                warning = str(exc)
+                warning = error_detail(self._service, exc)
             self._saved_keys.add(key)
             self._drafts.pop(key, None)
             await self.reload()
@@ -1944,7 +1962,7 @@ class LLMPane(Vertical):
                 else:
                     await self._service.update_config_entry("llms", index, result)
             except ConfigReloadError as exc:
-                warning = str(exc)
+                warning = error_detail(self._service, exc)
             await self.reload()
             message = warning or self._t(
                 "tui.entry_added" if index is None else "tui.entry_updated",
@@ -1977,7 +1995,9 @@ class LLMPane(Vertical):
         try:
             await action
         except SettingsError as exc:
-            message = self._t("tui.settings_invalid", option=exc.option, reason=exc.message)
+            message = self._t(
+                "tui.settings_invalid", option=exc.option, reason=error_detail(self._service, exc)
+            )
             self._set_status(f"[red]{escape(message)}[/red]")
             self.notify(message, severity="error", timeout=8)
             return False
@@ -2252,7 +2272,7 @@ class AccountsPane(Vertical):
                 else:
                     await self._service.update_config_entry("accounts", index, result)
             except ConfigReloadError as exc:
-                warning = str(exc)
+                warning = error_detail(self._service, exc)
             await self.reload()
             message = warning or self._t(
                 "tui.entry_added" if index is None else "tui.entry_updated",
@@ -2282,7 +2302,9 @@ class AccountsPane(Vertical):
         try:
             await action
         except SettingsError as exc:
-            message = self._t("tui.settings_invalid", option=exc.option, reason=exc.message)
+            message = self._t(
+                "tui.settings_invalid", option=exc.option, reason=error_detail(self._service, exc)
+            )
             self._set_status(f"[red]{escape(message)}[/red]")
             self.notify(message, severity="error", timeout=8)
             return

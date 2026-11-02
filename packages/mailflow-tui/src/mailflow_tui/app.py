@@ -1313,7 +1313,7 @@ class MailPane(Vertical):
         if matcher.error:
             self._set_static(
                 "#mail-empty-hint",
-                f"[red]{self._service.t('tui.invalid_regex')}: {escape(matcher.error)}[/red]",
+                f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]",
             )
             return
         self._mail_matcher = matcher
@@ -2328,7 +2328,7 @@ class ActionsPane(Vertical):
             hint = self.query_one_optional("#actions-hint", Static)
             if hint is not None:
                 hint.update(
-                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(matcher.error)}[/red]"
+                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]"
                 )
             return
         self._actions_matcher = matcher
@@ -3069,7 +3069,7 @@ class LogsPane(Vertical):
         if matcher.error:
             if status is not None:
                 status.update(
-                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(matcher.error)}[/red]"
+                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]"
                 )
             await self._restore_rendered_logs()
             return
@@ -3157,7 +3157,7 @@ class LogsPane(Vertical):
             status = self.query_one_optional("#logs-search-status", Static)
             if status is not None:
                 status.update(
-                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(matcher.error)}[/red]"
+                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]"
                 )
             self.run_worker(
                 cast(Any, self._restore_rendered_logs),
@@ -3669,7 +3669,7 @@ class MarketPane(Vertical):
         )
         if matcher.error:
             self._set_status(
-                f"[red]{self._service.t('tui.invalid_regex')}: {escape(matcher.error)}[/red]"
+                f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]"
             )
             return
         table.clear()

@@ -20,6 +20,7 @@ from httpx import AsyncClient
 from mailflow.action_store import action_has_ended
 from mailflow.config import MailFlowConfig
 from mailflow.domain import ActionItem, MailRecord, ReplyDraft, RuntimeSnapshot, TrashRecord
+from mailflow.errors import error_text
 from mailflow.i18n import I18n
 from mailflow.permissions import AccessDenied
 from mailflow.replies import ReplyError
@@ -229,7 +230,7 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
                 response = await probe.get("/snapshot", headers=basic_header(user, password))
         except (httpx.HTTPError, ValueError) as exc:
             status.update(
-                f"[red]{escape(self._t('tui.remote_unreachable', url=url, error=type(exc).__name__))}[/red]"
+                f"[red]{escape(self._t('tui.remote_unreachable', url=url, error=error_text(exc, self._t)))}[/red]"
             )
             return
         if response.status_code == 401:
