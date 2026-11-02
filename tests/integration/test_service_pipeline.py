@@ -1,4 +1,4 @@
-"""End-to-end tests exercising only the public ``start_service`` entry point.
+"""Service/pipeline integration tests using the public ``start_service`` entry point.
 
 Deterministic components are registered through the normal Pluggy hooks:
 the fake mail source and LLM backends come from a test plugin module, while
@@ -76,7 +76,7 @@ class CapturingNotifier:
         self.notified.append(record)
 
 
-class E2EPlugin:
+class ServiceFixturePlugin:
     """Registers the deterministic source, LLM and notifier components."""
 
     def __init__(self, captured: list[Any], notified: list[MailRecord]) -> None:
@@ -85,17 +85,17 @@ class E2EPlugin:
 
     def mailflow_plugin_info(self) -> PluginInfo:
         return PluginInfo(
-            plugin_id="mailflow-e2e-test",
-            name="E2E Test Components",
+            plugin_id="mailflow-service-fixture",
+            name="Service Integration Components",
             version="0.0.0",
-            description="deterministic source/llm/notifier for end-to-end tests",
+            description="deterministic source/llm/notifier for service integration tests",
             kinds=[ComponentKind.MAIL_SOURCE, ComponentKind.LLM_BACKEND, ComponentKind.NOTIFIER],
         )
 
     def mailflow_register(self, registrar: PluginRegistrar, config: Any) -> None:
         def source_factory(account: MailAccountConfig) -> MailSource:
             mail = make_mail(
-                message_id="e2e-1",
+                message_id="fixture-1",
                 account_id=account.account_id,
                 subject="Final calculus exam",
                 body_text="The final exam is on June 10 at 09:00. Bring your student ID.",
@@ -161,14 +161,14 @@ async def test_full_service_flow(tmp_path: Path) -> None:
     captured: list[Any] = []
     notified: list[MailRecord] = []
     manager = PluginManager(build_config(tmp_path / "unused.db"))
-    e2e_plugin = E2EPlugin(captured, notified)
-    for plugin in (e2e_plugin, storage_plugin, notify_plugin):
+    fixture_plugin = ServiceFixturePlugin(captured, notified)
+    for plugin in (fixture_plugin, storage_plugin, notify_plugin):
         assert manager.register(plugin) is not None
 
     service: MailFlowService | None = None
     try:
         service = await start_service(
-            build_config(tmp_path / "e2e.db"),
+            build_config(tmp_path / "service.db"),
             plugin_manager=manager,
             discover_plugins=False,
             enable_logging=False,
@@ -184,7 +184,7 @@ async def test_full_service_flow(tmp_path: Path) -> None:
         await wait_until(mails_processed)
         record = (await service.list_mails())[0]
         record_id = record.record_id
-        assert record.mail.message_id == "e2e-1"
+        assert record.mail.message_id == "fixture-1"
         assert record.analysis is not None
         assert record.analysis.urgency is Urgency.URGENT
         assert record.analysis.summary.startswith("Final calculus exam")
@@ -212,7 +212,7 @@ async def test_full_service_flow(tmp_path: Path) -> None:
 
         # -- snapshot maps components to their providing plugins ----------------
         snapshot = service.snapshot()
-        assert any(p.plugin_id == "mailflow-e2e-test" for p in snapshot.plugins)
+        assert any(p.plugin_id == "mailflow-service-fixture" for p in snapshot.plugins)
         account = next(a for a in snapshot.accounts if a.account_id == "acct-1")
         assert account.provider == "test-source"
         binding = next(b for b in snapshot.processors if b.processor_id == "llm-importance")
@@ -282,8 +282,8 @@ async def test_language_persists_across_restart(tmp_path: Path) -> None:
     captured: list[Any] = []
     notified: list[MailRecord] = []
     manager = PluginManager(build_config(tmp_path / "unused.db"))
-    e2e_plugin = E2EPlugin(captured, notified)
-    for plugin in (e2e_plugin, storage_plugin, notify_plugin):
+    fixture_plugin = ServiceFixturePlugin(captured, notified)
+    for plugin in (fixture_plugin, storage_plugin, notify_plugin):
         assert manager.register(plugin) is not None
 
     config = build_config(tmp_path / "persist.db")

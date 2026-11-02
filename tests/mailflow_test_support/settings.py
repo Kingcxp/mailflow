@@ -12,6 +12,7 @@ from mailflow_bundled import create_plugin_manager
 def build_config(db_path: Path) -> MailFlowConfig:
     config = MailFlowConfig()
     config.storage.path = str(db_path)
+    config.plugins.repositories = []
     return config
 
 

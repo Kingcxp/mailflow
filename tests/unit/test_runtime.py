@@ -1198,18 +1198,21 @@ async def test_retired_source_cannot_emit_after_reload() -> None:
     )
     runtime, storage, _ = build_runtime({"acct-1": source}, accounts=config.accounts)
     await runtime.start()
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), timeout=1)
     try:
-        await runtime.reconfigure(
-            config=MailFlowConfig(),
-            sources={},
-            pipeline=PipelineEngine([]),
-            notifiers=[],
-            notifier_configs=[],
-            restart_sources=True,
+        await asyncio.wait_for(
+            runtime.reconfigure(
+                config=MailFlowConfig(),
+                sources={},
+                pipeline=PipelineEngine([]),
+                notifiers=[],
+                notifier_configs=[],
+                restart_sources=True,
+            ),
+            timeout=3,
         )
         release.set()
-        await attempted.wait()
+        await asyncio.wait_for(attempted.wait(), timeout=1)
         await asyncio.sleep(0)
         assert storage.saved == []
         assert runtime.account_status("acct-1") != "running"

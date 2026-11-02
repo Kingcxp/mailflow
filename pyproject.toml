@@ -55,7 +55,8 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+# Component isolation; real component composition; supported process entry points.
+testpaths = ["tests/unit", "tests/integration", "tests/e2e"]
 pythonpath = ["tests"]
 addopts = "-ra"
 
@@ -106,6 +107,7 @@ typeCheckingMode = "strict"
 include = ["packages", "plugins", "tests", "tools"]
 exclude = [".venv", "dist", "build", "mailflow-generated"]
 extraPaths = [
+  "tests",
   "packages/mailflow-core/src",
   "packages/mailflow-testkit/src",
   "packages/mailflow-bundled/src",

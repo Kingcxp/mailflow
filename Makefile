@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help sync test coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot clean clean-records clean-trash clean-gateways clean-config
+.PHONY: help sync test test-unit test-integration test-e2e coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot clean clean-records clean-trash clean-gateways clean-config
 
 PY ?= uv run
 
@@ -14,8 +14,17 @@ sync: ## Install/update the workspace and dev toolchain
 test: ## Run the full test suite (pytest)
 	$(PY) pytest -q
 
+test-unit: ## Run isolated component, domain and transport-contract tests
+	$(PY) pytest -q tests/unit
+
+test-integration: ## Run component, SQLite, ASGI and headless TUI integration tests
+	$(PY) pytest -q tests/integration
+
+test-e2e: ## Run real CLI processes against temporary configuration and databases
+	$(PY) pytest -q tests/e2e
+
 coverage: ## Run tests with per-package coverage report (term + html)
-	$(PY) pytest --cov=mailflow --cov=mailflow_bundled --cov=mailflow_cli --cov=mailflow_tui --cov=mailflow_testkit --cov=mailflow_mail_fake --cov=mailflow_storage_sqlite --cov=mailflow_llm_openai_compatible --cov=mailflow_processor_rules --cov=mailflow_processor_llm_importance --cov=mailflow_notify_console --cov-report=term-missing --cov-report=html
+	$(PY) pytest --cov=mailflow --cov=mailflow_bundled --cov=mailflow_cli --cov=mailflow_tui --cov=mailflow_testkit --cov=mailflow_mail_fake --cov=mailflow_storage_sqlite --cov=mailflow_llm_openai_compatible --cov=mailflow_notify_console --cov-report=term-missing --cov-report=html
 
 lint: ## Ruff lint check
 	$(PY) ruff check .

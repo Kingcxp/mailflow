@@ -16,7 +16,6 @@ import pytest
 from mailflow.config import NotifierConfig
 from mailflow_notify_wechatpadpro import gateway
 from mailflow_notify_wechatpadpro.plugin import WechatPadProNotifier
-from mailflow_tui.notifications import NotificationsPane
 
 
 def test_find_docker_compose_accepts_legacy_client(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -161,51 +160,6 @@ async def test_missing_docker_requires_explicit_install_permission(
     with pytest.raises(RuntimeError, match="install_dependencies"):
         await gateway.WechatPadProProvisioner().install("one", {})
     assert not gateway._instance_dir("one").exists()
-
-
-async def test_guide_login_timeout_stops_gateway_and_discards_pending_result(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from unittest.mock import AsyncMock
-
-    from mailflow_tui import gateway_guide
-
-    ticks = iter((0.0, 301.0))
-    monkeypatch.setattr(gateway_guide, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
-    service = SimpleNamespace(gateway_shutdown=AsyncMock())
-    guide = SimpleNamespace(
-        _provider="wechatpadpro",
-        _instance_id="one",
-        _qr_done=False,
-        _result={"endpoint": "http://fake"},
-        _t=lambda key, **kwargs: key,
-        _log=lambda *args: None,
-        _set_status=lambda *args: None,
-    )
-    await gateway_guide.GatewayGuideModal._qr_loop(guide, service, "wechatpadpro")
-    service.gateway_shutdown.assert_awaited_once_with("wechatpadpro", "one")
-    assert guide._result is None
-
-
-async def test_unreachable_endpoint_cannot_finish_the_gateway_guide() -> None:
-    from unittest.mock import AsyncMock, Mock
-
-    from mailflow_tui.gateway_guide import GatewayGuideModal
-
-    service = SimpleNamespace(gateway_shutdown=AsyncMock())
-    guide = SimpleNamespace(
-        _instance_id="one",
-        _result={"endpoint": "http://fake"},
-        _wait_for_endpoint=AsyncMock(return_value=False),
-        _finish_ready=Mock(),
-        _t=lambda key, **kwargs: key,
-        _log=lambda *args: None,
-        _set_status=Mock(),
-    )
-    await GatewayGuideModal._finish_login(guide, service, "wechatpadpro")
-    guide._finish_ready.assert_not_called()
-    service.gateway_shutdown.assert_awaited_once_with("wechatpadpro", "one")
-    assert guide._result is None
 
 
 @pytest.mark.asyncio
@@ -453,45 +407,6 @@ async def test_auto_deployed_notifier_uses_managed_auth_key(
 
 
 @pytest.mark.asyncio
-async def test_guided_wechatpadpro_notifier_uses_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A completed deployment must create a notifier the adapter can reach."""
-    service = _Service()
-    pane = NotificationsPane(cast(Any, service))
-    status = _Status()
-
-    def no_refresh() -> None:
-        pass
-
-    def status_node(*_: Any) -> _Status:
-        return status
-
-    monkeypatch.setattr(pane, "refresh_data", no_refresh)
-    monkeypatch.setattr(pane, "query_one", status_node)
-
-    await pane._save_guided_notifier(  # pyright: ignore[reportPrivateUsage]
-        "wechatpadpro",
-        "wechat-1",
-        {"endpoint": "http://127.0.0.1:8101"},
-        {"options": {"admins": ["wxid-owner"]}},
-    )
-
-    assert service.added == [
-        (
-            "notifiers",
-            {
-                "notifier_id": "wechat-1",
-                "provider": "wechatpadpro",
-                "options": {
-                    "admins": ["wxid-owner"],
-                    "base_url": "http://127.0.0.1:8101",
-                    "gateway": "wechatpadpro",
-                },
-            },
-        )
-    ]
-
-
-@pytest.mark.asyncio
 async def test_install_avoids_a_taken_port_and_wires_linux_bridge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -579,64 +494,6 @@ async def test_stop_reports_compose_failure(
 
     with pytest.raises(RuntimeError, match="docker compose down failed: daemon unavailable"):
         await gateway.WechatPadProProvisioner().stop("wechat-1")
-
-
-@pytest.mark.asyncio
-async def test_guide_escape_cancels_deployment_and_shuts_down() -> None:
-    """Escape has the same cleanup semantics as the visible Cancel button."""
-    from mailflow_tui.gateway_guide import GatewayGuideModal
-    from textual.app import App
-
-    class GuideService:
-        def __init__(self) -> None:
-            self.gateways = SimpleNamespace(progress=lambda *_: None)
-            self.provision_started = asyncio.Event()
-            self.provision_cancelled = asyncio.Event()
-            self.shutdowns: list[tuple[str, str]] = []
-
-        def t(self, key: str, **_: Any) -> str:
-            return key
-
-        async def gateway_detect(self, _: str) -> str:
-            return "ready"
-
-        async def gateway_provision(self, *_: Any) -> None:
-            self.provision_started.set()
-            try:
-                await asyncio.Event().wait()
-            finally:
-                self.provision_cancelled.set()
-
-        async def gateway_shutdown(self, provider: str, instance_id: str) -> None:
-            self.shutdowns.append((provider, instance_id))
-
-    class GuideApp(App[None]):
-        def __init__(self, guide: GatewayGuideModal) -> None:
-            super().__init__()
-            self._guide = guide
-
-        def on_mount(self) -> None:
-            self.push_screen(self._guide)
-
-    service = GuideService()
-    guide = GatewayGuideModal(cast(Any, service), "wechatpadpro", "wechat-1", {})
-    app = GuideApp(guide)
-    async with app.run_test(size=(140, 50)) as pilot:
-        for _ in range(40):
-            if service.provision_started.is_set():
-                break
-            await pilot.pause(0.05)
-        assert service.provision_started.is_set()
-
-        await pilot.press("escape")
-        for _ in range(40):
-            if service.shutdowns and service.provision_cancelled.is_set():
-                break
-            await pilot.pause(0.05)
-
-        assert service.shutdowns == [("wechatpadpro", "wechat-1")]
-        assert service.provision_cancelled.is_set()
-        assert app.screen is not guide
 
 
 @pytest.mark.asyncio

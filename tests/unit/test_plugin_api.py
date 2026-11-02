@@ -28,16 +28,16 @@ async def test_multi_component_plugin_delivers_through_registered_factories() ->
         description="one source + one notifier",
     )
 
-    @PLUGIN.source("demo-source")
     class DemoSource(FakeMailSource):
         def __init__(self, config: MailAccountConfig) -> None:
             super().__init__([make_mail(account_id=config.account_id)])
 
-    @PLUGIN.notifier("demo-notify")
     class DemoNotifier(FakeNotifier):
         def __init__(self, config: NotifierConfig) -> None:
             super().__init__()
 
+    PLUGIN.source("demo-source")(DemoSource)
+    PLUGIN.notifier("demo-notify")(DemoNotifier)
     plugin = PLUGIN.build()
     info = plugin.mailflow_plugin_info()  # type: ignore[attr-defined]
     assert info.plugin_id == "mailflow-demo-bundle"

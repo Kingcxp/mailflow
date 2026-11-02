@@ -392,23 +392,23 @@ class TestLogging:
         finally:
             runtime.close()
 
-    def test_double_configure_replaces_cleanly(self) -> None:
+    def test_reconfigure_and_closing_old_logging_do_not_duplicate_or_steal_records(self) -> None:
+        import io
         import logging
-        import logging.handlers
 
-        first = configure_logging(LoggingConfig(console=False, file=False, jsonl=False))
-        second = configure_logging(LoggingConfig(console=False, file=False, jsonl=False))
+        first_output, second_output = io.StringIO(), io.StringIO()
+        first_handler = logging.StreamHandler(first_output)
+        second_handler = logging.StreamHandler(second_output)
+        config = LoggingConfig(console=False, file=False, jsonl=False)
+        first = configure_logging(config, extra_handlers=[first_handler])
+        log = logging.getLogger("mailflow.test")
+        log.warning("before replacement")
+        second = configure_logging(config, extra_handlers=[second_handler])
         try:
-            mailflow_logger = logging.getLogger("mailflow")
-            queue_handlers = [
-                h for h in mailflow_logger.handlers if isinstance(h, logging.handlers.QueueHandler)
-            ]
-            null_handlers = [
-                h for h in mailflow_logger.handlers if isinstance(h, logging.NullHandler)
-            ]
-            # exactly one queue chain; the NullHandler bootstrap guard stays
-            assert len(queue_handlers) == 1
-            assert len(null_handlers) == 1
+            first.close()
+            log.warning("after replacement")
+            assert first_output.getvalue().splitlines() == ["before replacement"]
+            assert second_output.getvalue().splitlines() == ["after replacement"]
         finally:
             second.close()
             first.close()

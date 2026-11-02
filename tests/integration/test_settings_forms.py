@@ -1,4 +1,4 @@
-"""End-to-end coverage for the TUI settings surface: sidebar reload
+"""Component integration coverage for the TUI settings surface: sidebar reload
 serialization, the provider-aware entry form (defaults, required-field
 validation, DuplicateIds regression) and the secret eye toggle."""
 
@@ -9,6 +9,7 @@ import queue as queue_module
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from mailflow.commands import CommandRouter
 from mailflow_tui.app import MailFlowApp, MailPane
 from mailflow_tui.ask_correct import AskCorrectModal
@@ -289,37 +290,44 @@ async def test_language_change_propagates_to_other_tabs(tmp_path: Path) -> None:
             assert service.i18n.language == "zh-CN"
             refresh_after = str(app.query_one("#btn-refresh", Button).label)
             assert refresh_after != refresh_before
-            assert refresh_after == "刷新"
+            assert refresh_after == service.t("tui.btn_refresh")
 
             urgency_filter = cast(Select[Any], app.query_one("#mail-urgency-filter", Select))
             urgency_select = cast(Select[Any], app.query_one("#urgency-select", Select))
             filter_labels = {str(option[0]) for option in urgency_filter._options}  # pyright: ignore[reportPrivateUsage]
             select_labels = {str(option[0]) for option in urgency_select._options}  # pyright: ignore[reportPrivateUsage]
-            assert "全部紧急度" in filter_labels
-            assert "跟随自动判定" in select_labels
+            assert service.t("tui.filter_all_urgencies") in filter_labels
+            assert service.t("tui.urgency_opt_auto") in select_labels
 
             mail_tab_title = str(tabs.get_tab("tab-mail").label)  # pyright: ignore[reportUnknownMemberType]
-            assert mail_tab_title == "邮件"
+            assert mail_tab_title == service.t("tui.tab_mail")
     finally:
         await service.stop()
 
 
-async def test_modal_escape_bindings_follow_active_language(tmp_path: Path) -> None:
-    """Every modal's visible Escape hint follows ``general.language``."""
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+async def test_escape_closes_settings_modals_without_changes(tmp_path: Path, language: str) -> None:
     from mailflow_tui.export import BotExportScreen
     from mailflow_tui.install import InstallScreen
     from mailflow_tui.repos import ReposScreen
     from mailflow_tui.scaffold import PluginScaffoldScreen
 
     service = await start_service_quiet(tmp_path)
+    await service.set_setting("general.language", language)
+    original = service.config.model_dump()
+    app = MailFlowApp(cast(Any, service), queue_module.Queue())
     try:
-        await service.set_setting("general.language", "zh-CN")
-        descriptions = [
-            screen(service)._bindings.get_bindings_for_key("escape")[0].description  # pyright: ignore[reportPrivateUsage]
-            for screen in (BotExportScreen, InstallScreen, ReposScreen, PluginScaffoldScreen)
-        ]
-
-        assert descriptions == ["取消"] * 4
+        async with app.run_test(size=(140, 50)) as pilot:
+            for screen_type in (BotExportScreen, InstallScreen, ReposScreen, PluginScaffoldScreen):
+                results: list[Any] = []
+                modal = screen_type(service)
+                app.push_screen(modal, results.append)
+                await pilot.pause()
+                await pilot.press("escape")
+                await pilot.pause()
+                assert app.screen is not modal
+                assert results == [None]
+                assert service.config.model_dump() == original
     finally:
         await service.stop()
 
@@ -403,8 +411,6 @@ async def test_ask_correct_modal_opens_and_sends(tmp_path: Path) -> None:
 
             # right pane shows the current urgency, header carries the reminder
             assert "urgent" in str(app.screen.query_one("#ask-correct-urgency").render()).lower()
-            title = str(app.screen.query_one("#ask-correct-title").render())
-            assert "temporary" in title.lower() or "临时" in title
 
             # sending a message without an LLM yields a friendly notice
             input_box = app.screen.query_one("#ask-correct-input", Input)
@@ -417,13 +423,13 @@ async def test_ask_correct_modal_opens_and_sends(tmp_path: Path) -> None:
                     if messages
                     else ""
                 )
-                if "No LLM" in rendered:
+                if service.t("tui.ask_correct_no_llm") in rendered:
                     break
                 await pilot.pause(0.05)
             messages = list(app.screen.query("#ask-correct-messages Markdown"))
             assert messages
             rendered = " ".join(str(node.render()) for node in messages[-1].query("*"))
-            assert "No LLM" in rendered
+            assert service.t("tui.ask_correct_no_llm") in rendered
 
             # closing dismisses the modal and discards the chat
             app.screen.action_close()

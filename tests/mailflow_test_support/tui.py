@@ -36,9 +36,7 @@ INFO_JSON = """{
   "notes": ""
 }"""
 
-_ID_DUE = (datetime.now(UTC) + timedelta(days=1)).replace(
-    hour=17, minute=0, second=0, microsecond=0
-)
+ID_DUE = (datetime.now(UTC) + timedelta(days=1)).replace(hour=17, minute=0, second=0, microsecond=0)
 
 URGENT_JSON = """{
   "summary": "Pick up student ID card today",
@@ -53,7 +51,7 @@ URGENT_JSON = """{
      "notes": "Bring your own ID photo"}
   ],
   "notes": ""
-}""".replace("@DUE@", _ID_DUE.isoformat())
+}""".replace("@DUE@", ID_DUE.isoformat())
 
 
 class MapLLM:
@@ -149,14 +147,14 @@ def build_config(db_path: Path) -> MailFlowConfig:
     )
 
 
-def _find_status(app: Any) -> Any:
+def find_settings_status(app: Any) -> Any:
     try:
         return app.query_one("#settings-status", Static)
     except Exception:
         return None
 
 
-def _find_mail_ids(messages: list[Any]) -> list[str]:
+def find_mail_ids(messages: list[Any]) -> list[str]:
     """Mail ids the last ``find_mail`` tool result reported to the model."""
     for message in reversed(messages):
         if message.get("role") != "tool":

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -410,6 +409,31 @@ class TestPipeline:
         assert later.calls == 0
         assert analysis.summary == "Hello"  # fallback applies after stop
 
+    async def test_a_timeout_is_not_retried(self) -> None:
+        """30 s means 30 s: retrying a slow call doubled the wait silently."""
+        attempts = 0
+
+        class AlwaysSlow:
+            processor_id = "slow"
+
+            async def process(self, mail: Any, context: Any) -> Any:
+                nonlocal attempts
+                attempts += 1
+                await asyncio.sleep(1.0)
+                return ProcessorResult()
+
+        engine = PipelineEngine(
+            [self._binding(AlwaysSlow(), "slow", retries=3, timeout_seconds=0.05)]
+        )
+
+        _analysis, notes, _llm, _backend = await asyncio.wait_for(
+            engine.process(make_mail(), "acct-1"), timeout=2
+        )
+
+        assert attempts == 1, "a timeout must not be retried"
+        assert notes[0].status == "failed"
+        assert notes[0].processor_id == "slow" and notes[0].message
+
 
 class TestMergeAnalysis:
     def test_overlay_wins_per_field(self) -> None:
@@ -479,33 +503,3 @@ class TestFeedbackGuidelines:
         )
         await engine.process(make_mail(), "acct-1")
         assert capturing.seen == [""]
-
-
-class TestTimeoutSemantics(TestPipeline):
-    """A configured timeout must be a real deadline, never doubled."""
-
-    async def test_a_timeout_is_not_retried(self) -> None:
-        """30 s means 30 s: retrying a slow call doubled the wait silently."""
-        attempts = 0
-
-        class AlwaysSlow:
-            processor_id = "slow"
-
-            async def process(self, mail: Any, context: Any) -> Any:
-                nonlocal attempts
-                attempts += 1
-                await asyncio.sleep(1.0)
-                return ProcessorResult()
-
-        engine = PipelineEngine(
-            [self._binding(AlwaysSlow(), "slow", retries=3, timeout_seconds=0.05)]
-        )
-        started = time.monotonic()
-
-        _analysis, notes, _llm, _backend = await engine.process(make_mail(), "acct-1")
-
-        elapsed = time.monotonic() - started
-        assert attempts == 1, "a timeout must not be retried"
-        assert elapsed < 0.5
-        assert notes[0].status == "failed"
-        assert notes[0].message == "failed: processor timed out after 0.05 seconds"

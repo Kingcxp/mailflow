@@ -29,11 +29,11 @@ from textual.widgets import (
 )
 
 from mailflow_test_support.tui import (
-    _ID_DUE,
+    ID_DUE,
     TUIPlugin,
-    _find_mail_ids,
-    _find_status,
     build_config,
+    find_mail_ids,
+    find_settings_status,
     set_select_value,
 )
 
@@ -110,7 +110,7 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
             actions_table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
             assert actions_table.row_count == 1
             # the row shows the deadline in the configured display timezone
-            expected_due = _ID_DUE.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
+            expected_due = ID_DUE.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
             assert expected_due in str(actions_table.get_row_at(0)[0])
             # A results-only render (Smart find's final step) must replace
             # the detail too, and an empty result must not leave a stale
@@ -197,7 +197,7 @@ async def test_tui_compose_and_data(tmp_path: Path) -> None:
 
             tabs = app.query_one(TabbedContent)
             tab_label = tabs.get_tab("tab-mail")  # pyright: ignore[reportUnknownMemberType]
-            assert str(tab_label.label) == "邮件"  # pyright: ignore[reportUnknownMemberType]
+            assert str(tab_label.label) == service.t("tui.tab_mail")  # pyright: ignore[reportUnknownMemberType]
             # settings tab: sidebar sections plus one card per option.
             # The language switch remounts the pane concurrently — re-query
             # and poll instead of racing the remount.
@@ -575,7 +575,7 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
                         ToolCall(
                             call_id="c2",
                             name="delete_mail",
-                            arguments={"record_ids": _find_mail_ids(messages)},
+                            arguments={"record_ids": find_mail_ids(messages)},
                         )
                     ],
                 )
@@ -1089,7 +1089,7 @@ async def test_settings_card_saves_resets_and_rejects(tmp_path: Path) -> None:
             # an invalid value is rejected with a message naming the option
             await settings_pane._save("general.cleanup_hour", "99")  # pyright: ignore[reportPrivateUsage]
             assert service.config.general.cleanup_hour == 4  # unchanged
-            status_node = _find_status(app)
+            status_node = find_settings_status(app)
             status = str(status_node.render()) if status_node is not None else ""
             assert "cleanup_hour" in status
 

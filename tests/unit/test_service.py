@@ -1,4 +1,4 @@
-"""Unit tests for the service reply state machine."""
+"""Service workflows isolated from model, mail and persistent storage providers."""
 
 from __future__ import annotations
 
@@ -41,9 +41,8 @@ from mailflow_test_support.service import (
     ADDRESS,
     MemoryStorage,
     RecordingSource,
-    _completion,
-    _reply,
     make_record,
+    model_completion,
 )
 from mailflow_test_support.service import service as service
 
@@ -267,7 +266,7 @@ class TestSmartSearch:
         )
 
     @staticmethod
-    def _reply(text: str) -> Any:
+    def model_completion(text: str) -> Any:
         class Reply:
             def __init__(self, value: str) -> None:
                 self.text = value
@@ -282,8 +281,10 @@ class TestSmartSearch:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
                 if messages[-1]["content"].startswith("Reply with"):
-                    return TestSmartSearch._reply("ok")
-                return TestSmartSearch._reply('```json\n[{"id": "m1", "relevance": 88}]\n```')
+                    return TestSmartSearch.model_completion("ok")
+                return TestSmartSearch.model_completion(
+                    '```json\n[{"id": "m1", "relevance": 88}]\n```'
+                )
 
         service = self._service(FencedRouter())
         storage = cast(Any, service.storage)
@@ -307,8 +308,8 @@ class TestSmartSearch:
         class ProseRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 if messages[-1]["content"].startswith("Reply with"):
-                    return TestSmartSearch._reply("ok")
-                return TestSmartSearch._reply('Matching candidate:\n["m1"]\nDone.')
+                    return TestSmartSearch.model_completion("ok")
+                return TestSmartSearch.model_completion('Matching candidate:\n["m1"]\nDone.')
 
         service = self._service(ProseRouter())
         storage = cast(Any, service.storage)
@@ -331,9 +332,9 @@ class TestSmartSearch:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 user = messages[-1]["content"]
                 if user.startswith("Reply with"):
-                    return TestSmartSearch._reply("ok")
+                    return TestSmartSearch.model_completion("ok")
                 self.listing = user
-                return TestSmartSearch._reply('[{"id": "M1", "relevance": 93}]')
+                return TestSmartSearch.model_completion('[{"id": "M1", "relevance": 93}]')
 
         router = AliasRouter()
         service = self._service(router)
@@ -353,9 +354,9 @@ class TestSmartSearch:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 user = messages[-1]["content"]
                 if user.startswith("Reply with"):
-                    return TestSmartSearch._reply("ok")
+                    return TestSmartSearch.model_completion("ok")
                 assert "线上研讨会通知" in user
-                return TestSmartSearch._reply('[{"id": "m1", "relevance": 100}]')
+                return TestSmartSearch.model_completion('[{"id": "m1", "relevance": 100}]')
 
         service = self._service(BilingualRouter())
         storage = cast(Any, service.storage)
@@ -375,10 +376,10 @@ class TestSmartSearch:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 user = messages[-1]["content"]
                 if user.startswith("Reply with"):
-                    return TestSmartSearch._reply("ok")
+                    return TestSmartSearch.model_completion("ok")
                 if "Subject m15" in user:
-                    return TestSmartSearch._reply('[{"id": "m1", "relevance": 60}]')
-                return TestSmartSearch._reply('[{"id": "m1", "relevance": 95}]')
+                    return TestSmartSearch.model_completion('[{"id": "m1", "relevance": 60}]')
+                return TestSmartSearch.model_completion('[{"id": "m1", "relevance": 95}]')
 
         service = self._service(RankingRouter())
         storage = cast(Any, service.storage)
@@ -397,8 +398,8 @@ class TestSmartSearch:
         class PrecisionRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 if messages[-1]["content"].startswith("Reply with"):
-                    return TestSmartSearch._reply("ok")
-                return TestSmartSearch._reply(
+                    return TestSmartSearch.model_completion("ok")
+                return TestSmartSearch.model_completion(
                     '[{"id": "m1", "relevance": 30}, {"id": "m2", "relevance": 40}]'
                 )
 
@@ -416,8 +417,8 @@ class TestSmartSearch:
         class BadRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 if messages[-1]["content"].startswith("Reply with"):
-                    return TestSmartSearch._reply("ok")
-                return TestSmartSearch._reply("I could not find anything, sorry!")
+                    return TestSmartSearch.model_completion("ok")
+                return TestSmartSearch.model_completion("I could not find anything, sorry!")
 
         service = self._service(BadRouter())
         storage = cast(Any, service.storage)
@@ -442,9 +443,9 @@ class TestSmartSearch:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 user = messages[-1]["content"]
                 if user.startswith("Reply with"):
-                    return TestSmartSearch._reply("ok")
+                    return TestSmartSearch.model_completion("ok")
                 if "Subject m15" in user:
-                    return TestSmartSearch._reply('[{"id": "m1", "relevance": 90}]')
+                    return TestSmartSearch.model_completion('[{"id": "m1", "relevance": 90}]')
                 raise TimeoutError("configured endpoint timed out")
 
         service = self._service(PartiallyFailingRouter())
@@ -510,7 +511,7 @@ class TestSeminarDiscovery:
                 self.calls += 1
                 self.listing = messages[-1]["content"]
                 title = "Research colloquium" if self.calls == 1 else "Reworded colloquium"
-                return _reply(
+                return model_completion(
                     "["
                     f'{{"id":"m1","title":"{title}",'
                     '"starts_at":"2030-10-15T14:00:00+08:00",'
@@ -569,7 +570,7 @@ class TestSeminarDiscovery:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
                 title = "Original seminar" if self.calls == 1 else "Reworded seminar"
-                return _reply(
+                return model_completion(
                     '[{"id":"m1",'
                     f'"title":"{title}",'
                     '"starts_at":"2030-10-15T14:00:00+08:00",'
@@ -595,7 +596,7 @@ class TestSeminarDiscovery:
 
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
-                return _reply("I found a seminar but cannot format it.")
+                return model_completion("I found a seminar but cannot format it.")
 
         router = MalformedRouter()
         service = self.make_service(router)
@@ -620,7 +621,7 @@ class TestSeminarDiscovery:
     async def test_expired_candidate_requires_future_edited_confirmation(self) -> None:
         class PastSeminarRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                return _reply(
+                return model_completion(
                     '[{"id":"m1","title":"Past seminar",'
                     '"starts_at":"2020-01-01T10:00:00+08:00",'
                     '"timezone":"Asia/Shanghai"}]'
@@ -647,7 +648,7 @@ class TestSeminarDiscovery:
     async def test_rejected_candidate_remains_hidden_after_repeat_scan(self) -> None:
         class SeminarRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                return _reply(
+                return model_completion(
                     '[{"id":"m1","title":"Seminar",'
                     '"starts_at":"2030-02-01T10:00:00+08:00",'
                     '"timezone":"Asia/Shanghai"}]'
@@ -682,7 +683,7 @@ class TestSeminarDiscovery:
 
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
-                return _reply("I found a seminar but cannot format it.")
+                return model_completion("I found a seminar but cannot format it.")
 
         router = ProseRouter()
         service = self.make_service(router)
@@ -921,14 +922,14 @@ class TestSmartAction:
             self.calls.append(list(messages))
             self.seen_tools.append(any(m.get("role") == "tool" for m in messages))
             self.tool_specs.append(kwargs.get("tools"))
-            turn = self.turns.pop(0) if self.turns else _completion("done")
+            turn = self.turns.pop(0) if self.turns else model_completion("done")
             return turn
 
     async def test_read_tool_results_reach_the_model_and_the_result(self) -> None:
         """The model searches, sees the result, then answers in prose."""
         router = self._ToolRouter(
             [
-                _completion(
+                model_completion(
                     "",
                     tool_calls=[
                         ToolCall(
@@ -938,7 +939,7 @@ class TestSmartAction:
                         )
                     ],
                 ),
-                _completion("Found the registration mail."),
+                model_completion("Found the registration mail."),
             ]
         )
         service = self.make_service(router)
@@ -966,13 +967,13 @@ class TestSmartAction:
         record_id = mail.normalized_message_id()
         router = self._ToolRouter(
             [
-                _completion(
+                model_completion(
                     "",
                     tool_calls=[
                         ToolCall(call_id="c1", name="find_mail", arguments={"contains": "invoice"})
                     ],
                 ),
-                _completion(
+                model_completion(
                     "",
                     tool_calls=[
                         ToolCall(
@@ -980,7 +981,7 @@ class TestSmartAction:
                         )
                     ],
                 ),
-                _completion("Staged the invoice mail for deletion."),
+                model_completion("Staged the invoice mail for deletion."),
             ]
         )
         service = self.make_service(router)
@@ -996,7 +997,7 @@ class TestSmartAction:
         assert await storage.get_mail(record_id) is not None
 
     async def test_loop_stops_at_its_step_bound(self) -> None:
-        always = _completion(
+        always = model_completion(
             "", tool_calls=[ToolCall(call_id="c", name="list_actions", arguments={})]
         )
         router = self._ToolRouter([always] * 20)
@@ -1011,8 +1012,10 @@ class TestSmartAction:
     async def test_unknown_tool_is_reported_to_the_model_without_failing(self) -> None:
         router = self._ToolRouter(
             [
-                _completion("", tool_calls=[ToolCall(call_id="c1", name="nonsense", arguments={})]),
-                _completion("I cannot do that."),
+                model_completion(
+                    "", tool_calls=[ToolCall(call_id="c1", name="nonsense", arguments={})]
+                ),
+                model_completion("I cannot do that."),
             ]
         )
         service = self.make_service(router)
@@ -1253,7 +1256,7 @@ class TestUserProfile:
         class RecordingRouter:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 prompts.append(str(messages[-1]["content"]))
-                return _completion("")
+                return model_completion("")
 
         service = TestSmartAction.make_service(RecordingRouter())
         storage = cast(Any, service.storage)
@@ -1588,53 +1591,6 @@ class TestTruncatedReplySalvage:
         assert _salvage_json_objects('[{"broken": ') == []
 
 
-class TestSeminarEventDedupe:
-    """One event the model describes twice must not become two candidates."""
-
-    @staticmethod
-    def _candidate(candidate_id: str, title: str, *, mail_id: str = "m1", starts: Any = None):
-        from mailflow.domain import SeminarCandidate
-
-        return SeminarCandidate(
-            candidate_id=candidate_id, mail_id=mail_id, title=title, starts_at=starts
-        )
-
-    def test_the_same_event_worded_identically_collapses(self) -> None:
-        from mailflow.service import _event_dedupe_key  # pyright: ignore[reportPrivateUsage]
-
-        first = self._candidate("a", "Research Seminar on Batteries")
-        second = self._candidate("b", "  research   seminar on batteries ")
-
-        assert _event_dedupe_key(first) == _event_dedupe_key(second)  # pyright: ignore[reportPrivateUsage]
-
-    def test_different_mails_never_collapse(self) -> None:
-        from mailflow.service import _event_dedupe_key  # pyright: ignore[reportPrivateUsage]
-
-        first = self._candidate("a", "Shared title", mail_id="m1")
-        second = self._candidate("b", "Shared title", mail_id="m2")
-
-        assert _event_dedupe_key(first) != _event_dedupe_key(second)  # pyright: ignore[reportPrivateUsage]
-
-    def test_different_start_times_never_collapse(self) -> None:
-        from mailflow.service import _event_dedupe_key  # pyright: ignore[reportPrivateUsage]
-
-        first = self._candidate(
-            "a", "Weekly lab meeting", starts=datetime(2026, 11, 2, 9, tzinfo=UTC)
-        )
-        second = self._candidate(
-            "b", "Weekly lab meeting", starts=datetime(2026, 11, 9, 9, tzinfo=UTC)
-        )
-
-        assert _event_dedupe_key(first) != _event_dedupe_key(second)  # pyright: ignore[reportPrivateUsage]
-
-    def test_an_untimed_event_keys_on_its_title(self) -> None:
-        from mailflow.service import _event_dedupe_key  # pyright: ignore[reportPrivateUsage]
-
-        assert _event_dedupe_key(self._candidate("a", "Timeless talk")) == (  # pyright: ignore[reportPrivateUsage]
-            _event_dedupe_key(self._candidate("b", "Timeless talk"))  # pyright: ignore[reportPrivateUsage]
-        )
-
-
 class TestSalvageScope:
     """Salvage must never turn prose into candidates (it would skip the retry)."""
 
@@ -1653,140 +1609,140 @@ class TestSalvageScope:
 
 
 class TestSeminarCandidateDedupe:
-    """One event announced by several mails must read as one candidate."""
+    """Discovery, review and import must agree on which events are distinct."""
 
-    @staticmethod
-    def _candidate(
-        candidate_id: str,
-        title: str,
-        *,
-        mail_id: str,
-        starts: Any = None,
-        confidence: int = 50,
-        status: Any = None,
-    ):
-        from mailflow.domain import SeminarCandidate, SeminarStatus
+    @pytest.mark.parametrize(
+        ("overrides", "expected_mails"),
+        [
+            pytest.param(
+                [{"id": "m1"}, {"id": "m1", "title": "  quantum   seminar ", "confidence": 95}],
+                ["mail-one"],
+                id="duplicate-within-mail",
+            ),
+            pytest.param(
+                [{}, {"title": "  quantum   seminar ", "confidence": 95}],
+                ["mail-two"],
+                id="duplicate-across-mails",
+            ),
+            pytest.param(
+                [{}, {"starts_at": "2099-11-09T06:00:00Z"}],
+                ["mail-one", "mail-two"],
+                id="different-dates",
+            ),
+            pytest.param(
+                [{"starts_at": None}, {"starts_at": None, "confidence": 95}],
+                ["mail-two"],
+                id="untimed-title",
+            ),
+            pytest.param(
+                [
+                    {"location": "Room 101, Bldg B"},
+                    {"title": "Reworded seminar", "location": "room 101, bldg b", "confidence": 95},
+                ],
+                ["mail-two"],
+                id="same-venue-reworded-title",
+            ),
+            pytest.param(
+                [
+                    {"title": "Parallel Session A", "location": "Room 1"},
+                    {"title": "Parallel Session B", "location": "Room 2"},
+                ],
+                ["mail-one", "mail-two"],
+                id="parallel-events",
+            ),
+            pytest.param(
+                [
+                    {"url": "https://events.example.test/live"},
+                    {
+                        "title": "Reworded webinar",
+                        "url": "https://events.example.test/live",
+                        "confidence": 95,
+                    },
+                ],
+                ["mail-two"],
+                id="same-online-event",
+            ),
+        ],
+    )
+    async def test_discovery_lists_distinct_events_and_keeps_stable_ids(
+        self, overrides: list[dict[str, Any]], expected_mails: list[str]
+    ) -> None:
+        payloads = [
+            {
+                "id": f"m{index + 1}",
+                "title": "Quantum Seminar",
+                "starts_at": "2099-11-02T06:00:00Z",
+                "confidence": 70,
+                **changes,
+            }
+            for index, changes in enumerate(overrides)
+        ]
 
-        return SeminarCandidate(
-            candidate_id=candidate_id,
-            mail_id=mail_id,
-            title=title,
-            starts_at=starts,
-            confidence=confidence,
-            status=status or SeminarStatus.PENDING,
+        class SeminarRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> LLMCompletion:
+                return model_completion(json.dumps(payloads))
+
+        service = TestSeminarDiscovery.make_service(SeminarRouter())
+        for record_id, minute in [("mail-one", 10), ("mail-two", 9)]:
+            await service.storage.save_mail(
+                MailRecord(record_id=record_id, mail=make_mail(record_id, minute=minute))
+            )
+        first = await service.discover_seminars()
+        assert first.is_complete and first.evaluated_mails == 2
+        assert sorted(item.mail_id for item in first.candidates) == sorted(expected_mails)
+        assert await service.list_seminar_candidates() == first.candidates
+        assert await service.list_actions() == []
+        repeated = await service.discover_seminars()
+        assert {item.candidate_id for item in repeated.candidates} == {
+            item.candidate_id for item in first.candidates
+        }
+
+    async def rediscover_imported_event(
+        self,
+    ) -> tuple[MailFlowService, SeminarCandidate, ActionItem]:
+        payloads: list[dict[str, Any]] = [
+            {
+                "id": "m1",
+                "title": "Already Imported",
+                "starts_at": "2099-11-02T06:00:00Z",
+                "confidence": 10,
+            }
+        ]
+
+        class SeminarRouter:
+            async def chat(self, messages: Any, **kwargs: Any) -> LLMCompletion:
+                return model_completion(json.dumps(payloads))
+
+        service = TestSeminarDiscovery.make_service(SeminarRouter())
+        await service.storage.save_mail(
+            MailRecord(record_id="mail-one", mail=make_mail("one", minute=10))
         )
-
-    def test_the_same_event_from_two_mails_collapses(self) -> None:
-        from mailflow.service import MailFlowService
-
-        soon = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
-        listed = MailFlowService._dedupe_candidates(  # pyright: ignore[reportPrivateUsage]
-            [
-                self._candidate("a1", "Quantum Seminar", mail_id="m1", starts=soon, confidence=70),
-                self._candidate(
-                    "a2", "  quantum   seminar ", mail_id="m2", starts=soon, confidence=95
-                ),
-            ]
+        candidate = (await service.discover_seminars()).candidates[0]
+        action = await service.import_seminar(candidate.candidate_id)
+        await service.storage.save_mail(
+            MailRecord(record_id="mail-two", mail=make_mail("two", minute=9))
         )
+        payloads.append({**payloads[0], "id": "m2", "confidence": 99})
 
-        assert [item.candidate_id for item in listed] == ["a2"]  # the better description wins
+        await service.discover_seminars()
+        return service, candidate, action
 
-    def test_the_same_title_at_different_times_stays_separate(self) -> None:
-        from mailflow.service import MailFlowService
+    async def test_imported_event_keeps_status_and_action_when_a_duplicate_arrives(self) -> None:
+        service, candidate, action = await self.rediscover_imported_event()
+        listed = await service.list_seminar_candidates(include_resolved=True)
+        assert [(item.candidate_id, item.status) for item in listed] == [
+            (candidate.candidate_id, SeminarStatus.IMPORTED)
+        ]
+        assert [item.item_id for item in await service.list_actions()] == [action.item_id]
 
-        listed = MailFlowService._dedupe_candidates(  # pyright: ignore[reportPrivateUsage]
-            [
-                self._candidate(
-                    "b1", "Weekly Lab", mail_id="m1", starts=datetime(2026, 11, 2, 6, tzinfo=UTC)
-                ),
-                self._candidate(
-                    "b2", "Weekly Lab", mail_id="m2", starts=datetime(2026, 11, 9, 6, tzinfo=UTC)
-                ),
-            ]
-        )
-
-        assert [item.candidate_id for item in listed] == ["b1", "b2"]
-
-    def test_untimed_duplicates_collapse_on_the_title(self) -> None:
-        from mailflow.service import MailFlowService
-
-        listed = MailFlowService._dedupe_candidates(  # pyright: ignore[reportPrivateUsage]
-            [
-                self._candidate("c1", "Timeless Talk", mail_id="m1"),
-                self._candidate("c2", "Timeless Talk", mail_id="m2"),
-            ]
-        )
-
-        assert len(listed) == 1
-
-    def test_a_resolved_candidate_beats_a_pending_duplicate(self) -> None:
-        """Import/reject state must never be lost to a newer duplicate."""
-        from mailflow.domain import SeminarStatus
-        from mailflow.service import MailFlowService
-
-        soon = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
-        listed = MailFlowService._dedupe_candidates(  # pyright: ignore[reportPrivateUsage]
-            [
-                self._candidate(
-                    "d1",
-                    "Already Imported",
-                    mail_id="m1",
-                    starts=soon,
-                    confidence=10,
-                    status=SeminarStatus.IMPORTED,
-                ),
-                self._candidate("d2", "Already Imported", mail_id="m2", starts=soon, confidence=99),
-            ]
-        )
-
-        assert [item.candidate_id for item in listed] == ["d1"]
-        assert listed[0].status is SeminarStatus.IMPORTED
-
-    def test_title_drift_with_same_venue_and_time_collapses(self) -> None:
-        """The same event announced twice with reworded titles must collapse
-        when the venue matches: an announcement and its reminder share the
-        room, and two distinct talks in one room at one minute are not real."""
-        from mailflow.service import MailFlowService
-
-        soon = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
-        first = self._candidate(
-            "e1", "X Colloquium: Graph Learning", mail_id="m1", starts=soon, confidence=60
-        )
-        first = first.model_copy(update={"location": "Room 101, Bldg B"})
-        second = self._candidate(
-            "e2", "Graph Learning Seminar (updated)", mail_id="m2", starts=soon, confidence=90
-        )
-        second = second.model_copy(update={"location": "room 101, bldg b"})
-        listed = MailFlowService._dedupe_candidates([first, second])  # pyright: ignore[reportPrivateUsage]
-
-        assert [item.candidate_id for item in listed] == ["e2"]  # better confidence wins
-
-    def test_same_time_different_venue_stays_separate(self) -> None:
-        """Two talks at the same instant in DIFFERENT rooms are distinct."""
-        from mailflow.service import MailFlowService
-
-        soon = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
-        first = self._candidate("f1", "Parallel Session A", mail_id="m1", starts=soon)
-        first = first.model_copy(update={"location": "Room 1"})
-        second = self._candidate("f2", "Parallel Session B", mail_id="m2", starts=soon)
-        second = second.model_copy(update={"location": "Room 2"})
-        listed = MailFlowService._dedupe_candidates([first, second])  # pyright: ignore[reportPrivateUsage]
-
-        assert [item.candidate_id for item in listed] == ["f1", "f2"]
-
-    def test_url_matches_venue_even_when_locations_differ(self) -> None:
-        from mailflow.service import MailFlowService
-
-        soon = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
-        first = self._candidate("g1", "Webinar on X", mail_id="m1", starts=soon)
-        first = first.model_copy(update={"url": "https://zoom.us/j/123"})
-        second = self._candidate(
-            "g2", "X — online webinar", mail_id="m2", starts=soon, confidence=90
-        )
-        second = second.model_copy(update={"url": "https://zoom.us/j/123"})
-        listed = MailFlowService._dedupe_candidates([first, second])  # pyright: ignore[reportPrivateUsage]
-
-        assert [item.candidate_id for item in listed] == ["g2"]
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="Resolved candidates are filtered out before deduplication, exposing a pending duplicate",
+    )
+    async def test_imported_event_does_not_return_to_pending_review(self) -> None:
+        service, _, _ = await self.rediscover_imported_event()
+        assert await service.list_seminar_candidates() == []
 
 
 class TestMarketplaceService:

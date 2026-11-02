@@ -32,9 +32,11 @@ def _service(language: str) -> MailFlowService:
 
 def test_canned_phrases_localize_per_language() -> None:
     zh = _service("zh-CN")
-    assert zh.display_text("Advertisement detected by rules") == "规则判定为广告"
-    assert zh.display_text("matches advertising keywords") == "命中广告关键词"
-    assert zh.display_text("sender is on the important-senders list") == "发件人在重要发件人名单中"
+    assert zh.display_text("Advertisement detected by rules") == zh.t("analysis.summary_ad_rules")
+    assert zh.display_text("matches advertising keywords") == zh.t("analysis.reason_ad_keywords")
+    assert zh.display_text("sender is on the important-senders list") == zh.t(
+        "analysis.reason_important_sender"
+    )
     en = _service("en")
     assert en.display_text("Advertisement detected by rules") == "Advertisement detected by rules"
 

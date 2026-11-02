@@ -33,11 +33,11 @@ def test_remote_adapter_follows_server_language_event() -> None:
         I18n(),
     )
 
-    assert adapter.t("tui.btn_quit") == "Quit"
+    assert adapter.t("tui.btn_quit") == I18n("en").t("tui.btn_quit")
 
     client.emit("language.changed", language="zh-CN")
 
-    assert adapter.t("tui.btn_quit") == "退出"
+    assert adapter.t("tui.btn_quit") == I18n("zh-CN").t("tui.btn_quit")
     assert adapter.snapshot_sync()["language"] == "zh-CN"
 
 
@@ -52,10 +52,12 @@ async def test_remote_login_uses_saved_language_and_validates_required_fields() 
 
         screen = app.screen
         assert isinstance(screen, LoginScreen)
-        assert str(screen.query_one("#login-connect", Button).label) == "连接"
+        assert str(screen.query_one("#login-connect", Button).label) == I18n("zh-CN").t(
+            "tui.remote_connect"
+        )
 
         screen.query_one("#login-connect", Button).press()
         await pilot.pause()
 
         status = str(screen.query_one("#login-status", Static).render())
-        assert "请填写服务器地址、用户名和密码。" in status
+        assert I18n("zh-CN").t("tui.remote_fields_required") in status

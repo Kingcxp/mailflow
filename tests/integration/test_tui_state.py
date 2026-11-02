@@ -36,6 +36,7 @@ from textual.coordinate import Coordinate
 from textual.widgets import Button, DataTable, Input, Select, Static, TabbedContent, TextArea
 
 from mailflow_test_support.commands import commands_service, make_record
+from mailflow_test_support.ui import until
 
 
 @pytest.fixture(params=[False, True], ids=["local", "remote"])
@@ -326,7 +327,13 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         assert not app.query("#smart-action, #btn-reparse, #btn-ask-correct, #btn-profile")
         assert not app.query("#tab-mailboxes, #tab-llms, #tab-notifications, #tab-market")
         app.query_one("#btn-reply", Button).press()
-        await pilot.pause()
+        await until(
+            pilot,
+            lambda: (
+                isinstance(app.screen, ReplyModal)
+                and app.screen.query_one("#reply-body", TextArea).text == "I will attend."
+            ),
+        )
         assert isinstance(app.screen, ReplyModal)
         assert app.screen.query_one("#reply-body", TextArea).text == "I will attend."
         assert len(service.storage.drafts) == 1

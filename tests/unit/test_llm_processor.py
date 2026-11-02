@@ -379,6 +379,7 @@ async def test_analysis_request_carries_mail_dates_profile_feedback_and_ocr() ->
 
     assert result.analysis is not None
     request = "\n".join(message["content"] for message in router.last_messages)
+    assert context.now is not None
     for value in (
         mail.subject,
         mail.body_text,

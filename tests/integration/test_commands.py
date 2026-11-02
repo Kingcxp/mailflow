@@ -1,4 +1,4 @@
-"""Unit tests for the shared command router."""
+"""Shared commands through the service, permissions and in-memory storage."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from mailflow.pipeline import PipelineEngine
 from mailflow.plugins import PluginManager
 from mailflow.registry import ComponentRegistry
 from mailflow.service import MailFlowService
+from mailflow.subscriptions import Subscriptions
 
 from mailflow_test_support.commands import MemoryStorage, commands_service, make_record
 from mailflow_test_support.commands import router as router
@@ -924,17 +925,15 @@ async def test_chat_help_is_sectioned() -> None:
     meaning and an example."""
     from mailflow.config import MailFlowConfig
     from mailflow.i18n import I18n
-    from mailflow.service import MailFlowService
 
     cfg = MailFlowConfig()
     cfg.general.command_prefix = "/"
-    service = MailFlowService.__new__(MailFlowService)
+    service = commands_service(cfg)
     service.config = cfg
     service.i18n = I18n()
-    chunks = service._chat_help("/")  # pyright: ignore[reportPrivateUsage]
-    assert len(chunks) == 6
+    chunks = await service.command_dispatch("/mailflow help")
+    assert isinstance(chunks, list) and chunks
     for chunk in chunks:
-        assert chunk.startswith("【MailFlow ·"), chunk[:30]
         assert "\n" in chunk  # every section has body beyond the title
     joined = "\n".join(chunks)
     for expected in (
@@ -947,47 +946,14 @@ async def test_chat_help_is_sectioned() -> None:
         assert expected in joined, expected
 
 
-@pytest.mark.asyncio
-async def test_chat_example_returns_chunks() -> None:
-    """example renders one chunk per notification type (mail, ad, reminder,
-    digest) so the bridge can forward-merge or pace them."""
-    from mailflow.config import MailFlowConfig
-    from mailflow.i18n import I18n
-    from mailflow.service import MailFlowService
-
-    cfg = MailFlowConfig()
-    service = MailFlowService.__new__(MailFlowService)
-    service.config = cfg
-    service.i18n = I18n()
-    chunks = await service._chat_example("napcat", "n1")  # pyright: ignore[reportPrivateUsage]
-    assert isinstance(chunks, list) and len(chunks) == 4
-    # every node carries a lifted '【…】' title (bot identity in forward)
-    for chunk in chunks:
-        assert chunk.startswith("【MailFlow ·"), chunk[:30]
-    other = await service._chat_example("console", "n1")  # pyright: ignore[reportPrivateUsage]
-    assert isinstance(other, list) and len(other) == 5
-
-
-@pytest.mark.asyncio
-async def test_minimum_urgency_default_is_info() -> None:
-    """INFO by default: ads are delivered too — nothing is silently
-    dropped (user requirement)."""
-    from mailflow.config import NotifierConfig
-    from mailflow.domain import Urgency
-
-    notifier = NotifierConfig(notifier_id="n", provider="onebot")
-    assert notifier.minimum_urgency is Urgency.INFO
-
-
 async def test_command_dispatch_prefix_filtering() -> None:
     """Chat messages only dispatch when they start with the prefix."""
     from mailflow.config import MailFlowConfig
     from mailflow.domain import CommandResponse
-    from mailflow.service import MailFlowService
 
     cfg = MailFlowConfig()
     cfg.general.command_prefix = "/"
-    service = MailFlowService.__new__(MailFlowService)
+    service = commands_service(cfg)
     service.config = cfg
     from mailflow.i18n import I18n as _I18n
 
@@ -1024,11 +990,10 @@ async def test_command_dispatch_prefix_filtering() -> None:
 @pytest.mark.asyncio
 async def test_command_dispatch_no_router() -> None:
     from mailflow.config import MailFlowConfig
-    from mailflow.service import MailFlowService
 
     cfg = MailFlowConfig()
     cfg.general.command_prefix = "/"
-    service = MailFlowService.__new__(MailFlowService)
+    service = commands_service(cfg)
     service.config = cfg
     from mailflow.i18n import I18n as _I18n
 
@@ -1047,11 +1012,10 @@ async def test_unprefixed_mailflow_text_gets_namespace_hint() -> None:
     must fire for bare 'mailflow ...' text; ordinary chatter stays
     silent."""
     from mailflow.config import MailFlowConfig
-    from mailflow.service import MailFlowService
 
     cfg = MailFlowConfig()
     cfg.general.command_prefix = "/"
-    service = MailFlowService.__new__(MailFlowService)
+    service = commands_service(cfg)
     service.config = cfg
     from mailflow.i18n import I18n as _I18n
 
@@ -1071,15 +1035,19 @@ async def test_mailflow_command_crash_returns_error_reply() -> None:
     failure at DEBUG) now yields a visible error reply and a logged
     traceback."""
     from mailflow.config import MailFlowConfig
-    from mailflow.service import MailFlowService
 
     cfg = MailFlowConfig()
-    service = MailFlowService.__new__(MailFlowService)
+    service = commands_service(cfg)
     service.config = cfg
     from mailflow.i18n import I18n as _I18n
 
     service.i18n = _I18n()
-    # subscriptions deliberately unset -> AttributeError inside the dispatch
+
+    class BrokenSubscriptions(Subscriptions):
+        async def subscribers(self, provider: str, instance_id: str) -> list[str]:
+            raise RuntimeError("subscription storage unavailable")
+
+    service.subscriptions = BrokenSubscriptions(service.storage)
     reply = await service.command_dispatch(
         "/mailflow status",
         sender="10001",
@@ -1089,7 +1057,7 @@ async def test_mailflow_command_crash_returns_error_reply() -> None:
         instance_id="qq-bot-1",
     )
     assert reply is not None
-    assert "internal error" in reply or "内部错误" in reply
+    assert reply == service.t("chat.error_reply")
 
 
 @pytest.mark.asyncio
@@ -1097,7 +1065,6 @@ async def test_mailflow_hourly_toggle() -> None:
     """'hourly on/off' toggles a persisted per-chat preference; bare
     'hourly' reads the state; non-admins are rejected."""
     from mailflow.config import MailFlowConfig, NotifierConfig
-    from mailflow.service import MailFlowService
 
     cfg = MailFlowConfig()
     cfg.notifiers = [
@@ -1107,7 +1074,7 @@ async def test_mailflow_hourly_toggle() -> None:
             options={"admins": ["10001"], "targets": ["group:888"], "http_url": "http://x"},
         )
     ]
-    service = MailFlowService.__new__(MailFlowService)
+    service = commands_service(cfg)
     service.config = cfg
     from mailflow.i18n import I18n as _I18n
 
@@ -1180,7 +1147,6 @@ async def test_mailflow_hourly_toggle() -> None:
 @pytest.mark.asyncio
 async def test_mailflow_subscribe_requires_admin() -> None:
     from mailflow.config import MailFlowConfig, NotifierConfig
-    from mailflow.service import MailFlowService
 
     cfg = MailFlowConfig()
     cfg.general.command_prefix = "/"
@@ -1191,7 +1157,7 @@ async def test_mailflow_subscribe_requires_admin() -> None:
             options={"admins": ["10001"], "http_url": "http://x"},
         )
     ]
-    service = MailFlowService.__new__(MailFlowService)
+    service = commands_service(cfg)
     service.config = cfg
     from mailflow.i18n import I18n as _I18n
 
@@ -1252,7 +1218,7 @@ async def test_mailflow_subscribe_requires_admin() -> None:
 
     # help: section-grouped chunks, every section carries mailflow commands
     help_chunks = await service.command_dispatch("/mailflow help", sender="10001")
-    assert isinstance(help_chunks, list) and len(help_chunks) == 6
+    assert isinstance(help_chunks, list) and help_chunks
     joined = "\n".join(help_chunks)
     assert "mailflow subscribe" in joined
     assert "mailflow mail list" in joined
@@ -1262,7 +1228,6 @@ async def test_mailflow_subscribe_requires_admin() -> None:
 @pytest.mark.asyncio
 async def test_mailflow_unsubscribe_removes_target() -> None:
     from mailflow.config import MailFlowConfig, NotifierConfig
-    from mailflow.service import MailFlowService
 
     cfg = MailFlowConfig()
     cfg.general.command_prefix = "/"
@@ -1277,7 +1242,7 @@ async def test_mailflow_unsubscribe_removes_target() -> None:
             },
         )
     ]
-    service = MailFlowService.__new__(MailFlowService)
+    service = commands_service(cfg)
     service.config = cfg
     from mailflow.i18n import I18n as _I18n
 

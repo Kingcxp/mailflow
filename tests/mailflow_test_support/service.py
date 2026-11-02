@@ -158,18 +158,7 @@ class RecordingSource:
         pass
 
 
-def _reply(text: str) -> Any:
-    """Minimal LLMCompletion stand-in the smart-action routers return."""
-
-    class Reply:
-        def __init__(self, value: str) -> None:
-            self.text = value
-            self.tool_calls: list[Any] = []
-
-    return Reply(text)
-
-
-def _completion(text: str, *, tool_calls: list[ToolCall] | None = None) -> LLMCompletion:
+def model_completion(text: str, *, tool_calls: list[ToolCall] | None = None) -> LLMCompletion:
     """One scripted model turn for the tool-loop tests."""
     return LLMCompletion(text=text, model="test-model", tool_calls=tool_calls or [])
 

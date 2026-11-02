@@ -1,4 +1,4 @@
-"""Unit tests for the Ask & Correct conversational analysis flow."""
+"""Conversational analysis through the service with a fake model and memory storage."""
 
 from __future__ import annotations
 
@@ -219,13 +219,13 @@ async def test_chat_about_mail_no_llm_configured() -> None:
 
     result = await service.chat_about_mail("ask-1", [{"role": "user", "content": "Any question"}])
 
-    assert "No LLM is configured" in result["reply"]
+    assert result["reply"] == service.t("tui.ask_correct_no_llm")
     assert result["corrections"] == {}
     service.i18n.set_language("zh-CN")
     localized = await service.chat_about_mail(
         "ask-1", [{"role": "user", "content": "Any question"}]
     )
-    assert "尚未配置" in localized["reply"]
+    assert localized["reply"] == service.t("tui.ask_correct_no_llm")
 
 
 @pytest.mark.asyncio
@@ -250,4 +250,4 @@ async def test_chat_about_mail_hides_backend_failure_text() -> None:
 async def test_chat_about_mail_unknown_mail() -> None:
     service = _service(_config_with_llm())
     result = await service.chat_about_mail("missing", [{"role": "user", "content": "Hi"}])
-    assert "not found" in result["reply"]
+    assert result["reply"] == service.t("tui.ask_correct_mail_missing")

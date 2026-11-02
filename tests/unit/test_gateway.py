@@ -350,15 +350,16 @@ async def test_provision_shares_progress_with_install_and_start() -> None:
 
     provisioner = RecordingProvisioner()
     manager, _storage = _manager(provisioner)
-    await manager.provision("fake-gw", "gw-1", {"x": 1})
+    options = {"x": 1}
+    instance = await manager.provision("fake-gw", "gw-1", options)
 
     progress = captured["install"].get("_progress")
     assert isinstance(progress, InstallProgress)
     assert captured["install"]["x"] == 1
     assert captured["start"]["_progress"] is progress
-    assert progress._done  # pyright: ignore[reportPrivateUsage]
-    # Original options remain free of call-scoped transport state.
-    assert "_progress" not in {"x": 1}
+    assert progress.percent == 100.0
+    assert instance.status == "running"
+    assert options == {"x": 1}
 
 
 @pytest.mark.asyncio

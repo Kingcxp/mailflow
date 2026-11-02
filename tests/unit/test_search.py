@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
-
-from mailflow.config import LLMConfig
-from mailflow.domain import Attachment, MailRecord
+from mailflow.domain import MailRecord
 from mailflow.ocr import searchable_mail_text
 from mailflow_testkit.fakes import make_mail
 from mailflow_tui.search import build_search_matcher
-
-from mailflow_test_support.commands import commands_service, make_record
 
 
 def test_literal_search_is_case_insensitive_by_default() -> None:
@@ -49,37 +44,3 @@ def test_mail_body_and_image_text_preserve_case_sensitive_search() -> None:
     assert build_search_matcher("Room Y908", case_sensitive=True).matches(text)
     assert build_search_matcher("Research", case_sensitive=True).matches(text)
     assert not build_search_matcher("research", case_sensitive=True).matches(text)
-
-
-async def test_smart_model_receives_sender_summary_attachment_and_ocr_text() -> None:
-    service = commands_service()
-    service.config.llms = [LLMConfig(llm_id="fake")]
-    record = make_record()
-    record.mail.attachments = [Attachment(filename="attachment-only.png")]
-    record.mail.image_text = "OCR-only phrase"
-    await service.storage.save_mail(record)
-    prompts: list[str] = []
-
-    async def chat(messages: Any, **kwargs: Any) -> Any:
-        from mailflow.contracts import LLMCompletion
-
-        prompt = str(messages[-1]["content"])
-        prompts.append(prompt)
-        return LLMCompletion(
-            text="ok" if prompt.startswith("Reply with") else '[{"id":"m1","relevance":90}]'
-        )
-
-    service.router = type("FakeRouter", (), {"chat": staticmethod(chat)})()
-    result = await service.smart_rank("attachment-only")
-    assert [r.record_id for r in result.records] == [record.record_id]
-    assert all(
-        value in prompts[-1]
-        for value in (
-            record.mail.subject,
-            record.mail.sender.display,
-            record.mail.body_text,
-            record.summary,
-            "attachment-only.png",
-            "OCR-only phrase",
-        )
-    )

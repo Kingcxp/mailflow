@@ -1,10 +1,6 @@
-"""Reading a poster's text out of an image attachment.
+"""OCR normalization, image selection and failure tolerance with no OCR service.
 
-Opt-in and failure-tolerant by design: without the optional engine everything
-here degrades to "no text" and the pipeline behaves exactly as before, because
-most users will not have the OCR package installed. These tests therefore split
-into two groups — the pure normalization/filtering logic (always runnable) and
-recognition itself (skipped when the engine is absent).
+Local engine recognition belongs to integration/test_ocr_engine.py.
 """
 
 from __future__ import annotations
@@ -12,6 +8,13 @@ from __future__ import annotations
 import pytest
 from mailflow import ocr
 from mailflow.domain import Attachment
+
+OCR_RESULTS: list[tuple[object, str]] = [
+    ([[[], "Research Seminar", 0.99]], "Research Seminar"),
+    (([[[], "Research Seminar", 0.99]], [0.01]), "Research Seminar"),
+    (None, ""),
+    ([None, [], [0], [[], "  ", 0.99], [[], "Kept", 0.99]], "Kept"),
+]
 
 
 class TestNormalization:
@@ -85,8 +88,37 @@ class TestFailureTolerance:
     def test_extract_text_rejects_a_non_image_content_type(self) -> None:
         assert ocr.extract_text(b"\x00\x01binary", content_type="application/pdf") == ""
 
-    def test_extract_text_survives_undecodable_bytes(self) -> None:
+    def test_extract_text_survives_undecodable_bytes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unittest.mock import Mock
+
+        engine = Mock(side_effect=AssertionError("undecodable data must not reach recognition"))
+        monkeypatch.setattr(ocr, "_load_engine", lambda: engine)
+        monkeypatch.setattr(ocr, "_decode_image", Mock(return_value=None))
         assert ocr.extract_text(b"not an image at all", content_type="image/png") == ""
+
+    @pytest.mark.parametrize(
+        ("result", "expected"),
+        OCR_RESULTS,
+    )
+    def test_engine_results_reach_extracted_text(
+        self, result: object, expected: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import Mock
+
+        engine = Mock(return_value=result)
+        monkeypatch.setattr(ocr, "_load_engine", lambda: engine)
+        monkeypatch.setattr(ocr, "_decode_image", Mock(return_value=object()))
+        assert ocr.extract_text(b"fake image", content_type="image/png") == expected
+
+    def test_engine_failure_does_not_escape_into_mail_processing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import Mock
+
+        engine = Mock(side_effect=RuntimeError("OCR model unavailable"))
+        monkeypatch.setattr(ocr, "_load_engine", lambda: engine)
+        monkeypatch.setattr(ocr, "_decode_image", Mock(return_value=object()))
+        assert ocr.extract_text(b"fake image", content_type="image/png") == ""
 
     def test_extract_text_survives_an_oversized_payload(self) -> None:
         oversized = b"\x89PNG" + b"\x00" * (ocr.MAX_IMAGE_BYTES + 10)
@@ -100,56 +132,3 @@ class TestFailureTolerance:
         ]
 
         assert ocr.extract_mail_images(attachments) == ""
-
-
-class TestRecognition:
-    """The real thing, when the optional engine is installed."""
-
-    @staticmethod
-    def _poster_bytes() -> bytes:
-        """Render a poster with Pillow.
-
-        Imported dynamically: Pillow arrives with the optional OCR package, so
-        a static import would make the type checker (and the test suite) depend
-        on a dependency most installs do not have.
-        """
-        pytest.importorskip("PIL.Image")
-        import importlib
-        import io
-        from typing import Any
-
-        image_module: Any = importlib.import_module("PIL.Image")
-        draw_module: Any = importlib.import_module("PIL.ImageDraw")
-
-        image: Any = image_module.new("RGB", (900, 200), "white")
-        draw: Any = draw_module.Draw(image)
-        draw.text((20, 40), "PAIR Research Seminar", fill="black")
-        draw.text((20, 120), "15 October 2026, 14:00", fill="black")
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        return bytes(buffer.getvalue())
-
-    def test_poster_text_is_read_and_searchable(self) -> None:
-        if not ocr.is_available():
-            pytest.skip("optional OCR engine not installed")
-        data = self._poster_bytes()
-
-        text = ocr.extract_text(data, content_type="image/png")
-        forms = ocr.searchable_forms(text)
-
-        assert any("seminar" in form for form in forms)
-        assert any("15 october 2026" in form for form in forms)
-
-    def test_the_mail_level_helper_reads_a_poster(self) -> None:
-        if not ocr.is_available():
-            pytest.skip("optional OCR engine not installed")
-        attachment = Attachment(
-            filename="PAIR-Seminar-poster.png",
-            content_type="image/png",
-            size=len(self._poster_bytes()),
-            data=self._poster_bytes(),
-        )
-
-        text = ocr.extract_mail_images([attachment])
-
-        assert "seminar" in ocr.searchable_text(text)

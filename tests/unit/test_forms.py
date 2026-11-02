@@ -58,12 +58,6 @@ def test_registry_stores_and_returns_form_fields() -> None:
     assert registry.form_fields(ComponentKind.MAIL_SOURCE, "custom-chan") == ()
 
 
-def test_registry_ignores_empty_form_fields() -> None:
-    registry, registrar = _registrar()
-    registrar.add_form_fields(ComponentKind.NOTIFIER, "nope", ())
-    assert registry.form_fields(ComponentKind.NOTIFIER, "nope") == ()
-
-
 def test_registry_stores_and_returns_probe() -> None:
     registry, registrar = _registrar()
 
