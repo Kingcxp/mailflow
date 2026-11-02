@@ -345,6 +345,9 @@ class {Category}Storage:
     async def get_draft(self, draft_id):
         raise NotImplementedError
 
+    async def list_drafts(self, mail_id):
+        raise NotImplementedError
+
     async def delete_draft(self, draft_id):
         raise NotImplementedError
 

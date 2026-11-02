@@ -751,15 +751,7 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             from mailflow_tui.todo_create import TodoEditModal
 
             for _ in range(10):
-                idx = next(
-                    (
-                        i
-                        for i in range(table.row_count)
-                        if "给导师发进度报告" in str(table.get_row_at(i)[2])
-                    ),
-                    -1,
-                )
-                assert idx >= 0, "todo row vanished"
+                idx = table.get_row_index(item.item_id)
                 table.move_cursor(row=idx, animate=False)  # pyright: ignore[reportUnknownMemberType]
                 await pilot.pause(0.1)
                 app.query_one("#actions-edit", Button).press()
@@ -789,7 +781,7 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             await _wait_until(
                 pilot,
                 lambda: any(
-                    "给导师发周报" in str(table.get_row_at(i)[2]) for i in range(table.row_count)
+                    "给导师发周报" in str(table.get_cell(key, "content")) for key in table.rows
                 ),
             )
             rows = " ".join(
@@ -798,9 +790,7 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             assert "给导师发周报" in rows
 
             # delete it: custom todos are removed for real
-            idx = next(
-                i for i in range(table.row_count) if "给导师发周报" in str(table.get_row_at(i)[2])
-            )
+            idx = table.get_row_index(item.item_id)
             table.move_cursor(row=idx, animate=False)  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause(0.05)
             app.query_one("#actions-delete", Button).press()
