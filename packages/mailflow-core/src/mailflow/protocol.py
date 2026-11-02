@@ -7,7 +7,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, time
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -24,16 +24,22 @@ def json_value(value: Any) -> Any:
         # for OCR and never enter event or mail JSON responses.
         return {**value.model_dump(exclude={"data"}), "data": None}
     if isinstance(value, BaseModel):
-        fields = value.model_dump(mode="python")
+        fields: Any = value.model_dump(mode="python")
         if not isinstance(fields, dict):
             return json_value(fields)
-        return {name: json_value(getattr(value, name, item)) for name, item in fields.items()}
+        return {
+            name: json_value(getattr(value, name, item))
+            for name, item in cast("dict[str, Any]", fields).items()
+        }
     if is_dataclass(value) and not isinstance(value, type):
         return json_value(asdict(value))
     if isinstance(value, Mapping):
-        return {str(json_value(key)): json_value(item) for key, item in value.items()}
+        return {
+            str(json_value(key)): json_value(item)
+            for key, item in cast("Mapping[object, Any]", value).items()
+        }
     if isinstance(value, (list, tuple, set, frozenset)):
-        return [json_value(item) for item in value]
+        return [json_value(item) for item in cast("list[Any]", value)]
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     if isinstance(value, Path):

@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 from mailflow.domain import (
     MailRecord,
 )
 from mailflow.i18n import I18n
-from mailflow_server.app import _jsonable, create_app
+from mailflow.protocol import json_value
+from mailflow_server.app import create_app
 from mailflow_server.client import RemoteClient
 from mailflow_tui.remote import RemoteServiceAdapter
+from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from mailflow_test_support.commands import commands_service, make_record
+from mailflow_test_support.ui import mock_http_client
 
 
 def test_rest_history_live_logs_and_service_events_share_frames() -> None:
@@ -28,19 +31,20 @@ def test_rest_history_live_logs_and_service_events_share_frames() -> None:
     record = make_record()
     first = logging.LogRecord("mailflow.test", logging.WARNING, "", 0, "historic", (), None)
     feed.handle(first)
-    from mailflow_server.client import _basic
+    from mailflow_tui.remote import basic_header
 
     with (
-        TestClient(app, headers=_basic("admin", "secret")) as client,
+        TestClient(app, headers=basic_header("admin", "secret")) as client,
         client.websocket_connect("/ws") as ws,
     ):
-        history = client.get("/logs").json()
+        http = cast(httpx.Client, client)
+        history = http.get("/logs").json()
         ws.send_json({"type": "logs"})
         assert ws.receive_json() == history[0]
         second = logging.LogRecord("mailflow.test", logging.ERROR, "", 0, "live", (), None)
         feed.handle(second)
         frame = ws.receive_json()
-        assert frame == client.get("/logs").json()[-1]
+        assert frame == http.get("/logs").json()[-1]
         assert frame["event"] == "log" and "|ERROR|mailflow.test|live" in frame["payload"]["line"]
         assert client.portal is not None
         client.portal.call(lambda: service.events.emit("example", nested={"record": record}))
@@ -48,7 +52,7 @@ def test_rest_history_live_logs_and_service_events_share_frames() -> None:
         assert frame["event"] == "example"
         assert MailRecord.model_validate(frame["payload"]["nested"]["record"]) == record
     assert not feed.queues
-    assert not service.events._subscribers.get("*")
+    assert not service.events._subscribers.get("*")  # pyright: ignore[reportPrivateUsage]
 
 
 def test_websocket_rejects_missing_credentials() -> None:
@@ -77,13 +81,10 @@ async def test_remote_tui_renders_mail_actions_runtime_and_settings(
     record = make_record()
     await service.storage.save_mail(record)
     await service.add_action("remote schedule", datetime.now(UTC) + timedelta(days=1))
-    real_client = httpx.AsyncClient
     transport = httpx.ASGITransport(app=create_app(service))
-    monkeypatch.setattr(
-        httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs)
-    )
+    mock_http_client(monkeypatch, transport)
     adapter = RemoteServiceAdapter(
-        RemoteClient("http://fake", "admin", "secret"), _jsonable(service.snapshot()), I18n()
+        RemoteClient("http://fake", "admin", "secret"), json_value(service.snapshot()), I18n()
     )
     app = MailFlowApp(adapter, queue.Queue(), remote=True)
     async with app.run_test(size=(140, 45)) as pilot:
@@ -91,8 +92,10 @@ async def test_remote_tui_renders_mail_actions_runtime_and_settings(
         mail = app.query_one(MailPane)
         await mail.refresh_mail()
         assert app.query_one("#mail-table", DataTable).row_count == 1
-        mail._selected_id = record.record_id
-        await mail._show_selected()
+        table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
         assert record.summary in str(app.query_one("#mail-summary", Static).render())
         await app.query_one(ActionsPane).refresh_actions()
         assert app.query_one("#actions-table", DataTable).row_count == 1

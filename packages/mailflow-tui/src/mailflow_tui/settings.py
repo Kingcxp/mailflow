@@ -41,7 +41,8 @@ from mailflow.settings import (
     entry_model,
 )
 from rich.text import Text
-from textual.app import ComposeResult
+from textual import getters
+from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
@@ -823,7 +824,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 draft[extra.field_id] = node.value()
             elif isinstance(node, TextArea):
                 draft[extra.field_id] = node.text
-            elif isinstance(node, (Input, Select, Switch)):
+            elif isinstance(node, Select):
+                select = cast("Select[Any]", node)
+                draft[extra.field_id] = select.value
+            elif isinstance(node, (Input, Switch)):
                 draft[extra.field_id] = node.value
         self._provider_drafts[self._active_provider] = draft
 
@@ -1116,7 +1120,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
 
     async def _test_notifier(self) -> None:
         """Use the current provider's credentials and declared probe."""
-        from mailflow_tui.notifications import _NotifierProbe
+        from mailflow_tui.notifications import NotifierProbe
 
         provider = self._current_provider()
         options = dict(self._collect_extras(validate=False).get("options") or {})
@@ -1124,7 +1128,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         if probe is not None:
             message = await probe(options, self._service.t)
         else:
-            message = await _NotifierProbe.probe(provider, options, self._service.t)
+            message = await NotifierProbe.probe(provider, options, self._service.t)
         self.query_one("#entry-form-status", Static).update(
             escape(error_detail(self._service, message, extra_secrets=self._secrets()))
         )
@@ -1747,6 +1751,8 @@ def _double_clicked(stamp_key: str, row_key: str) -> bool:
 class LLMPane(Vertical):
     """The ordered LLM chain: first entry is default, the rest are fallbacks."""
 
+    app = getters.app(cast("type[App[Any]]", App))
+
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
@@ -1950,7 +1956,8 @@ class LLMPane(Vertical):
             if result is None:
                 self._set_status(self._t("tui.form_cancelled"))
 
-        self.app.push_screen(
+        app = self.app
+        app.push_screen(
             EntryFormScreen(
                 self._service, "llms", values=values, hidden=("default", "fallback"), on_save=save
             ),
@@ -1991,6 +1998,8 @@ class AccountsPane(Vertical):
     """Mailboxes plus the history browser (select mail, run the pipeline)."""
 
     _DEFAULT_HISTORY_BATCH_SIZE = 25
+
+    app = getters.app(cast("type[App[Any]]", App))
 
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
@@ -2255,7 +2264,8 @@ class AccountsPane(Vertical):
             if result is None:
                 self._set_status(self._t("tui.form_cancelled"))
 
-        self.app.push_screen(
+        app = self.app
+        app.push_screen(
             EntryFormScreen(self._service, "accounts", values=values, on_save=save),
             callback=after,
         )  # pyright: ignore[reportUnknownMemberType]

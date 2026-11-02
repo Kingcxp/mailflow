@@ -8,8 +8,8 @@ import logging
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import AsyncMock
+from typing import Any, Never, cast
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -28,6 +28,11 @@ from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 from textual.worker import WorkerCancelled
 
 from mailflow_test_support.commands import commands_service
+from mailflow_test_support.ui import mock_http_client
+
+
+def unused_provider(_config: Any) -> Never:
+    raise AssertionError("settings forms must not instantiate providers")
 
 
 async def settle(pilot: Any) -> None:
@@ -56,7 +61,7 @@ async def test_provider_drafts_do_not_cross_and_save_failure_keeps_input(
         "notifiers": (ComponentKind.NOTIFIER, registrar.add_notifier, "notifier_id"),
     }[group]
     for provider in ("old", "fresh"):
-        register(provider, lambda _config: None)
+        register(provider, unused_provider)
     registrar.add_form_fields(kind, "old", (FormField("legacy"),))
     registrar.add_form_fields(
         kind,
@@ -68,7 +73,7 @@ async def test_provider_drafts_do_not_cross_and_save_failure_keeps_input(
             FormField("instructions", kind="textarea"),
         ),
     )
-    values = {
+    values: dict[str, Any] = {
         id_field: "entry",
         "provider": "old",
         "options": {"legacy": "old", "password": "old-secret"},
@@ -130,7 +135,7 @@ async def test_model_page_save_failure_is_retryable_without_retyping(
 
     service = commands_service(config_path=str(tmp_path / "config.toml"))
     registrar = PluginRegistrar(service.registry, service.config, "fake")
-    registrar.add_llm("openai-completions", lambda _config: None)
+    registrar.add_llm("openai-completions", unused_provider)
     monkeypatch.setattr(service, "reload_runtime", AsyncMock())
     write = service_module.write_config
     attempts = 0
@@ -329,14 +334,9 @@ async def test_notifier_probe_uses_edited_token_and_does_not_gate_save(
         requests.append(request)
         return httpx.Response(401)
 
-    client_type = httpx.AsyncClient
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        lambda **kwargs: client_type(transport=httpx.MockTransport(respond), **kwargs),
-    )
+    mock_http_client(monkeypatch, httpx.MockTransport(respond))
     registrar = PluginRegistrar(service.registry, service.config, "fake")
-    registrar.add_notifier("onebot", lambda _config: None)
+    registrar.add_notifier("onebot", unused_provider)
     registrar.add_form_fields(
         ComponentKind.NOTIFIER,
         "onebot",
@@ -377,7 +377,7 @@ async def test_notifier_page_rename_and_delete_recover_from_save_errors(
         NotifierConfig(notifier_id="old", provider="fake", options={"access_token": "saved-token"})
     ]
     registrar = PluginRegistrar(service.registry, service.config, "fake")
-    registrar.add_notifier("fake", lambda _config: None)
+    registrar.add_notifier("fake", unused_provider)
     registrar.add_form_fields(
         ComponentKind.NOTIFIER, "fake", (FormField("access_token", kind="password", secret=True),)
     )
@@ -406,7 +406,7 @@ async def test_notifier_page_rename_and_delete_recover_from_save_errors(
 
     async with Host().run_test() as pilot:
         await settle(pilot)
-        table = pane.query_one("#notifications-table", DataTable)
+        table = cast(DataTable[Any], pane.query_one("#notifications-table", DataTable))
         assert "saved-token" not in str(table.get_row("old")[-1])
         pane.query_one("#notif-edit", Button).press()
         await settle(pilot)
@@ -485,9 +485,7 @@ async def test_remote_login_can_cancel_recover_and_retry_session_write(
             assert "secret" not in rendered(form, "#login-status")
         mode = "success"
         original = remote.save_session
-        monkeypatch.setattr(
-            remote, "save_session", lambda _data: (_ for _ in ()).throw(OSError("read only"))
-        )
+        monkeypatch.setattr(remote, "save_session", Mock(side_effect=OSError("read only")))
         form.query_one("#login-connect", Button).press()
         await settle(pilot)
         assert app.screen is form and not saved
@@ -495,16 +493,18 @@ async def test_remote_login_can_cancel_recover_and_retry_session_write(
         form.query_one("#login-connect", Button).press()
         await settle(pilot)
         assert saved == [{"url": "http://fake", "username": "admin", "password": "secret"}]
-        assert "secret" not in remote._SESSION_FILE.read_text(encoding="utf-8")
+        assert "secret" not in (tmp_path / "session.json").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("phase", ["install", "login", "endpoint"])
-async def test_gateway_cancel_waits_for_operation_and_releases_resources(phase: str) -> None:
+async def test_gateway_cancel_waits_for_operation_and_releases_resources(
+    phase: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service = commands_service()
     entered, released = asyncio.Event(), asyncio.Event()
     qr_ready = asyncio.Event()
     progress = InstallProgress(stage="installing", message="internal token", percent=40)
-    service.gateways = SimpleNamespace(progress=lambda *_args: progress)
+    monkeypatch.setattr(service, "gateways", SimpleNamespace(progress=Mock(return_value=progress)))
     service.gateway_detect = AsyncMock(return_value="")
     service.gateway_shutdown = AsyncMock()
 
@@ -532,7 +532,7 @@ async def test_gateway_cancel_waits_for_operation_and_releases_resources(phase: 
         assert released.is_set()
 
     service.gateway_provision = provision
-    service.gateway_qr = qr
+    monkeypatch.setattr(service, "gateway_qr", qr)
     service.gateway_shutdown.side_effect = shutdown
     guide = GatewayGuideModal(service, "napcat", "chat", {"access_token": "internal token"})
 
@@ -544,7 +544,7 @@ async def test_gateway_cancel_waits_for_operation_and_releases_resources(phase: 
             released.set()
         return True
 
-    guide._wait_for_endpoint = endpoint
+    monkeypatch.setattr(guide, "_wait_for_endpoint", endpoint)
     app = App[None]()
     results: list[Any] = []
     async with app.run_test() as pilot:

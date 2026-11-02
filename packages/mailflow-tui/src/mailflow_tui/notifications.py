@@ -40,7 +40,7 @@ from mailflow_tui.widgets import SafeSelect
 _URGENCY_ORDER = (Urgency.AD, Urgency.INFO, Urgency.IMPORTANT, Urgency.URGENT)
 
 
-class _NotifierProbe:
+class NotifierProbe:
     """Connectivity probes for notifier backends. Each returns a
     human-readable status line; providers without a probe report that
     honestly instead of pretending to be online."""
@@ -688,7 +688,7 @@ class NotificationsPane(Vertical):
                     try:
                         if probe is not None:
                             return await probe(options, self._service.t)
-                        return await _NotifierProbe.probe(provider, options, self._service.t)
+                        return await NotifierProbe.probe(provider, options, self._service.t)
                     except Exception as exc:
                         return error_message(self._service, exc)
 

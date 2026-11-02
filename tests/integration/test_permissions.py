@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import httpx
@@ -102,13 +103,15 @@ async def test_concurrent_contexts_remain_isolated() -> None:
 
 
 @pytest.mark.parametrize("language", ["en", "zh-CN"])
-async def test_missing_account_and_history_capability_are_translated(language: str) -> None:
+async def test_missing_account_and_history_capability_are_translated(
+    language: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service = commands_service()
     service.i18n.set_language(language)
     with pytest.raises(KeyError) as missing:
         await service.fetch_history("missing")
     assert missing.value.args[0] == service.t("account.not_found", account_id="missing")
-    service.sources["read-only"] = object()
+    monkeypatch.setitem(service.sources, "read-only", cast(Any, object()))
     with pytest.raises(NotImplementedError) as unsupported:
         await service.fetch_history("read-only")
     assert str(unsupported.value) == service.t(

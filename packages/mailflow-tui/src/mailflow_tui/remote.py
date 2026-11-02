@@ -255,10 +255,9 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         except ValueError:
             status.update(self._t("tui.remote_invalid_response"))
             return
-        if isinstance(payload, dict):
-            language = cast("dict[str, Any]", payload).get("language")
-            if language:
-                session["language"] = str(language)
+        language = cast("dict[str, Any]", payload).get("language")
+        if language:
+            session["language"] = str(language)
         if save:
             session["saved_password"] = password
         save_session(session)
@@ -538,21 +537,25 @@ class _EventProxy:
 
 def _option(data: dict[str, Any]) -> OptionSpec:
     return OptionSpec(
-        **{
-            **data,
-            "editor": EditorKind(data["editor"]),
-            "choices": tuple(data.get("choices") or ()),
-            "item_fields": tuple(_option(item) for item in data.get("item_fields") or ()),
-        }
+        key=data["key"],
+        section=data["section"],
+        label=data["label"],
+        editor=EditorKind(data["editor"]),
+        description=data["description"],
+        default=data.get("default"),
+        value=data.get("value"),
+        required=bool(data.get("required", False)),
+        choices=tuple(data.get("choices") or ()),
+        item_fields=tuple(_option(item) for item in data.get("item_fields") or ()),
     )
 
 
 def _section(data: dict[str, Any]) -> SettingsSection:
     return SettingsSection(
-        **{
-            **data,
-            "options": [_option(item) for item in data.get("options", [])],
-        }
+        section_id=data["section_id"],
+        title=data["title"],
+        plugin_id=data.get("plugin_id", ""),
+        options=[_option(item) for item in data.get("options", [])],
     )
 
 

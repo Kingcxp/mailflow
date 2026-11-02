@@ -618,8 +618,16 @@ def update_entry(
         old_value: Any = previous
         new_value: Any = entries[index]
         for part in path[2:]:
-            old_value = old_value.get(part) if isinstance(old_value, dict) else None
-            new_value = new_value.get(part) if isinstance(new_value, dict) else None
+            old_value = (
+                cast("dict[object, Any]", old_value).get(part)
+                if isinstance(old_value, dict)
+                else None
+            )
+            new_value = (
+                cast("dict[object, Any]", new_value).get(part)
+                if isinstance(new_value, dict)
+                else None
+            )
         if old_value != new_value:
             updated.env_placeholders.pop(path, None)
     return updated

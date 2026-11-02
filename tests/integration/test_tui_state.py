@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import queue
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import httpx
@@ -35,8 +35,8 @@ from textual.containers import ScrollableContainer
 from textual.coordinate import Coordinate
 from textual.widgets import Button, DataTable, Input, Select, Static, TabbedContent, TextArea
 
-from mailflow_test_support.commands import commands_service, make_record
-from mailflow_test_support.ui import until
+from mailflow_test_support.commands import MemoryStorage, commands_service, make_record
+from mailflow_test_support.ui import mock_http_client, until
 
 
 @pytest.fixture(params=[False, True], ids=["local", "remote"])
@@ -60,12 +60,7 @@ def host(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Any
             return httpx.Response(503, json={"detail": "offline [retry]"})
         return await transport.handle_async_request(req)
 
-    real_client = httpx.AsyncClient
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs),
-    )
+    mock_http_client(monkeypatch, httpx.MockTransport(respond))
     client = RemoteClient("http://fake", "admin", "secret")
     remote = bool(request.param)
     view = (
@@ -75,7 +70,7 @@ def host(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Any
 
     async def emit(event: str, **payload: Any) -> None:
         if remote:
-            await client._dispatch(event, json_value(payload))
+            await client._dispatch(event, json_value(payload))  # pyright: ignore[reportPrivateUsage]
         else:
             await service.events.emit(event, **payload)
 
@@ -287,15 +282,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
             return httpx.Response(503, json={"detail": "offline [retry]"})
         return await asgi.handle_async_request(req)
 
-    real_client = httpx.AsyncClient
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        lambda **kwargs: real_client(
-            transport=httpx.MockTransport(respond),
-            **kwargs,
-        ),
-    )
+    mock_http_client(monkeypatch, httpx.MockTransport(respond))
     view = RemoteServiceAdapter(
         RemoteClient("http://fake", "admin", "secret"), json_value(service.snapshot()), I18n()
     )
@@ -308,9 +295,15 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
             assert "offline [retry]" in text(app, ident)
         failures.clear()
-        await app._reload_all()
+        await app.query_one(MailPane).refresh_mail()
+        await app.query_one(ActionsPane).refresh_actions()
+        await app.query_one(RuntimePane).refresh_runtime()
+        await settle(pilot)
         failures.update({"/mails", "/actions", "/snapshot"})
-        await app._reload_all()
+        await app.query_one(MailPane).refresh_mail()
+        await app.query_one(ActionsPane).refresh_actions()
+        await app.query_one(RuntimePane).refresh_runtime()
+        await settle(pilot)
         for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
             assert "offline [retry]" in text(app, ident)
         assert app.query_one("#mail-table", DataTable).row_count == 1
@@ -321,7 +314,10 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         assert "offline [retry]" in text(app, "#mail-operation-status")
         assert await service.storage.get_mail("m1") is not None
         failures.clear()
-        await app._reload_all()
+        await app.query_one(MailPane).refresh_mail()
+        await app.query_one(ActionsPane).refresh_actions()
+        await app.query_one(RuntimePane).refresh_runtime()
+        await settle(pilot)
         for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
             assert "offline" not in text(app, ident)
         assert not app.query("#smart-action, #btn-reparse, #btn-ask-correct, #btn-profile")
@@ -336,11 +332,11 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         )
         assert isinstance(app.screen, ReplyModal)
         assert app.screen.query_one("#reply-body", TextArea).text == "I will attend."
-        assert len(service.storage.drafts) == 1
+        assert len(cast(MemoryStorage, service.storage).drafts) == 1
         draft_screen = app.screen
         draft_screen.query_one("#reply-body", TextArea).text = "My unfinished reply"
         service.i18n.set_language("zh-CN")
-        await view.client._dispatch("language.changed", {"language": "zh-CN"})
+        await view.client._dispatch("language.changed", {"language": "zh-CN"})  # pyright: ignore[reportPrivateUsage]
         await pilot.pause()
         assert app.screen is draft_screen
         assert draft_screen.query_one("#reply-body", TextArea).text == "My unfinished reply"

@@ -9,7 +9,6 @@ import platform
 import shutil
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 
 import pytest
@@ -59,23 +58,6 @@ def test_compose_arguments_support_plugin_and_legacy_clients() -> None:
     ]
 
 
-class _Service:
-    def __init__(self) -> None:
-        self.config = SimpleNamespace(notifiers=[])
-        self.added: list[tuple[str, dict[str, Any]]] = []
-
-    async def add_config_entry(self, group: str, values: dict[str, Any]) -> None:
-        self.added.append((group, values))
-
-    def t(self, key: str, **_: Any) -> str:
-        return key
-
-
-class _Status:
-    def update(self, _: str) -> None:
-        pass
-
-
 class _RecordingWriter:
     def __init__(self) -> None:
         self.payload = bytearray()
@@ -92,14 +74,14 @@ class _RecordingWriter:
 
 
 async def test_webhook_rejects_credentials_from_another_instance() -> None:
-    bridge = gateway._WebhookBridge("wechat-1", 0, "http://bot", "one")
+    bridge = gateway._WebhookBridge("wechat-1", 0, "http://bot", "one")  # pyright: ignore[reportPrivateUsage]
     reader = asyncio.StreamReader()
     reader.feed_data(b"POST /webhook?token=two HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}")
     reader.feed_eof()
     writer = _RecordingWriter()
-    await bridge._handle(reader, cast(Any, writer))
+    await bridge._handle(reader, cast(Any, writer))  # pyright: ignore[reportPrivateUsage]
     assert bytes(writer.payload).startswith(b"HTTP/1.1 403")
-    assert not bridge._pending_forwards
+    assert not bridge._pending_forwards  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_image_pull_cancellation_terminates_only_its_subprocess(
@@ -137,7 +119,7 @@ async def test_image_pull_cancellation_terminates_only_its_subprocess(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
     provisioner = gateway.WechatPadProProvisioner()
     task = asyncio.create_task(
-        provisioner._pull_with_progress("docker", tmp_path / "compose.yml", None)
+        provisioner._pull_with_progress("docker", tmp_path / "compose.yml", None)  # pyright: ignore[reportPrivateUsage]
     )
     await reading.wait()
     task.cancel()
@@ -159,7 +141,7 @@ async def test_missing_docker_requires_explicit_install_permission(
     monkeypatch.setattr(gateway, "install_docker_dependencies", unexpected_install)
     with pytest.raises(RuntimeError, match="install_dependencies"):
         await gateway.WechatPadProProvisioner().install("one", {})
-    assert not gateway._instance_dir("one").exists()
+    assert not gateway._instance_dir("one").exists()  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.asyncio

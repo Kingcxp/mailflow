@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from mailflow.config import LLMConfig
+from mailflow.contracts import LLMRouter
 from mailflow.domain import Attachment
 
 from mailflow_test_support.commands import commands_service, make_record
@@ -28,7 +29,7 @@ async def test_smart_model_receives_sender_summary_attachment_and_ocr_text() -> 
             text="ok" if prompt.startswith("Reply with") else '[{"id":"m1","relevance":90}]'
         )
 
-    service.router = type("FakeRouter", (), {"chat": staticmethod(chat)})()
+    service.router = cast(LLMRouter, type("FakeRouter", (), {"chat": staticmethod(chat)})())
     result = await service.smart_rank("attachment-only")
     assert [r.record_id for r in result.records] == [record.record_id]
     assert all(

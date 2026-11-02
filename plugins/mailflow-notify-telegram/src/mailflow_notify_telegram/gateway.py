@@ -88,6 +88,9 @@ class TelegramBridge:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    def matches_connection(self, bot_url: str, token: str) -> bool:
+        return self._bot_url == bot_url and self._token == token
+
     async def start(self) -> None:
         async with self._lock:
             if self.running:
@@ -208,12 +211,7 @@ class TelegramProvisioner(GatewayProvisioner):
         async with self._lock:
             bot_url = str(options.get("bot_url") or "")
             bridge = self._bridges.get(instance_id)
-            if (
-                bridge is not None
-                and bridge._token == token
-                and bridge._bot_url == bot_url
-                and bridge.running
-            ):  # pyright: ignore[reportPrivateUsage]
+            if bridge is not None and bridge.matches_connection(bot_url, token) and bridge.running:
                 return bridge
             if bridge is not None:
                 await bridge.stop()

@@ -24,12 +24,13 @@ from mailflow.domain import (
     Urgency,
 )
 from mailflow.i18n import I18n
-from mailflow.protocol import event_frame
-from mailflow_server.app import _jsonable, create_app
-from mailflow_server.client import RemoteClient, RemoteUnsupported, _ws_connect, _ws_headers
+from mailflow.protocol import event_frame, json_value
+from mailflow_server.app import create_app
+from mailflow_server.client import RemoteClient, RemoteUnsupported
 from mailflow_tui.remote import RemoteServiceAdapter
 
 from mailflow_test_support.commands import commands_service, make_record
+from mailflow_test_support.ui import mock_http_client
 
 
 def test_recursive_values_include_models_dates_enums_and_settings() -> None:
@@ -45,7 +46,7 @@ def test_recursive_values_include_models_dates_enums_and_settings() -> None:
         "when": datetime(2026, 11, 2, tzinfo=UTC),
         "settings": commands_service().settings_sections(),
     }
-    result = json.loads(json.dumps(_jsonable(payload)))
+    result = json.loads(json.dumps(json_value(payload)))
     assert result["nested"][0]["meta"] == {"when": "2026-11-02", "urgency": "urgent"}
     restored = MailRecord.model_validate(result["nested"][0]["record"])
     assert restored.mail.attachments[0].filename == "image.png"
@@ -74,6 +75,12 @@ def test_websocket_connect_sends_only_supported_header_keyword(
     connect = current if modern else legacy
     auth = {"Authorization": "Basic fake"}
     monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=connect))
+    # Exercise the transport adapter at its dependency boundary.
+    from mailflow_server.client import (
+        _ws_connect,  # pyright: ignore[reportPrivateUsage]
+        _ws_headers,  # pyright: ignore[reportPrivateUsage]
+    )
+
     _ws_connect("ws://fake/ws", auth)
     assert captured == [{"headers": auth}]
     assert set(_ws_headers(auth, connect)) == {"additional_headers" if modern else "extra_headers"}
@@ -131,6 +138,8 @@ async def test_fake_websocket_live_logs_typed_events_and_repeat_start(
         await client.enable_logs()
         await client.enable_logs()
         assert ws.sent == [{"type": "logs"}]
+        await ws.incoming.put(json.dumps(["invalid frame"]))
+        await ws.incoming.put(json.dumps({"event": "invalid", "payload": []}))
         await ws.incoming.put(
             json.dumps(event_frame("log", {"line": "10:00|ERROR|mailflow.test|live"}))
         )
@@ -150,7 +159,9 @@ async def test_fake_websocket_live_logs_typed_events_and_repeat_start(
         assert connect.call_count == 1
     finally:
         await client.stop_events()
-    assert client._ws is None
+    sent = list(ws.sent)
+    await client.enable_logs()
+    assert ws.sent == sent
 
 
 async def test_remote_adapter_uses_real_domain_and_setting_types(
@@ -172,11 +183,8 @@ async def test_remote_adapter_uses_real_domain_and_setting_types(
         )
     ]
     await service.storage.save_mail(record)
-    real_client = httpx.AsyncClient
     transport = httpx.ASGITransport(app=create_app(service))
-    monkeypatch.setattr(
-        httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs)
-    )
+    mock_http_client(monkeypatch, transport)
     initial = service.snapshot()
     initial.processors = [
         ProcessorBindingSnapshot(
@@ -188,7 +196,7 @@ async def test_remote_adapter_uses_real_domain_and_setting_types(
         )
     ]
     adapter = RemoteServiceAdapter(
-        RemoteClient("http://fake", "admin", "secret"), _jsonable(initial), I18n()
+        RemoteClient("http://fake", "admin", "secret"), json_value(initial), I18n()
     )
     assert isinstance(adapter.snapshot(), RuntimeSnapshot)
     assert adapter.snapshot().processors == initial.processors
@@ -211,7 +219,7 @@ async def test_remote_adapter_uses_real_domain_and_setting_types(
     assert not await adapter.delete_mail("missing")
     await adapter.refresh_settings()
     sections = adapter.settings_sections()
-    assert _jsonable(sections) == _jsonable(service.settings_sections())
+    assert json_value(sections) == json_value(service.settings_sections())
     assert (
         sections[0].options[0].display_value()
         == service.settings_sections()[0].options[0].display_value()
@@ -227,12 +235,9 @@ async def test_remote_adapter_uses_real_domain_and_setting_types(
 async def test_httpx_mock_does_not_confuse_error_text_with_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    real_client = httpx.AsyncClient
     transport = httpx.MockTransport(
         lambda request: httpx.Response(503, json={"detail": "worker 404 failed"})
     )
-    monkeypatch.setattr(
-        httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs)
-    )
+    mock_http_client(monkeypatch, transport)
     with pytest.raises(RuntimeError, match="worker 404 failed"):
         await RemoteClient("http://fake", "admin", "secret").get_mail("mail")

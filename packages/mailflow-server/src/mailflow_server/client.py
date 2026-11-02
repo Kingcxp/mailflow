@@ -185,13 +185,17 @@ class RemoteClient:
                     await self._request_logs()
                     async for raw in ws:
                         try:
-                            frame = json.loads(raw)
+                            frame: Any = json.loads(raw)
                         except json.JSONDecodeError:
                             continue
                         if not isinstance(frame, dict):
                             continue
-                        event = str(frame.get("event", ""))
-                        payload_map: dict[str, Any] = dict(frame.get("payload") or {})
+                        frame_map = cast("dict[str, Any]", frame)
+                        event = str(frame_map.get("event", ""))
+                        payload = frame_map.get("payload")
+                        if not isinstance(payload, dict):
+                            continue
+                        payload_map = dict(cast("dict[str, Any]", payload))
                         if event == "log":
                             await self.log_queue.put(str(payload_map.get("line", "")))
                             continue
@@ -340,8 +344,10 @@ class RemoteClient:
         result: list[dict[str, Any]] = await self._request("GET", "/settings/sections")
         return result
 
-    async def set_setting(self, key: str, value: Any) -> dict[str, Any]:
-        result: dict[str, Any] = await self._request("PUT", f"/settings/{key}", {"value": value})
+    async def set_setting(self, key: str, value: Any) -> dict[str, Any] | None:
+        result: dict[str, Any] | None = await self._request(
+            "PUT", f"/settings/{key}", {"value": value}
+        )
         return result
 
     async def reset_setting(self, key: str) -> dict[str, Any] | None:

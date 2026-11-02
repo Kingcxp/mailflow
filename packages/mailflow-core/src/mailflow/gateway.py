@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -152,7 +153,10 @@ class GatewayManager:
         """
         try:
             await self._stop_provider(instance)
-            rollback = getattr(provisioner, "cleanup_failed", None)
+            rollback = cast(
+                Callable[[str], Awaitable[None]] | None,
+                getattr(provisioner, "cleanup_failed", None),
+            )
             if callable(rollback):
                 await bounded(
                     rollback(instance.instance_id),
@@ -862,7 +866,10 @@ class GatewayManager:
         try:
             await self._stop_provider(instance)
             if instance.extra.get("setup_pending"):
-                rollback = getattr(self.provisioner(provider), "cleanup_failed", None)
+                rollback = cast(
+                    Callable[[str], Awaitable[None]] | None,
+                    getattr(self.provisioner(provider), "cleanup_failed", None),
+                )
                 if callable(rollback):
                     await bounded(
                         rollback(instance_id),

@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from importlib import metadata
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -288,10 +289,19 @@ class TestAstrbotExporter:
     ) -> None:
         from mailflow_test_support.commands import commands_service
 
+        def command(name: str) -> Any:
+            def decorate(method: Any) -> Any:
+                return method
+
+            return decorate
+
+        def plain_result(text: str) -> str:
+            return text
+
         event_module = ModuleType("astrbot.api.event")
         event_module.__dict__.update(
             AstrMessageEvent=object,
-            filter=SimpleNamespace(command=lambda name: lambda method: method),
+            filter=SimpleNamespace(command=command),
         )
         star_module = ModuleType("astrbot.api.star")
         star_module.__dict__.update(Context=object, Star=object)
@@ -318,7 +328,7 @@ class TestAstrbotExporter:
             get_sender_id=lambda: "reader",
             get_group_id=lambda: "chat-1",
             platform_meta=SimpleNamespace(name="telegram", id="bot-1"),
-            plain_result=lambda text: text,
+            plain_result=plain_result,
         )
         clear = AsyncMock(return_value=(0, 0))
         service.clear_all_records = clear

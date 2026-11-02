@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from textual.coordinate import Coordinate
 from textual.widgets import DataTable
+from textual.widgets._data_table import RowKey
+
+
+class TableRowEvent(Protocol):
+    data_table: DataTable[Any]
+    row_key: RowKey
+    cursor_row: int
 
 
 @dataclass

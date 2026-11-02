@@ -9,9 +9,14 @@ import subprocess
 import threading
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from mailflow import gateway_resources as resources
+
+
+def port_free(_port: int) -> bool:
+    return True
 
 
 class Process:
@@ -86,7 +91,7 @@ def test_ports_are_reserved_across_gateway_providers(
     other = tmp_path / "wechatpadpro-one"
     other.mkdir()
     (other / "instance.json").write_text(json.dumps({"api_port": 30000}), encoding="utf-8")
-    monkeypatch.setattr(resources, "port_available", lambda _: True)
+    monkeypatch.setattr(resources, "port_available", port_free)
     first = tmp_path / "onebot-one"
     second = tmp_path / "openwechat-two"
     assert resources.allocate_port(first, "http_port", 30000) == 30001
@@ -135,7 +140,7 @@ async def test_local_gateway_custom_port_restart_and_instance_isolation(
         return port in ready
 
     monkeypatch.setattr(subprocess, "Popen", launch)
-    monkeypatch.setattr(resources, "port_available", lambda _: True)
+    monkeypatch.setattr(resources, "port_available", port_free)
     monkeypatch.setattr(provisioner, "_wait_http_port", health)
     bridge_name = "openwechat-bridge" if provider == "openwechat" else "whatsapp-bridge.mjs"
     for instance_id in ("a/b", "a?b"):
@@ -170,28 +175,39 @@ async def test_early_exit_cleans_process_reference_and_reports_log(
     class Gateway(resources.LocalProcessGateway):
         provider = "fake"
 
-    owner = Gateway(lambda _: tmp_path, lambda _: 32003)
+    owner = Gateway(Mock(return_value=tmp_path), Mock(return_value=32003))
     process = Process(4)
 
     async def unhealthy(*args: Any, **kwargs: Any) -> bool:
         return False
 
-    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
-    monkeypatch.setattr(resources, "port_available", lambda _: True)
+    monkeypatch.setattr(subprocess, "Popen", Mock(return_value=process))
+    monkeypatch.setattr(resources, "port_available", port_free)
     monkeypatch.setattr(owner, "_wait_http_port", unhealthy)
     (tmp_path / "fake.log").write_text("failed to load runtime", encoding="utf-8")
     with pytest.raises(RuntimeError, match=r"exited early.*code 4"):
         await owner.start_process("one", {}, ["fake"], timeout_seconds=1)
-    assert owner._processes == {}
+    assert owner._processes == {}  # pyright: ignore[reportPrivateUsage]
     assert (await owner.status("one")).status == "stopped"
 
 
-async def test_listener_stop_closes_accepted_connections_and_can_restart() -> None:
+async def test_listener_stop_closes_accepted_connections_and_can_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from mailflow.lifecycle import OwnedListener
 
     listener = OwnedListener()
     entered = asyncio.Event()
     finished = asyncio.Event()
+    start_server = asyncio.start_server
+    servers: list[asyncio.Server] = []
+
+    async def listen(*args: Any, **kwargs: Any) -> asyncio.Server:
+        server = await start_server(*args, **kwargs)
+        servers.append(server)
+        return server
+
+    monkeypatch.setattr(asyncio, "start_server", listen)
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         entered.set()
@@ -201,11 +217,11 @@ async def test_listener_stop_closes_accepted_connections_and_can_restart() -> No
             finished.set()
 
     await listener.start_listener(handle, "127.0.0.1", 0)
-    server = listener._server
-    assert server is not None
+    server = servers[0]
     await listener.start_listener(handle, "127.0.0.1", 0)
-    assert listener._server is server
-    reader, writer = await asyncio.open_connection(*server.sockets[0].getsockname()[:2])
+    assert servers == [server]
+    address = server.sockets[0].getsockname()
+    reader, writer = await asyncio.open_connection(str(address[0]), int(address[1]))
     try:
         await asyncio.wait_for(entered.wait(), timeout=1)
         await listener.stop_listener()

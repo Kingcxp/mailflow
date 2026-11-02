@@ -91,9 +91,9 @@ async def test_failed_live_reload_stops_old_runtime_and_reports_saved_config(
 
     service = make_service(tmp_path)
     bot = SimpleNamespace(url="http://fake/bot", start=AsyncMock(), stop=AsyncMock())
-    monkeypatch.setattr("mailflow.bot_server.BotServer", lambda _: bot)
+    monkeypatch.setattr("mailflow.bot_server.BotServer", Mock(return_value=bot))
     await service.start()
-    tasks = list(service.runtime._tasks)
+    tasks = asyncio.all_tasks() - {asyncio.current_task()}
     build_registry = service.plugin_manager.build_registry
     monkeypatch.setattr(
         service.plugin_manager, "build_registry", Mock(side_effect=RuntimeError("bad plugin"))
@@ -286,7 +286,7 @@ async def test_live_reload_releases_old_gateway_and_schedulers_before_replacemen
         assert all(task is None or task.done() for task in tasks)
         assert service.runtime._queue.maxsize == 2  # pyright: ignore[reportPrivateUsage]
         assert (
-            len([task for task in service.runtime._tasks if task.get_name().startswith("worker-")])
+            len([task for task in asyncio.all_tasks() if task.get_name().startswith("worker-")])
             == 4
         )  # pyright: ignore[reportPrivateUsage]
         assert not service._stopped_event.is_set()  # pyright: ignore[reportPrivateUsage]

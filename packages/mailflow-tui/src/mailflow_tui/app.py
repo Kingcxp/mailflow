@@ -67,7 +67,7 @@ from mailflow_tui.seminars import SeminarReviewModal
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
-from mailflow_tui.view_state import TableView
+from mailflow_tui.view_state import TableRowEvent, TableView
 from mailflow_tui.widgets import SafeSelect, SearchToggle
 
 logger = logging.getLogger("mailflow.tui")
@@ -1389,7 +1389,7 @@ class MailPane(Vertical):
             self._clear_smart_action_result()
             self._schedule_mail_filter()
 
-    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    async def on_data_table_row_selected(self, event: TableRowEvent) -> None:
         if event.data_table.id != "mail-table" or self._rendering:
             return
         self._selected_id = event.row_key.value
@@ -1400,7 +1400,7 @@ class MailPane(Vertical):
             self._sync_urgency_select(record)
         await self._show_selected()
 
-    async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+    async def on_data_table_row_highlighted(self, event: TableRowEvent) -> None:
         """Cursor movement (arrow keys) highlights rows without selecting;
         the detail pane must follow the highlight so what the user looks at
         is what the right side shows."""
@@ -2443,7 +2443,7 @@ class ActionsPane(Vertical):
         if event.toggle.id in {"actions-search-regex", "actions-search-case"}:
             self._schedule_actions_filter()
 
-    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    async def on_data_table_row_selected(self, event: TableRowEvent) -> None:
         if event.data_table.id != "actions-table":
             return
         item = next((i for i in self._items if i.item_id == event.row_key.value), None)
@@ -2701,7 +2701,7 @@ class RuntimePane(Vertical):
                 lambda: scroll.scroll_to(x=offset[0], y=offset[1], animate=False, force=True)
             )
 
-    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    async def on_data_table_row_selected(self, event: TableRowEvent) -> None:
         if event.data_table.id != "runtime-plugins-table":
             return
         plugin_id = cast(str, event.row_key.value)
@@ -2713,7 +2713,7 @@ class RuntimePane(Vertical):
             escape(f"{plugin_id} — {self._service.t(f'tui.plugin_status_{status}')}{detail}")
         )
 
-    async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+    async def on_data_table_row_highlighted(self, event: TableRowEvent) -> None:
         if (
             event.data_table.id == "runtime-plugins-table"
             and event.cursor_row == event.data_table.cursor_row
@@ -3779,7 +3779,7 @@ class MarketPane(Vertical):
         if event.toggle.id in {"market-search-regex", "market-search-case"}:
             self._schedule_market_filter()
 
-    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    async def on_data_table_row_selected(self, event: TableRowEvent) -> None:
         plugin = next((p for _r, p in self._entries if p.id == event.row_key.value), None)
         if plugin is None:
             return
@@ -3797,7 +3797,7 @@ class MarketPane(Vertical):
         if self._detail_open_for == plugin_id:
             self._detail_open_for = None
 
-    async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+    async def on_data_table_row_highlighted(self, event: TableRowEvent) -> None:
         plugin = next((p for _r, p in self._entries if p.id == event.row_key.value), None)
         if plugin is not None and plugin is not self._selected:
             self._show_detail(plugin)

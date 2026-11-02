@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
 from typing import Any, cast
 
@@ -83,7 +83,7 @@ def secret_values(value: Any, *, sensitive: bool = False) -> set[str]:
 
 
 @contextmanager
-def redact_operation_logs(service: Any, *, extra_secrets: Iterable[str] = ()) -> Iterator[None]:
+def redact_operation_logs(service: Any, *, extra_secrets: Iterable[str] = ()) -> Generator[None]:
     """Protect unsaved credentials while plugins and HTTP clients perform an operation."""
     from mailflow.logging import SecretRedactionFilter, get_active_runtime
 

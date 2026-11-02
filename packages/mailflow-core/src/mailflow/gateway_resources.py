@@ -59,7 +59,7 @@ def port_available(port: int) -> bool:
 def read_metadata(target: Path) -> dict[str, Any]:
     try:
         value: Any = json.loads((target / "mailflow.json").read_text(encoding="utf-8"))
-        return dict(value) if isinstance(value, dict) else {}
+        return dict(cast("dict[str, Any]", value)) if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
 
@@ -89,13 +89,13 @@ def reserved_ports(root: Path, *, exclude: tuple[Path, str] | None = None) -> se
     for filename in ("mailflow.json", "instance.json"):
         for path in root.glob(f"*/{filename}"):
             try:
-                values = json.loads(path.read_text(encoding="utf-8"))
+                values: Any = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             if isinstance(values, dict):
                 reserved.update(
                     value
-                    for key, value in values.items()
+                    for key, value in cast("dict[str, Any]", values).items()
                     if key.endswith("_port")
                     and isinstance(value, int)
                     and (exclude is None or (path.parent, key) != exclude)
@@ -195,11 +195,8 @@ async def run_command(
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            **(
-                {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-                if os.name == "nt"
-                else {"start_new_session": True}
-            ),
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            start_new_session=os.name != "nt",
         ),
         terminate=terminate,
     )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import Callable, Coroutine, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -40,7 +40,7 @@ def normalize_provider(provider: str) -> str:
 
 
 @contextmanager
-def permission_scope(context: PermissionContext) -> Iterator[None]:
+def permission_scope(context: PermissionContext) -> Generator[None]:
     token = _context.set(context)
     try:
         yield

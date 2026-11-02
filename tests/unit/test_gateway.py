@@ -80,8 +80,10 @@ class FakeStorage:
         self.preferences[key] = value
 
 
-def _manager(provisioner: FakeProvisioner) -> tuple[GatewayManager, FakeStorage]:
-    config = MailFlowConfig()
+def _manager(
+    provisioner: FakeProvisioner, config: MailFlowConfig | None = None
+) -> tuple[GatewayManager, FakeStorage]:
+    config = config or MailFlowConfig()
     registry = ComponentRegistry()
     registrar = PluginRegistrar(registry, config, "test-plugin")
     registrar.add_gateway_provisioner("fake-gw", lambda: provisioner)
@@ -161,8 +163,8 @@ async def test_login_timeout_cleans_failed_setup_and_preserves_error() -> None:
     provisioner = FakeProvisioner()
     manager, _ = _manager(provisioner)
     await manager.provision("fake-gw", "one", {"login_timeout_seconds": 0})
-    supervisor = manager._supervise_tasks["fake-gw.one"]
-    await asyncio.wait_for(supervisor, timeout=1)
+    supervisors = [task for task in asyncio.all_tasks() if task.get_name() == "gateway-one"]
+    await asyncio.wait_for(asyncio.gather(*supervisors), timeout=1)
     instance = manager.instance("fake-gw", "one")
     assert instance is not None and instance.status == "error"
     assert "login timed out" in instance.error
@@ -178,26 +180,31 @@ async def test_progress_and_supervisors_are_isolated_by_instance() -> None:
         manager.provision("fake-gw", "two", {}),
     )
     assert manager.progress("fake-gw", "one") is not manager.progress("fake-gw", "two")
-    supervisors = dict(manager._supervise_tasks)
+    supervisors = {task for task in asyncio.all_tasks() if task.get_name().startswith("gateway-")}
     await manager.start()
     await manager.start()
-    assert manager._supervise_tasks == supervisors
+    assert {
+        task for task in asyncio.all_tasks() if task.get_name().startswith("gateway-")
+    } == supervisors
     await manager.stop()
     await manager.stop()
     assert sorted(provisioner.stopped) == ["one", "two"]
 
 
-async def test_service_restart_does_not_resume_removed_or_disabled_notifiers() -> None:
+async def test_service_restart_does_not_resume_removed_or_disabled_notifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from types import SimpleNamespace
 
     from mailflow.config import NotifierConfig
 
     provisioner = FakeProvisioner()
-    manager, _storage = _manager(provisioner)
+    config = MailFlowConfig()
+    manager, _storage = _manager(provisioner, config)
     for name in ("removed", "disabled"):
         await manager.provision("fake-gw", name, {})
     await manager.stop(persist_running=True)
-    manager._config.notifiers = [
+    config.notifiers = [
         NotifierConfig(
             notifier_id="disabled",
             provider="fake-notify",
@@ -205,9 +212,9 @@ async def test_service_restart_does_not_resume_removed_or_disabled_notifiers() -
             options={"gateway": "fake-gw"},
         )
     ]
-    manager._service_ref = SimpleNamespace(bot_server=None)
+    monkeypatch.setattr(manager, "_service_ref", SimpleNamespace(bot_server=None))
     await manager.start()
-    assert not manager._supervise_tasks
+    assert not [task for task in asyncio.all_tasks() if task.get_name().startswith("gateway-")]
     assert all(instance.status == "stopped" for instance in await manager.instances())
     await manager.stop()
     assert sorted(provisioner.stopped) == ["disabled", "removed"]

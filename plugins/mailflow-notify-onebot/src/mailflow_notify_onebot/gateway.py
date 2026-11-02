@@ -414,6 +414,9 @@ class _OneBotEventBridge(OwnedListener):
     def port(self) -> int:
         return self._port
 
+    def matches_connection(self, bot_url: str, token: str) -> bool:
+        return self._bot_url == bot_url and self._token == token
+
     async def start(self) -> None:
         await self.start_listener(self._handle, "127.0.0.1", self.port)
 
@@ -934,8 +937,7 @@ class NapCatProvisioner(GatewayFiles):
         if (
             existing is not None
             and existing.running
-            and existing._bot_url == bot_url
-            and existing._token == token
+            and existing.matches_connection(bot_url, token)
         ):
             healed = await self._sync_per_account_config(instance_id)
             if healed and instance_id not in self._relaunching:
@@ -1472,11 +1474,8 @@ class NapCatProvisioner(GatewayFiles):
                     env={**os.environ, **env},
                     stdout=handle,
                     stderr=subprocess.STDOUT,
-                    **(
-                        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-                        if os.name == "nt"
-                        else {"start_new_session": True}
-                    ),
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                    start_new_session=os.name != "nt",
                 )
 
         qr_file = target / "cache" / "qrcode.png"

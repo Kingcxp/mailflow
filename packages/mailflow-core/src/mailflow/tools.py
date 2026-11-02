@@ -92,9 +92,9 @@ class ToolService(Protocol):
         self, *, include_resolved: bool = False
     ) -> list[SeminarCandidate]: ...
 
-    async def discover_seminars(
+    def discover_seminars(
         self, *, progress: Any = None, records: list[MailRecord] | None = None
-    ) -> SeminarDiscoveryResult: ...
+    ) -> Awaitable[SeminarDiscoveryResult]: ...
 
     async def smart_rank(
         self, query: str, *, records: list[MailRecord] | None = None, progress: Any = None
