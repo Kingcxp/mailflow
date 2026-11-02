@@ -232,18 +232,36 @@ class TestFindMail:
     async def test_reports_unavailable_batches_instead_of_claiming_success(self) -> None:
         class FailingRouter:
             async def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> LLMCompletion:
+                if kwargs.get("tools"):
+                    from mailflow.contracts import ToolCall
+
+                    if messages[-1]["role"] == "tool":
+                        assert "search_id:" not in messages[-1]["content"]
+                        return LLMCompletion(text="The search is incomplete.")
+                    return LLMCompletion(
+                        text="",
+                        tool_calls=[
+                            ToolCall(
+                                call_id="find", name="find_mail", arguments={"query": "anything"}
+                            )
+                        ],
+                    )
                 raise RuntimeError("backend down")
 
         service = make_service(FailingRouter())
         await seed(service)
-        registry = ToolRegistry(service)
+        progress: list[Any] = []
 
-        text, _ = await registry.call("find_mail", {"query": "anything"})
+        def report(stage: str, done: int, total: int, detail: Any) -> None:
+            progress.append((stage, done, total, detail))
 
-        assert "could not be checked" in text
-        assert "retry" in text
-        assert "search_id:" not in text
-        assert "incomplete" in text
+        result = await service.smart_action("find anything", progress=report)
+
+        assert not result.is_complete
+        assert result.failed_mails == 3
+        assert result.failed_batches == 1
+        assert result.failure_reasons
+        assert any(detail[0] == "smart_batch_failed" for *_rest, detail in progress)
 
     async def test_search_token_stages_every_match_beyond_preview_limit(self) -> None:
         service = make_service()
@@ -332,6 +350,13 @@ class TestStagingTools:
         assert staged.arguments["url"] == "https://example.com/event"
         assert staged.arguments["notes"] == "Bring the signed form"
         assert await service.storage.list_custom_actions() == []  # type: ignore[attr-defined]
+
+        service.config.general.timezone = "Asia/Shanghai"
+        _, local = await registry.call(
+            "schedule_event", {"title": "Local event", "starts_at": "2099-10-15T14:00:00"}
+        )
+        assert local is not None
+        assert local.arguments["starts_at"] == "2099-10-15T06:00:00+00:00"
 
     async def test_schedule_event_rejects_a_past_time(self) -> None:
         service = make_service()
@@ -580,6 +605,7 @@ class TestCheckSeminarsScope:
 
         service = make_service(FailingRouter())
         await seed(service)
+        await self._seed_candidates(service)
         registry = ToolRegistry(service)
 
         text, staged = await registry.call("check_seminars", {})
@@ -591,6 +617,10 @@ class TestCheckSeminarsScope:
         assert text.startswith("partial:")
         assert "could not be read" in text
         assert "record_ids" in text
+        assert "seminar-inside" in text and "seminar-outside" in text
+        assert "failed_record_ids:" in text
+        failed_ids = text.split("failed_record_ids: ", 1)[1].splitlines()[0]
+        assert set(failed_ids.split(", ")) == {"a", "b", "c"}
         assert staged is None
 
 

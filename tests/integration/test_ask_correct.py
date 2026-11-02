@@ -208,6 +208,16 @@ async def test_chat_about_mail_no_correction_no_guideline() -> None:
     record = await service.storage.get_mail("ask-1")
     assert record is not None
     assert record.auto_urgency == Urgency.INFO
+
+    for payload in ("[]", '"urgent"', '{"urgency":"highest","summary":null,"body":"replace"}'):
+        router = _CorrectionRouter(f"Explanation [c]{payload}[/c]")
+        service.router = cast(Any, router)
+        result = await service.chat_about_mail("ask-1", [{"role": "user", "content": "Why?"}])
+        assert result["corrections"] == {}
+        assert "[c]" not in result["reply"]
+
+    assert "Please confirm your attendance" not in router.seen[0]["content"]
+    assert any("Please confirm your attendance" in m["content"] for m in router.seen[1:])
     assert await service.feedback_guidelines() == ""
 
 

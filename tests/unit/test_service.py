@@ -259,7 +259,7 @@ class TestSmartSearch:
         assert [record.mail.message_id for record in result.records] == ["m1"]
         assert result.is_complete
         assert result.total_mails == 2
-        assert stages[0][:3] == ("warmup", 0, 1)
+        assert stages[0][:3] == ("match", 0, 2)
         assert stages[-1][:3] == ("match", 2, 2)
 
     async def test_prose_wrapped_legacy_candidate_refs_are_parsed(self) -> None:
@@ -373,12 +373,15 @@ class TestSmartSearch:
 
     async def test_malformed_batch_is_retried_then_reported_incomplete(self) -> None:
         class BadRouter:
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                if messages[-1]["content"].startswith("Reply with"):
-                    return TestSmartSearch.model_completion("ok")
-                return TestSmartSearch.model_completion("I could not find anything, sorry!")
+            reply = "I could not find anything, sorry!"
+            calls = 0
 
-        service = new_service(BadRouter())
+            async def chat(self, messages: Any, **kwargs: Any) -> Any:
+                self.calls += 1
+                return TestSmartSearch.model_completion(self.reply)
+
+        router = BadRouter()
+        service = new_service(router)
         storage = cast(Any, service.storage)
         for message_id in ("m1", "m2"):
             mail = make_mail(message_id, minute=10)
@@ -388,13 +391,17 @@ class TestSmartSearch:
         def _progress(stage: str, done: int, total: int, detail: Any) -> None:
             stages.append((stage, done, total, detail))
 
-        result = await service.smart_search("receipts", progress=_progress)
+        for reply in (router.reply, '[{"id":"unknown","relevance":90}]', "[null]"):
+            router.reply = reply
+            router.calls = 0
+            result = await service.smart_search("receipts", progress=_progress)
 
-        assert result.records == []
-        assert result.failed_mails == 2
-        assert result.failed_batches == 1
-        assert not result.is_complete
-        assert stages[-1][3][0] == "smart_batch_unreadable"
+            assert result.records == []
+            assert result.failed_mails == 2
+            assert result.failed_batches == 1
+            assert not result.is_complete
+            assert router.calls == 2
+            assert stages[-1][3][0] == "smart_batch_unreadable"
 
     async def test_failed_batch_preserves_completed_matches(self) -> None:
         class PartiallyFailingRouter:
@@ -423,6 +430,11 @@ class TestSmartSearch:
         assert result.failed_batches == 1
         assert not result.is_complete
         assert any(detail[0] == "smart_batch_failed" for *_rest, detail in stages)
+
+        ranked = await service.smart_rank("event details", records=await service.list_mails())
+        assert len(ranked.records) == 16
+        assert ranked.failed_mails == 1
+        assert not ranked.is_complete
 
     async def test_empty_mailbox_does_not_call_the_llm(self) -> None:
         class NoCallRouter:
@@ -609,7 +621,9 @@ async def test_truncated_discovery_keeps_complete_candidates(prefix: str) -> Non
             )
         )
     result = await service.discover_seminars()
-    assert result.is_complete
+    assert not result.is_complete
+    assert result.failed_mails == 3
+    assert set(result.failed_record_ids) == {"record-0", "record-1", "record-2"}
     assert {(item.mail_id, item.title) for item in result.candidates} == {
         ("record-0", "First"),
         ("record-1", "Second"),

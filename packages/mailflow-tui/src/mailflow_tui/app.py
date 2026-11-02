@@ -1044,7 +1044,7 @@ class MailPane(Vertical):
             progress_log.write(
                 "; ".join(hints) if hints else self._service.t("tui.smart_action_done")
             )
-        status_hint = f"[yellow]{'; '.join(hints)}[/yellow]" if hints else ""
+        status_hint = f"[yellow]{escape('; '.join(hints))}[/yellow]" if hints else ""
         await self._render_records(
             result.records,
             empty_hint_key="tui.mail_no_match",
@@ -1531,6 +1531,8 @@ class MailPane(Vertical):
 
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "mail-search":
+            if self._smart_action_running:
+                await self._cancel_smart_action()
             progress = self.query_one_optional("#smart-action-progress", RichLog)
             if progress is not None:
                 progress.clear()
@@ -1609,20 +1611,9 @@ class MailPane(Vertical):
         if self._smart_action_running:
             # Cancellation restores the full mailbox rather than a stale
             # pre-search cache, so mail arriving during the search remains visible.
-            self._mail_filter_generation += 1
-            self._smart_action_running = False
-            task = self._smart_action_task
-            self._smart_action_task = None
-            if task is not None and not task.done():
-                task.cancel()
-            await self._stop_smart_spinner()
-            progress = self.query_one_optional("#smart-action-progress", RichLog)
-            if progress is not None:
-                progress.clear()
-            self._clear_smart_action_result()
+            await self._cancel_smart_action()
             if search is not None:
                 search.value = ""
-            self._set_smart_label("tui.smart_action")
             await self.refresh_mail()
             return
         if not query:
@@ -1664,7 +1655,7 @@ class MailPane(Vertical):
         def _show_progress(
             stage: str, done: int, total: int, detail: str | tuple[str, dict[str, Any]]
         ) -> None:
-            if not self._smart_action_running:
+            if not self._smart_action_running or self._smart_action_task is not task:
                 return
             self._smart_progress_started = True
             detail_key = ""
@@ -1736,6 +1727,21 @@ class MailPane(Vertical):
         self._smart_action_result = result
         async with self._refresh_lock:
             await self._render_smart_action_result(result)
+
+    async def _cancel_smart_action(self) -> None:
+        self._mail_filter_generation += 1
+        self._smart_action_running = False
+        task = self._smart_action_task
+        self._smart_action_task = None
+        if task is not None and not task.done():
+            task.cancel()
+        self.workers.cancel_group(self, "smart-preview")  # pyright: ignore[reportUnknownMemberType]
+        await self._stop_smart_spinner()
+        progress = self.query_one_optional("#smart-action-progress", RichLog)
+        if progress is not None:
+            progress.clear()
+        self._clear_smart_action_result()
+        self._set_smart_label("tui.smart_action")
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         try:

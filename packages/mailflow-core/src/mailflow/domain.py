@@ -473,6 +473,7 @@ class SeminarDiscoveryResult(BaseModel):
     evaluated_mails: int = 0
     failed_mails: int = 0
     failed_batches: int = 0
+    failed_record_ids: list[str] = Field(default_factory=lambda: [])
     failure_reasons: list[str] = Field(default_factory=lambda: [])
     """One short phrase per failed batch, so a retry reads as the right fix
     instead of the mail looking unreadable."""

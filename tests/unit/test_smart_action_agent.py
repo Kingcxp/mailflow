@@ -120,6 +120,7 @@ class TestReadLoop:
         router = ScriptedRouter(
             [
                 call("find_mail", {"contains": "seminar"}),
+                call("read_mail", {"record_id": "seminar-1"}),
                 text("Found the seminar invitation."),
             ]
         )
@@ -128,7 +129,10 @@ class TestReadLoop:
 
         result = await run_agent(service, cast(Any, router), "show me the seminar mail")
 
-        assert result.tool_steps == ['find_mail {"contains": "seminar"}']
+        assert result.tool_steps == [
+            'find_mail {"contains": "seminar"}',
+            'read_mail {"record_id": "seminar-1"}',
+        ]
         assert result.final_text == "Found the seminar invitation."
         assert result.pending == []
         assert [record.record_id for record in result.records] == ["seminar-1"]
@@ -140,6 +144,11 @@ class TestReadLoop:
         assert "seminar-1" in second_turn[-1]["content"]
         # the assistant turn replays in the OpenAI wire shape
         assert second_turn[-2]["tool_calls"][0]["function"]["name"] == "find_mail"
+        assert router.calls[2][-1]["role"] == "tool"
+        assert '"body_truncated": false' in router.calls[2][-1]["content"]
+        assert '"sent_at":' in router.calls[2][-1]["content"]
+        assert service.config.general.timezone in router.calls[0][1]["content"]
+        assert "Current local time:" in router.calls[0][1]["content"]
         # and every turn was offered the tool schemas
         assert all(specs for specs in router.tool_arguments)
 
@@ -169,10 +178,11 @@ class TestReadLoop:
                 LLMCompletion(
                     text="",
                     tool_calls=[
-                        ToolCall(call_id="c1", name="find_mail", arguments={"contains": "seminar"}),
+                        ToolCall(call_id="c1", name="find_mail", arguments={"query": "mail"}),
                         ToolCall(call_id="c2", name="list_actions", arguments={}),
                     ],
                 ),
+                text('[{"id":"m2","relevance":95},{"id":"m1","relevance":50}]'),
                 text("Both done."),
             ]
         )
@@ -182,11 +192,12 @@ class TestReadLoop:
         result = await run_agent(service, cast(Any, router), "seminar mail and my schedule")
 
         assert result.tool_steps == [
-            'find_mail {"contains": "seminar"}',
+            'find_mail {"query": "mail"}',
             "list_actions {}",
         ]
-        roles = [m["role"] for m in router.calls[1]]
+        roles = [m["role"] for m in router.calls[-1]]
         assert roles.count("tool") == 2
+        assert [record.record_id for record in result.records] == ["invoice-1", "seminar-1"]
 
     async def test_a_tool_error_is_fed_back_and_the_loop_continues(self) -> None:
         router = ScriptedRouter(

@@ -130,24 +130,28 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
             assert router.started.is_set(), "smart action did not reach the ranking turn"
             await asyncio.sleep(0.2)
             hint = app.query_one("#mail-empty-hint", Static)
-            # the progress line names the tool the model chose, not a batch index
-            assert "1/12" in str(hint.render())
-            assert "find_mail" in str(hint.render())
-            # cancelling restores the mailbox
-            button.press()
+            # The inner scan reports the actual candidate count while it runs.
+            assert "0/3" in str(hint.render())
+            # Changing the request cancels its old result and keeps the new input.
+            search.value = "lecture"
             for _ in range(60):
-                if str(search.value) == "" and int(table.row_count) == 3:
+                if not pane._smart_action_running and int(table.row_count) == 1:  # pyright: ignore[reportPrivateUsage]
                     break
                 await asyncio.sleep(0.05)
             assert not pane._smart_action_running  # pyright: ignore[reportPrivateUsage]
-            assert search.value == ""
-            assert table.row_count == 3
+            assert search.value == "lecture"
+            assert table.row_count == 1
+            router.release.set()
 
             search.value = "the student ID invitation"
             await asyncio.sleep(0.05)
             button.press()
             for _ in range(80):
-                if int(table.row_count) == 1 and str(button.label) == "Smart action…":
+                if (
+                    int(table.row_count) == 1
+                    and str(button.label) == "Smart action…"
+                    and pane._smart_action_result is not None  # pyright: ignore[reportPrivateUsage]
+                ):
                     break
                 await asyncio.sleep(0.05)
             assert int(table.row_count) == 1
