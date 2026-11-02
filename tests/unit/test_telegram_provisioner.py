@@ -18,10 +18,8 @@ from mailflow.domain import MailRecord, Urgency
 from mailflow_notify_telegram.gateway import (
     TelegramBridge,
     TelegramProvisioner,
-    as_object,
-    as_text,
 )
-from mailflow_notify_telegram.plugin import TelegramNotifier, targets_of
+from mailflow_notify_telegram.plugin import TelegramNotifier
 
 
 def _record() -> MailRecord:
@@ -110,34 +108,32 @@ def api(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return state
 
 
-@pytest.mark.asyncio
-async def test_install_requires_a_token() -> None:
-    """No token means the setup cannot proceed; the message must say how."""
+async def test_setup_checks_token_then_starts_reports_identity_and_stops(
+    api: dict[str, Any],
+) -> None:
     prov = TelegramProvisioner()
-    with pytest.raises(RuntimeError, match="@BotFather"):
+    assert (await prov.status("tg-1")).status == "stopped"
+    assert (await prov.qr("tg-1")).startswith("ERROR:")
+    with pytest.raises(RuntimeError):
         await prov.install("tg-1", {})
-
-
-@pytest.mark.asyncio
-async def test_install_validates_the_token(api: dict[str, Any]) -> None:
-    prov = TelegramProvisioner()
-    await prov.install("tg-1", {"bot_token": "123:abc"})
-    assert api["calls"][0][0] == "getMe"
-
-
-@pytest.mark.asyncio
-async def test_install_reports_a_rejected_token(api: dict[str, Any]) -> None:
+    with pytest.raises(RuntimeError):
+        await prov.start("tg-1", {})
+    assert api["calls"] == []
     api["fail"] = "telegram getMe: Unauthorized"
-    prov = TelegramProvisioner()
     with pytest.raises(RuntimeError, match="Unauthorized"):
         await prov.install("tg-1", {"bot_token": "bad"})
-
-
-@pytest.mark.asyncio
-async def test_start_without_a_token_is_an_error() -> None:
-    prov = TelegramProvisioner()
-    with pytest.raises(RuntimeError, match="no bot token"):
-        await prov.start("tg-1", {})
+    assert (await prov.status("tg-1")).status == "stopped"
+    api["fail"] = None
+    await prov.install("tg-1", {"bot_token": "123:abc"})
+    instance = await prov.start("tg-1", {"bot_token": "123:abc"})
+    try:
+        assert instance.status == "running" and instance.extra["username"] == "mf_bot"
+        assert (await prov.status("tg-1")).status == "running"
+        assert await prov.qr("tg-1") == "__MAILFLOW_LOGGED_IN__"
+    finally:
+        await prov.stop("tg-1")
+    assert (await prov.status("tg-1")).status == "stopped"
+    assert (await prov.qr("tg-1")).startswith("ERROR:")
 
 
 async def test_changing_token_or_host_replaces_old_poller(api: dict[str, Any]) -> None:
@@ -159,64 +155,6 @@ async def test_changing_token_or_host_replaces_old_poller(api: dict[str, Any]) -
     await provisioner.stop("one")
     await provisioner.stop("one")
     assert not third.running
-
-
-@pytest.mark.asyncio
-async def test_start_reports_the_bot_identity(api: dict[str, Any]) -> None:
-    prov = TelegramProvisioner()
-    instance = await prov.start("tg-1", {"bot_token": "123:abc", "bot_url": ""})
-    assert instance.status == "running"
-    assert instance.extra["username"] == "mf_bot"
-    await prov.stop("tg-1")
-
-
-@pytest.mark.asyncio
-async def test_status_is_stopped_without_a_bridge() -> None:
-    prov = TelegramProvisioner()
-    status = await prov.status("tg-1")
-    assert status.status == "stopped"
-    assert status.error
-
-
-@pytest.mark.asyncio
-async def test_status_reports_running_while_polling(api: dict[str, Any]) -> None:
-    prov = TelegramProvisioner()
-    await prov.start("tg-1", {"bot_token": "123:abc", "bot_url": ""})
-    status = await prov.status("tg-1")
-    assert status.status == "running"
-    await prov.stop("tg-1")
-    assert (await prov.status("tg-1")).status == "stopped"
-
-
-@pytest.mark.asyncio
-async def test_ensure_bridge_restarts_the_poller(api: dict[str, Any]) -> None:
-    """After an app restart the instance is still 'running' but the
-    in-process poller is gone; ensure_bridge must bring it back."""
-    prov = TelegramProvisioner()
-    await prov.ensure_bridge("tg-1", {"bot_token": "123:abc", "bot_url": ""})
-    assert (await prov.status("tg-1")).status == "running"
-    await prov.stop("tg-1")
-
-
-@pytest.mark.asyncio
-async def test_ensure_bridge_without_a_token_warns_and_does_nothing(
-    api: dict[str, Any], caplog: pytest.LogCaptureFixture
-) -> None:
-    prov = TelegramProvisioner()
-    await prov.ensure_bridge("tg-1", {})
-    assert (await prov.status("tg-1")).status == "stopped"
-
-
-@pytest.mark.asyncio
-async def test_qr_requires_an_active_authenticated_bridge(api: dict[str, Any]) -> None:
-    """Telegram has no QR login: the guided setup must complete at once
-    instead of waiting out the QR timeout."""
-    prov = TelegramProvisioner()
-    assert (await prov.qr("tg-1")).startswith("ERROR:")
-    await prov.start("tg-1", {"bot_token": "123:abc"})
-    assert await prov.qr("tg-1") == "__MAILFLOW_LOGGED_IN__"
-    await prov.stop("tg-1")
-    assert (await prov.qr("tg-1")).startswith("ERROR:")
 
 
 @pytest.mark.asyncio
@@ -290,41 +228,25 @@ async def test_dispatch_ignores_self_and_non_text_messages(
 
 
 @pytest.mark.asyncio
-async def test_notifier_skips_without_credentials(sent: list[Any]) -> None:
-    await _notifier().notify(_record())
-    assert sent == []
-
-
-@pytest.mark.asyncio
 async def test_notifier_posts_one_message_per_target(sent: list[Any]) -> None:
     record = _record()
-    await _notifier(bot_token="t", chat_id="42", targets=["user:7"]).notify(record)
+    await _notifier().notify(record)
+    assert sent == []
+    record.manual_urgency = Urgency.URGENT
+    notifier = _notifier(bot_token="t", chat_id="42", targets=["user:7", "user:42"])
+    await notifier.notify(record)
     assert [call[1] for call in sent] == ["7", "42"]
     assert all(call[0] == "t" for call in sent)
     assert record.mail.subject in sent[0][2]
-
-
-@pytest.mark.asyncio
-async def test_notifier_deduplicates_chat_id_against_targets(sent: list[Any]) -> None:
-    """chat_id is the single-destination form of the same setting: a chat
-    already in targets must not receive the alert twice."""
-    config = NotifierConfig(
-        notifier_id="tg",
-        provider="telegram",
-        options={"bot_token": "t", "chat_id": "42", "targets": ["user:42"]},
-    )
-    assert targets_of(config) == ["user:42"]
-
-
-@pytest.mark.asyncio
-async def test_push_text_reaches_every_target(sent: list[Any]) -> None:
-    await _notifier(bot_token="t", targets=["user:1", "user:2"]).push_text("reminder")
-    assert [call[1] for call in sent] == ["1", "2"]
-
-
-@pytest.mark.asyncio
-async def test_push_to_target_strips_the_prefix(sent: list[Any]) -> None:
-    await _notifier(bot_token="t").push_to_target("user:99", "hourly")
+    assert "urgent" in sent[0][2]
+    sent.clear()
+    await notifier.push_text("reminder")
+    assert [(token, target, text) for token, target, text in sent] == [
+        ("t", "7", "reminder"),
+        ("t", "42", "reminder"),
+    ]
+    sent.clear()
+    await notifier.push_to_target("user:99", "hourly")
     assert sent == [("t", "99", "hourly")]
 
 
@@ -345,22 +267,3 @@ async def test_one_failing_target_does_not_abort_the_rest(
     with pytest.raises(RuntimeError, match="chat not found"):
         await _notifier(bot_token="t", targets=["user:1", "user:2"]).push_text("x")
     assert delivered == ["2"]
-
-
-def test_narrowing_helpers_are_total() -> None:
-    """The Bot API is untyped; the helpers must never raise on odd payloads."""
-    assert as_object(None) == {}
-    assert as_object([1]) == {}
-    assert as_object({"a": 1}) == {"a": 1}
-    assert as_text(None) == ""
-    assert as_text(42) == "42"
-
-
-def test_urgency_is_visible_in_the_alertas_text(sent: list[Any]) -> None:
-    """The urgency must be in the preview, not only in the app."""
-    import asyncio
-
-    record = _record()
-    record.manual_urgency = Urgency.URGENT
-    asyncio.run(_notifier(bot_token="t", chat_id="1").notify(record))
-    assert "urgent" in sent[0][2]

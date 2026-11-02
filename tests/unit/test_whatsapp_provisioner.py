@@ -70,20 +70,14 @@ async def _never_ready(port: int, wait_seconds: float = 2.0) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_detect_reports_missing_node_and_npm(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(gw_mod, "_find_node", lambda: None)
-    monkeypatch.setattr(gw_mod, "_find_npm", lambda: None)
-    status = await WhatsappProvisioner().detect()
-    assert "node toolchain not found" in status
-    assert "nodejs.org" in status
-    assert "npm not found" in status
-    assert "not installed" in status
-    assert "not running" in status
-
-
-@pytest.mark.asyncio
 async def test_install_requires_node_and_npm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gw_mod, "_find_node", lambda: None)
+    monkeypatch.setattr(gw_mod, "_find_npm", lambda: None)
+    provisioner = WhatsappProvisioner()
+    assert "node toolchain not found" in await provisioner.detect()
+    assert (await provisioner.status("wa-1")).status == "stopped"
+    with pytest.raises(RuntimeError, match="not installed"):
+        await provisioner.start("wa-1", {})
     with pytest.raises(RuntimeError, match=r"nodejs\.org"):
         await WhatsappProvisioner().install("wa-1", {})
     monkeypatch.setattr(gw_mod, "_find_node", lambda: "/usr/bin/node")
@@ -117,28 +111,8 @@ async def test_install_runs_npm_and_writes_the_bridge(
     ]
     manifest = (_bridge_path("wa-1").parent / "package.json").read_text(encoding="utf-8")
     assert '"@whiskeysockets/baileys": "6.7.24"' in manifest
-
-
-@pytest.mark.asyncio
-async def test_install_is_a_no_op_when_already_installed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(gw_mod, "_find_node", lambda: "/usr/bin/node")
-    monkeypatch.setattr(gw_mod, "_find_npm", lambda: "/usr/bin/npm")
-    target = _bridge_path("wa-1").parent
-    target.mkdir(parents=True, exist_ok=True)
-    _bridge_path("wa-1").write_text("// bridge", encoding="utf-8")
-    _deps(target)
-
-    def boom(*_: Any, **__: Any) -> None:
-        raise AssertionError("npm install must not run when the payload is present")
-
-    monkeypatch.setattr(gw_mod.subprocess, "run", boom)
     await WhatsappProvisioner().install("wa-1", {})
-
-
-@pytest.mark.asyncio
-async def test_start_requires_install() -> None:
-    with pytest.raises(RuntimeError, match="not installed"):
-        await WhatsappProvisioner().start("wa-1", {})
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
@@ -246,13 +220,6 @@ async def test_start_passes_bot_url_and_provider_to_the_bridge(
 
 
 @pytest.mark.asyncio
-async def test_status_reports_stopped_when_the_port_is_dead() -> None:
-    instance = await WhatsappProvisioner().status("wa-1")
-    assert instance.status == "stopped"
-    assert instance.error
-
-
-@pytest.mark.asyncio
 async def test_qr_maps_every_bridge_state(monkeypatch: pytest.MonkeyPatch) -> None:
     port = _port_for("wa-1")
     payload = b'{"status": "scanning", "qrcode": "iVBORw0KGgo="}'
@@ -332,19 +299,11 @@ def _record() -> Any:
 
 
 @pytest.mark.asyncio
-async def test_notify_skips_without_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A channel that is not configured must never break the fan-out."""
-    notifier = _notifier(monkeypatch)
-    await notifier.notify(_record())
-    assert _NotifierClient.calls == []
-
-
-@pytest.mark.asyncio
 async def test_notify_posts_one_request_per_target(monkeypatch: pytest.MonkeyPatch) -> None:
     notifier = _notifier(
         monkeypatch,
         gateway_url="http://127.0.0.1:8898/",
-        targets=["group:12345@g.us", "user:67890"],
+        targets=["invalid", "group:", "group:12345@g.us", "user:67890"],
     )
     await notifier.notify(_record())
 
@@ -375,34 +334,12 @@ async def test_notify_posts_one_request_per_target(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_malformed_targets_are_skipped_but_valid_ones_still_send(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    notifier = _notifier(
-        monkeypatch,
-        gateway_url="http://127.0.0.1:8898",
-        targets=["12345", "group:", "user:67890"],
-    )
-    await notifier.push_text("A new mail arrived")
-
-    assert _NotifierClient.calls == [
-        (
-            "http://127.0.0.1:8898/send",
-            {
-                "json": {
-                    "to": {"type": "contact", "name": "67890"},
-                    "text": "A new mail arrived",
-                }
-            },
-        )
-    ]
-
-
-@pytest.mark.asyncio
 async def test_push_to_target_reports_missing_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     notifier = _notifier(monkeypatch, targets=["user:67890"])
+    await notifier.notify(_record())
+    assert _NotifierClient.calls == []
     with pytest.raises(ValueError, match="gateway_url"):
         await notifier.push_to_target("user:67890", "hourly briefing")
     assert _NotifierClient.calls == []

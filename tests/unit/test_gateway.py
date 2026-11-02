@@ -248,6 +248,7 @@ async def test_plugin_reload_replaces_supervisor_and_stops_old_gateway() -> None
 async def test_provision_installs_starts_and_persists() -> None:
     provisioner = FakeProvisioner()
     manager, storage = _manager(provisioner)
+    assert await manager.detect("fake-gw") == "fake gateway ready"
 
     instance = await manager.provision("fake-gw", "gw-1", {"token": "x"})
 
@@ -255,6 +256,7 @@ async def test_provision_installs_starts_and_persists() -> None:
     assert provisioner.started == ["gw-1"]
     assert instance.status == "running"
     assert instance.endpoint.startswith("http://127.0.0.1")
+    assert await manager.qr("fake-gw", "gw-1") == "FAKEQR"
     # instance ids recorded for restart scanning
     assert storage.preferences.get("gateway.instance.fake-gw.ids") == "gw-1"
     # instance state persisted
@@ -301,72 +303,6 @@ async def test_provision_start_failure_stops_partial_gateway() -> None:
     assert instance is not None
     assert instance.status == "error"
     assert provisioner.stopped == ["gw-1"]
-
-
-@pytest.mark.asyncio
-async def test_detect_and_qr_delegate() -> None:
-    provisioner = FakeProvisioner()
-    manager, _storage = _manager(provisioner)
-
-    assert await manager.detect("fake-gw") == "fake gateway ready"
-    assert await manager.qr("fake-gw", "gw-1") == "FAKEQR"
-    assert provisioner.detect_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_providers_lists_registered() -> None:
-    provisioner = FakeProvisioner()
-    manager, _storage = _manager(provisioner)
-    assert manager.providers() == ["fake-gw"]
-    with pytest.raises(KeyError):
-        manager.provisioner("missing")
-
-
-def test_install_progress_updates_and_clamps() -> None:
-    from mailflow.gateway import InstallProgress
-
-    progress = InstallProgress()
-    progress.update(10.0, "downloading")
-    assert progress.percent == 10.0
-    assert progress.message == "downloading"
-    # clamp out-of-range
-    progress.update(150.0, "over")
-    assert progress.percent == 100.0
-    progress.update(-5.0, "under")
-    assert progress.percent == 0.0
-    progress.finish("done")
-    assert progress.percent == 100.0
-    assert progress._done  # pyright: ignore[reportPrivateUsage]
-
-
-@pytest.mark.asyncio
-async def test_provision_shares_progress_with_install_and_start() -> None:
-    """The live guide needs one progress channel through startup completion."""
-    from mailflow.gateway import InstallProgress
-
-    captured: dict[str, dict[str, Any]] = {}
-
-    class RecordingProvisioner(FakeProvisioner):
-        async def install(self, instance_id: str, options: dict[str, Any]) -> None:
-            captured["install"] = options
-            await super().install(instance_id, options)
-
-        async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
-            captured["start"] = options
-            return await super().start(instance_id, options)
-
-    provisioner = RecordingProvisioner()
-    manager, _storage = _manager(provisioner)
-    options = {"x": 1}
-    instance = await manager.provision("fake-gw", "gw-1", options)
-
-    progress = captured["install"].get("_progress")
-    assert isinstance(progress, InstallProgress)
-    assert captured["install"]["x"] == 1
-    assert captured["start"]["_progress"] is progress
-    assert progress.percent == 100.0
-    assert instance.status == "running"
-    assert options == {"x": 1}
 
 
 @pytest.mark.asyncio

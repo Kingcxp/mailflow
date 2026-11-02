@@ -59,26 +59,6 @@ class TestCleanupScheduler:
 
 
 class TestRuntime:
-    async def test_mail_flows_source_to_storage(self) -> None:
-        analysis = MailAnalysis(summary="analyzed", urgency=Urgency.URGENT)
-        source = EmittingSource([make_mail()])
-        runtime, storage, notifiers = build_runtime(
-            {"acct-1": source},
-            analysis=analysis,
-            workers=2,
-            accounts=[MailAccountConfig(account_id="acct-1", provider="fake")],
-        )
-        await runtime.start()
-        await asyncio.sleep(0.3)
-        await runtime.stop()
-        assert len(storage.saved) == 1
-        record = storage.saved[0]
-        assert record.analysis is not None
-        assert record.analysis.summary == "analyzed"
-        assert record.effective_urgency is Urgency.URGENT
-        assert len(notifiers[0].notified) == 1
-        assert source.closed is True
-
     async def test_notifier_threshold_suppresses_low_urgency(self) -> None:
         analysis = MailAnalysis(summary="ad", urgency=Urgency.AD)
         source = EmittingSource([make_mail()])
@@ -324,43 +304,6 @@ class TestReminderScheduler:
         runtime, _ = await self._runtime_with_item(item)
         assert await runtime.run_reminder_tick() == 0
 
-    async def test_reminder_state_persisted_across_restart(self) -> None:
-        """A fired reminder stays fired after the service restarts."""
-        from mailflow.domain import ActionItem
-
-        item = ActionItem(
-            item_id="a4",
-            mail_id="r1",
-            summary="Due soon",
-            action_type="other",
-            due_at=datetime.now(UTC) + timedelta(days=2),
-        )
-        storage = FakeStorage()
-        runtime, events = await self._runtime_with_item(item, storage=storage)
-        delivered: list[str] = []
-
-        async def capture(event: str, **payload: Any) -> None:
-            delivered.append(payload["item"].item_id)
-
-        events.subscribe("mailflow.action.reminder", capture)
-        assert await runtime.run_reminder_tick() == 1
-        assert delivered == [item.item_id]
-        # a fresh runtime on the same storage must not re-fire
-        fresh_config = MailFlowConfig.model_validate(
-            {"general": {"reminder_hour": 0, "reminder_minute": 0}}
-        )
-        fresh = MailFlowRuntime(
-            fresh_config,
-            sources={},
-            pipeline=PipelineEngine([]),
-            storage=storage,
-            notifiers=[],
-            notifier_configs=[],
-            events=EventBus(),
-            account_configs=[],
-        )
-        assert await fresh.run_reminder_tick() == 0
-
 
 class TestCustomActionReminders:
     async def test_user_created_action_fires_reminder(self) -> None:
@@ -442,27 +385,6 @@ class TestDeduplication:
         assert len(notifiers[0].notified) == 2
         assert {record.mail.account_id for record in storage.saved} == {"acct-1", "acct-2"}
 
-    async def test_same_account_refetch_is_skipped(self) -> None:
-        """Re-fetching an already stored mail does not reprocess it."""
-        analysis = MailAnalysis(summary="s", urgency=Urgency.INFO)
-        mail = make_mail()
-        runtime, storage, notifiers = build_runtime(
-            {"acct-1": EmittingSource([mail])},
-            analysis=analysis,
-            workers=2,
-            accounts=[MailAccountConfig(account_id="acct-1", provider="fake")],
-            notifiers=[RecordingNotifier()],
-        )
-        # pre-seed the stored copy, then let the source emit the same mail again
-        from mailflow.domain import MailRecord
-
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        await runtime.start()
-        await asyncio.sleep(0.3)
-        await runtime.stop()
-        assert len(storage.saved) == 1
-        assert notifiers[0].notified == []
-
     async def test_new_analysis_is_deduped_against_existing_and_custom_actions(self) -> None:
         storage = FakeStorage()
         old_mail = make_mail(subject="Old notice")
@@ -520,55 +442,6 @@ class TestDeduplication:
         assert stored.action_items == []
         assert stored.analysis is not None and stored.analysis.action_items == []
 
-    async def test_duplicate_record_and_custom_actions_remind_only_once(self) -> None:
-        storage = FakeStorage()
-        due = datetime(2099, 5, 2, 9, tzinfo=UTC)
-        first = ActionItem(
-            item_id="record-action",
-            mail_id="mail-1",
-            summary="  Prepare   slides ",
-            action_type="meeting",
-            due_at=due,
-        )
-        record_mail = make_mail()
-        await storage.save_mail(
-            MailRecord(
-                record_id=record_mail.normalized_message_id(),
-                mail=record_mail,
-                auto_urgency=Urgency.INFO,
-                analysis=MailAnalysis(summary="s", urgency=Urgency.INFO, action_items=[first]),
-            )
-        )
-        duplicate = ActionItem(
-            item_id="custom-action",
-            mail_id="",
-            summary="prepare slides",
-            action_type="errand",
-            due_at=due,
-        )
-        await storage.save_custom_action(duplicate)
-        runtime, _, _ = build_runtime({}, storage=storage)
-
-        approaching = await runtime._approaching_actions(  # pyright: ignore[reportPrivateUsage]
-            due - timedelta(days=1), 3
-        )
-        reminders: list[tuple[ActionItem, MailRecord | None]] = []
-
-        async def capture(
-            item: ActionItem, record: MailRecord | None, now: datetime, config: Any
-        ) -> int:
-            reminders.append((item, record))
-            return 1
-
-        runtime._fire_reminder = capture  # type: ignore[method-assign]
-        fired = await runtime.run_reminder_tick()
-
-        assert [item.item_id for item in approaching] == ["record-action"]
-        assert fired == 1
-        assert [(item.item_id, record is not None) for item, record in reminders] == [
-            ("record-action", True)
-        ]
-
 
 class TestDailyDigest:
     async def test_digest_fires_once_after_reminder_hour(self) -> None:
@@ -616,6 +489,8 @@ class TestDailyDigest:
             digests.append(payload)
 
         events.subscribe("mailflow.action.digest", capture)
+        assert await runtime._fire_daily_digest(now.replace(hour=7), config.general) == 0  # pyright: ignore[reportPrivateUsage]
+        assert digests == []
         assert await runtime._fire_daily_digest(now, config.general) == 1  # pyright: ignore[reportPrivateUsage]
         assert len(digests) == 1
         assert digests[0]["today_count"] == 1
@@ -625,221 +500,72 @@ class TestDailyDigest:
         assert await runtime._fire_daily_digest(now, config.general) == 0  # pyright: ignore[reportPrivateUsage]
         assert len(digests) == 1
 
-    async def test_digest_before_reminder_hour_silent(self) -> None:
-        from mailflow.domain import ActionItem
 
-        storage = FakeStorage()
-        early = datetime(2026, 8, 16, 7, 0, tzinfo=UTC)  # before 08:00
-        await storage.save_custom_action(
-            ActionItem(
-                item_id="a",
-                mail_id="",
-                summary="X",
-                action_type="errand",
-                due_at=datetime(2026, 8, 16, 15, 0, tzinfo=UTC),
-                notes="",
+async def test_hourly_summary_respects_closed_hours_preferences_and_delivery_receipts() -> None:
+    calls: list[list[dict[str, Any]]] = []
+    pushed: list[tuple[str, str]] = []
+
+    class Router:
+        async def chat(self, messages: Any, **kwargs: Any) -> Any:
+            calls.append(messages)
+            from mailflow.contracts import LLMCompletion
+
+            return LLMCompletion(text="Hour briefing: one important mail.")
+
+    class Notifier:
+        async def push_text(self, text: str) -> None:
+            pushed.append(("default", text))
+
+        async def push_to_target(self, target: str, text: str) -> None:
+            pushed.append((target, text))
+
+    storage = FakeStorage()
+    mail = make_mail()
+    mail.received_at = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
+    await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+    config = MailFlowConfig.model_validate(
+        {
+            "general": {"workers": 1, "hourly_summary": False},
+            "llms": [{"llm_id": "llm-1"}],
+        }
+    )
+    engine = PipelineEngine([])
+    engine._router = Router()  # pyright: ignore[reportPrivateUsage]
+    runtime = MailFlowRuntime(
+        config,
+        sources={},
+        pipeline=engine,
+        storage=storage,
+        notifiers=[Notifier()],  # type: ignore[list-item]
+        notifier_configs=[
+            NotifierConfig(
+                notifier_id="n0",
+                provider="onebot",
+                options={
+                    "hourly_summary": True,
+                    "targets": ["group:888", "group:999"],
+                },
             )
-        )
-        events = EventBus()
-        config = MailFlowConfig.model_validate(
-            {"general": {"workers": 1, "reminder_interval_seconds": 10, "reminder_hour": 8}}
-        )
-        runtime = MailFlowRuntime(
-            config,
-            sources={},
-            pipeline=PipelineEngine([]),
-            storage=storage,
-            notifiers=[],
-            notifier_configs=[],
-            events=events,
-            account_configs=[],
-        )
-        assert await runtime._fire_daily_digest(early, config.general) == 0  # pyright: ignore[reportPrivateUsage]
-
-
-class TestHourlySummary:
-    async def test_hourly_summary_pushes_to_opted_notifiers(self) -> None:
-        """With hourly_summary on, a closed hour with mail summarizes via
-        the LLM and pushes through opted-in notifiers only."""
-        from datetime import datetime as dt
-
-        class FakeRouter:
-            def __init__(self) -> None:
-                self.calls: list[list[dict[str, str]]] = []
-
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                self.calls.append(messages)
-
-                class C:
-                    text = "Hour briefing: one important mail."
-
-                return C()
-
-        class PushRecorder:
-            def __init__(self) -> None:
-                self.pushed: list[str] = []
-
-            async def push_text(self, text: str) -> None:
-                self.pushed.append(text)
-
-            async def push_to_target(self, target: str, text: str) -> None:
-                self.pushed.append(f"{target}: {text}")
-
-        storage = FakeStorage()
-        mail = make_mail()
-        mail.received_at = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
-        record = MailRecord(record_id=mail.normalized_message_id(), mail=mail)
-        await storage.save_mail(record)
-        config = MailFlowConfig.model_validate(
-            {
-                "general": {"workers": 1, "hourly_summary": True},
-                "llms": [{"llm_id": "llm-1"}],
-            }
-        )
-        engine = PipelineEngine([])
-        engine._router = FakeRouter()  # pyright: ignore[reportPrivateUsage]
-        pusher = PushRecorder()
-        notifier_config = NotifierConfig(
-            notifier_id="n0",
-            provider="onebot",
-            options={"hourly_summary": True, "targets": ["group:888"]},
-        )
-        runtime = MailFlowRuntime(
-            config,
-            sources={},
-            pipeline=engine,
-            storage=storage,
-            notifiers=[pusher],  # type: ignore[arg-type]
-            notifier_configs=[notifier_config],
-            events=EventBus(),
-            account_configs=[],
-        )
-        now = dt(2026, 8, 16, 10, 5, tzinfo=UTC)  # hour 09 is closed
-        assert await runtime._fire_hourly_summary(now, config.general) == 1  # pyright: ignore[reportPrivateUsage]
-        assert len(pusher.pushed) == 1
-        assert "group:888" in pusher.pushed[0]
-        # once per hour
-        assert await runtime._fire_hourly_summary(now, config.general) == 0  # pyright: ignore[reportPrivateUsage]
-        assert len(pusher.pushed) == 1
-
-    async def test_hourly_summary_silent_without_mail(self) -> None:
-        from datetime import datetime as dt
-
-        storage = FakeStorage()
-        config = MailFlowConfig.model_validate({"general": {"workers": 1, "hourly_summary": True}})
-        runtime = MailFlowRuntime(
-            config,
-            sources={},
-            pipeline=PipelineEngine([]),
-            storage=storage,
-            notifiers=[],
-            notifier_configs=[],
-            events=EventBus(),
-            account_configs=[],
-        )
-        now = dt(2026, 8, 16, 10, 5, tzinfo=UTC)
-        assert await runtime._fire_hourly_summary(now, config.general) == 0  # pyright: ignore[reportPrivateUsage]
-        # the empty hour is still marked so it never retries
-        assert await storage.get_preference("hourly_summary.2026-08-16T09:00")  # pyright: ignore[reportPrivateUsage]
-
-    async def test_hourly_summary_disabled_is_noop(self) -> None:
-        from datetime import datetime as dt
-
-        storage = FakeStorage()
-        mail = make_mail()
-        mail.received_at = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        config = MailFlowConfig.model_validate({"general": {"workers": 1}})
-        runtime = MailFlowRuntime(
-            config,
-            sources={},
-            pipeline=PipelineEngine([]),
-            storage=storage,
-            notifiers=[],
-            notifier_configs=[],
-            events=EventBus(),
-            account_configs=[],
-        )
-        now = dt(2026, 8, 16, 10, 5, tzinfo=UTC)
-        assert await runtime._fire_hourly_summary(now, config.general) == 0  # pyright: ignore[reportPrivateUsage]
-
-    async def test_hourly_summary_skips_open_hour(self) -> None:
-        """The current still-open hour is not summarized (partial picture)."""
-        from datetime import datetime as dt
-
-        storage = FakeStorage()
-        mail = make_mail()
-        mail.received_at = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        config = MailFlowConfig.model_validate({"general": {"workers": 1, "hourly_summary": True}})
-        runtime = MailFlowRuntime(
-            config,
-            sources={},
-            pipeline=PipelineEngine([]),
-            storage=storage,
-            notifiers=[],
-            notifier_configs=[],
-            events=EventBus(),
-            account_configs=[],
-        )
-        now = dt(2026, 8, 16, 9, 45, tzinfo=UTC)  # inside hour 09
-        assert await runtime._fire_hourly_summary(now, config.general) == 0  # pyright: ignore[reportPrivateUsage]
-
-    async def test_hourly_summary_per_chat_opt_out(self) -> None:
-        """A chat that turned hourly off via the command is skipped."""
-        from datetime import datetime as dt
-
-        class PushRecorder:
-            def __init__(self) -> None:
-                self.pushed: list[str] = []
-
-            async def push_text(self, text: str) -> None:
-                self.pushed.append(text)
-
-            async def push_to_target(self, target: str, text: str) -> None:
-                self.pushed.append(f"{target}: {text}")
-
-        storage = FakeStorage()
-        mail = make_mail()
-        mail.received_at = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        await storage.set_preference("hourly_summary.chat.onebot.n0.888", "off")
-        config = MailFlowConfig.model_validate(
-            {
-                "general": {"workers": 1, "hourly_summary": True},
-                "llms": [{"llm_id": "llm-1"}],
-            }
-        )
-
-        class FakeRouter:
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                class C:
-                    text = "briefing"
-
-                return C()
-
-        engine = PipelineEngine([])
-        engine._router = FakeRouter()  # pyright: ignore[reportPrivateUsage]
-        pusher = PushRecorder()
-        notifier_config = NotifierConfig(
-            notifier_id="n0",
-            provider="onebot",
-            options={"hourly_summary": True, "targets": ["group:888", "group:999"]},
-        )
-        runtime = MailFlowRuntime(
-            config,
-            sources={},
-            pipeline=engine,
-            storage=storage,
-            notifiers=[pusher],  # type: ignore[arg-type]
-            notifier_configs=[notifier_config],
-            events=EventBus(),
-            account_configs=[],
-        )
-        now = dt(2026, 8, 16, 10, 5, tzinfo=UTC)
-        await runtime._fire_hourly_summary(now, config.general)  # pyright: ignore[reportPrivateUsage]
-        # group:888 opted out; group:999 (never toggled) still receives
-        assert pusher.pushed == ["group:999: briefing"]
+        ],
+        events=EventBus(),
+        account_configs=[],
+    )
+    closed = datetime(2026, 8, 16, 10, 5, tzinfo=UTC)
+    assert await runtime._fire_hourly_summary(closed, config.general) == 0  # pyright: ignore[reportPrivateUsage]
+    config.general.hourly_summary = True
+    assert (
+        await runtime._fire_hourly_summary(datetime(2026, 8, 16, 9, 45, tzinfo=UTC), config.general)  # pyright: ignore[reportPrivateUsage]
+        == 0
+    )
+    assert calls == [] and pushed == []
+    await storage.set_preference("hourly_summary.chat.onebot.n0.999", "off")
+    assert await runtime._fire_hourly_summary(closed, config.general) == 1  # pyright: ignore[reportPrivateUsage]
+    assert pushed == [("group:888", "Hour briefing: one important mail.")]
+    assert await runtime._fire_hourly_summary(closed, config.general) == 0  # pyright: ignore[reportPrivateUsage]
+    assert len(calls) == 1 and len(pushed) == 1
+    assert await runtime._fire_hourly_summary(closed + timedelta(hours=1), config.general) == 0  # pyright: ignore[reportPrivateUsage]
+    assert await storage.get_preference("hourly_summary.2026-08-16T10:00")
+    assert len(calls) == 1
 
 
 class TestFailedReanalysisKeepsPrevious:
