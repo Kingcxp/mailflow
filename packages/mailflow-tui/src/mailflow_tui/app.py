@@ -840,6 +840,9 @@ class MailPane(Vertical):
             self.refresh_mail(), exclusive=True, group="mail-refresh", exit_on_error=False
         )
 
+    async def on_unmount(self) -> None:
+        await self._cancel_smart_action()
+
     def _mail_table(self) -> SelectionTable | None:
         return self.query_one_optional("#mail-table", SelectionTable)
 
@@ -1645,7 +1648,7 @@ class MailPane(Vertical):
                     # spinner once stages start left no visible animation at
                     # all — instead the hint carries the latest stage text
                     # and the RichLog below keeps the full history
-                    hint.update(f"{frame} {spinner_state['message']}")
+                    hint.update(RichText(f"{frame} {spinner_state['message']}"))
                     hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
                 await asyncio.sleep(0.12)
 

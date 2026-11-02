@@ -609,8 +609,16 @@ async def test_truncated_discovery_keeps_complete_candidates(prefix: str) -> Non
     ]
 
     class TruncatedRouter:
+        calls = 0
+
         async def chat(self, messages: Any, **kwargs: Any) -> Any:
-            return model_completion(prefix + json.dumps(rows)[:-1] + ',{"id":"m3","title":"Cut')
+            self.calls += 1
+            if self.calls == 2 and not prefix:
+                raise TimeoutError("retry unavailable")
+            recovered = rows if self.calls == 1 else rows[:1]
+            return model_completion(
+                prefix + json.dumps(recovered)[:-1] + ',{"id":"m3","title":"Cut'
+            )
 
     service = new_service(TruncatedRouter())
     for index in range(3):

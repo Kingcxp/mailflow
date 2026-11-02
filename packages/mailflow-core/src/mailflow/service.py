@@ -1619,24 +1619,22 @@ class MailFlowService:
                 payloads: list[Any] | None = None
                 partial_payloads: list[Any] = []
                 for attempt in (1, 2):
-                    completion = await asyncio.wait_for(
-                        self.router.chat(
-                            messages,
-                            primary=llm_ids[0],
-                            fallback=llm_ids[1:],
-                            options={
-                                "temperature": 0.0,
-                                # one object per event notice is long (title,
-                                # ISO times, location, URL, description,
-                                # confidence, evidence); 1800 tokens cut the
-                                # array off mid-object, which made the whole
-                                # reply unreadable and silently dropped every
-                                # candidate in the batch
-                                "max_tokens": 4000,
-                            },
-                        ),
-                        timeout=300,
-                    )
+                    try:
+                        completion = await asyncio.wait_for(
+                            self.router.chat(
+                                messages,
+                                primary=llm_ids[0],
+                                fallback=llm_ids[1:],
+                                options={"temperature": 0.0, "max_tokens": 4000},
+                            ),
+                            timeout=300,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        if partial_payloads:
+                            break
+                        raise
                     raw = _extract_json_typed(completion.text, list[Any])
                     if raw is not None and any(
                         not isinstance(item, dict)
@@ -1661,7 +1659,7 @@ class MailFlowService:
                                 batch_number,
                                 len(salvaged),
                             )
-                            partial_payloads = salvaged
+                            partial_payloads.extend(salvaged)
                     if isinstance(raw, list):
                         payloads = raw
                         break

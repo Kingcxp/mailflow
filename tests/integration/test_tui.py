@@ -57,6 +57,7 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
         def __init__(self) -> None:
             self.started = asyncio.Event()
             self.release = asyncio.Event()
+            self.cancelled = asyncio.Event()
             self.held = False
 
         async def chat(self, messages: list[Any], **kwargs: Any) -> LLMCompletion:
@@ -78,7 +79,11 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
             self.started.set()
             if not self.held:
                 self.held = True
-                await self.release.wait()
+                try:
+                    await self.release.wait()
+                except asyncio.CancelledError:
+                    self.cancelled.set()
+                    raise
             user = next(
                 str(m.get("content") or "") for m in reversed(messages) if m.get("role") == "user"
             )
@@ -159,8 +164,22 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
                 table.get_cell(next(iter(table.rows)), "subject")
             )
             assert pane._smart_action_result is not None  # pyright: ignore[reportPrivateUsage]
+            router.held = False
+            router.started.clear()
+            router.release.clear()
+            router.cancelled.clear()
+            search.value = "another query"
+            await pilot.pause()
+            button.press()
+            for _ in range(60):
+                if router.started.is_set():
+                    break
+                await asyncio.sleep(0.05)
+            assert router.started.is_set()
             app.exit()
             await pilot.pause()
+        assert router.cancelled.is_set()
+        assert pane._smart_spinner_task is None  # pyright: ignore[reportPrivateUsage]
     finally:
         await service.stop()
 
