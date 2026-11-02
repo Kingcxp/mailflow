@@ -1410,16 +1410,16 @@ class MailFlowService:
                 refreshed.append(candidate)
             if changed:
                 await self._save_seminar_candidates(refreshed)
+        deduplicated = self._dedupe_candidates(refreshed)
         visible = (
-            refreshed
+            deduplicated
             if include_resolved
             else [
                 candidate
-                for candidate in refreshed
+                for candidate in deduplicated
                 if candidate.status in {SeminarStatus.PENDING, SeminarStatus.EXPIRED}
             ]
         )
-        visible = self._dedupe_candidates(visible)
         return sorted(
             visible,
             key=lambda candidate: (
@@ -1478,9 +1478,17 @@ class MailFlowService:
                 best[key] = candidate
                 order.append(key)
                 continue
-            if previous.status is SeminarStatus.PENDING and (
-                candidate.status is not SeminarStatus.PENDING
-                or candidate.confidence > previous.confidence
+            resolved = {SeminarStatus.IMPORTED, SeminarStatus.REJECTED}
+            if previous.status not in resolved and (
+                candidate.status in resolved
+                or (
+                    previous.status is candidate.status
+                    and candidate.confidence > previous.confidence
+                )
+                or (
+                    previous.status is SeminarStatus.PENDING
+                    and candidate.status is SeminarStatus.EXPIRED
+                )
             ):
                 best[key] = candidate
         return [best[key] for key in order]

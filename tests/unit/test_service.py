@@ -1735,14 +1735,31 @@ class TestSeminarCandidateDedupe:
         ]
         assert [item.item_id for item in await service.list_actions()] == [action.item_id]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="Resolved candidates are filtered out before deduplication, exposing a pending duplicate",
-    )
     async def test_imported_event_does_not_return_to_pending_review(self) -> None:
         service, _, _ = await self.rediscover_imported_event()
         assert await service.list_seminar_candidates() == []
+
+    @pytest.mark.parametrize("status", [SeminarStatus.IMPORTED, SeminarStatus.REJECTED])
+    async def test_expiring_duplicate_does_not_hide_a_resolved_event(
+        self, status: SeminarStatus
+    ) -> None:
+        service = TestSeminarDiscovery.make_service(None)
+        resolved = SeminarCandidate(
+            candidate_id="resolved",
+            mail_id="one",
+            title="Past event",
+            starts_at=datetime.now(UTC) - timedelta(days=1),
+            status=status,
+        )
+        duplicate = resolved.model_copy(
+            update={"candidate_id": "duplicate", "mail_id": "two", "status": SeminarStatus.PENDING}
+        )
+        await service.storage.set_preference(
+            "seminars.candidates",
+            json.dumps([duplicate.model_dump(mode="json"), resolved.model_dump(mode="json")]),
+        )
+        assert await service.list_seminar_candidates() == []
+        assert await service.list_seminar_candidates(include_resolved=True) == [resolved]
 
 
 class TestMarketplaceService:

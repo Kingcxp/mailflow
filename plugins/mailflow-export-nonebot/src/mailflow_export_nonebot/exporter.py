@@ -185,7 +185,7 @@ def export_nonebot(context: BotExportContext) -> BotExportResult:
     output = context.output_dir
     output.mkdir(parents=True, exist_ok=True)
     version = context.version or "0.1.0"
-    deps = ",\n".join(f'    "{pid}",' for pid in sorted(set(context.plugin_ids)))
+    deps = "\n".join(f'    "{pid}",' for pid in sorted(set(context.plugin_ids)))
     (output / "pyproject.toml").write_text(
         _PYPROJECT.format(
             name=PLUGIN_NAME,

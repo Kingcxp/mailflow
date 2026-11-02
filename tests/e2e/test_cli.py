@@ -108,20 +108,7 @@ def test_cli_restarts_preserve_account_scoped_mail_priority_and_actions(cli_conf
     }
 
 
-@pytest.mark.parametrize(
-    "framework",
-    [
-        pytest.param(
-            "nonebot",
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=tomllib.TOMLDecodeError,
-                reason="NoneBot export joins comma-terminated dependencies with another comma",
-            ),
-        ),
-        "astrbot",
-    ],
-)
+@pytest.mark.parametrize("framework", ["nonebot", "astrbot"])
 def test_cli_export_produces_loadable_config_and_runtime_dependencies(
     cli_config: Path, framework: str
 ) -> None:
