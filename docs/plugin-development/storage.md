@@ -12,7 +12,7 @@ See `mailflow/contracts.py` — `StorageBackend` (async methods):
   `delete_mail` (moves to trash)
 - trash: `list_trash`, `restore_from_trash`, `purge_trash(before) -> int`,
   `cleanup_mail(before) -> int`
-- drafts: `save_draft`, `get_draft`, `delete_draft`
+- drafts: `save_draft`, `get_draft`, `list_drafts(mail_id)`, `delete_draft`; draft lookup returns only replies to that mail, including finished drafts so the service can select an unfinished one.
 - preferences: `get_preference(key)`, `set_preference(key, value)`
 
 ## Registration

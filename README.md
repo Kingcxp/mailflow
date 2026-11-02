@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-740%20collected-3776AB)]()
+[![Tests](https://img.shields.io/badge/tests-742%20collected-3776AB)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -43,7 +43,12 @@ notifiers, storage — installed from a plugin marketplace.
   reminders fire at a configurable fixed time two days before the due date
   and at midnight on the due day.
 - **Two-step confirmed replies** — draft → prepare (short-lived token) →
-  confirm; double-send safe, editing invalidates the token.
+  confirm; double-send safe, editing invalidates the token. Reopening continues
+  unfinished drafts; Ctrl+S saves, Esc saves and closes.
+- **Batch inbox and task actions** — click checkboxes, Shift-select a range,
+  or Ctrl+A to select visible results. Filter expired items, preview deletion,
+  retry failed items, and undo the last mail deletion with Ctrl+Z. Search uses
+  loaded data; remote live-update status is visible and reconnect refreshes data.
 - **Recoverable retention** — configurable mail retention (default 30 days)
   with a daily 04:00 cleanup; deleted mails recoverable for 7 days in trash.
 - **Rich logging** — queue-based rich console output, rotating file, JSONL;
@@ -76,7 +81,7 @@ notifiers, storage — installed from a plugin marketplace.
   arrived before MailFlow was configured and analyze only the messages they
   pick; picked mails take the same pipeline path as live mail, and
   already-analyzed mail is skipped.
-- **Quality gates** — 740 collected unit/integration/e2e cases; optional local OCR
+- **Quality gates** — 742 collected unit/integration/e2e cases; optional local OCR
   and filesystem-link cases may skip. Ruff, mypy and pyright strict pass. Offline
   contracts cover bundled and marketplace plugins, and integration tests follow
   mail through analysis, SQLite, notifications, REST and the remote TUI.

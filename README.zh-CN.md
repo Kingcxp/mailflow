@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-740%20collected-3776AB)]()
+[![Tests](https://img.shields.io/badge/tests-742%20collected-3776AB)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -34,6 +34,10 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
 - **带时间待办 + 提醒** —— 考试/会议/跑腿，含时间、类型、内容与准备备注，可下钻到源邮件；
   到期前两天固定时刻与到期日零点触发提醒。
 - **两步确认回复** —— 起草 → 准备（短期令牌）→ 确认；防重复发送，编辑会使令牌失效。
+  重开会继续未完成的草稿，Ctrl+S 保存，Esc 保存并关闭。
+- **邮件与待办批量操作** —— 点击勾选、Shift 连选、Ctrl+A 全选当前结果；可筛选过期项目、
+  预览删除范围、重试失败项，并用 Ctrl+Z 撤销最近一批邮件删除。搜索使用已加载数据，
+  远程实时连接状态可见，重连后自动刷新。
 - **可恢复保留策略** —— 可配置邮件保留期（默认 30 天），每日 04:00 清理；删除的邮件可在回收站恢复 7 天。
 - **丰富的日志** —— 基于队列的富控制台输出、轮转文件、JSONL；级别、重定向与密钥脱敏全部可配置；
   绝不触碰宿主的根日志器。
@@ -54,7 +58,7 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
   即路由策略：第一项为默认，其后每一项都是前面的后备。
 - **浏览并解析已有邮件** —— 新用户可以分页浏览 MailFlow 配置之前就已收到的邮件，只
   勾选需要的进行解析；被选中的邮件走与实时邮件完全相同的处理流程，已解析过的会跳过。
-- **质量门槛** —— 当前收集 740 个单元、集成和端到端用例；可选 OCR 与文件链接用例可能跳过。
+- **质量门槛** —— 当前收集 742 个单元、集成和端到端用例；可选 OCR 与文件链接用例可能跳过。
   Ruff、mypy 和 pyright 严格检查通过。内置与市场插件使用离线契约验证，集成测试覆盖邮件接收、
   分析、SQLite、通知、远程接口和远程终端界面的完整链路。
 - **远程访问** —— 支持带身份认证的 REST、WebSocket 服务和远程终端界面；进程管理仅在本地模式开放。
