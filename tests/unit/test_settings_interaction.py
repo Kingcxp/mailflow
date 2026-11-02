@@ -23,10 +23,11 @@ from mailflow_tui.gateway_guide import GatewayGuideModal
 from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.remote import LoginScreen
 from mailflow_tui.settings import EntryFormScreen, ListEditScreen, LLMPane, SettingsPane
-from test_commands import commands_service
 from textual.app import App, ComposeResult
 from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 from textual.worker import WorkerCancelled
+
+from mailflow_test_support.commands import commands_service
 
 
 async def settle(pilot: Any) -> None:

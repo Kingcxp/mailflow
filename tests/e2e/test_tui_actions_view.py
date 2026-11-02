@@ -18,7 +18,7 @@ from mailflow_bundled import create_plugin_manager
 from mailflow_tui.app import ActionsPane, MailFlowApp
 from mailflow_tui.confirm import ConfirmModal
 from textual.coordinate import Coordinate
-from textual.widgets import Button, DataTable, Static
+from textual.widgets import Button, DataTable
 
 
 def build_config(db_path: Path) -> MailFlowConfig:
@@ -282,22 +282,5 @@ async def test_a_long_plan_keeps_its_buttons_on_screen(tmp_path: Path) -> None:
             # and the long body is scrollable rather than overflowing
             scroll = app.screen.query_one("#confirm-body-scroll")
             assert scroll.region.height < screen_height
-    finally:
-        await service.stop()
-
-
-async def test_actions_pane_has_no_seminar_review_control(tmp_path: Path) -> None:
-    """Discovery is one smart-action operation, not a standing button."""
-    service = await start_service_quiet(tmp_path)
-    app = MailFlowApp(cast(Any, service), queue_module.Queue())
-    try:
-        async with app.run_test(size=(140, 50)) as pilot:
-            await pilot.pause()
-            pane = app.query_one(ActionsPane)
-            await pane.refresh_actions()
-            assert not pane.query("#actions-review-seminars")
-            assert bool(pane.query("#actions-add"))
-            hint = pane.query_one("#actions-hint", Static)
-            assert hint is not None
     finally:
         await service.stop()

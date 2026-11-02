@@ -1,84 +1,59 @@
-"""Urgent notifications must survive transient transport failures: the
-runtime retries each notifier up to three times before giving up."""
+"""Notification retries through the public mail-processing entry point."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import Any, cast
+import asyncio
+from typing import Any
 
-from mailflow.config import NotifierConfig
-from mailflow.domain import MailAnalysis, MailMessage, MailRecord, Urgency
-from mailflow.runtime import MailFlowRuntime
+import pytest
+from mailflow.domain import MailAnalysis, MailRecord, Urgency
+
+from mailflow_test_support.runtime import RecordingNotifier, build_runtime, make_mail
 
 
-class _FlakyNotifier:
-    backend_id = "flaky"
-
+class FlakyNotifier(RecordingNotifier):
     def __init__(self, failures: int) -> None:
-        self._failures = failures
-        self.calls = 0
+        super().__init__()
+        self.failures = failures
+        self.attempts = 0
 
     async def notify(self, record: MailRecord) -> None:
-        self.calls += 1
-        if self.calls <= self._failures:
-            raise RuntimeError("transient transport error")
+        self.attempts += 1
+        if self.attempts <= self.failures:
+            raise RuntimeError("transport unavailable")
+        await super().notify(record)
 
 
-class _Events:
-    async def emit(self, event: str, **payload: Any) -> None: ...
-
-
-def _record() -> MailRecord:
-    mail = MailMessage(
-        message_id="m-notify",
-        account_id="acct-1",
-        subject="考试提醒",
-        sender=cast(Any, None)
-        or __import__("mailflow.domain", fromlist=["MailAddress"]).MailAddress(address="a@e"),
-        recipients=[],
-        date=datetime.now(UTC),
-        received_at=datetime.now(UTC),
-    )
-    return MailRecord(
-        record_id="m-notify",
-        mail=mail,
-        auto_urgency=Urgency.URGENT,
-        analysis=MailAnalysis(summary="s", urgency=Urgency.URGENT),
-    )
-
-
-def _runtime(notifier: Any) -> MailFlowRuntime:
-    runtime = MailFlowRuntime.__new__(MailFlowRuntime)
-    runtime._notifiers = [notifier]  # pyright: ignore[reportPrivateUsage]
-    runtime._notifier_configs = [  # pyright: ignore[reportPrivateUsage]
-        NotifierConfig(notifier_id="n", provider="flaky", minimum_urgency=Urgency.INFO)
-    ]  # pyright: ignore[reportPrivateUsage]
-    runtime._events = _Events()  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]
-    return runtime
-
-
-async def test_retry_succeeds_on_second_attempt() -> None:
-    import asyncio
-
-    notifier = _FlakyNotifier(failures=1)
-    runtime = _runtime(notifier)
-    sleep_log: list[float] = []
-
-    async def _fake_sleep(seconds: float) -> None:
-        sleep_log.append(seconds)
-
+@pytest.mark.parametrize("failures", [1, 99], ids=["transient", "exhausted"])
+async def test_notification_failure_keeps_mail_and_other_destinations_working(
+    failures: int, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     original_sleep = asyncio.sleep
-    asyncio.sleep = _fake_sleep  # type: ignore[assignment]
-    try:
-        await runtime._notify(_record())  # pyright: ignore[reportPrivateUsage]  # pyright: ignore[reportPrivateUsage]
-    finally:
-        asyncio.sleep = original_sleep  # type: ignore[assignment]
-    assert notifier.calls == 2
-    assert sleep_log == [2.0]
 
+    async def no_backoff(_delay: float, *args: Any, **kwargs: Any) -> None:
+        await original_sleep(0)
 
-async def test_gives_up_after_three_attempts() -> None:
-    notifier = _FlakyNotifier(failures=99)
-    runtime = _runtime(notifier)
-    await runtime._notify(_record())  # pyright: ignore[reportPrivateUsage]  # pyright: ignore[reportPrivateUsage]
-    assert notifier.calls == 3
+    monkeypatch.setattr("mailflow.runtime.asyncio.sleep", no_backoff)
+    flaky, healthy = FlakyNotifier(failures), RecordingNotifier()
+    runtime, storage, _ = build_runtime(
+        {},
+        analysis=MailAnalysis(summary="Useful notice", urgency=Urgency.URGENT),
+        notifiers=[flaky, healthy],
+    )
+    mail = make_mail(subject="Notification regression")
+
+    record = await asyncio.wait_for(runtime.process_mail_now(mail), timeout=2)
+
+    assert record is not None
+    assert await storage.get_mail(record.record_id) == record
+    assert healthy.notified == [record]
+    if failures == 1:
+        assert flaky.notified == [record]
+        assert flaky.attempts > 1
+    else:
+        assert flaky.notified == []
+        assert 1 < flaky.attempts < failures
+        assert record.record_id in caplog.text and "notifier" in caplog.text
+
+    assert await runtime.process_mail_now(mail) is None
+    assert healthy.notified == [record]

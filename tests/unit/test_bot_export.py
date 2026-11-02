@@ -286,7 +286,7 @@ class TestAstrbotExporter:
     async def test_exported_handler_preserves_identity_and_shared_permission(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from test_commands import commands_service
+        from mailflow_test_support.commands import commands_service
 
         event_module = ModuleType("astrbot.api.event")
         event_module.__dict__.update(

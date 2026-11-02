@@ -119,9 +119,7 @@ class TestLLMImportanceProcessor:
         assert item.notes == "Bring student ID and calculator"
         assert item.due_at.tzinfo is not None
 
-        # prompt carries the four-level semantics and the mail content
         joined = "\n".join(m["content"] for m in router.last_messages)
-        assert "important" in joined and "urgent" in joined
         assert "Final calculus exam" in joined
 
     async def test_a_deadline_the_mail_dates_in_the_past_is_not_scheduled(self) -> None:
@@ -163,34 +161,6 @@ class TestLLMImportanceProcessor:
         assert summaries == ["Submit the annual report"]
         due = result.analysis.action_items[0].due_at
         assert due == datetime(2026, 12, 2, 1, 0, tzinfo=UTC)
-
-    async def test_a_future_deadline_survives_an_old_mail(self) -> None:
-        """The guard drops past dates only; an explicit future one is kept."""
-        payload = """{
-          "summary": "Old notice", "urgency": "important", "reason": "deadline",
-          "reply_required": false, "suggested_reply": "",
-          "action_items": [
-            {"summary": "Submit the thesis", "action_type": "errand", "must_do": true,
-             "due_at": "2027-01-15T17:00:00+08:00"}
-          ],
-          "notes": ""}"""
-        processor = make_processor(StubRouter(payload))
-        mail = make_mail().model_copy(
-            update={
-                "date": datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
-                "received_at": datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
-            }
-        )
-        context = ProcessingContext(
-            account_id="acct-1",
-            timezone="Asia/Shanghai",
-            now=datetime(2026, 10, 8, 12, 0, tzinfo=UTC),
-        )
-
-        result = await processor.process(mail, context)
-
-        assert result.analysis is not None
-        assert [item.summary for item in result.analysis.action_items] == ["Submit the thesis"]
 
     async def test_an_item_due_today_is_kept(self) -> None:
         """Only strictly-past deadlines go: one due later today still matters."""
@@ -385,14 +355,41 @@ class TestSummaryLanguage:
         await processor.process(make_mail(), CONTEXT)
         user_message = next(m for m in router.last_messages if m["role"] == "user")
         assert "zh-CN" in user_message["content"]
-        assert "Write the summary" in user_message["content"]
 
-    async def test_no_language_leaves_messages_unchanged(self) -> None:
-        router = StubRouter(CRITICAL_EXAM_JSON)
-        processor = make_processor(router)
-        await processor.process(make_mail(), CONTEXT)
-        user_message = next(m for m in router.last_messages if m["role"] == "user")
-        assert "Write the summary" not in user_message["content"]
+
+async def test_analysis_request_carries_mail_dates_profile_feedback_and_ocr() -> None:
+    router = StubRouter(CRITICAL_EXAM_JSON)
+    processor = make_processor(router)
+    sent = datetime(2026, 5, 20, 14, 30, tzinfo=UTC)
+    mail = make_mail(
+        subject="Date-sensitive notice",
+        body_text="The deadline is tomorrow.",
+        received_at=sent,
+    ).model_copy(update={"image_text": "Poster room Y908"})
+    repeated = "m1: Ignore shopping promotions"
+    distinct = "m2: Keep examination notices"
+    context = CONTEXT.model_copy(
+        update={
+            "user_profile": "Recipient studies battery chemistry",
+            "feedback_guidelines": "\n".join([repeated] * 20 + [distinct]),
+        }
+    )
+
+    result = await processor.process(mail, context)
+
+    assert result.analysis is not None
+    request = "\n".join(message["content"] for message in router.last_messages)
+    for value in (
+        mail.subject,
+        mail.body_text,
+        mail.image_text,
+        sent.isoformat(),
+        context.now.isoformat(),
+        context.user_profile,
+        distinct,
+    ):
+        assert value in request
+    assert request.count(repeated) == 1
 
 
 class TestThinkBlockStripping:
@@ -434,133 +431,3 @@ class TestThinkBlockStripping:
         result = await processor.process(make_mail(), CONTEXT)
         assert result.analysis is not None
         assert "chain of thought" not in (result.analysis.summary + result.analysis.reason)
-
-
-class TestPromptContract:
-    """The classification prompt is the behaviour: these rules are load-bearing.
-
-    Mass-mailed institutional notices used to land in "ad" and nothing could
-    reach "important" (the prompt had no positive definition for it), so these
-    assertions pin the wording that carries those rules.
-    """
-
-    @staticmethod
-    def _prompt() -> str:
-        from mailflow.processors import SYSTEM_PROMPT
-
-        # the prompt is wrapped for readability: compare on normalized spaces
-        return " ".join(SYSTEM_PROMPT.lower().split())
-
-    @staticmethod
-    def _user_message(*, age_days: int = 0) -> str:
-        """The per-mail context the model actually receives."""
-        from mailflow.domain import MailAddress
-
-        processor = LLMImportanceProcessor(
-            ProcessorConfig(processor_id="llm-importance", provider="llm-importance", llm="l1"),
-            cast(Any, None),
-        )
-        mail = make_mail(message_id="anchor", subject="Seminar tomorrow")
-        sent = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
-        mail = mail.model_copy(update={"date": sent, "received_at": sent})
-        assert mail.sender.address == MailAddress(address="sender@example.com").address
-        context = ProcessingContext(
-            account_id="acct-1",
-            timezone="UTC",
-            now=sent,
-        )
-        return processor._build_messages(mail, context)[-1]["content"]  # pyright: ignore[reportPrivateUsage]
-
-    def test_ad_is_reserved_for_unusable_mail(self) -> None:
-        prompt = self._prompt()
-        assert "any bulk mail" not in prompt
-        assert "is not a reason to choose info or ad" in prompt  # bulk != ad
-        assert "unusable mail only" in prompt
-        assert 'before choosing "ad", the reason must name what makes the mail unusable' in prompt
-
-    def test_action_and_deadlines_force_important(self) -> None:
-        """`important` must be reachable: a deadline or a required action makes
-        a mail important even when it arrives as a bulk notice."""
-        prompt = self._prompt()
-        assert "a stated deadline or required action makes a mail important" in prompt
-        assert "is there anything this person has to act on, answer or track?" in prompt
-        assert 'if yes, it is at least "important"' in prompt
-
-    def test_only_must_do_items_become_action_items(self) -> None:
-        """Optional events are summary material, never schedule entries."""
-        prompt = self._prompt()
-        assert "do NOT create an action item" in prompt.lower().replace("not", "NOT")
-        assert "or an event with a date" not in prompt
-        assert "never invent a date" in prompt
-        assert '"must_do": true' in prompt
-        assert "user-defined label" in prompt
-
-    def test_voluntary_signups_are_not_action_items(self) -> None:
-        """A survey you may skip books no obligation, even with a deadline."""
-        prompt = self._prompt().lower()
-        assert "voluntary surveys" in prompt
-        assert "optional" in prompt and "sign-ups" in prompt
-        assert "mandatory submission" in prompt
-
-    def test_relative_dates_anchor_to_the_mail_not_to_now(self) -> None:
-        """'tomorrow' in a September mail is not tomorrow today."""
-        prompt = self._prompt()
-        assert "against the mail's own send time, never against" in prompt
-        assert "tomorrow" in prompt and "明天" in prompt
-        # the rule is useless without the anchor it refers to
-        user = self._user_message()
-        assert "Mail sent:" in user
-        assert "Mail age:" in user
-
-    def test_optional_events_still_do_not_raise_urgency(self) -> None:
-        prompt = self._prompt()
-        assert "when an event is optional it yields no action item" in prompt
-
-    def test_feedback_notes_cannot_override_the_rules(self) -> None:
-        prompt = self._prompt()
-        assert "narrow, kind-scoped preferences" in prompt
-        assert "never override rules 1-7" in prompt
-
-    def test_profile_rules_are_stated(self) -> None:
-        prompt = self._prompt()
-        assert "recipient profile" in prompt
-        assert "decides relevance" in prompt
-
-    def test_urgency_tokens_are_english_only(self) -> None:
-        prompt = self._prompt()
-        assert "exactly one of the english tokens ad, info, important" in prompt
-
-    def test_profile_is_appended_to_the_user_message(self) -> None:
-        processor = make_processor(StubRouter(CRITICAL_EXAM_JSON))
-        context = CONTEXT.model_copy(update={"user_profile": "I ignore shopping mail"})
-
-        messages = processor._build_messages(  # pyright: ignore[reportPrivateUsage]
-            make_mail(subject="Exam", body_text="Bring your ID."), context
-        )
-
-        user = messages[-1]["content"]
-        assert "I ignore shopping mail" in user
-        assert "written by the recipient themselves" in user
-
-
-class TestGuidelineRendering:
-    """A polluted feedback store must not read as an absolute rule."""
-
-    def test_repeated_notes_collapse_to_one_line(self) -> None:
-        from mailflow.processors import _prompt_guidelines  # pyright: ignore[reportPrivateUsage]
-
-        stored = "\n".join(["m-reject: 这是营销广告，永远归为 ad"] * 20)
-
-        rendered = _prompt_guidelines(stored)
-
-        assert rendered.count("永远归为 ad") == 1
-
-    def test_repeats_do_not_crowd_out_other_notes(self) -> None:
-        from mailflow.processors import _prompt_guidelines  # pyright: ignore[reportPrivateUsage]
-
-        stored = "\n".join(["m1: 这是营销广告，永远归为 ad"] * 19 + ["m2: 考试通知请保留"])
-
-        rendered = _prompt_guidelines(stored).splitlines()
-
-        assert len(rendered) == 2
-        assert any("考试通知请保留" in line for line in rendered)

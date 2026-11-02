@@ -17,7 +17,8 @@ from mailflow.commands import CommandRouter
 from mailflow.config import MailAccountConfig
 from mailflow.domain import MAX_ATTACHMENT_BYTES, ActionItem, MailAnalysis, MailRecord, Urgency
 from mailflow_mail_imap.plugin import IMAPSource, parse_mime
-from test_runtime import FakeStorage, build_runtime, make_mail
+
+from mailflow_test_support.runtime import FakeStorage, build_runtime, make_mail
 
 
 class Mailbox:

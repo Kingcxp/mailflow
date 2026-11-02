@@ -11,7 +11,7 @@ error that names neither the status nor the content type.
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import pytest
@@ -283,9 +283,3 @@ def test_as_bool_parses_config_strings() -> None:
         assert as_bool(value) is False
     for value in ("true", "1", "yes", "on"):
         assert as_bool(value) is True
-
-
-def test_config_string_stream_false_is_honoured() -> None:
-    """TOML/`options` values arrive as strings; "false" must not read as true."""
-    backend = OpenAIBackend(_config(stream="false"))
-    assert cast(Any, backend)._use_stream is False

@@ -14,9 +14,10 @@ from mailflow.service import MailFlowService
 from mailflow_server.app import create_app
 from mailflow_server.client import RemoteClient
 from mailflow_tui.remote import RemoteServiceAdapter
-from test_reply_delivery import WaitingSource
-from test_service import RecordingSource
-from test_service import service as service
+
+from mailflow_test_support.replies import WaitingSource
+from mailflow_test_support.service import RecordingSource
+from mailflow_test_support.service import service as service
 
 
 def remote_adapter(

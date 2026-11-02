@@ -31,7 +31,8 @@ from mailflow_server.app import _jsonable, create_app
 from mailflow_server.client import RemoteClient, RemoteUnsupported, _ws_connect, _ws_headers
 from mailflow_tui.remote import RemoteServiceAdapter
 from starlette.websockets import WebSocketDisconnect
-from test_commands import commands_service, make_record
+
+from mailflow_test_support.commands import commands_service, make_record
 
 
 def test_recursive_values_include_models_dates_enums_and_settings() -> None:

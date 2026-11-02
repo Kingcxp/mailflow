@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from mailflow.config import MailFlowConfig
-from mailflow.domain import ComponentKind
+from mailflow.config import LLMConfig, MailAccountConfig, MailFlowConfig, NotifierConfig
+from mailflow.contracts import LLMCompletion
+from mailflow.domain import ComponentKind, MailAnalysis, MailRecord, Urgency
 from mailflow.plugin_api import define_plugin
 from mailflow.registry import ComponentRegistry, PluginRegistrar
+from mailflow_testkit.fakes import FakeMailSource, FakeNotifier, make_mail
 
 
 def _register(plugin: object) -> ComponentRegistry:
-    registrar = PluginRegistrar(ComponentRegistry(), MailFlowConfig(), "test")
+    registry = ComponentRegistry()
+    registrar = PluginRegistrar(registry, MailFlowConfig(), "test")
     plugin.mailflow_register(registrar, MailFlowConfig())  # type: ignore[attr-defined]
-    return registrar._registry  # pyright: ignore[reportPrivateUsage]
+    return registry
 
 
-def test_multi_component_plugin() -> None:
+async def test_multi_component_plugin_delivers_through_registered_factories() -> None:
     PLUGIN = define_plugin(
         "mailflow-demo-bundle",
         name="Demo Bundle",
@@ -25,20 +29,14 @@ def test_multi_component_plugin() -> None:
     )
 
     @PLUGIN.source("demo-source")
-    class DemoSource:  # pyright: ignore[reportUnusedClass]
-        async def run(self, emit: Any, stop_event: Any) -> None:
-            await stop_event.wait()
-
-        async def send_reply(self, mail_id: str, draft: object) -> None:
-            pass
-
-        async def close(self) -> None:
-            pass
+    class DemoSource(FakeMailSource):
+        def __init__(self, config: MailAccountConfig) -> None:
+            super().__init__([make_mail(account_id=config.account_id)])
 
     @PLUGIN.notifier("demo-notify")
-    class DemoNotifier:  # pyright: ignore[reportUnusedClass]
-        async def notify(self, record: object) -> None:
-            pass
+    class DemoNotifier(FakeNotifier):
+        def __init__(self, config: NotifierConfig) -> None:
+            super().__init__()
 
     plugin = PLUGIN.build()
     info = plugin.mailflow_plugin_info()  # type: ignore[attr-defined]
@@ -46,26 +44,53 @@ def test_multi_component_plugin() -> None:
     assert set(info.kinds) == {ComponentKind.MAIL_SOURCE, ComponentKind.NOTIFIER}
 
     registry = _register(plugin)
-    assert registry.source_factory("demo-source") is not None
-    assert registry.notifier_factory("demo-notify") is not None
+    source = registry.source_factory("demo-source")(
+        MailAccountConfig(account_id="demo", provider="demo-source")
+    )
+    notifier = registry.notifier_factory("demo-notify")(
+        NotifierConfig(notifier_id="demo", provider="demo-notify")
+    )
+    delivered: list[MailRecord] = []
+    stop = asyncio.Event()
+
+    async def emit(mail: Any) -> None:
+        record = MailRecord(
+            record_id=mail.normalized_message_id(),
+            mail=mail,
+            auto_urgency=Urgency.INFO,
+            analysis=MailAnalysis(summary="kept", urgency=Urgency.INFO),
+        )
+        await notifier.notify(record)
+        delivered.append(record)
+        stop.set()
+
+    await source.run(emit, stop)
+    assert isinstance(notifier, DemoNotifier)
+    assert notifier.notified == delivered and len(delivered) == 1
+    assert delivered[0].mail.account_id == "demo"
     assert registry.plugin_for("demo-source") == "test"
 
 
-def test_component_id_from_class_attribute() -> None:
+async def test_inferred_component_id_builds_a_working_backend() -> None:
     PLUGIN = define_plugin("mailflow-demo-llm", name="Demo LLM")
 
     @PLUGIN.llm()
     class DemoBackend:  # pyright: ignore[reportUnusedClass]
         backend_id = "demo-llm"
 
-        async def chat(self, messages: list[dict[str, str]], **kwargs: object) -> object:
-            raise NotImplementedError
+        def __init__(self, config: LLMConfig) -> None:
+            self.model = config.model
+
+        async def chat(self, messages: list[dict[str, str]], **kwargs: object) -> LLMCompletion:
+            return LLMCompletion(text=messages[-1]["content"], model=self.model)
 
     registry = _register(PLUGIN.build())
-    assert registry.llm_factory("demo-llm") is not None
+    backend = registry.llm_factory("demo-llm")(LLMConfig(llm_id="demo", model="fixture-model"))
+    result = await backend.chat([{"role": "user", "content": "fixture request"}])
+    assert result.text == "fixture request" and result.model == "fixture-model"
 
 
-def test_all_kinds_registered() -> None:
+def test_decorators_record_declared_component_kinds() -> None:
     PLUGIN = define_plugin("mailflow-demo-all", name="Demo All")
 
     @PLUGIN.processor("p")

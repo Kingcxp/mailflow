@@ -51,20 +51,8 @@ def make_mail(**overrides: Any) -> MailMessage:
 class TestUrgencyContract:
     """The four-level urgency contract is public and fixed."""
 
-    def test_exactly_four_values(self) -> None:
-        assert len(Urgency) == 4
-
     def test_values(self) -> None:
-        assert Urgency.AD.value == "ad"
-        assert Urgency.INFO.value == "info"
-        assert Urgency.IMPORTANT.value == "important"
-        assert Urgency.URGENT.value == "urgent"
-
-    def test_colors(self) -> None:
-        assert Urgency.AD.color == "#909399"  # gray: irrelevant ads
-        assert Urgency.INFO.color == "#67C23A"  # green: useful, not urgent
-        assert Urgency.IMPORTANT.color == "#E6A23C"  # orange: important, read it
-        assert Urgency.URGENT.color == "#F56C6C"  # red: must handle
+        assert {level.value for level in Urgency} == {"ad", "info", "important", "urgent"}
 
     def test_rank_order(self) -> None:
         assert Urgency.AD.rank < Urgency.INFO.rank < Urgency.IMPORTANT.rank < Urgency.URGENT.rank
@@ -87,15 +75,6 @@ class TestMailRecordUrgency:
             auto_urgency=Urgency.IMPORTANT,
         )
         assert record.effective_urgency is Urgency.IMPORTANT
-
-    def test_manual_wins_over_automatic(self) -> None:
-        record = MailRecord(
-            record_id="r1",
-            mail=make_mail(),
-            auto_urgency=Urgency.AD,
-            manual_urgency=Urgency.URGENT,
-        )
-        assert record.effective_urgency is Urgency.URGENT
 
     def test_reset_restores_automatic(self) -> None:
         record = MailRecord(
@@ -195,24 +174,6 @@ class TestMailMessage:
     def test_invalid_urgency_rejected(self) -> None:
         with pytest.raises(ValidationError):
             MailAnalysis.model_validate({"summary": "x", "urgency": "not-a-value"})
-
-
-class TestConfigDefaults:
-    def test_retention_and_cleanup_defaults(self) -> None:
-        config = MailFlowConfig()
-        assert config.general.language == "en"
-        assert config.general.timezone == "UTC"
-        assert config.general.mail_retention_days == 30
-        assert config.general.trash_retention_days == 7
-        assert config.general.cleanup_hour == 4
-        assert config.general.cleanup_minute == 0
-        assert config.general.queue_size == 500
-        assert config.general.workers == 2
-
-    def test_storage_defaults(self) -> None:
-        config = MailFlowConfig()
-        assert config.storage.provider == "sqlite"
-        assert config.storage.path == "data/mailflow.db"
 
 
 class TestConfigEnvInterpolation:

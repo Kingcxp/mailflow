@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from mailflow.domain import ProcessorNote
-from test_commands import commands_service, make_record
+
+from mailflow_test_support.commands import commands_service, make_record
 
 
 async def test_failed_selection() -> None:

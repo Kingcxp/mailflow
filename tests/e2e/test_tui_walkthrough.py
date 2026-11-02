@@ -26,7 +26,6 @@ from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_tui.app import ActionsPane, LLMPane, LogsPane, MailFlowApp, MailPane
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.profile import UserProfileModal
-from test_tui import TUIPlugin, build_config
 from textual.widgets import (
     Button,
     DataTable,
@@ -37,6 +36,8 @@ from textual.widgets import (
     TabbedContent,
     TextArea,
 )
+
+from mailflow_test_support.tui import TUIPlugin, build_config
 
 
 class _StubRouter:

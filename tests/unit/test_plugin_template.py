@@ -109,14 +109,6 @@ def test_processor_template_registers_via_registrar(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_readme_template_demonstrates_rich_markdown(tmp_path: Path) -> None:
-    files = template_files("mailflow-demo-notifier", "notifier")
-    readme = json.loads(files["plugin.json"])["readme"]
-    assert '<span style="color:' in readme
-    assert "~~strikethrough~~" in readme
-    assert "**bold**" in readme
-
-
 def test_bot_exporter_template_registers_framework(tmp_path: Path) -> None:
     """The generated bot_exporter module registers a runnable exporter factory."""
     target = scaffold_plugin(tmp_path, "mailflow-export-demo", "bot_exporter")

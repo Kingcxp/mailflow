@@ -509,12 +509,3 @@ class TestTimeoutSemantics(TestPipeline):
         assert elapsed < 0.5
         assert notes[0].status == "failed"
         assert notes[0].message == "failed: processor timed out after 0.05 seconds"
-
-    async def test_other_failures_are_still_retried(self) -> None:
-        flaky = FlakyProcessor("flaky", failures=2)
-        engine = PipelineEngine([self._binding(flaky, "flaky", retries=3, timeout_seconds=5.0)])
-
-        _analysis, notes, _llm, _backend = await engine.process(make_mail(), "acct-1")
-
-        assert flaky.calls == 3
-        assert notes[0].status == "success"

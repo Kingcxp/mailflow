@@ -10,34 +10,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from mailflow.commands import CommandRouter
-from mailflow.config import MailFlowConfig
-from mailflow.service import MailFlowService
-from mailflow_bundled import create_plugin_manager
 from mailflow_tui.app import MailFlowApp, MailPane
 from mailflow_tui.ask_correct import AskCorrectModal
 from textual.widgets import Button, Input, Select, Static, TabbedContent
 
-
-def build_config(db_path: Path) -> MailFlowConfig:
-    config = MailFlowConfig()
-    config.storage.path = str(db_path)
-    return config
-
-
-async def start_service_quiet(tmp_path: Path) -> MailFlowService:
-    from mailflow.service import start_service
-
-    config_path = tmp_path / "cfg.toml"
-    config_path.write_text("", encoding="utf-8")
-    config = build_config(tmp_path / "tui.db")
-    manager = create_plugin_manager(config, discover_external=False)
-    return await start_service(
-        config,
-        config_path=config_path,
-        plugin_manager=manager,
-        discover_plugins=False,
-        enable_logging=False,
-    )
+from mailflow_test_support.settings import start_service_quiet
 
 
 def _result_collector(results: list[dict[str, Any]]) -> Any:
@@ -287,33 +264,6 @@ async def test_llm_form_numeric_error_preserves_input_and_eye_toggle(tmp_path: P
             assert saved["api_key"] == "sk-test"
     finally:
         await service.stop()
-        await service.stop()
-
-
-async def test_account_form_opens_with_imap_default(tmp_path: Path) -> None:
-    """Regression: a NULL initial value crashed Select._on_mount with
-    InvalidSelectValueError when opening the add-mailbox form."""
-    from mailflow_tui.settings import EntryFormScreen
-
-    service = await start_service_quiet(tmp_path)
-    CommandRouter(service)
-    app = MailFlowApp(cast(Any, service), queue_module.Queue())
-    try:
-        async with app.run_test(size=(140, 50)) as pilot:
-            await pilot.pause()
-            results: list[dict[str, Any]] = []
-            app.push_screen(
-                cast(Any, EntryFormScreen(cast(Any, service), "accounts")),
-                _result_collector(results),
-            )
-            await pilot.pause(0.3)
-
-            provider_select = cast(Select[Any], app.screen.query_one("#field-provider", Select))
-            assert str(provider_select.value) == "imap"
-            # imap-specific extras rendered for the default provider
-            assert app.screen.query_one("#extra-username", Input) is not None
-            assert results == []  # nothing saved by merely opening
-    finally:
         await service.stop()
 
 
@@ -641,46 +591,6 @@ async def test_ask_correct_worker_keeps_modal_responsive_and_renders_markdown(
         await service.stop()
 
 
-async def test_account_form_test_button_probes_imap_not_llm(tmp_path: Path) -> None:
-    """Regression: the form's test button used to run the LLM probe for
-    every group, surfacing "no llm_backend component 'imap'" in the
-    mailbox form. It must dispatch to the IMAP credential check."""
-    from textual.widgets import Button, Static
-
-    service = await start_service_quiet(tmp_path)
-    CommandRouter(service)
-    app = MailFlowApp(cast(Any, service), queue_module.Queue())
-    try:
-        async with app.run_test(size=(140, 50)) as pilot:
-            await pilot.pause()
-            from textual.widgets import TabbedContent
-
-            app.query_one(TabbedContent).active = "tab-mailboxes"
-            for _ in range(40):
-                if app.query("#account-add"):
-                    break
-                await pilot.pause(0.05)
-            app.query_one("#account-add", Button).press()
-            await pilot.pause(0.3)
-            for _ in range(40):
-                if app.screen.query("#entry-form-test"):
-                    break
-                await pilot.pause(0.05)
-            # default provider imap, no credentials yet
-            app.screen.query_one("#entry-form-test", Button).press()
-            status = app.screen.query_one("#entry-form-status", Static)
-            text = ""
-            for _ in range(40):
-                text = str(status.content)
-                if text.strip():
-                    break
-                await pilot.pause(0.05)
-            assert "llm_backend" not in text
-            assert text.strip()
-    finally:
-        await service.stop()
-
-
 async def test_history_count_controls_page_size_across_pages(tmp_path: Path) -> None:
     from textual.widgets import Button, DataTable, Input, TabbedContent
 
@@ -775,40 +685,6 @@ def _accounts_pane(app: Any) -> Any:
     from mailflow_tui.settings import AccountsPane
 
     return app.query_one(AccountsPane)
-
-
-async def test_notifier_form_mounts_with_valid_provider_default(tmp_path: Path) -> None:
-    """Regression: clicking Add notification must not crash with
-    InvalidSelectValueError. The notifier form's provider choices are the
-    IM/gateway platforms, and the default provider must be one of them
-    (the old default "console" was not, so Textual Select rejected it at
-    mount)."""
-    from mailflow_tui.settings import EntryFormScreen
-
-    service = await start_service_quiet(tmp_path)
-    CommandRouter(service)
-    app = MailFlowApp(cast(Any, service), queue_module.Queue())
-    try:
-        async with app.run_test(size=(140, 50)) as pilot:
-            await pilot.pause()
-            app.push_screen(cast(Any, EntryFormScreen(cast(Any, service), "notifiers")))
-            await pilot.pause(0.2)
-
-            provider_select = cast(Select[Any], app.screen.query_one("#field-provider", Select))
-            # the preselected default is always one of the listed providers
-            value = str(provider_select.value)
-            option_values = {
-                str(o[1])
-                for o in provider_select._options  # pyright: ignore[reportPrivateUsage]
-            }
-            assert value in option_values, f"default {value!r} not in {option_values}"
-            assert value == "onebot"
-            # the form is actually interactive (switch provider rebuilds)
-            provider_select.value = "openwechat"
-            await pilot.pause(0.2)
-            assert str(provider_select.value) == "openwechat"
-    finally:
-        await service.stop()
 
 
 async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:

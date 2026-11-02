@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_splash import make_app
 from textual.widgets import TabbedContent
+
+from mailflow_test_support.app import make_app
 
 
 async def _tick(app: Any, pilot: Any) -> float:

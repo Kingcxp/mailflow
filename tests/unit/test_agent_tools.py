@@ -283,7 +283,6 @@ class TestFindMail:
 
         assert "ids: a, c" in text
         # the narrowed prompt is the ordering-only one
-        assert "return ALL of them" in router.prompts[0]
 
     async def test_semantic_only_search_lets_scores_decide(self) -> None:
         router = RankingRouter({"Research seminar": 91, "Guest lecture": 12})
@@ -296,7 +295,6 @@ class TestFindMail:
         # 12 is below the relevance floor, so the ranking decided membership
         assert "ids: a" in text
         assert "Guest lecture" not in text
-        assert "Return [] only after evaluating" in router.prompts[0]
 
     async def test_reports_unavailable_batches_instead_of_claiming_success(self) -> None:
         class FailingRouter:

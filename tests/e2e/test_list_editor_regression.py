@@ -13,8 +13,9 @@ import pytest
 from mailflow.commands import CommandRouter
 from mailflow_tui.app import MailFlowApp
 from mailflow_tui.list_editor import ListEditor
-from test_settings_forms import start_service_quiet
 from textual.widgets import Button, Input
+
+from mailflow_test_support.settings import start_service_quiet
 
 
 async def _wait_until(pilot: Any, predicate: Any, budget: float = 4.0) -> None:

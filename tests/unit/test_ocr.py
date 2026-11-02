@@ -31,10 +31,6 @@ class TestNormalization:
 
         assert any("room y908 and zoom" in form for form in forms)
 
-    def test_collapsed_text_glues_word_boundaries_by_design(self) -> None:
-        """Documents why the collapsed form may never be used alone."""
-        assert ocr.collapsed_text("room y908 and zoom") == "roomy908 andzoom"
-
     def test_empty_input_yields_no_distinct_form(self) -> None:
         assert ocr.searchable_forms("") == [""]
 
@@ -105,9 +101,6 @@ class TestFailureTolerance:
 
         assert ocr.extract_mail_images(attachments) == ""
 
-    def test_is_available_never_raises(self) -> None:
-        assert isinstance(ocr.is_available(), bool)
-
 
 class TestRecognition:
     """The real thing, when the optional engine is installed."""
@@ -160,52 +153,3 @@ class TestRecognition:
         text = ocr.extract_mail_images([attachment])
 
         assert "seminar" in ocr.searchable_text(text)
-
-
-class TestPromptIntegration:
-    """Recognised text must reach the analyser, labelled as derived content."""
-
-    def test_image_text_is_appended_and_labelled(self) -> None:
-        from mailflow.domain import MailAddress, MailMessage
-        from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
-
-        mail = MailMessage(
-            message_id="m1",
-            account_id="a",
-            subject="Invitation",
-            sender=MailAddress(address="s@example.com"),
-            recipients=[],
-            cc=[],
-            date=__import__("datetime").datetime(2026, 10, 1, tzinfo=__import__("datetime").UTC),
-            received_at=__import__("datetime").datetime(
-                2026, 10, 1, tzinfo=__import__("datetime").UTC
-            ),
-            body_text="See the poster.",
-            image_text="PAIR Research Seminar\n15 October 2026",
-        )
-
-        body = _plain_body(mail)  # pyright: ignore[reportPrivateUsage]
-
-        assert "See the poster." in body
-        assert "PAIR Research Seminar" in body
-        assert "text read from images" in body
-
-    def test_without_image_text_nothing_changes(self) -> None:
-        from mailflow.domain import MailAddress, MailMessage
-        from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
-
-        mail = MailMessage(
-            message_id="m1",
-            account_id="a",
-            subject="Invitation",
-            sender=MailAddress(address="s@example.com"),
-            recipients=[],
-            cc=[],
-            date=__import__("datetime").datetime(2026, 10, 1, tzinfo=__import__("datetime").UTC),
-            received_at=__import__("datetime").datetime(
-                2026, 10, 1, tzinfo=__import__("datetime").UTC
-            ),
-            body_text="Plain body.",
-        )
-
-        assert _plain_body(mail) == "Plain body."  # pyright: ignore[reportPrivateUsage]

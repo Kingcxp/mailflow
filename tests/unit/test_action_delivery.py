@@ -16,7 +16,8 @@ from mailflow.i18n import I18n
 from mailflow.pipeline import PipelineEngine
 from mailflow.registry import ComponentRegistry
 from mailflow.service import MailFlowService
-from test_service import MemoryStorage, make_record
+
+from mailflow_test_support.service import MemoryStorage, make_record
 
 
 class FakeNotifier:

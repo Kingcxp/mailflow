@@ -7,7 +7,8 @@ from mailflow.domain import Attachment, MailRecord
 from mailflow.ocr import searchable_mail_text
 from mailflow_testkit.fakes import make_mail
 from mailflow_tui.search import build_search_matcher
-from test_commands import commands_service, make_record
+
+from mailflow_test_support.commands import commands_service, make_record
 
 
 def test_literal_search_is_case_insensitive_by_default() -> None:

@@ -31,10 +31,11 @@ from mailflow_tui.app import (
     RuntimePane,
 )
 from mailflow_tui.remote import RemoteServiceAdapter
-from test_commands import commands_service, make_record
 from textual.containers import ScrollableContainer
 from textual.coordinate import Coordinate
 from textual.widgets import Button, DataTable, Input, Select, Static, TabbedContent, TextArea
+
+from mailflow_test_support.commands import commands_service, make_record
 
 
 @pytest.fixture(params=[False, True], ids=["local", "remote"])

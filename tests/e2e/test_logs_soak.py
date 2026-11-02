@@ -11,8 +11,9 @@ from typing import Any
 
 import pytest
 from mailflow_tui.app import LogsPane
-from test_splash import make_app
 from textual.widgets import TabbedContent
+
+from mailflow_test_support.app import make_app
 
 
 async def _tick_once(app: Any, pilot: Any) -> float:

@@ -12,7 +12,8 @@ from mailflow.commands import CommandRouter
 from mailflow.config import NotifierConfig
 from mailflow.permissions import AccessDenied, PermissionContext, current_context, permission_scope
 from mailflow_server.app import create_app
-from test_commands import commands_service, make_record
+
+from mailflow_test_support.commands import commands_service, make_record
 
 VIEWER = PermissionContext("reader", "telegram", "bot-1", "chat-1")
 

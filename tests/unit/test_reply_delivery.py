@@ -13,20 +13,10 @@ from mailflow.domain import ReplyDraft, ReplyState
 from mailflow.replies import ReplyError, ReplySourceError
 from mailflow.service import MailFlowService
 from mailflow_mail_imap.plugin import IMAPSource
-from test_service import RecordingSource
-from test_service import service as service
 
-
-class WaitingSource(RecordingSource):
-    def __init__(self) -> None:
-        super().__init__()
-        self.started = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def send_reply(self, mail_id: str, draft: ReplyDraft) -> None:
-        self.started.set()
-        await self.release.wait()
-        await super().send_reply(mail_id, draft)
+from mailflow_test_support.replies import WaitingSource
+from mailflow_test_support.service import RecordingSource
+from mailflow_test_support.service import service as service
 
 
 async def test_failed_send_preserves_body_and_requires_a_new_token(
