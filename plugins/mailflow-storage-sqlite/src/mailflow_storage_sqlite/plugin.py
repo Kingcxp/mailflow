@@ -335,6 +335,18 @@ class SQLiteStorage:
             ).fetchone()
         return ReplyDraft.model_validate_json(row[0]) if row else None
 
+    async def list_drafts(self, mail_id: str) -> list[ReplyDraft]:
+        async with self._lock:
+            rows = (
+                self._check_conn()
+                .execute(
+                    "SELECT draft_json FROM drafts WHERE json_extract(draft_json, '$.mail_id') = ?",
+                    (mail_id,),
+                )
+                .fetchall()
+            )
+        return [ReplyDraft.model_validate_json(row[0]) for row in rows]
+
     async def delete_draft(self, draft_id: str) -> None:
         async with self._lock:
             conn = self._check_conn()

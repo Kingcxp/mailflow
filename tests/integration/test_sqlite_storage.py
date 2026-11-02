@@ -237,10 +237,17 @@ class TestSQLiteStorage:
             body="body",
         )
         await storage.save_draft(draft)
+        other = draft.model_copy(update={"draft_id": "d2", "mail_id": "other-mail"})
+        await storage.save_draft(other)
+        await storage.close()
+        await storage.initialize()
+        assert await storage.list_drafts("r1") == [draft]
+        assert await storage.list_drafts("other-mail") == [other]
         loaded = await storage.get_draft("d1")
         assert loaded is not None and loaded == draft
         await storage.delete_draft("d1")
         assert await storage.get_draft("d1") is None
+        assert await storage.list_drafts("r1") == []
 
         await storage.set_preference("language", "zh-CN")
         assert await storage.get_preference("language") == "zh-CN"

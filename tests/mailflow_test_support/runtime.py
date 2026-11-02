@@ -164,6 +164,9 @@ class FakeStorage:
     async def get_draft(self, draft_id: str) -> ReplyDraft | None:
         return None
 
+    async def list_drafts(self, mail_id: str) -> list[ReplyDraft]:
+        return []
+
     async def delete_draft(self, draft_id: str) -> None:
         pass
 

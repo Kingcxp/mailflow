@@ -44,6 +44,10 @@ async def test_local_and_remote_edits_share_state_and_one_confirmation(
     edited = await remote.edit_draft(draft.draft_id, "Re: Hello", "Remote body")
     local = await service.get_draft(draft.draft_id)
     assert local == edited
+    opened = await asyncio.gather(
+        remote.create_reply("m1", resume=True), service.create_reply("m1", resume=True)
+    )
+    assert opened == [edited, edited]
     prepared = await service.prepare_reply(draft.draft_id)
     assert (await remote.get_draft(draft.draft_id)) == prepared
     results = await asyncio.gather(
@@ -56,6 +60,7 @@ async def test_local_and_remote_edits_share_state_and_one_confirmation(
     assert stored is not None and stored.state is ReplyState.SENT
     assert stored == await service.get_draft(draft.draft_id)
     assert len(cast(RecordingSource, service.sources["acct-1"]).sent) == 1
+    assert (await remote.create_reply("m1", resume=True)).draft_id != draft.draft_id
 
 
 async def test_remote_observes_sending_and_cannot_cancel_in_flight_reply(
@@ -71,6 +76,7 @@ async def test_remote_observes_sending_and_cannot_cancel_in_flight_reply(
     in_flight = await remote.get_draft(draft.draft_id)
     assert in_flight is not None and in_flight.state is ReplyState.SENDING
     assert in_flight == await service.get_draft(draft.draft_id)
+    assert await remote.create_reply("m1", resume=True) == in_flight
     cancel = asyncio.create_task(remote.cancel_reply(draft.draft_id))
     await asyncio.sleep(0)
     assert not cancel.done()
@@ -97,6 +103,7 @@ async def test_remote_failure_keeps_body_and_translates_the_same_error_code(
     failed = await remote.get_draft(draft.draft_id)
     assert failed is not None and failed.state is ReplyState.FAILED
     assert failed.body == "Saved remotely" and failed == await service.get_draft(draft.draft_id)
+    assert await remote.create_reply("m1", resume=True) == failed
     source.fail_send = False
     retry = await remote.prepare_reply(draft.draft_id)
     assert (await remote.confirm_reply(draft.draft_id, retry.token or "")).state is ReplyState.SENT
@@ -114,3 +121,4 @@ async def test_remote_cancel_invalidates_prepared_token(
     with pytest.raises(PermissionError):
         await remote.confirm_reply(draft.draft_id, prepared.token or "")
     assert await remote.get_draft("missing") is None
+    assert (await remote.create_reply("m1", resume=True)).draft_id != draft.draft_id

@@ -307,8 +307,9 @@ class RemoteClient:
         result = await self._request("DELETE", f"/actions/{item_id}")
         return bool(result["ok"])
 
-    async def create_reply(self, mail_id: str) -> dict[str, Any]:
-        result: dict[str, Any] = await self._request("POST", f"/mails/{mail_id}/replies")
+    async def create_reply(self, mail_id: str, *, resume: bool = False) -> dict[str, Any]:
+        suffix = "?resume=true" if resume else ""
+        result: dict[str, Any] = await self._request("POST", f"/mails/{mail_id}/replies{suffix}")
         return result
 
     async def get_draft(self, draft_id: str) -> dict[str, Any] | None:

@@ -366,6 +366,10 @@ async def check_component(
             )
             await call("save_draft", draft)
             await call("get_draft", "draft")
+            if await call("list_drafts", record.record_id) != [draft]:
+                raise TypeError("drafts did not round-trip")
+            if await call("list_drafts", "other-mail"):
+                raise TypeError("draft lookup crossed mail boundaries")
             await call("delete_draft", "draft")
             await call("set_preference", "validation", "yes")
             if await call("get_preference", "validation") != "yes":

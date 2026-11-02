@@ -398,8 +398,10 @@ class RemoteServiceAdapter:
         except (httpx.HTTPError, RuntimeError):
             raise ReplyError("reply.connection_failed", self.t("reply.connection_failed")) from None
 
-    async def create_reply(self, mail_id: str) -> ReplyDraft:
-        return ReplyDraft.model_validate(await self._reply_call(self.client.create_reply(mail_id)))
+    async def create_reply(self, mail_id: str, *, resume: bool = False) -> ReplyDraft:
+        return ReplyDraft.model_validate(
+            await self._reply_call(self.client.create_reply(mail_id, resume=resume))
+        )
 
     async def get_draft(self, draft_id: str) -> ReplyDraft | None:
         data = await self._reply_call(self.client.get_draft(draft_id))

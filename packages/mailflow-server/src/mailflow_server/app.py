@@ -241,8 +241,8 @@ def create_app(service: MailFlowService) -> FastAPI:
             raise HTTPException(status_code=404, detail=error_info(exc, service.t)) from None
 
     @app.post("/mails/{record_id}/replies")
-    async def create_reply(record_id: str, _: None = Depends(guard)) -> Any:
-        return await reply_result(service.create_reply(record_id))
+    async def create_reply(record_id: str, resume: bool = False, _: None = Depends(guard)) -> Any:
+        return await reply_result(service.create_reply(record_id, resume=resume))
 
     @app.get("/drafts/{draft_id}")
     async def get_draft(draft_id: str, _: None = Depends(guard)) -> Any:

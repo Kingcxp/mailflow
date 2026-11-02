@@ -675,6 +675,7 @@ class MailFlowService:
         self.bot_server: Any | None = None
         self.commands: Any | None = None  # CommandRouter wired by mailflow.commands
         self._reply_locks = _DraftLocks()
+        self._reply_create_lock = asyncio.Lock()
         self._seminar_lock = asyncio.Lock()
 
     # -- lifecycle ---------------------------------------------------------------
@@ -3819,8 +3820,28 @@ Return every candidate in this batch."""
     # -- reply workflow ---------------------------------------------------------------------
 
     @admin_operation
-    async def create_reply(self, mail_id: str) -> ReplyDraft:
-        record = await self._reply_record(mail_id)
+    async def create_reply(self, mail_id: str, *, resume: bool = False) -> ReplyDraft:
+        """Open an unfinished draft when requested; explicit creation stays fresh."""
+        async with self._reply_create_lock:
+            record = await self._reply_record(mail_id)
+            if resume:
+                try:
+                    drafts = await self.storage.list_drafts(mail_id)
+                except Exception:
+                    raise self._reply_error("reply.storage_failed") from None
+                active = [
+                    draft
+                    for draft in drafts
+                    if draft.state not in (ReplyState.SENT, ReplyState.CANCELLED)
+                ]
+                if active:
+                    return max(active, key=lambda draft: to_utc(draft.updated_at)).model_copy(
+                        deep=True
+                    )
+            return await self._create_reply(record)
+
+    async def _create_reply(self, record: MailRecord) -> ReplyDraft:
+        mail_id = record.record_id
         draft = ReplyDraft(
             draft_id=uuid4().hex[:16],
             mail_id=mail_id,

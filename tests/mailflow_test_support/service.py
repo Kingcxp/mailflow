@@ -122,6 +122,9 @@ class MemoryStorage:
     async def get_draft(self, draft_id: str) -> ReplyDraft | None:
         return self.drafts.get(draft_id)
 
+    async def list_drafts(self, mail_id: str) -> list[ReplyDraft]:
+        return [draft for draft in self.drafts.values() if draft.mail_id == mail_id]
+
     async def delete_draft(self, draft_id: str) -> None:
         self.drafts.pop(draft_id, None)
 

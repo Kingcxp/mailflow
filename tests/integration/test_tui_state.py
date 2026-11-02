@@ -444,3 +444,36 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         await pilot.pause()
         assert app.screen is draft_screen
         assert draft_screen.query_one("#reply-body", TextArea).text == "My unfinished reply"
+        draft_id = next(iter(cast(MemoryStorage, service.storage).drafts))
+        failures.add(f"/drafts/{draft_id}")
+        await pilot.press("escape")
+        await settle(pilot)
+        assert app.screen is draft_screen
+        assert draft_screen.query_one("#reply-body", TextArea).text == "My unfinished reply"
+        assert view.t("reply.connection_failed") in text(draft_screen, "#reply-status")
+        failures.clear()
+        await pilot.press("escape")
+        await settle(pilot)
+        assert app.screen is not draft_screen
+        app.query_one("#btn-reply", Button).press()
+        await settle(pilot)
+        reopened = app.screen
+        assert isinstance(reopened, ReplyModal)
+        assert reopened.query_one("#reply-body", TextArea).text == "My unfinished reply"
+        saved = await service.get_draft(draft_id)
+        assert saved is not None and saved.body == "My unfinished reply"
+        assert len(cast(MemoryStorage, service.storage).drafts) == 1
+        # Discard is explicit, confirmed, and no longer confused with closing.
+        reopened.query_one("#reply-cancel", Button).press()
+        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        app.screen.query_one("#confirm-cancel", Button).press()
+        await settle(pilot)
+        assert app.screen is reopened
+        reopened.query_one("#reply-cancel", Button).press()
+        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        app.screen.query_one("#confirm-run", Button).press()
+        await settle(pilot)
+        app.query_one("#btn-reply", Button).press()
+        await settle(pilot)
+        assert isinstance(app.screen, ReplyModal)
+        assert app.screen.query_one("#reply-body", TextArea).text == "I will attend."

@@ -33,6 +33,7 @@ from mailflow_test_support.tui import (
     find_settings_status,
     set_select_value,
 )
+from mailflow_test_support.ui import until
 
 # The deadline is relative: an absolute date would age into the past and be
 # retired by the schedule-expiry sweep, which is not what this fixture tests.
@@ -600,6 +601,21 @@ async def test_reply_letter_template_and_toolbar(
             assert draft is not None
             stored = await service.get_draft(draft.draft_id)
             assert stored is not None and stored.body == textarea.text
+            await pilot.press("escape")
+            await pilot.pause()
+            app.query_one("#btn-reply", Button).press()
+            await until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ReplyModal)
+                    and app.screen.query_one("#reply-body", TextArea).text == stored.body
+                ),
+            )
+            modal = app.screen
+            assert isinstance(modal, ReplyModal)
+            textarea = modal.query_one("#reply-body", TextArea)
+            assert textarea.text == stored.body
+            assert len(await service.storage.list_drafts(record.record_id)) == 1
             # Preparing saves the editor contents, and later edits disable confirm.
             modal.query_one("#reply-prepare", Button).press()
             await pilot.pause(0.1)
@@ -623,6 +639,19 @@ async def test_reply_letter_template_and_toolbar(
             assert failed.body == textarea.text
             assert modal.query_one("#reply-confirm", Button).disabled
             assert not modal.query_one("#reply-prepare", Button).disabled
+            await pilot.press("escape")
+            await pilot.pause()
+            app.query_one("#btn-reply", Button).press()
+            await until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ReplyModal)
+                    and app.screen.query_one("#reply-body", TextArea).text == failed.body
+                ),
+            )
+            modal = app.screen
+            assert isinstance(modal, ReplyModal)
+            assert modal.query_one("#reply-body", TextArea).text == failed.body
             monkeypatch.setattr(source, "send_reply", original_send)
             modal.query_one("#reply-prepare", Button).press()
             await pilot.pause(0.1)
@@ -1443,15 +1472,16 @@ async def test_bulk_reparse_stop_covers_reanalyze_failed_and_never_latches(
                 await pilot.pause(0.05)
             await pilot.pause(0.1)
             assert not failed_button.disabled
-            await app.workers.wait_for_complete()
-            table = app.query_one("#mail-table", DataTable)
+            await cast(Any, app.workers).wait_for_complete()
+            table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
             table.focus()
             table.move_cursor(row=0)
             await pilot.press("space", "down", "space")
-            expected = {
-                (await service.get_mail(str(key.value))).mail.message_id
-                for key in list(table.rows)[:2]
-            }
+            expected: set[str] = set()
+            for key in list(table.rows)[:2]:
+                selected = await service.get_mail(str(key.value))
+                assert selected is not None
+                expected.add(selected.mail.message_id)
             processed.clear()
             app.query_one("#btn-reparse", Button).press()
             for _ in range(80):
@@ -1459,7 +1489,7 @@ async def test_bulk_reparse_stop_covers_reanalyze_failed_and_never_latches(
                     app.screen.query_one("#confirm-run", Button).press()
                     break
                 await pilot.pause(0.05)
-            await app.workers.wait_for_complete()
+            await cast(Any, app.workers).wait_for_complete()
             assert set(processed) == expected, "only the two checked messages are re-analyzed"
             app.exit()
             await pilot.pause()
