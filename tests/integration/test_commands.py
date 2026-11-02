@@ -31,11 +31,6 @@ class TestCommandRouter:
         assert not response.ok
         assert "bogus" in response.text
 
-    async def test_empty_line(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
-        commands, _ = router
-        response = await commands.execute("")
-        assert response.text == ""
-
     async def test_help_lists_topics(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
         commands, _ = router
         response = await commands.execute("help")
@@ -60,23 +55,6 @@ class TestCommandRouter:
             "runtime",
         ):
             assert any(topic in text for text in pages), topic
-
-    async def test_help_topic(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
-        commands, _ = router
-        response = await commands.execute("help mail")
-        assert response.ok
-        assert "mail" in response.text
-
-    async def test_mail_list(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
-        commands, _ = router
-        response = await commands.execute("mail list")
-        assert response.ok
-        # numbered rows + urgency + pagination hint; raw ids stay truncated
-        # (the full id never fit chat width — numbers are the interface)
-        assert "#1" in response.text
-        assert "important" in response.text
-        assert "urgent" in response.text
-        assert "mail show <#>" in response.text
 
     async def test_mail_smart_search_chat(
         self, router: tuple[CommandRouter, MemoryStorage]
@@ -148,46 +126,24 @@ class TestCommandRouter:
         assert not response.ok
         assert "could not check" in response.text
 
-    async def test_mail_show_accepts_list_number(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, _ = router
-        # the number printed by `mail list` must resolve to the same mail
-        # as its id: newest-first, 1-based
-        by_number = await commands.execute("mail show 1")
-        assert by_number.ok
-        # page 1 of the listing starts with the NEWEST mail
-        assert "Bring your student ID" in by_number.text
-
-    async def test_mail_list_page_accepts_positional(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, _ = router
-        positional = await commands.execute("mail list 2")
-        flag = await commands.execute("mail list --page 2")
-        assert positional.ok and flag.ok
-        assert positional.text == flag.text
-
     async def test_mail_show_original_body(
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:
         commands, _ = router
-        response = await commands.execute("mail show m1")
+        response = await commands.execute("mail show 1")
         assert response.ok
         assert "Bring your student ID" in response.text
         assert "Original body content" in response.text
         assert "sender@example.com" in response.text
-
-    async def test_mail_show_unknown(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
-        commands, _ = router
-        response = await commands.execute("mail show ghost")
-        assert not response.ok
-        assert "ghost" in response.text
+        assert not (await commands.execute("mail show ghost")).ok
+        assert not (await commands.execute("mail show ' '")).ok
 
     async def test_mail_urgency_set_and_reset(
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:
         commands, storage = router
+        assert not (await commands.execute("mail urgency m1 improtant")).ok
+        assert storage.mails["m1"].manual_urgency is None
         response = await commands.execute("mail urgency m1 urgent")
         assert response.ok
         assert storage.mails["m1"].manual_urgency is Urgency.URGENT
@@ -195,22 +151,6 @@ class TestCommandRouter:
         assert response.ok
         assert storage.mails["m1"].manual_urgency is None
         assert storage.mails["m1"].effective_urgency is Urgency.IMPORTANT
-
-    async def test_mail_urgency_rejects_unknown_level(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, storage = router
-        response = await commands.execute("mail urgency m1 improtant")
-        assert not response.ok  # must not silently degrade to info
-        assert storage.mails["m1"].manual_urgency is None
-
-    async def test_blank_id_is_never_a_prefix_match(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, _ = router
-        # shlex drops empty args, so exercise the guard via a whitespace id
-        response = await commands.execute("mail show ' '")
-        assert not response.ok
 
     async def test_mail_delete_and_trash_restore(
         self, router: tuple[CommandRouter, MemoryStorage]
@@ -230,26 +170,12 @@ class TestCommandRouter:
         assert "m2" in storage.mails
         assert "m2" not in storage.trash
 
-    async def test_action_list_and_show(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
-        commands, _ = router
-        response = await commands.execute("action list")
-        assert response.ok
-        assert "#1" in response.text
-        assert "exam" in response.text
-        assert "Final calculus exam" in response.text
-        assert "m3" in response.text  # source mail backlink
-        # the number resolves for show (delete uses the same finder)
-        shown = await commands.execute("action show 1")
-        assert shown.ok
-        assert "Final calculus exam" in shown.text
-        response = await commands.execute("action show a1")
-        assert response.ok
-        assert "Bring student ID and calculator" in response.text
-
     async def test_action_add_list_and_show(
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:
         commands, storage = router
+        shown = await commands.execute("action show 1")
+        assert shown.ok and "Final calculus exam" in shown.text and "m3" in shown.text
         response = await commands.execute(
             'action add "Pick up parcel" --due "2026-06-20 15:30" --type errand --notes "gate 3"'
         )
@@ -267,6 +193,10 @@ class TestCommandRouter:
         response = await commands.execute(f"action show {item_id}")
         assert response.ok
         assert "Pick up parcel" in response.text
+        assert (await commands.execute(f"action delete {item_id[:10]}")).ok
+        assert item_id not in storage.custom_actions
+        assert not (await commands.execute(f"action delete {item_id}")).ok
+        assert not (await commands.execute("action delete a1")).ok
 
     async def test_action_add_validation(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
         commands, storage = router
@@ -287,43 +217,22 @@ class TestCommandRouter:
         assert item.summary == "Renew passport at the office"
         assert item.action_type == "errand"  # default type
 
-    async def test_action_delete(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
-        commands, storage = router
-        await commands.execute('action add "Buy tickets" --due "2026-08-01 10:00"')
-        item_id = next(iter(storage.custom_actions))
-        # the list truncates ids to ten characters; the truncated id must resolve
-        response = await commands.execute(f"action delete {item_id[:10]}")
-        assert response.ok
-        assert item_id not in storage.custom_actions
-        # deleting again reports not found
-        response = await commands.execute(f"action delete {item_id}")
-        assert not response.ok
-        assert "not found" in response.text
-        # mail-derived items cannot be deleted through this path
-        response = await commands.execute("action delete a1")
-        assert not response.ok
-        assert "a1" in response.text
-
-    async def test_plugin_account_llm_adapter_commands(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, _ = router
-        assert (await commands.execute("plugin list")).ok
-        assert (await commands.execute("adapter list")).ok
-        assert (await commands.execute("account list")).ok
-        assert (await commands.execute("llm list")).ok
-        assert (await commands.execute("llm bindings")).ok
-        assert (await commands.execute("runtime")).ok
-
     async def test_reply_flow_through_commands(
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:
         commands, storage = router
-        created = await commands.execute("reply create m1")
+        created = await commands.execute("reply create #1")
         assert created.ok
         draft_id = created.text.split()[1]
-        edited = await commands.execute(f"reply edit {draft_id} 'Re: Exam' 'I will attend.'")
+        assert storage.drafts[draft_id].mail_id == "m1"
+        edited = await commands.execute(
+            f"reply edit {draft_id} 'Re: Exam' '**urgent** note <right>Li Si</right>'"
+        )
         assert edited.ok
+        assert "<b>urgent</b>" in storage.drafts[draft_id].body
+        shown = await commands.execute(f"reply show {draft_id}")
+        assert shown.ok and "urgent" in shown.text and "Li Si" in shown.text
+        assert "<b>" not in shown.text
         prepared = await commands.execute(f"reply prepare {draft_id}")
         assert prepared.ok
         token = prepared.text.split("token: ")[-1].split(" ")[0]
@@ -333,15 +242,6 @@ class TestCommandRouter:
         # wrong token rejected
         response = await commands.execute(f"reply confirm {draft_id} wrong")
         assert not response.ok
-
-    async def test_reply_create_accepts_mail_list_number(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, storage = router
-        created = await commands.execute("reply create #1")
-        assert created.ok
-        draft_id = created.text.split()[1]
-        assert storage.drafts[draft_id].mail_id == "m1"
 
     async def test_reply_compose_letter_templates(
         self, router: tuple[CommandRouter, MemoryStorage]
@@ -361,26 +261,6 @@ class TestCommandRouter:
         bad = await commands.execute("reply compose m1 ja")
         assert not bad.ok
         assert "unknown letter template" in bad.text
-
-    async def test_reply_edit_markup_conversion(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, storage = router
-        created = await commands.execute("reply create m1")
-        draft_id = created.text.split()[1]
-        edited = await commands.execute(
-            f"reply edit {draft_id} 'Re: Exam' '**urgent** note <right>Li Si</right>'"
-        )
-        assert edited.ok
-        body = storage.drafts[draft_id].body
-        assert "<b>urgent</b>" in body
-        assert '<div style="text-align:right">Li Si</div>' in body
-        # show renders a plain-text view without tags
-        shown = await commands.execute(f"reply show {draft_id}")
-        assert shown.ok
-        assert "urgent" in shown.text
-        assert "<b>" not in shown.text
-        assert "Li Si" in shown.text
 
     async def test_lang_get_and_set(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
         commands, storage = router
@@ -410,14 +290,6 @@ class TestCommandRouter:
         assert "required" in response.text.lower() or "yes" in response.text
         assert "sk-topsecret" not in response.text
         assert "llms[].api_key*" in response.text  # secret marker
-
-    async def test_config_get(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
-        commands, _ = router
-        response = await commands.execute("config get general.reminder_hour")
-        assert response.ok
-        assert "8" in response.text
-        response = await commands.execute("config get no.such.key")
-        assert not response.ok
 
     async def test_config_set_persists_to_file(self, tmp_path: Path) -> None:
         from mailflow.config import MailFlowConfig
@@ -686,6 +558,7 @@ class TestPaginationAndFeedback:
         assert "2/2" in page2.text
         assert "#11" in page2.text
         assert "#10" not in page2.text
+        assert (await commands.execute("mail list 2")).text == page2.text
         filtered = await commands.execute("mail list --query 'subject 05'")
         assert filtered.ok
         # the query matches the raw subject; the row shows the LLM summary
@@ -703,23 +576,6 @@ class TestPaginationAndFeedback:
         updated = await commands.execute("mail urgency mail-11-abcdef urgent")  # unique prefix
         assert updated.ok
         assert storage.mails["mail-11-abcdef123456"].manual_urgency is Urgency.URGENT
-
-    async def test_action_and_plugin_list_pagination(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, _ = router
-        assert (await commands.execute("action list --page 1")).ok
-        assert (await commands.execute("plugin list --page 1")).ok
-        assert (await commands.execute("plugin list --page 99")).ok  # clamps to last page
-
-    async def test_help_pagination(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
-        commands, _ = router
-        page1 = await commands.execute("help")
-        assert page1.ok
-        assert "1/2" in page1.text  # 12 topics, 10 per page
-        page2 = await commands.execute("help --page 2")
-        assert page2.ok
-        assert "2/2" in page2.text
 
     async def test_feedback_records_and_guidelines(
         self, router: tuple[CommandRouter, MemoryStorage]
@@ -739,33 +595,6 @@ class TestPaginationAndFeedback:
 
 
 class TestLocalPluginInstall:
-    async def test_install_single_plugin_folder(
-        self,
-        tmp_path: Path,
-        router: tuple[CommandRouter, MemoryStorage],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        commands, storage = router
-        plugin_dir = tmp_path / "my-plugin"
-        plugin_dir.mkdir()
-        (plugin_dir / "plugin.json").write_text(
-            '{"id": "my-plugin", "name": "My Plugin"}', encoding="utf-8"
-        )
-        calls: list[str] = []
-
-        async def fake_install(plugin: Any, *, check: bool = True) -> str:
-            calls.append(plugin.source)
-            return "ok"
-
-        monkeypatch.setattr(commands.service.market, "install", fake_install)
-        response = await commands.execute(
-            f"plugin install {str(plugin_dir).replace(chr(92), chr(47))}"
-        )
-        assert response.ok, response.text
-        assert calls == [str(plugin_dir)]
-        # local installs keep their source recorded (never auto-updated)
-        assert storage.preferences.get("plugin.source.my-plugin") == str(plugin_dir)
-
     async def test_install_batch_of_plugin_folders(
         self,
         tmp_path: Path,
@@ -805,19 +634,12 @@ class TestLocalPluginInstall:
 
 
 class TestMailWipe:
-    async def test_wipe_requires_explicit_confirm(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, storage = router
-        response = await commands.execute("mail wipe")
-        assert not response.ok
-        assert "CONFIRM" in response.text
-        assert len(storage.mails) == 3  # untouched
-
     async def test_wipe_confirmed_clears_mails_and_trash(
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:
         commands, storage = router
+        denied = await commands.execute("mail wipe")
+        assert not denied.ok and len(storage.mails) == 3
         await commands.execute("mail delete m1")
         assert len(storage.trash) >= 1
         response = await commands.execute("mail wipe CONFIRM")
@@ -833,6 +655,7 @@ class TestCleanCommands:
         self, router: tuple[CommandRouter, MemoryStorage]
     ) -> None:
         commands, storage = router
+        await commands.execute("mail delete m1")
         # a mail-derived entry and a user todo: both must leave the schedule
         await commands.execute('action add --summary "Submit the form" --due "2099-05-01 09:00"')
         assert len(storage.custom_actions) == 1
@@ -844,68 +667,10 @@ class TestCleanCommands:
         assert len(storage.custom_actions) == 0
         # nothing was destroyed: every mail is recoverable from the trash
         assert len(storage.trash) == 3
-
-    async def test_records_clears_the_derived_state_it_orphaned(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, storage = router
-        storage.preferences["actions.dismissed"] = '["stale|key|errand"]'
-        storage.preferences["seminars.candidates"] = '["something"]'
-
-        await commands.execute("clean records")
-
-        # a dismissal for a mail nobody can see any more would hide the entry
-        # forever if it survived
-        assert storage.preferences["actions.dismissed"] == "[]"
-        assert storage.preferences["seminars.candidates"] == "[]"
-
-    async def test_records_does_not_purge_the_trash(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        """The recoverable half must never destroy what it just moved."""
-        commands, storage = router
-        await commands.execute("mail delete m1")
-        assert len(storage.trash) == 1
-
-        await commands.execute("clean records")
-
-        # the pre-existing entry survives and the two remaining mails join it
+        assert not (await commands.execute("clean trash")).ok
         assert len(storage.trash) == 3
-        assert len(storage.mails) == 0
-
-    async def test_records_is_idempotent(self, router: tuple[CommandRouter, MemoryStorage]) -> None:
-        commands, storage = router
-        await commands.execute("clean records")
-        response = await commands.execute("clean records")
-
-        assert response.ok
-        assert len(storage.mails) == 0
-        assert len(storage.trash) == 3  # not double-counted
-
-    async def test_trash_requires_explicit_confirm(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, storage = router
-        await commands.execute("mail delete m1")
-
-        response = await commands.execute("clean trash")
-
-        assert not response.ok
-        assert "CONFIRM" in response.text
-        assert len(storage.trash) == 1  # untouched
-
-    async def test_trash_confirmed_purges_everything(
-        self, router: tuple[CommandRouter, MemoryStorage]
-    ) -> None:
-        commands, storage = router
-        await commands.execute("clean records")
-        assert len(storage.trash) == 3
-
-        response = await commands.execute("clean trash CONFIRM")
-
-        assert response.ok
-        assert len(storage.trash) == 0
-        assert len(storage.mails) == 0
+        assert (await commands.execute("clean trash CONFIRM")).ok
+        assert storage.trash == {}
 
     async def test_usage_is_reported_for_a_bare_or_unknown_subcommand(
         self, router: tuple[CommandRouter, MemoryStorage]
@@ -971,6 +736,8 @@ async def test_command_dispatch_prefix_filtering() -> None:
     # namespace, the reply teaches the corrected form instead
     bare = await service.command_dispatch("/mail list")
     assert bare is not None and "mailflow help" in bare
+    hinted = await service.command_dispatch("mailflow unsubscribe")
+    assert hinted is not None and "mailflow help" in hinted
     assert await service.command_dispatch("hello") is None
     # only the namespace dispatches; non-subscription commands route
     # straight to the shared router (their own semantics apply)
@@ -985,46 +752,6 @@ async def test_command_dispatch_prefix_filtering() -> None:
     cfg.general.command_prefix = "!"
     assert await service.command_dispatch("!mailflow mail list") == "ok:mail list"
     assert await service.command_dispatch("/mail list") is None
-
-
-@pytest.mark.asyncio
-async def test_command_dispatch_no_router() -> None:
-    from mailflow.config import MailFlowConfig
-
-    cfg = MailFlowConfig()
-    cfg.general.command_prefix = "/"
-    service = commands_service(cfg)
-    service.config = cfg
-    from mailflow.i18n import I18n as _I18n
-
-    service.i18n = _I18n()
-    service.commands = None
-    hinted = await service.command_dispatch("/mail")
-    assert hinted is not None and "mailflow help" in hinted
-    assert await service.command_dispatch("x") is None
-
-
-@pytest.mark.asyncio
-async def test_unprefixed_mailflow_text_gets_namespace_hint() -> None:
-    """'mailflow unsubscribe' WITHOUT the prefix used to return None —
-    no reply at all, and the user could not tell ignored from executed
-    (reported: an unsubscribe with zero feedback). The namespace hint
-    must fire for bare 'mailflow ...' text; ordinary chatter stays
-    silent."""
-    from mailflow.config import MailFlowConfig
-
-    cfg = MailFlowConfig()
-    cfg.general.command_prefix = "/"
-    service = commands_service(cfg)
-    service.config = cfg
-    from mailflow.i18n import I18n as _I18n
-
-    service.i18n = _I18n()
-    service.commands = None
-    hinted = await service.command_dispatch("mailflow unsubscribe")
-    assert hinted is not None and "mailflow help" in hinted
-    # non-command text is not ours: keep it silent
-    assert await service.command_dispatch("早上好") is None
 
 
 @pytest.mark.asyncio

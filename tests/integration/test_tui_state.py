@@ -110,7 +110,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
     target.mail.sender = MailAddress(name="NameNeedle", address="sender@example.com")
     target.mail.body_text = "BodyNeedle"
     target.mail.attachments = [Attachment(filename="PosterNeedle.png")]
-    target.mail.image_text = "OCRNeedle"
+    target.mail.image_text = "OCRNeedle Research Se minar Room Y908"
     assert target.analysis is not None
     target.analysis.summary = "SummaryNeedle"
     await service.storage.save_mail(target)
@@ -127,6 +127,8 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
             "SummaryNeedle",
             "PosterNeedle",
             "OCRNeedle",
+            "seminar",
+            "room y908",
         ):
             search.value = query
             await settle(pilot)

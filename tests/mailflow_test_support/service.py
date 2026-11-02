@@ -141,6 +141,16 @@ class MemoryStorage:
         return self.custom_actions.pop(item_id, None) is not None
 
 
+class OrderedMemoryStorage(MemoryStorage):
+    """Tools receive the same newest-first inventory as persistent storage."""
+
+    async def list_mails(self, limit: int | None = None) -> list[MailRecord]:
+        ordered = sorted(
+            self.mails.values(), key=lambda record: record.mail.received_at, reverse=True
+        )
+        return ordered if limit is None else ordered[:limit]
+
+
 class RecordingSource:
     def __init__(self) -> None:
         self.sent: list[tuple[str, ReplyDraft]] = []

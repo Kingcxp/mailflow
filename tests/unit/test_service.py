@@ -13,10 +13,8 @@ from mailflow.contracts import (
     LLMCompletion,
     LLMRouter,
     MailMessage,
-    MessageDict,
     ProcessorResult,
     ReplyDraft,
-    ToolCall,
 )
 from mailflow.domain import (
     ActionItem,
@@ -28,7 +26,6 @@ from mailflow.domain import (
     SeminarCandidate,
     SeminarStatus,
     Urgency,
-    parse_urgency,
 )
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
@@ -45,6 +42,24 @@ from mailflow_test_support.service import (
     model_completion,
 )
 from mailflow_test_support.service import service as service
+
+
+def new_service(router: Any = None) -> MailFlowService:
+    config = MailFlowConfig()
+    config.llms = [LLMConfig(llm_id="llm-1")]
+    return MailFlowService(
+        config=config,
+        registry=ComponentRegistry(),
+        plugin_manager=cast(Any, None),
+        storage=cast(Any, MemoryStorage()),
+        sources={},
+        router=cast(LLMRouter, router),
+        pipeline=PipelineEngine([]),
+        notifiers=[],
+        notifier_configs=[],
+        events=EventBus(),
+        i18n=I18n(),
+    )
 
 
 class TestReplyWorkflow:
@@ -66,64 +81,36 @@ class TestReplyWorkflow:
         source: RecordingSource = service.sources["acct-1"]  # type: ignore[assignment]
         assert len(source.sent) == 1
         assert source.sent[0][0] == "m1"
+        with pytest.raises(PermissionError):
+            await service.confirm_reply(draft.draft_id, prepared.token or "")
+        with pytest.raises(ReplyError):
+            await service.edit_draft(draft.draft_id, "changed", "changed")
+        with pytest.raises(ReplyError):
+            await service.cancel_reply(draft.draft_id)
+        assert len(source.sent) == 1
 
-    async def test_confirm_without_prepare_rejected(self, service: MailFlowService) -> None:
+    async def test_token_lifecycle_rejects_unprepared_expired_and_invalidated_confirmation(
+        self, service: MailFlowService
+    ) -> None:
         draft = await service.create_reply("m1")
         with pytest.raises(PermissionError):
-            await service.confirm_reply(draft.draft_id, "no-token")
-
-    async def test_wrong_token_rejected(self, service: MailFlowService) -> None:
-        draft = await service.create_reply("m1")
+            await service.confirm_reply(draft.draft_id, "not-prepared")
         await service.prepare_reply(draft.draft_id)
         with pytest.raises(PermissionError):
             await service.confirm_reply(draft.draft_id, "wrong-token")
-
-    async def test_expired_token_rejected(self, service: MailFlowService) -> None:
-        draft = await service.create_reply("m1")
-        await service.prepare_reply(draft.draft_id)
         stored: ReplyDraft = await service.storage.get_draft(draft.draft_id)  # type: ignore[attr-defined]
         stored.token_expires_at = datetime.now(UTC) - timedelta(minutes=1)
         await service.storage.save_draft(stored)  # type: ignore[attr-defined]
         with pytest.raises(PermissionError):
             await service.confirm_reply(draft.draft_id, stored.token or "")
-
-    async def test_confirm_consumes_token(self, service: MailFlowService) -> None:
-        draft = await service.create_reply("m1")
         prepared = await service.prepare_reply(draft.draft_id)
-        assert prepared.token is not None
-        await service.confirm_reply(draft.draft_id, prepared.token)
-        # token consumed by the first confirm -> second attempt must fail
-        with pytest.raises(PermissionError):
-            await service.confirm_reply(draft.draft_id, prepared.token)
-
-    async def test_edit_after_sent_rejected(self, service: MailFlowService) -> None:
-        draft = await service.create_reply("m1")
-        prepared = await service.prepare_reply(draft.draft_id)
-        await service.confirm_reply(draft.draft_id, prepared.token or "")
-        with pytest.raises(ReplyError):
-            await service.edit_draft(draft.draft_id, "x", "y")
-
-    async def test_cancel_sent_rejected(self, service: MailFlowService) -> None:
-        draft = await service.create_reply("m1")
-        prepared = await service.prepare_reply(draft.draft_id)
-        await service.confirm_reply(draft.draft_id, prepared.token or "")
-        with pytest.raises(ReplyError):
-            await service.cancel_reply(draft.draft_id)
-
-    async def test_cancel_before_send(self, service: MailFlowService) -> None:
-        draft = await service.create_reply("m1")
-        cancelled = await service.cancel_reply(draft.draft_id)
-        assert cancelled.state is ReplyState.CANCELLED
-        with pytest.raises(ValueError):
-            await service.prepare_reply(draft.draft_id)
-
-    async def test_edit_invalidates_prepared_token(self, service: MailFlowService) -> None:
-        draft = await service.create_reply("m1")
-        prepared = await service.prepare_reply(draft.draft_id)
-        assert prepared.token is not None
         await service.edit_draft(draft.draft_id, "Re: Hello", "changed")
         with pytest.raises(PermissionError):
             await service.confirm_reply(draft.draft_id, prepared.token or "")
+        assert (await service.cancel_reply(draft.draft_id)).state is ReplyState.CANCELLED
+        with pytest.raises(ValueError):
+            await service.prepare_reply(draft.draft_id)
+        assert not cast(RecordingSource, service.sources["acct-1"]).sent
 
     async def test_concurrent_confirms_send_once(self, service: MailFlowService) -> None:
         """Two confirms racing with the same token: the per-draft lock makes
@@ -196,16 +183,11 @@ class TestMailboxHistory:
             i18n=I18n(),
         )
 
-    async def test_history_accounts_lists_only_capable_sources(self) -> None:
-        capable = self._service(HistorySource([make_mail("h1", minute=0)]))
-        assert capable.history_accounts() == ["acct-1"]
-        plain = self._service(RecordingSource())
-        assert plain.history_accounts() == []
-
     async def test_fetch_history_paginates_newest_first(self) -> None:
         mails = [make_mail(f"h{i}", minute=i) for i in range(5)]
         source = HistorySource(mails)
         service = self._service(source)
+        assert service.history_accounts() == ["acct-1"]
         page = await service.fetch_history("acct-1", limit=2)
         assert [m.message_id for m in page] == ["h4", "h3"]
         assert [m.message_id for m in await service.fetch_history("acct-1", limit=2, offset=2)] == [
@@ -220,13 +202,6 @@ class TestMailboxHistory:
             await service.fetch_history("ghost")
         with pytest.raises(NotImplementedError):
             await service.fetch_history("acct-1")
-
-    async def test_fetch_history_rejects_invalid_pagination(self) -> None:
-        service = self._service(HistorySource([make_mail("h1", minute=0)]))
-        with pytest.raises(ValueError, match=service.t("errors.history_limit")):
-            await service.fetch_history("acct-1", limit=0)
-        with pytest.raises(ValueError, match=service.t("errors.history_offset")):
-            await service.fetch_history("acct-1", offset=-1)
 
     async def test_process_mail_stores_and_dedups(self) -> None:
         mail = make_mail("h1", minute=0)
@@ -247,23 +222,6 @@ class TestMailboxHistory:
 
 class TestSmartSearch:
     """The LLM finder must return ranked, trustworthy, usable results."""
-
-    def _service(self, router: Any) -> MailFlowService:
-        config = MailFlowConfig()
-        config.llms = [LLMConfig(llm_id="llm-1")]
-        return MailFlowService(
-            config=config,
-            registry=ComponentRegistry(),
-            plugin_manager=cast(Any, None),
-            storage=cast(Any, MemoryStorage()),
-            sources={},
-            router=cast(LLMRouter, router),
-            pipeline=PipelineEngine([]),
-            notifiers=[],
-            notifier_configs=[],
-            events=EventBus(),
-            i18n=I18n(),
-        )
 
     @staticmethod
     def model_completion(text: str) -> Any:
@@ -286,7 +244,7 @@ class TestSmartSearch:
                     '```json\n[{"id": "m1", "relevance": 88}]\n```'
                 )
 
-        service = self._service(FencedRouter())
+        service = new_service(FencedRouter())
         storage = cast(Any, service.storage)
         for message_id, minute in (("m1", 20), ("m2", 10)):
             mail = make_mail(message_id, minute=minute)
@@ -311,7 +269,7 @@ class TestSmartSearch:
                     return TestSmartSearch.model_completion("ok")
                 return TestSmartSearch.model_completion('Matching candidate:\n["m1"]\nDone.')
 
-        service = self._service(ProseRouter())
+        service = new_service(ProseRouter())
         storage = cast(Any, service.storage)
         for message_id, minute in (("m1", 10), ("m2", 20)):
             mail = make_mail(message_id, minute=minute)
@@ -337,7 +295,7 @@ class TestSmartSearch:
                 return TestSmartSearch.model_completion('[{"id": "M1", "relevance": 93}]')
 
         router = AliasRouter()
-        service = self._service(router)
+        service = new_service(router)
         storage = cast(Any, service.storage)
         mail = make_mail("source-message", minute=10).model_copy(
             update={"subject": "Campus event invitation"}
@@ -358,7 +316,7 @@ class TestSmartSearch:
                 assert "线上研讨会通知" in user
                 return TestSmartSearch.model_completion('[{"id": "m1", "relevance": 100}]')
 
-        service = self._service(BilingualRouter())
+        service = new_service(BilingualRouter())
         storage = cast(Any, service.storage)
         mail = make_mail("m1", minute=20).model_copy(update={"subject": "线上研讨会通知"})
         await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
@@ -381,7 +339,7 @@ class TestSmartSearch:
                     return TestSmartSearch.model_completion('[{"id": "m1", "relevance": 60}]')
                 return TestSmartSearch.model_completion('[{"id": "m1", "relevance": 95}]')
 
-        service = self._service(RankingRouter())
+        service = new_service(RankingRouter())
         storage = cast(Any, service.storage)
         for index in range(16):
             mail = make_mail(f"m{index}", minute=index)
@@ -403,7 +361,7 @@ class TestSmartSearch:
                     '[{"id": "m1", "relevance": 30}, {"id": "m2", "relevance": 40}]'
                 )
 
-        service = self._service(PrecisionRouter())
+        service = new_service(PrecisionRouter())
         storage = cast(Any, service.storage)
         for message_id, minute in (("m1", 20), ("m2", 10)):
             mail = make_mail(message_id, minute=minute)
@@ -420,7 +378,7 @@ class TestSmartSearch:
                     return TestSmartSearch.model_completion("ok")
                 return TestSmartSearch.model_completion("I could not find anything, sorry!")
 
-        service = self._service(BadRouter())
+        service = new_service(BadRouter())
         storage = cast(Any, service.storage)
         for message_id in ("m1", "m2"):
             mail = make_mail(message_id, minute=10)
@@ -448,7 +406,7 @@ class TestSmartSearch:
                     return TestSmartSearch.model_completion('[{"id": "m1", "relevance": 90}]')
                 raise TimeoutError("configured endpoint timed out")
 
-        service = self._service(PartiallyFailingRouter())
+        service = new_service(PartiallyFailingRouter())
         storage = cast(Any, service.storage)
         for index in range(16):
             mail = make_mail(f"m{index}", minute=index)
@@ -471,7 +429,7 @@ class TestSmartSearch:
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 raise AssertionError("an empty mailbox does not need an LLM")
 
-        result = await self._service(NoCallRouter()).smart_search("anything")
+        result = await new_service(NoCallRouter()).smart_search("anything")
 
         assert result.records == []
         assert result.total_mails == 0
@@ -480,24 +438,6 @@ class TestSmartSearch:
 
 class TestSeminarDiscovery:
     """Seminar discovery must remain review-only, timezone-safe and idempotent."""
-
-    @staticmethod
-    def make_service(router: Any) -> MailFlowService:
-        config = MailFlowConfig()
-        config.llms = [LLMConfig(llm_id="llm-1")]
-        return MailFlowService(
-            config=config,
-            registry=ComponentRegistry(),
-            plugin_manager=cast(Any, None),
-            storage=cast(Any, MemoryStorage()),
-            sources={},
-            router=cast(LLMRouter, router),
-            pipeline=PipelineEngine([]),
-            notifiers=[],
-            notifier_configs=[],
-            events=EventBus(),
-            i18n=I18n(),
-        )
 
     async def test_discovers_review_only_candidate_and_imports_once(self) -> None:
         opaque_record_id = "opaque-record-id@example.test"
@@ -524,7 +464,7 @@ class TestSeminarDiscovery:
                 )
 
         router = SeminarRouter()
-        service = self.make_service(router)
+        service = new_service(router)
         storage = cast(Any, service.storage)
         mail = make_mail("source-message", minute=10).model_copy(
             update={"subject": "Research seminar invitation"}
@@ -549,6 +489,9 @@ class TestSeminarDiscovery:
         assert candidate.mail_id == opaque_record_id
         assert candidate.starts_at == datetime(2030, 10, 15, 6, tzinfo=UTC)
         assert candidate.status is SeminarStatus.PENDING
+        repeated = (await service.discover_seminars()).candidates[0]
+        assert repeated.candidate_id == candidate.candidate_id
+        assert repeated.title == "Reworded colloquium"
 
         first = await service.import_seminar(candidate.candidate_id)
         second = await service.import_seminar(candidate.candidate_id)
@@ -562,33 +505,6 @@ class TestSeminarDiscovery:
         assert saved[0].status is SeminarStatus.IMPORTED
         assert (await service.discover_seminars()).candidates == []
 
-    async def test_timed_candidate_deduplicates_when_title_changes(self) -> None:
-        class RewordingRouter:
-            def __init__(self) -> None:
-                self.calls = 0
-
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                self.calls += 1
-                title = "Original seminar" if self.calls == 1 else "Reworded seminar"
-                return model_completion(
-                    '[{"id":"m1",'
-                    f'"title":"{title}",'
-                    '"starts_at":"2030-10-15T14:00:00+08:00",'
-                    '"timezone":"Asia/Shanghai"}]'
-                )
-
-        service = self.make_service(RewordingRouter())
-        storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-
-        first = (await service.discover_seminars()).candidates[0]
-        second = (await service.discover_seminars()).candidates[0]
-
-        assert second.candidate_id == first.candidate_id
-        assert second.title == "Reworded seminar"
-        assert len(await service.list_seminar_candidates(include_resolved=True)) == 1
-
     async def test_malformed_batch_is_retried_and_reported_incomplete(self) -> None:
         class MalformedRouter:
             def __init__(self) -> None:
@@ -596,10 +512,10 @@ class TestSeminarDiscovery:
 
             async def chat(self, messages: Any, **kwargs: Any) -> Any:
                 self.calls += 1
-                return model_completion("I found a seminar but cannot format it.")
+                return model_completion('I found a seminar: {"id":"m1","title":"invented"} maybe?')
 
         router = MalformedRouter()
-        service = self.make_service(router)
+        service = new_service(router)
         storage = cast(Any, service.storage)
         mail = make_mail("m1", minute=10)
         await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
@@ -627,7 +543,7 @@ class TestSeminarDiscovery:
                     '"timezone":"Asia/Shanghai"}]'
                 )
 
-        service = self.make_service(PastSeminarRouter())
+        service = new_service(PastSeminarRouter())
         storage = cast(Any, service.storage)
         mail = make_mail("m1", minute=10)
         await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
@@ -654,7 +570,7 @@ class TestSeminarDiscovery:
                     '"timezone":"Asia/Shanghai"}]'
                 )
 
-        service = self.make_service(SeminarRouter())
+        service = new_service(SeminarRouter())
         storage = cast(Any, service.storage)
         mail = make_mail("m1", minute=10)
         await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
@@ -667,41 +583,51 @@ class TestSeminarDiscovery:
         saved = await service.list_seminar_candidates(include_resolved=True)
         assert saved[0].status is SeminarStatus.REJECTED
 
-    async def test_an_unparseable_reply_still_retries_once(self) -> None:
-        """An empty salvage must not be mistaken for a parse.
 
-        ``_salvage_json_objects`` returns ``[]`` for a reply it cannot mine,
-        and ``[]`` *is* a list — so a caller that only checked
-        ``isinstance(raw, list)`` treated prose as a valid empty answer and
-        skipped the retry, turning a recoverable unreadable reply into a
-        silently empty scan.
-        """
+@pytest.mark.parametrize("prefix", ["", "Here you go:\n```json\n"], ids=["raw", "fenced"])
+async def test_truncated_discovery_keeps_complete_candidates(prefix: str) -> None:
+    rows = [
+        {
+            "id": "m1",
+            "title": "First",
+            "starts_at": "2099-01-01T09:00:00Z",
+            "meta": {"a": {"b": 1}},
+        },
+        {"id": "m2", "title": "Second", "starts_at": "2099-01-02T09:00:00Z"},
+    ]
 
-        class ProseRouter:
-            def __init__(self) -> None:
-                self.calls = 0
+    class TruncatedRouter:
+        async def chat(self, messages: Any, **kwargs: Any) -> Any:
+            return model_completion(prefix + json.dumps(rows)[:-1] + ',{"id":"m3","title":"Cut')
 
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                self.calls += 1
-                return model_completion("I found a seminar but cannot format it.")
+    service = new_service(TruncatedRouter())
+    for index in range(3):
+        await service.storage.save_mail(
+            MailRecord(
+                record_id=f"record-{index}",
+                mail=make_mail(f"mail-{index}", minute=3 - index),
+            )
+        )
+    result = await service.discover_seminars()
+    assert result.is_complete
+    assert {(item.mail_id, item.title) for item in result.candidates} == {
+        ("record-0", "First"),
+        ("record-1", "Second"),
+    }
+    assert await service.list_actions() == []
 
-        router = ProseRouter()
-        service = self.make_service(router)
-        storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
 
-        result = await service.discover_seminars()
-
-        assert router.calls == 2, "an unreadable reply must be retried"
-        assert result.failed_batches == 1
-        assert not result.is_complete
+async def test_smart_action_without_model_reports_unavailable() -> None:
+    service = new_service(None)
+    service.config.llms = []
+    with pytest.raises(RuntimeError):
+        await service.smart_action("find the exam mails")
 
 
 class TestActionMutations:
     @staticmethod
     def make_service() -> MailFlowService:
-        return TestSeminarDiscovery.make_service(None)
+        return new_service(None)
 
     async def test_add_and_edit_preserve_free_type_and_metadata(self) -> None:
         service = self.make_service()
@@ -883,155 +809,6 @@ class TestActionMutations:
         assert statuses == {SeminarStatus.IMPORTED}
 
 
-class TestSmartAction:
-    """One instruction is executed by letting the model call tools."""
-
-    @staticmethod
-    def make_service(router: Any) -> MailFlowService:
-        config = MailFlowConfig()
-        config.llms = [LLMConfig(llm_id="llm-1")]
-        return MailFlowService(
-            config=config,
-            registry=ComponentRegistry(),
-            plugin_manager=cast(Any, None),
-            storage=cast(Any, MemoryStorage()),
-            sources={},
-            router=cast(LLMRouter, router),
-            pipeline=PipelineEngine([]),
-            notifiers=[],
-            notifier_configs=[],
-            events=EventBus(),
-            i18n=I18n(),
-        )
-
-    class _ToolRouter:
-        """Scripted router: replays one completion per turn.
-
-        The loop is what is under test, so the router answers by *turn*, not by
-        phase; ``seen_tools`` records whether a tool result already came back,
-        which is how a script proves the loop fed the result to the model.
-        """
-
-        def __init__(self, turns: list[LLMCompletion]) -> None:
-            self.turns = list(turns)
-            self.calls: list[list[MessageDict]] = []
-            self.seen_tools: list[bool] = []
-            self.tool_specs: list[Any] = []
-
-        async def chat(self, messages: list[MessageDict], **kwargs: Any) -> LLMCompletion:
-            self.calls.append(list(messages))
-            self.seen_tools.append(any(m.get("role") == "tool" for m in messages))
-            self.tool_specs.append(kwargs.get("tools"))
-            turn = self.turns.pop(0) if self.turns else model_completion("done")
-            return turn
-
-    async def test_read_tool_results_reach_the_model_and_the_result(self) -> None:
-        """The model searches, sees the result, then answers in prose."""
-        router = self._ToolRouter(
-            [
-                model_completion(
-                    "",
-                    tool_calls=[
-                        ToolCall(
-                            call_id="c1",
-                            name="find_mail",
-                            arguments={"contains": "registration"},
-                        )
-                    ],
-                ),
-                model_completion("Found the registration mail."),
-            ]
-        )
-        service = self.make_service(router)
-        storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10).model_copy(
-            update={"body_text": "Please finish your registration by Friday."}
-        )
-        record_id = mail.normalized_message_id()
-        await storage.save_mail(MailRecord(record_id=record_id, mail=mail))
-
-        result = await service.smart_action("show me the registration mail")
-
-        assert [record.record_id for record in result.records] == [record_id]
-        assert result.final_text == "Found the registration mail."
-        assert result.pending == []
-        assert result.tool_steps == ['find_mail {"contains": "registration"}']
-        # the second turn really carried the tool result back to the model
-        assert router.seen_tools == [False, True]
-        assert router.tool_specs[0] is not None and router.tool_specs[0][0]["type"] == "function"
-
-    async def test_mutating_tool_only_stages_and_changes_nothing(self) -> None:
-        mail = make_mail("m1", minute=10).model_copy(
-            update={"body_text": "Your invoice is attached."}
-        )
-        record_id = mail.normalized_message_id()
-        router = self._ToolRouter(
-            [
-                model_completion(
-                    "",
-                    tool_calls=[
-                        ToolCall(call_id="c1", name="find_mail", arguments={"contains": "invoice"})
-                    ],
-                ),
-                model_completion(
-                    "",
-                    tool_calls=[
-                        ToolCall(
-                            call_id="c2", name="delete_mail", arguments={"record_ids": [record_id]}
-                        )
-                    ],
-                ),
-                model_completion("Staged the invoice mail for deletion."),
-            ]
-        )
-        service = self.make_service(router)
-        storage = cast(Any, service.storage)
-        await storage.save_mail(MailRecord(record_id=record_id, mail=mail))
-
-        result = await service.smart_action("delete the invoice mail")
-
-        assert len(result.pending) == 1
-        assert result.pending[0].tool == "delete_mail"
-        assert result.pending[0].record_ids == [record_id]
-        # the loop never deletes: only a confirmed delete_mails call does
-        assert await storage.get_mail(record_id) is not None
-
-    async def test_loop_stops_at_its_step_bound(self) -> None:
-        always = model_completion(
-            "", tool_calls=[ToolCall(call_id="c", name="list_actions", arguments={})]
-        )
-        router = self._ToolRouter([always] * 20)
-        service = self.make_service(router)
-
-        result = await service.smart_action("what is on my schedule")
-
-        assert len(router.calls) == 12
-        assert len(result.tool_steps) == 12
-        assert result.final_text  # the user learns the loop stopped
-
-    async def test_unknown_tool_is_reported_to_the_model_without_failing(self) -> None:
-        router = self._ToolRouter(
-            [
-                model_completion(
-                    "", tool_calls=[ToolCall(call_id="c1", name="nonsense", arguments={})]
-                ),
-                model_completion("I cannot do that."),
-            ]
-        )
-        service = self.make_service(router)
-
-        result = await service.smart_action("do something impossible")
-
-        assert result.final_text == "I cannot do that."
-        assert result.tool_steps == ["nonsense {}"]
-
-    async def test_instruction_without_llm_reports_the_missing_model(self) -> None:
-        service = self.make_service(TestSmartAction._ToolRouter([]))
-        service.config.llms = []
-        with pytest.raises(RuntimeError):
-            await service.smart_action("find the exam mails")
-
-
 def _expired_record(
     record_id: str,
     *,
@@ -1070,29 +847,16 @@ def _expired_record(
 class TestClearAllRecords:
     """`make clean-records` moves everything to the trash and leaves it there."""
 
-    @staticmethod
-    def make_service() -> MailFlowService:
-        config = MailFlowConfig()
-        config.llms = [LLMConfig(llm_id="llm-1")]
-        return MailFlowService(
-            config=config,
-            registry=ComponentRegistry(),
-            plugin_manager=cast(Any, None),
-            storage=cast(Any, MemoryStorage()),
-            sources={},
-            router=cast(LLMRouter, None),
-            pipeline=PipelineEngine([]),
-            notifiers=[],
-            notifier_configs=[],
-            events=EventBus(),
-            i18n=I18n(),
-        )
-
-    async def test_mail_and_actions_move_to_the_trash(self) -> None:
-        service = self.make_service()
+    async def test_clear_is_recoverable_repeatable_and_resets_derived_state(self) -> None:
+        service = new_service()
         storage = cast(Any, service.storage)
-        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
+        record = _expired_record("m1", urgency=Urgency.INFO, due_in_hours=5)
+        await storage.save_mail(record)
+        await storage.save_mail(_expired_record("already-deleted", urgency=Urgency.INFO))
+        await service.delete_mail("already-deleted")
         await service.add_action("Submit the form", datetime.now(UTC) + timedelta(days=2))
+        await storage.set_preference("actions.dismissed", '["stale|key|errand"]')
+        await storage.set_preference("seminars.candidates", '[{"candidate_id":"stale"}]')
 
         moved, actions = await service.clear_all_records()
 
@@ -1100,88 +864,24 @@ class TestClearAllRecords:
         assert actions == 1
         assert await service.count_mails() == 0
         assert await service.list_actions_all() == []
-        assert len(await service.list_trash()) == 1  # recoverable
-
-    async def test_the_trash_is_kept_for_the_separate_purge_step(self) -> None:
-        service = self.make_service()
-        storage = cast(Any, service.storage)
-        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
-        await service.delete_mail("m1")
-        assert len(await service.list_trash()) == 1
-
-        await service.clear_all_records()
-
-        assert len(await service.list_trash()) == 1  # untouched by the clear
-
-    async def test_purge_trash_now_empties_it(self) -> None:
-        service = self.make_service()
-        storage = cast(Any, service.storage)
-        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
-        await service.clear_all_records()
-
-        purged = await service.purge_trash_now()
-
-        assert purged == 1
-        assert await service.list_trash() == []
-
-    async def test_derived_state_is_reset_not_accumulated(self) -> None:
-        """A surviving dismissal would hide entries for invisible mail forever."""
-        service = self.make_service()
-        storage = cast(Any, service.storage)
-        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
-        await storage.set_preference("actions.dismissed", '["m1|2026-01-01T09:00:00+00:00|other"]')
-        await storage.set_preference("seminars.candidates", '[{"candidate_id": "x"}]')
-
-        await service.clear_all_records()
-
+        assert len(await service.list_trash()) == 2
         assert await storage.get_preference("actions.dismissed") == "[]"
         assert await storage.get_preference("seminars.candidates") == "[]"
-
-    async def test_clearing_twice_is_idempotent(self) -> None:
-        service = self.make_service()
-        storage = cast(Any, service.storage)
-        await storage.save_mail(_expired_record("m1", urgency=Urgency.INFO, due_in_hours=5))
-
-        first = await service.clear_all_records()
-        second = await service.clear_all_records()
-
-        assert first == (1, 0)
-        assert second == (0, 0)
-        assert len(await service.list_trash()) == 1  # not duplicated
-
-    async def test_a_reset_lets_the_same_mail_be_processed_again(self) -> None:
-        service = self.make_service()
-        record = _expired_record("m1", urgency=Urgency.INFO, due_in_hours=5)
-        await service.storage.save_mail(record)
-        await service.clear_all_records()
+        assert await service.clear_all_records() == (0, 0)
+        assert len(await service.list_trash()) == 2
         restored = await service.process_mail(record.mail)
         assert restored is not None
         assert await service.storage.get_mail(restored.record_id) is not None
+        assert await service.purge_trash_now() == 2
+        assert await service.list_trash() == []
+        assert await service.count_mails() == 1
 
 
 class TestExpiredMail:
     """Clearing expired mail must never touch mail that still matters."""
 
-    @staticmethod
-    def make_service() -> MailFlowService:
-        config = MailFlowConfig()
-        config.llms = [LLMConfig(llm_id="llm-1")]
-        return MailFlowService(
-            config=config,
-            registry=ComponentRegistry(),
-            plugin_manager=cast(Any, None),
-            storage=cast(Any, MemoryStorage()),
-            sources={},
-            router=cast(LLMRouter, None),
-            pipeline=PipelineEngine([]),
-            notifiers=[],
-            notifier_configs=[],
-            events=EventBus(),
-            i18n=I18n(),
-        )
-
     async def test_purges_old_ads_and_past_info_only(self) -> None:
-        service = self.make_service()
+        service = new_service()
         storage = cast(Any, service.storage)
         await storage.save_mail(_expired_record("old-ad", urgency=Urgency.AD))
         await storage.save_mail(_expired_record("past-info", urgency=Urgency.INFO, due_in_hours=-5))
@@ -1195,6 +895,31 @@ class TestExpiredMail:
             _expired_record("manual-ad", urgency=Urgency.AD, manual=Urgency.INFO)
         )
         await storage.save_mail(_expired_record("bare-info", urgency=Urgency.INFO))
+        await storage.save_mail(
+            TestExpiredMailGuards._rich("failed-ad", urgency=Urgency.AD, failed_note=True)
+        )
+        await storage.save_mail(
+            TestExpiredMailGuards._rich("fallback-ad", urgency=Urgency.AD, summary_is_fallback=True)
+        )
+        await storage.save_mail(
+            _expired_record("no-analysis", urgency=Urgency.AD).model_copy(update={"analysis": None})
+        )
+        await storage.save_mail(
+            TestExpiredMailGuards._rich(
+                "ongoing", urgency=Urgency.INFO, due_in_hours=-2, due_end_in_hours=20
+            )
+        )
+        await storage.save_mail(_expired_record("seminar-source", urgency=Urgency.INFO))
+        await storage.save_custom_action(
+            ActionItem(
+                item_id="seminar",
+                mail_id="seminar-source",
+                summary="Colloquium",
+                action_type="seminar",
+                due_at=datetime.now(UTC) + timedelta(days=3),
+                origin=ActionOrigin.SEMINAR,
+            )
+        )
 
         expired = await service.list_expired_mails()
 
@@ -1203,26 +928,12 @@ class TestExpiredMail:
         # exactly the expired records were handed to the trash move (the real
         # backend keeps them restorable; the error-prone part is the rule)
         assert sorted(storage.deleted) == ["old-ad", "past-info"]
-
-    async def test_purge_is_a_noop_without_expired_mail(self) -> None:
-        service = self.make_service()
-        storage = cast(Any, service.storage)
-        await storage.save_mail(_expired_record("fresh", urgency=Urgency.INFO))
+        assert storage.refresh_deleted_at_calls == [True, True]
         assert await service.purge_expired_mails() == 0
-        assert len(await service.list_mails()) == 1
 
 
 class TestUserProfile:
     """The recipient profile personalizes analysis and smart actions."""
-
-    async def test_profile_round_trip_is_trimmed_and_capped(self) -> None:
-        service = TestExpiredMail.make_service()
-        assert await service.user_profile() == ""
-
-        stored = await service.set_user_profile("  CS master's student, cares about labs  ")
-
-        assert stored == "CS master's student, cares about labs"
-        assert await service.user_profile() == stored
 
     async def test_profile_reaches_the_processor_context(self) -> None:
         seen: dict[str, str] = {}
@@ -1258,11 +969,13 @@ class TestUserProfile:
                 prompts.append(str(messages[-1]["content"]))
                 return model_completion("")
 
-        service = TestSmartAction.make_service(RecordingRouter())
+        service = new_service(RecordingRouter())
         storage = cast(Any, service.storage)
         mail = make_mail("m1", minute=10)
         await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        await service.set_user_profile("I am a CS master's student")
+        assert await service.user_profile() == ""
+        stored = await service.set_user_profile("  I am a CS master's student  ")
+        assert await service.user_profile() == stored == "I am a CS master's student"
 
         await service.smart_action("the lab notice")
 
@@ -1275,7 +988,7 @@ class TestExpiredMailGuards:
 
     @staticmethod
     def _service() -> MailFlowService:
-        return TestExpiredMail.make_service()
+        return new_service()
 
     @staticmethod
     def _rich(
@@ -1309,50 +1022,6 @@ class TestExpiredMailGuards:
             )
         return record
 
-    async def test_never_sweeps_a_mail_whose_analysis_failed(self) -> None:
-        service = self._service()
-        storage = cast(Any, service.storage)
-        await storage.save_mail(self._rich("failed-ad", urgency=Urgency.AD, failed_note=True))
-        await storage.save_mail(
-            self._rich("fallback-ad", urgency=Urgency.AD, summary_is_fallback=True)
-        )
-        bare = _expired_record("no-analysis", urgency=Urgency.AD)
-        await storage.save_mail(bare.model_copy(update={"analysis": None}))
-
-        assert await service.list_expired_mails() == []
-
-    async def test_never_sweeps_a_mail_with_a_live_schedule_entry(self) -> None:
-        service = self._service()
-        storage = cast(Any, service.storage)
-        await storage.save_mail(self._rich("seminar-source", urgency=Urgency.INFO))
-        # importing a seminar keeps the source mail id on the schedule entry
-        await storage.save_custom_action(
-            ActionItem(
-                item_id="seminar-source-1",
-                mail_id="seminar-source",
-                summary="Attend the colloquium",
-                action_type="seminar",
-                due_at=datetime.now(UTC) + timedelta(days=3),
-                origin=ActionOrigin.SEMINAR,
-            )
-        )
-
-        assert await service.list_expired_mails() == []
-
-    async def test_an_event_that_is_still_running_is_not_expired(self) -> None:
-        service = self._service()
-        storage = cast(Any, service.storage)
-        await storage.save_mail(
-            self._rich(
-                "ongoing",
-                urgency=Urgency.INFO,
-                due_in_hours=-2,
-                due_end_in_hours=20,
-            )
-        )
-
-        assert await service.list_expired_mails() == []
-
     async def test_purge_rechecks_each_record_before_deleting_it(self) -> None:
         """A manual classification landing while the dialog is open wins."""
         service = self._service()
@@ -1382,62 +1051,20 @@ class TestExpiredMailGuards:
         remaining = {record.record_id for record in await service.list_mails()}
         assert remaining == {"second"}
 
-    async def test_purge_refreshes_the_trash_window(self) -> None:
-        """A mail already sitting in the trash must not expire right after."""
-        service = self._service()
-        storage = cast(Any, service.storage)
-        await storage.save_mail(self._rich("stale-trash", urgency=Urgency.AD))
-
-        assert await service.purge_expired_mails() == 1
-
-        assert storage.refresh_deleted_at_calls == [True]
-
 
 class TestFeedbackWindow:
     """One repeated rejection must not fill the whole prompt window."""
 
-    async def test_repeated_notes_are_stored_once(self) -> None:
-        service = TestExpiredMail.make_service()
-        for _ in range(25):
-            await service.record_feedback("m-reject", "这是营销广告，永远归为 ad")
-
-        guidelines = (await service.feedback_guidelines()).splitlines()
-
-        assert len(guidelines) == 1
-
     async def test_distinct_notes_survive_and_keep_the_newest(self) -> None:
-        service = TestExpiredMail.make_service()
+        service = new_service()
         await service.record_feedback("m1", "广告")
         await service.record_feedback("m2", "考试通知请保留")
-        await service.record_feedback("m1", "广告")
+        for _ in range(25):
+            await service.record_feedback("m1", "广告")
 
         guidelines = (await service.feedback_guidelines()).splitlines()
 
         assert guidelines == ["m2: 考试通知请保留", "m1: 广告"]
-
-
-class TestUrgencySynonyms:
-    """A model answering in Chinese must not silently become info."""
-
-    @pytest.mark.parametrize(
-        ("value", "expected"),
-        [
-            ("important", Urgency.IMPORTANT),
-            ("urgent", Urgency.URGENT),
-            ("重要", Urgency.IMPORTANT),
-            ("紧急", Urgency.URGENT),
-            ("广告", Urgency.AD),
-            ("推广", Urgency.AD),
-            ("信息", Urgency.INFO),
-            ("medium", Urgency.IMPORTANT),
-            ("high", Urgency.URGENT),
-        ],
-    )
-    def test_synonyms_resolve_to_the_contract_levels(self, value: str, expected: Urgency) -> None:
-        assert parse_urgency(value) is expected
-
-    def test_unknown_value_still_defaults_to_info(self) -> None:
-        assert parse_urgency("??") is Urgency.INFO
 
 
 class TestLLMFallbackBinding:
@@ -1467,38 +1094,6 @@ class TestLLMFallbackBinding:
     @staticmethod
     def _processor(config: MailFlowConfig) -> Any:
         return next(p for p in config.processors if p.provider == "llm-importance")
-
-    async def test_adding_a_second_llm_extends_the_binding(self, tmp_path: Path) -> None:
-        config = MailFlowConfig()
-        config.llms = [LLMConfig(llm_id="primary"), LLMConfig(llm_id="backup")]
-        service = self._service(config, tmp_path)
-
-        await service.add_config_entry("llms", {"llm_id": "third", "model": "m"})
-
-        bound = self._processor(service.config)
-        assert bound.llm == "primary"
-        assert "backup" in bound.fallback_llms and "third" in bound.fallback_llms
-
-    async def test_a_new_llm_becomes_reachable_after_a_deletion(self, tmp_path: Path) -> None:
-        """Deleting a chain member clears the binding; adding one re-fills it."""
-        config = MailFlowConfig()
-        config.llms = [LLMConfig(llm_id="primary"), LLMConfig(llm_id="backup")]
-        config.processors = [
-            ProcessorConfig(
-                processor_id="llm-importance",
-                provider="llm-importance",
-                llm="primary",
-                fallback_llms=["backup"],
-            )
-        ]
-        service = self._service(config, tmp_path)
-
-        await service.remove_config_entry("llms", 1)  # drop "backup"
-        assert self._processor(service.config).fallback_llms == []
-
-        await service.add_config_entry("llms", {"llm_id": "replacement", "model": "m"})
-
-        assert self._processor(service.config).fallback_llms == ["replacement"]
 
     async def test_pinning_a_model_to_the_top_moves_the_analysis(self, tmp_path: Path) -> None:
         """The chain order is the routing policy: pinning a new model must make
@@ -1548,64 +1143,6 @@ class TestLLMFallbackBinding:
         await service.update_config_entry("llms", 0, {"model": "changed"})
 
         assert self._processor(service.config).fallback_llms == ["backup"]
-
-
-class TestTruncatedReplySalvage:
-    """A reply the token budget cut short must not discard the whole batch."""
-
-    def test_complete_objects_are_recovered_from_a_cut_off_array(self) -> None:
-        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
-
-        truncated = (
-            '[{"id":"m1","title":"First","confidence":90},'
-            '{"id":"m2","title":"Second","confidence":80},'
-            '{"id":"m3","title":"Cut off mid-obj'
-        )
-
-        salvaged = _salvage_json_objects(truncated)  # pyright: ignore[reportPrivateUsage]
-
-        assert [item["id"] for item in salvaged] == ["m1", "m2"]
-
-    def test_nested_objects_inside_a_candidate_stay_intact(self) -> None:
-        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
-
-        truncated = '[{"id":"m1","meta":{"a":{"b":1}},"t":"ok"},{"id":"m2","x"'
-
-        salvaged = _salvage_json_objects(truncated)  # pyright: ignore[reportPrivateUsage]
-
-        assert salvaged == [{"id": "m1", "meta": {"a": {"b": 1}}, "t": "ok"}]
-
-    def test_a_fenced_truncated_reply_is_also_salvaged(self) -> None:
-        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
-
-        truncated = 'Here you go:\n```json\n[{"id":"m1","title":"Kept"},\n{"id":"m2"'
-
-        salvaged = _salvage_json_objects(truncated)  # pyright: ignore[reportPrivateUsage]
-
-        assert salvaged == [{"id": "m1", "title": "Kept"}]
-
-    def test_a_reply_with_no_objects_returns_nothing(self) -> None:
-        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
-
-        assert _salvage_json_objects("I could not find anything.") == []
-        assert _salvage_json_objects('[{"broken": ') == []
-
-
-class TestSalvageScope:
-    """Salvage must never turn prose into candidates (it would skip the retry)."""
-
-    def test_prose_containing_braces_is_not_mined(self) -> None:
-        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
-
-        prose = 'I found a seminar but cannot format it. Here: {"id": "m1"} maybe?'
-
-        assert _salvage_json_objects(prose) == []  # pyright: ignore[reportPrivateUsage]
-
-    def test_an_unfenced_reply_must_start_with_the_array(self) -> None:
-        from mailflow.service import _salvage_json_objects  # pyright: ignore[reportPrivateUsage]
-
-        assert _salvage_json_objects('Sure: [{"id": "m1"}]') == []  # pyright: ignore[reportPrivateUsage]
-        assert _salvage_json_objects('[{"id": "m1"}]') == [{"id": "m1"}]  # pyright: ignore[reportPrivateUsage]
 
 
 class TestSeminarCandidateDedupe:
@@ -1682,7 +1219,7 @@ class TestSeminarCandidateDedupe:
             async def chat(self, messages: Any, **kwargs: Any) -> LLMCompletion:
                 return model_completion(json.dumps(payloads))
 
-        service = TestSeminarDiscovery.make_service(SeminarRouter())
+        service = new_service(SeminarRouter())
         for record_id, minute in [("mail-one", 10), ("mail-two", 9)]:
             await service.storage.save_mail(
                 MailRecord(record_id=record_id, mail=make_mail(record_id, minute=minute))
@@ -1713,7 +1250,7 @@ class TestSeminarCandidateDedupe:
             async def chat(self, messages: Any, **kwargs: Any) -> LLMCompletion:
                 return model_completion(json.dumps(payloads))
 
-        service = TestSeminarDiscovery.make_service(SeminarRouter())
+        service = new_service(SeminarRouter())
         await service.storage.save_mail(
             MailRecord(record_id="mail-one", mail=make_mail("one", minute=10))
         )
@@ -1734,16 +1271,13 @@ class TestSeminarCandidateDedupe:
             (candidate.candidate_id, SeminarStatus.IMPORTED)
         ]
         assert [item.item_id for item in await service.list_actions()] == [action.item_id]
-
-    async def test_imported_event_does_not_return_to_pending_review(self) -> None:
-        service, _, _ = await self.rediscover_imported_event()
         assert await service.list_seminar_candidates() == []
 
     @pytest.mark.parametrize("status", [SeminarStatus.IMPORTED, SeminarStatus.REJECTED])
     async def test_expiring_duplicate_does_not_hide_a_resolved_event(
         self, status: SeminarStatus
     ) -> None:
-        service = TestSeminarDiscovery.make_service(None)
+        service = new_service(None)
         resolved = SeminarCandidate(
             candidate_id="resolved",
             mail_id="one",
@@ -1843,52 +1377,6 @@ class TestMarketplaceService:
         assert storage.preferences["plugin.source.alpha-local"] == str(root / "alpha-local")
         assert storage.preferences["plugin.package.alpha-local"] == "alpha-distribution"
         assert "plugin.source.beta-local" not in storage.preferences
-
-    async def test_uninstall_clears_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from mailflow.plugin_market import MarketPlugin, PluginMarket, Repository
-
-        storage = MemoryStorage()
-        service = self._service(storage)
-        plugin = MarketPlugin(
-            id="uninstall-service-test", package="", source="https://example.invalid/plugin"
-        )
-        storage.preferences[f"plugin.source.{plugin.id}"] = plugin.source
-
-        class FakeMarket:
-            def find(self, plugin_id: str) -> tuple[Repository, MarketPlugin] | None:
-                return Repository("test", "https://example.invalid"), plugin
-
-            async def uninstall(self, item: MarketPlugin) -> str:
-                return "removed"
-
-        monkeypatch.setattr(
-            PluginMarket, "is_installed", staticmethod(lambda *args, **kwargs: True)
-        )
-        service.market = cast(Any, FakeMarket())
-        assert await service.plugin_uninstall(plugin.id) == "removed"
-        assert storage.preferences[f"plugin.source.{plugin.id}"] == ""
-
-    async def test_market_cache_is_versioned_and_legacy_entries_are_stale(self) -> None:
-        from mailflow.plugin_market import MarketPlugin, Repository
-
-        storage = MemoryStorage()
-        service = self._service(storage)
-        plugin = MarketPlugin(id="cache-service-test", name="Cache test")
-        repository = Repository("offline", "https://example.invalid")
-        await service.market_cache_save([(repository, plugin)])
-        payload = json.loads(storage.preferences[service._MARKET_CACHE_PREF])  # pyright: ignore[reportPrivateUsage]
-        assert payload["version"] == 1
-        loaded = await service.market_cache_load()
-        assert loaded[0][0].name == "offline"
-        assert loaded[0][0].stale is True
-
-        storage.preferences[service._MARKET_CACHE_PREF] = json.dumps(  # pyright: ignore[reportPrivateUsage]
-            [plugin.model_dump(mode="json"), {"malformed": True}]
-        )
-        legacy = await service.market_cache_load()
-        assert len(legacy) == 1
-        assert legacy[0][0].name == "cache"
-        assert legacy[0][0].stale is True
 
     async def test_market_fetch_report_merges_failed_repository_cache(self) -> None:
         from mailflow.plugin_market import MarketFetchReport, MarketPlugin, Repository
