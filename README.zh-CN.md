@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-318%20passed-67C23A)]()
+[![Tests](https://img.shields.io/badge/tests-995%20collected-3776AB)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -29,7 +29,7 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
 - **多账户、多适配器** —— 提供商适配器合并成一条有界流；单账户故障隔离。
 - **四级紧急度契约** —— `ad #909399`（垃圾）· `info #67C23A`（有用）· `important #E6A23C`（值得读）· `urgent #F56C6C`（立即处理）。
   颜色是公开契约的一部分，CLI、TUI 与通知器共用。
-- **LLM 分析** —— OpenAI 兼容的 chat completions（可用于 OpenCode 中继、llama.cpp、vLLM）与 Anthropic Claude 后端；具名 LLM 按序回退；
+- **LLM 分析** —— OpenAI 兼容的 chat completions（可用于 OpenCode 中继、llama.cpp、vLLM）、Anthropic、Google Gemini 与 Vertex 后端；具名 LLM 按序回退；
   结构化摘要、理由、回复草稿与带时间的待办项。
 - **带时间待办 + 提醒** —— 考试/会议/跑腿，含时间、类型、内容与准备备注，可下钻到源邮件；
   到期前两天固定时刻与到期日零点触发提醒。
@@ -40,7 +40,7 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
 - **i18n** —— 内置英文（默认）与简体中文；其他语言以纯数据 JSON 包加载；语言选择持久化。
 - **插件商城**（VS Code 风格）—— 搜索、分类筛选、Markdown 详情，命令行与 TUI 均可安装/卸载/启用/禁用；
   内置插件按类别组织（mail_source、processor、llm_backend、llm_enhancer、notifier、storage、bot_exporter、gateway）；
-  IMAP 邮件源内置 QQ、163、Outlook、Gmail 预设，LLM 内置 OpenAI 兼容与 Anthropic 两种格式；
+  IMAP 邮件源内置 QQ、163、Outlook、Gmail 预设，LLM 内置 OpenAI 兼容、Anthropic、Google Gemini 与 Vertex 格式；
   禁用插件绝不会导致启动失败（孤立配置项会跳过并告警）。
 - **机器人框架导出** —— 把配置好的实例导出为 NoneBot2、AstrBot 或任何其他聊天机器人框架的插件
   （`mailflow export --framework <id>`、带文件树的 TUI 导出向导、`make bot-plugin-*`）；
@@ -54,8 +54,10 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
   即路由策略：第一项为默认，其后每一项都是前面的后备。
 - **浏览并解析已有邮件** —— 新用户可以分页浏览 MailFlow 配置之前就已收到的邮件，只
   勾选需要的进行解析；被选中的邮件走与实时邮件完全相同的处理流程，已解析过的会跳过。
-- **质量门槛** —— 318 项单元/集成/端到端测试，mypy 与 pyright 严格模式，ruff 检查 + 格式化，
-  Nuitka standalone/onefile 可执行文件。
+- **质量门槛** —— 当前收集 995 个单元、集成和端到端用例；可选 OCR 与文件链接用例可能跳过。
+  两个严格预期失败分别记录 NoneBot 依赖 TOML 错误和已导入研讨会重新出现的问题。
+  Ruff 与 mypy 通过；pyright 保留严格模式，目前仍有待处理的类型错误。
+- **远程访问** —— 支持带身份认证的 REST、WebSocket 服务和远程终端界面；进程管理仅在本地模式开放。
 
 ## 安装
 
@@ -73,8 +75,8 @@ MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级�
 |---|---|
 | TUI 终端界面 | Windows 下建议 Windows Terminal，其它任意 ANSI 终端 |
 | QQ 机器人（NapCat） | 见下方"聊天平台前置要求" |
-| 微信机器人（WeChaty） | Node.js ≥ 18 与 Go 工具链（缺失时部署器会给出准确的 apt 命令） |
-| 构建单文件可执行 | dev 依赖组自带 Nuitka；C 编译器自动下载 |
+| 微信网关 | OpenWeChat 使用 Go；WeChatPadPro 使用 Docker Compose |
+| 构建单文件可执行 | dev 依赖组自带 Nuitka；使用本地 C 编译器，下载工具需明确传入 `--download-tools` |
 
 ### 2. 安装 uv
 
@@ -97,7 +99,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```bash
 git clone https://github.com/Kingcxp/mailflow.git
 cd mailflow
-uv sync --all-packages --group dev
+uv sync --locked --all-packages --group dev
 ```
 
 `uv` 会创建虚拟环境、以可编辑方式安装全部工作区包以及 dev 依赖组
@@ -191,14 +193,16 @@ await service.stop()
 ## 质量门槛
 
 ```bash
-make help           # 分组、带色的目标列表
-make check          # lint + format + mypy + pyright + pytest
-make coverage       # 每包覆盖率报告
-make build          # 为每个包构建 wheel
+make help           # 跨平台目标列表
+make check          # 先运行测试和离线插件验证，再检查格式与类型
+make coverage       # 覆盖 packages/、plugins/ 和命令行子进程
+make build          # 全部工作区 wheel 输出到 dist/wheels/
 make bot-plugin-nonebot | bot-plugin-astrbot   # 导出 NoneBot / AstrBot 插件
 make bot-plugin FRAMEWORK=<id> OUTPUT=<dir>     # 为任意已安装导出器导出
 make exe-standalone # Nuitka standalone（onefile 前的冒烟测试）
 make exe-onefile
+make validate-plugins # 使用核心契约和模拟连接验证内置插件
+make clean          # 清理构建、测试产物；保留环境、数据和日志
 ```
 
 ## 文档
@@ -260,5 +264,5 @@ docs/                       架构、开发、代理文档
 
 ## 协议
 
-MIT。真实提供商适配器（IMAP、Gmail、Outlook）是规划中的未来插件，不属于 0.1.0 基线——
+MIT。IMAP 已内置，支持通用服务器及 QQ、163、Outlook、Gmail 预设；Gmail API 和 Outlook Graph 邮件源位于插件仓库。
 参见 [CHANGELOG.md](CHANGELOG.md)。

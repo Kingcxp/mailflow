@@ -37,7 +37,7 @@ mailflow-llm-google-vertex = { workspace = true }
 # Reading text out of mail images (event posters). Kept optional: the models
 # are committed with the package, so this pulls a sizeable download, and the
 # feature is off unless general.ocr_images = true. Install with:
-#     uv pip install -e ".[ocr]"
+#     uv sync --all-packages --extra ocr
 # or just:  uv pip install rapidocr-onnxruntime
 ocr = ["rapidocr-onnxruntime>=1.4"]
 
@@ -45,8 +45,8 @@ ocr = ["rapidocr-onnxruntime>=1.4"]
 dev = [
   "pytest>=8.3",
   "pytest-asyncio>=0.24",
-  "pytest-cov>=5.0",
-  "coverage>=7.6",
+  "pytest-cov>=7.0",
+  "coverage>=7.10",
   "ruff>=0.12",
   "mypy>=1.17",
   "pyright>=1.1.400",
@@ -59,6 +59,22 @@ asyncio_mode = "auto"
 testpaths = ["tests/unit", "tests/integration", "tests/e2e"]
 pythonpath = ["tests"]
 addopts = "-ra"
+
+[tool.coverage.run]
+source = ["packages", "plugins"]
+branch = true
+relative_files = true
+patch = ["subprocess"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
+[tool.coverage.html]
+directory = "build/reports/coverage"
+
+[tool.coverage.xml]
+output = "build/reports/coverage.xml"
 
 [tool.ruff]
 target-version = "py311"

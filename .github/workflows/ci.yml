@@ -15,6 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v5
 
@@ -26,30 +27,48 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
 
       - name: Install dependencies
-        run: uv sync --frozen --all-packages
+        run: uv sync --locked --all-packages --group dev
+
+      - name: Tests and coverage
+        id: tests
+        run: uv run --frozen --all-packages pytest -q --cov --cov-report=term-missing --cov-report=xml --cov-report=html --junitxml=build/reports/pytest.xml
+
+      - name: Validate bundled plugins with offline samples
+        if: ${{ !cancelled() }}
+        run: uv run --frozen --all-packages python -B -m mailflow_testkit.plugin_smoke --root plugins --source
 
       - name: Lint (ruff check)
-        run: uv run ruff check .
+        if: ${{ !cancelled() }}
+        run: uv run --frozen --all-packages ruff check .
 
       - name: Format (ruff format)
-        run: uv run ruff format --check .
+        if: ${{ !cancelled() }}
+        run: uv run --frozen --all-packages ruff format --check .
 
       - name: Type check (mypy)
-        run: uv run mypy packages plugins tools
+        if: ${{ !cancelled() }}
+        run: uv run --frozen --all-packages mypy packages plugins tools
 
       - name: Type check (pyright)
-        run: uv run pyright
+        if: ${{ !cancelled() }}
+        run: uv run --frozen --all-packages python -c "import subprocess, sys; sys.exit(subprocess.call([sys.executable, '-m', 'pyright', '--pythonpath', sys.executable]))"
 
-      - name: Tests
-        run: uv run pytest tests -q --junitxml=pytest.xml
+      - name: Build workspace wheels
+        if: ${{ !cancelled() }}
+        run: uv run --frozen --all-packages python tools/build_all.py --offline
 
       - name: Annotate test failures
-        if: failure()
-        run: uv run python tools/annotate_pytest_failures.py pytest.xml
-      - name: Dump first failure (debug)
-        if: failure()
-        run: uv run pytest tests -q --tb=short --no-header -x 2>&1 | uv run python tools/emit_lines_as_errors.py
+        if: ${{ failure() && steps.tests.outcome == 'failure' }}
+        run: uv run --frozen --all-packages python tools/annotate_pytest_failures.py build/reports/pytest.xml
+
+      - name: Upload test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-${{ matrix.os }}-${{ matrix.python }}
+          path: build/reports/
+          if-no-files-found: warn
 

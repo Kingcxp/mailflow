@@ -25,11 +25,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build wheels
-        run: uv build --all-packages --out-dir dist-wheels
+        run: python tools/build_all.py --version "${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@v4
         with:
           name: wheels
-          path: dist-wheels/*.whl
+          path: dist/wheels/*.whl
           if-no-files-found: error
 
   frozen:
@@ -53,23 +53,21 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies (incl. nuitka)
-        run: uv sync --frozen --all-packages --group dev
-      - name: Build frozen onefile executable
-        run: uv run python tools/build_exe.py --mode onefile
-      - name: Rename artifact
-        shell: bash
+        run: uv sync --locked --all-packages --group dev
+      - name: Build frozen standalone executable
+        run: uv run --frozen --all-packages python tools/build_exe.py --mode standalone --download-tools
+      - name: Check standalone startup without external services
         run: |
-          mkdir -p dist-release
-          if [ -f dist/onefile-mailflow.exe ] || [ -f "dist/onefile-${{ matrix.artifact }}" ]; then
-            mv dist/onefile-* "dist-release/${{ matrix.artifact }}"
-          else
-            # linux onefile has no extension
-            mv dist/onefile-* "dist-release/${{ matrix.artifact }}"
-          fi
+          python -c "import subprocess, sys; from pathlib import Path; binary = Path('dist/standalone/frozen_entry.dist') / ('mailflow.exe' if sys.platform == 'win32' else 'mailflow'); subprocess.run([str(binary), 'config-check', '-c', 'configs/example.toml'], check=True)"
+      - name: Build frozen onefile executable
+        run: uv run --frozen --all-packages python tools/build_exe.py --mode onefile --download-tools
+      - name: Rename artifact
+        run: |
+          python -c "import shutil, sys; from pathlib import Path; source = Path('dist/onefile') / ('mailflow.exe' if sys.platform == 'win32' else 'mailflow'); target = Path('dist/release/${{ matrix.artifact }}'); target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(source, target)"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist-release/*
+          path: dist/release/*
           if-no-files-found: error
 
   publish:
@@ -78,6 +76,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -90,11 +91,12 @@ jobs:
         id: notes
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          if uv run python tools/changelog_for_release.py "$VERSION" > notes.md 2>/dev/null; then
+          mkdir -p build/reports
+          if python tools/changelog_for_release.py "$VERSION" > build/reports/release-notes.md 2>/dev/null; then
             echo "notes found for $VERSION"
           else
             echo "no CHANGELOG section for $VERSION — using fallback note"
-            echo "First packaged release of MailFlow. See CHANGELOG.md for the full history." > notes.md
+            echo "MailFlow $VERSION. See CHANGELOG.md for the full history." > build/reports/release-notes.md
           fi
       - name: Publish pre-release
         # every automated release is a pre-release until explicitly
@@ -102,6 +104,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           prerelease: true
-          body_path: notes.md
+          body_path: build/reports/release-notes.md
           files: release/*
           fail_on_unmatched_files: true

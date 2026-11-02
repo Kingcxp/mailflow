@@ -1,11 +1,15 @@
 # Python
-.venv/
+.venv*/
 __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
 build/
 dist/
+dist-wheels/
+dist-release/
+artifacts/
+release/
 *.egg
 
 # Tooling caches
@@ -17,6 +21,8 @@ dist/
 htmlcov/
 .coverage.*
 *.coverage
+/pytest.xml
+/coverage.xml
 
 # Local runtime data
 *.db

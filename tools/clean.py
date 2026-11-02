@@ -19,6 +19,8 @@ Targeted cleanups (all ask for confirmation when run interactively):
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -62,10 +64,16 @@ DIR_PATTERNS = (
 
 FILE_PATTERNS = (
     ".coverage",
-    "*.log",
-    "*.db",
-    "*.sqlite",
-    "*.sqlite3",
+    ".coverage.*",
+    "*.coverage",
+)
+ROOT_ARTIFACTS = (
+    "dist-wheels",
+    "dist-release",
+    "artifacts",
+    "release",
+    "pytest.xml",
+    "coverage.xml",
 )
 
 
@@ -75,9 +83,9 @@ def _preserved(rel: Path) -> bool:
 
 
 def _confirm(label: str) -> bool:
-    """Interactive confirmation; non-TTY runs proceed (make passes -y)."""
+    """Destructive targets require an answer or an explicit --yes."""
     if not sys.stdin.isatty():
-        return True
+        return False
     answer = input(f"Delete {label}? [y/N] ").strip().lower()
     return answer in ("y", "yes")
 
@@ -92,8 +100,14 @@ def clean_target(name: str, force: bool = False) -> int:
         print("aborted")
         return 0
     removed = 0
-    for rel in paths:
-        path = ROOT / rel
+    targets = [ROOT / rel for rel in paths]
+    if name == "config":
+        targets.extend((ROOT / "configs").glob("*.local.toml"))
+    root = ROOT.resolve()
+    for path in targets:
+        rel = path.relative_to(ROOT)
+        if not path.resolve().is_relative_to(root) or path.is_symlink():
+            continue
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
             removed += 1
@@ -104,6 +118,45 @@ def clean_target(name: str, force: bool = False) -> int:
             print(f"  removed file {rel}")
     print(f"cleanup '{name}': removed {removed} path(s)")
     return 0
+
+
+def clean_artifacts(root: Path) -> tuple[list[Path], list[Path]]:
+    """Prune environments and user data before walking disposable output."""
+    root = root.resolve()
+    removed_dirs: list[Path] = []
+    removed_files: list[Path] = []
+
+    def remove(path: Path) -> None:
+        if path.is_symlink() or not path.resolve().is_relative_to(root):
+            return
+        if path.is_dir():
+            shutil.rmtree(path)
+            removed_dirs.append(path)
+        elif path.is_file():
+            path.unlink()
+            removed_files.append(path)
+
+    for name in ROOT_ARTIFACTS:
+        remove(root / name)
+    for parent, directories, files in os.walk(root, followlinks=False):
+        for name in directories[:]:
+            path = Path(parent) / name
+            if (
+                _preserved(path.relative_to(root))
+                or name in {".git", "venv", "env"}
+                or name.startswith(".venv")
+                or path.is_symlink()
+                or not path.resolve().is_relative_to(root)
+                or (path / ".git").exists()
+            ):
+                directories.remove(name)
+            elif any(fnmatch.fnmatch(name, pattern) for pattern in DIR_PATTERNS):
+                remove(path)
+                directories.remove(name)
+        for name in files:
+            if any(fnmatch.fnmatch(name, pattern) for pattern in FILE_PATTERNS):
+                remove(Path(parent) / name)
+    return removed_dirs, removed_files
 
 
 def main() -> None:
@@ -134,24 +187,7 @@ def main() -> None:
             code |= clean_target("config", force=args.yes)
         sys.exit(code)
 
-    removed_dirs: list[Path] = []
-    removed_files: list[Path] = []
-
-    for pattern in DIR_PATTERNS:
-        for path in ROOT.glob(pattern):
-            if path.is_dir() and not _preserved(path.relative_to(ROOT)):
-                shutil.rmtree(path, ignore_errors=True)
-                removed_dirs.append(path)
-    for pattern in DIR_PATTERNS:
-        for path in ROOT.rglob(pattern):
-            if path.is_dir() and path != ROOT and not _preserved(path.relative_to(ROOT)):
-                shutil.rmtree(path, ignore_errors=True)
-                removed_dirs.append(path)
-    for pattern in FILE_PATTERNS:
-        for path in ROOT.rglob(pattern):
-            if path.is_file() and not _preserved(path.relative_to(ROOT)):
-                path.unlink()
-                removed_files.append(path)
+    removed_dirs, removed_files = clean_artifacts(ROOT)
 
     print(f"removed {len(removed_dirs)} directories, {len(removed_files)} files")
     for path in removed_dirs:

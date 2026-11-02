@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from pathlib import Path
 
 from mailflow_bundled import BUNDLED_PLUGINS
 
@@ -28,6 +29,7 @@ INCLUDE_PACKAGES = (
     "mailflow_tui",
     *BUNDLED_PLUGINS,
 )
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def main() -> None:
@@ -38,25 +40,32 @@ def main() -> None:
         default="standalone",
         help="Nuitka distribution mode (default: standalone)",
     )
+    parser.add_argument(
+        "--download-tools", action="store_true", help="allow Nuitka to download compiler tools"
+    )
     args = parser.parse_args()
 
     cmd = [
         sys.executable,
         "-m",
         "nuitka",
-        "--assume-yes-for-downloads",
-        "--output-dir=dist",
+        f"--output-dir={ROOT / 'dist' / args.mode}",
+        "--output-filename=mailflow.exe"
+        if sys.platform == "win32"
+        else "--output-filename=mailflow",
         "--enable-plugin=no-qt",
         "--no-deployment-flag=self-execution",  # all resources bundled; no re-exec
     ]
+    if args.download_tools:
+        cmd.append("--assume-yes-for-downloads")
     cmd.append("--standalone" if args.mode == "standalone" else "--onefile")
     for package in INCLUDE_PACKAGES:
         cmd.append(f"--include-package={package}")
     for package in ("mailflow", "mailflow_tui"):
         cmd.append(f"--include-package-data={package}")
-    cmd.append("tools/frozen_entry.py")
-    subprocess.run(cmd, check=True)
-    print(f"frozen {args.mode} build written under dist/")
+    cmd.append(str(ROOT / "tools/frozen_entry.py"))
+    subprocess.run(cmd, cwd=ROOT, check=True, stdin=subprocess.DEVNULL)
+    print(f"frozen {args.mode} build written under dist/{args.mode}/")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 ## Wheels
 
 ```bash
-make build          # uv build --all-packages -> dist/*.whl + sdist
+make build          # uv build --all-packages --wheel -> dist/wheels/*.whl
 ```
 
 Every package builds independently; Core has no runtime dependency on any
@@ -15,7 +15,7 @@ components.
 ```bash
 make exe-standalone   # tools/build_exe.py --mode standalone
 # smoke-test the standalone binary FIRST:
-./dist/frozen_entry.dist/frozen_entry.exe config-check -c configs/development.toml
+./dist/standalone/frozen_entry.dist/mailflow.exe config-check -c configs/development.toml
 make exe-onefile      # tools/build_exe.py --mode onefile
 ```
 
@@ -23,13 +23,18 @@ make exe-onefile      # tools/build_exe.py --mode onefile
 
 - `--standalone` / `--onefile`;
 - explicit `--include-package` for `mailflow`, `mailflow_bundled`,
-  `mailflow_cli`, `mailflow_tui` and all built-in plugins — the official
+  `mailflow_cli`, `mailflow_server`, `mailflow_tui` and all built-in plugins — the official
   plugin set is registered by static imports in `mailflow-bundled`, so
   frozen builds do **not** depend on entry-point metadata;
 - `--include-package-data` for `mailflow` (locale JSON) and `mailflow_tui`
   (app.tcss);
 - `--no-deployment-flag=self-execution` (all resources are bundled; the
   self-execution guard otherwise misparses CLI arguments such as `-c`).
+
+Onefile output is `dist/onefile/mailflow.exe` on Windows and `dist/onefile/mailflow` on Linux.
+Compiler downloads are disabled by default; pass `--download-tools` explicitly when needed.
+The release workflow uses the same wheel script and checks the tag against the core version.
+Plugin versions are independent and must match their runtime metadata.
 
 Release notes:
 
@@ -40,5 +45,6 @@ Release notes:
   alongside the executable or use absolute paths.
 - `tools/frozen_entry.py` is the stable entry point (calls the CLI `main`).
 
-make clean          # tools/clean.py: caches, dist, build — keeps data/ and logs/
+```bash
+make clean          # caches, reports and builds; keeps virtual environments, data/ and logs/
 ```

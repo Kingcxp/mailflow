@@ -9,11 +9,13 @@ make mypy           # mypy strict over packages/plugins/tools
 make pyright        # pyright strict over packages/plugins/tests/tools
 make typecheck      # mypy + pyright
 make test           # pytest
-make check          # lint + format-check + typecheck + test
+make check          # test + offline plugin validation, then lint + format + types
+```
 
 Locale hygiene is enforced by tests instead (`tests/unit/test_i18n.py`):
-en/zh-CN key parity, no duplicate lookup paths, no Chinese text in `en.json`,
-and a `config.desc.<key>` entry for every configurable option.
+en/zh-CN key parity, translated parameters and a `config.desc.<key>` entry for
+every configurable option. Translation tests compare resources and behavior,
+not fixed wording or punctuation.
 
 ## Configuration
 

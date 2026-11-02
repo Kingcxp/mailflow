@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
 [![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-318%20passed-67C23A)]()
+[![Tests](https://img.shields.io/badge/tests-995%20collected-3776AB)]()
 [![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
 [![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
 [![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
@@ -35,7 +35,7 @@ notifiers, storage — installed from a plugin marketplace.
   (useful) · `important #E6A23C` (read it) · `urgent #F56C6C` (act now).
   Colors are part of the public contract, reused by CLI, TUI and notifiers.
 - **LLM analysis** — OpenAI-compatible chat completions (works with OpenCode
-  relays, llama.cpp, vLLM) plus an Anthropic Claude backend; named LLMs
+  relays, llama.cpp, vLLM) plus Anthropic, Google Gemini and Vertex backends; named LLMs
   with ordered fallback; structured summaries, reasons, reply drafts and
   timed action items.
 - **Timed-action table + reminders** — exams/meetings/errands with time,
@@ -76,8 +76,12 @@ notifiers, storage — installed from a plugin marketplace.
   arrived before MailFlow was configured and analyze only the messages they
   pick; picked mails take the same pipeline path as live mail, and
   already-analyzed mail is skipped.
-- **Quality gates** — 318 unit/integration/e2e tests, mypy & pyright strict,
-  ruff lint + format, Nuitka standalone/onefile executables.
+- **Quality gates** — 995 collected unit/integration/e2e cases; optional local OCR
+  and filesystem-link cases may skip. Two strict expected failures track invalid
+  NoneBot dependency TOML and reoffered imported seminars. Ruff and mypy pass;
+  pyright strict remains enabled and currently reports outstanding type errors.
+- **Remote access** — authenticated REST/WebSocket service and remote TUI; local
+  process management is available only in local mode.
 
 ## Install
 
@@ -95,8 +99,8 @@ Optional, per feature:
 |---|---|
 | TUI in a modern terminal | Windows Terminal (Windows), or any ANSI terminal |
 | QQ bot (NapCat) | see *Chat-platform prerequisites* below |
-| WeChat bot (WeChaty) | Node.js ≥ 18 and a Go toolchain (the provisioner reports the exact apt command if missing) |
-| Building frozen executables | included in the dev group (Nuitka); a C compiler is auto-provisioned |
+| WeChat gateways | Go for OpenWeChat; Docker Compose for WeChatPadPro |
+| Building frozen executables | included in the dev group (Nuitka); a local C compiler; tool downloads require `--download-tools` |
 
 ### 2. Install uv
 
@@ -119,7 +123,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```bash
 git clone https://github.com/Kingcxp/mailflow.git
 cd mailflow
-uv sync --all-packages --group dev
+uv sync --locked --all-packages --group dev
 ```
 
 `uv` creates the virtualenv, installs every workspace package (editable) and
@@ -240,14 +244,16 @@ text as read and a gap-closed form.
 ## Quality gates
 
 ```bash
-make help           # grouped, colored list of every target
-make check          # lint + format + mypy + pyright + pytest
-make coverage       # per-package coverage report
-make build          # wheels for every package
+make help           # portable list of every target
+make check          # tests + offline plugins, then lint + format + types
+make coverage       # packages/ + plugins/, including CLI subprocesses
+make build          # every workspace wheel in dist/wheels/
 make bot-plugin-nonebot | bot-plugin-astrbot   # export the NoneBot / AstrBot plugin
 make bot-plugin FRAMEWORK=<id> OUTPUT=<dir>     # export for any installed exporter
 make exe-standalone # Nuitka standalone (smoke test before onefile)
 make exe-onefile
+make validate-plugins # shared core contracts with fake transports
+make clean          # build/test artifacts only; keeps environments, data and logs
 ```
 
 ## Documentation
