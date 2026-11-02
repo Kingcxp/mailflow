@@ -11,6 +11,7 @@ import queue as queue_module
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from mailflow.config import MailFlowConfig
 from mailflow.service import MailFlowService
@@ -63,7 +64,13 @@ async def _seed_actions(service: MailFlowService, count: int) -> None:
 
 async def test_refresh_keeps_the_cursor_row_and_the_scroll_offset(tmp_path: Path) -> None:
     service = await start_service_quiet(tmp_path)
+    service.config.general.timezone = "Asia/Shanghai"
     await _seed_actions(service, 30)
+    expected_due = (
+        (await service.list_actions())[0]
+        .due_at.astimezone(ZoneInfo("Asia/Shanghai"))
+        .strftime("%Y-%m-%d %H:%M")
+    )
     app = MailFlowApp(cast(Any, service), queue_module.Queue())
     try:
         async with app.run_test(size=(140, 50)) as pilot:
@@ -72,6 +79,7 @@ async def test_refresh_keeps_the_cursor_row_and_the_scroll_offset(tmp_path: Path
             await pane.refresh_actions()
             table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
             assert table.row_count == 30
+            assert expected_due in str(table.get_row_at(0)[0])
 
             # put the cursor deep enough that the list has really scrolled
             table.move_cursor(row=25)
@@ -87,33 +95,17 @@ async def test_refresh_keeps_the_cursor_row_and_the_scroll_offset(tmp_path: Path
             assert int(table.scroll_y) == before_scroll, "a refresh threw the list back"
             after_key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
             assert after_key == before_key, "the cursor row changed under the user"
-    finally:
-        await service.stop()
-
-
-async def test_a_refresh_after_a_delete_does_not_jump_to_the_top(tmp_path: Path) -> None:
-    service = await start_service_quiet(tmp_path)
-    await _seed_actions(service, 30)
-    app = MailFlowApp(cast(Any, service), queue_module.Queue())
-    try:
-        async with app.run_test(size=(140, 50)) as pilot:
-            await pilot.pause()
-            pane = app.query_one(ActionsPane)
-            await pane.refresh_actions()
-            table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
-
-            table.move_cursor(row=25)
-            await pilot.pause(0.3)
-            before_scroll = int(table.scroll_y)
-            items = list(pane._items)  # pyright: ignore[reportPrivateUsage]
-            await service.delete_action(items[0].item_id)
-
+            first_key = next(iter(table.rows)).value
+            assert first_key is not None
+            await service.delete_action(str(first_key))
             await pane.refresh_actions()
             await pilot.pause(0.3)
-
             assert table.row_count == 29
-            # the removed entry was above the viewport, so the offset survives
             assert int(table.scroll_y) >= before_scroll - 1
+            assert (
+                table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+                == before_key
+            )
     finally:
         await service.stop()
 

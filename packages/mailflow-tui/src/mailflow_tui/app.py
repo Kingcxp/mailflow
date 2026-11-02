@@ -1597,9 +1597,8 @@ class MailPane(Vertical):
             and not getattr(self, "_urgency_suppress", False)
         ):
             value = event.value
-            if value is Select.NULL or str(value) == "":
-                # a blank sentinel means "back to automatic": reset the
-                # override instead of constructing an invalid Urgency
+            if value is Select.NULL or str(value) in ("", "auto"):
+                # The automatic option and blank sentinel clear the override.
                 urgency: Urgency | None = None
             else:
                 try:

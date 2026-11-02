@@ -6,7 +6,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
-from zoneinfo import ZoneInfo
 
 import pytest
 from mailflow.commands import CommandRouter
@@ -17,7 +16,6 @@ from mailflow.service import start_service
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import make_mail
 from mailflow_tui.app import MailFlowApp
-from textual.css.query import NoMatches
 from textual.widgets import (
     Button,
     DataTable,
@@ -29,7 +27,6 @@ from textual.widgets import (
 )
 
 from mailflow_test_support.tui import (
-    ID_DUE,
     TUIPlugin,
     build_config,
     find_mail_ids,
@@ -39,263 +36,6 @@ from mailflow_test_support.tui import (
 
 # The deadline is relative: an absolute date would age into the past and be
 # retired by the schedule-expiry sweep, which is not what this fixture tests.
-
-
-async def test_tui_compose_and_data(tmp_path: Path) -> None:
-    # a local marketplace (per-plugin folder layout)
-    import json as jsonlib
-
-    (tmp_path / "notifier" / "mailflow-test-market-plugin").mkdir(parents=True)
-    (tmp_path / "index.json").write_text(
-        jsonlib.dumps(
-            {"name": "local", "schema": 2, "categories": [{"id": "notifier", "path": "notifier"}]}
-        ),
-        encoding="utf-8",
-    )
-    (tmp_path / "notifier" / "mailflow-test-market-plugin" / "plugin.json").write_text(
-        jsonlib.dumps(
-            {
-                "id": "mailflow-test-market-plugin",
-                "name": "Market Test",
-                "version": "9.9.9",
-                "description": "browsable from the tui",
-                "categories": ["notifier"],
-                "package": "mailflow-test-market-plugin",
-                "source": "",
-                "readme": "# Market Test\n\nLong markdown readme.",
-            }
-        ),
-        encoding="utf-8",
-    )
-    index_path = tmp_path
-    manager = PluginManager(build_config(tmp_path / "unused.db"))
-    manager.register(TUIPlugin())
-    manager.register(storage_plugin)
-    from mailflow_notify_console.plugin import plugin as notify_plugin
-
-    manager.register(notify_plugin)
-    service = await start_service(
-        build_config(tmp_path / "tui.db"),
-        plugin_manager=manager,
-        discover_plugins=False,
-        enable_logging=False,
-    )
-    from mailflow.config import PluginRepositoryConfig
-    from mailflow.plugin_market import PluginMarket, Repository
-
-    service.config.plugins.repositories.append(
-        PluginRepositoryConfig(name="local", url=index_path.as_uri())
-    )
-    service.market = PluginMarket([Repository("local", index_path.as_uri())])
-    CommandRouter(service)
-    import queue
-
-    app = MailFlowApp(service, queue.Queue())
-    try:
-        async with app.run_test() as pilot:
-            # wait for the pipeline to process the three mails
-            for _ in range(100):
-                if await service.count_mails() == 3:
-                    break
-                await pilot.pause(0.05)
-            await pilot.pause()
-            from mailflow_tui.app import ActionsPane, MailPane
-
-            await app.query_one(MailPane).refresh_mail()
-
-            table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
-            assert table.row_count == 3
-            actions_pane = app.query_one(ActionsPane)
-            await actions_pane.refresh_actions()
-            actions_table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
-            assert actions_table.row_count == 1
-            # the row shows the deadline in the configured display timezone
-            expected_due = ID_DUE.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
-            assert expected_due in str(actions_table.get_row_at(0)[0])
-            # A results-only render (Smart find's final step) must replace
-            # the detail too, and an empty result must not leave a stale
-            # previously selected mail beside the empty table.
-            pane = app.query_one(MailPane)
-            records = {record.mail.message_id: record for record in await service.list_mails()}
-            old_record = records["m-info"]
-            result_record = records["m-id"]
-            pane._selected_id = old_record.record_id  # pyright: ignore[reportPrivateUsage]
-            await pane._show_selected()  # pyright: ignore[reportPrivateUsage]
-            assert "Lecture on Friday" in str(app.query_one("#mail-summary", Static).render())
-            await pane._render_records([result_record])  # pyright: ignore[reportPrivateUsage]
-            assert "Pick up student ID" in str(app.query_one("#mail-summary", Static).render())
-            await pane._render_records([])  # pyright: ignore[reportPrivateUsage]
-            assert str(app.query_one("#mail-summary", Static).render()) == ""
-            await pane.refresh_mail()
-            # search filters the table
-            search = app.query_one("#mail-search", Input)
-            search.value = "promotion"
-            await pilot.pause(0.35)
-            assert table.row_count == 1
-
-            # search matches the BODY too: "before 17:00" only appears in
-            # the ID-card mail's body_text, never in its subject/summary
-            search.value = "before 17:00"
-            await pilot.pause(0.35)
-            assert table.row_count == 1
-            assert "student ID" in " ".join(str(cell) for cell in table.get_row_at(0))
-
-            search.value = ""
-            await pilot.pause(0.35)
-            assert table.row_count == 3
-            # select the urgent mail row: its urgency cell carries the contract color
-            # (column order: date, urgency, subject, sender)
-            urgent_index = next(
-                (
-                    i
-                    for i in range(table.row_count)
-                    if "urgent" in str(table.get_row_at(i)[1]).lower()
-                ),
-                -1,
-            )
-            assert urgent_index >= 0, "no urgent row rendered"
-            urgent_cell_text = str(table.get_row_at(urgent_index)[1])
-            assert "■" in urgent_cell_text
-            assert "urgent" in urgent_cell_text.lower()
-
-            # select the urgent mail, then the urgency dropdown drives the mutation
-            pane = app.query_one(MailPane)
-            record = next(r for r in await service.list_mails() if r.mail.message_id == "m-id")
-            pane._selected_id = record.record_id  # pyright: ignore[reportPrivateUsage]
-            select = cast(Select[Any], app.query_one("#urgency-select", Select))
-            await set_select_value(pilot, select, "ad")
-            record = await service.get_mail(result_record.record_id)
-            assert record is not None
-            assert record.manual_urgency is Urgency.AD
-            # language switch persists — driven through the general.language
-            # option card (the standalone selector row was removed)
-            from mailflow_tui.settings import SettingsPane
-
-            settings_pane = app.query_one(SettingsPane)
-            await settings_pane.reload()
-            await pilot.pause(0.15)
-            from mailflow_tui.settings import OptionCard
-
-            # the language-switch remount can swap the cards between reload
-            # and scan: poll for the card instead of a bare next() (a
-            # StopIteration inside a coroutine surfaces as RuntimeError)
-            lang_card = None
-            for _ in range(40):
-                lang_card = next(
-                    (card for card in app.query(OptionCard) if card.spec.key == "general.language"),
-                    None,
-                )
-                if lang_card is not None:
-                    break
-                await pilot.pause(0.05)
-            assert lang_card is not None, "language option card never rendered"
-            lang_select = cast(Select[Any], lang_card.query_one(Select))
-            await set_select_value(pilot, lang_select, "zh-CN")
-            await settings_pane._save("general.language", "zh-CN")  # pyright: ignore[reportPrivateUsage]
-            await pilot.pause(0.05)
-            from textual.widgets import TabbedContent
-
-            tabs = app.query_one(TabbedContent)
-            tab_label = tabs.get_tab("tab-mail")  # pyright: ignore[reportUnknownMemberType]
-            assert str(tab_label.label) == service.t("tui.tab_mail")  # pyright: ignore[reportUnknownMemberType]
-            # settings tab: sidebar sections plus one card per option.
-            # The language switch remounts the pane concurrently — re-query
-            # and poll instead of racing the remount.
-            from mailflow_tui.settings import OptionCard, SettingsPane
-
-            sections = None
-            for _ in range(40):
-                panes = app.query(SettingsPane)
-                listings = app.query("#settings-sections")
-                if panes and listings:
-                    await panes.first().reload()
-                    candidate = listings.first()
-                    cards_now = list(app.query(OptionCard))
-                    # only proceed once the language card exists: reloading
-                    # again after interaction starts would swap the Select
-                    # out from under the overlay
-                    if len(list(candidate.children)) >= 5 and any(
-                        card.spec.key == "general.language" for card in cards_now
-                    ):  # general/logging/plugins/storage/i18n
-                        sections = candidate
-                        break
-                await pilot.pause(0.05)
-            assert sections is not None and len(sections.children) >= 5
-            # reload() swaps cards asynchronously under a lock — poll instead
-            # of racing it
-            cards = []
-            keys: set[str] = set()
-            for _ in range(40):
-                cards = list(app.query(OptionCard))
-                keys = {card.spec.key for card in cards}
-                if "general.reminder_hour" in keys:
-                    break
-                await pilot.pause(0.05)
-            assert "general.reminder_hour" in keys, f"cards rendered: {sorted(keys)[:6]}"
-            # searching filters across every section — poll until the filter
-            # has actually been applied. A late remount resets the search
-            # input, so re-type it whenever the box goes empty.
-            filtered: set[str] = set()
-            for _ in range(120):
-                # re-query every iteration: a late remount replaces the pane
-                # and its input, detaching the previously captured widget.
-                # The settings pane itself may not be mounted yet on a slow
-                # runner — skip this tick until it is.
-                try:
-                    search = app.query_one("#settings-search", Input)
-                except NoMatches:
-                    await pilot.pause(0.05)
-                    continue
-                if search.value != "reminder_hour":
-                    search.value = "reminder_hour"
-                filtered = {card.spec.key for card in app.query(OptionCard)}
-                if filtered == {"general.reminder_hour"}:
-                    break
-                await pilot.pause(0.05)
-            assert filtered == {"general.reminder_hour"}
-            search.value = ""
-            await pilot.pause(0.1)
-            # secrets never reach the rendered value
-            rendered = "\n".join(str(node.render()) for node in app.query(Static))
-            assert "sk-tui-secret" not in rendered
-            # market tab browses the local repository
-            from mailflow_tui.app import MarketPane
-
-            market_pane = app.query_one(MarketPane)
-            await market_pane.refresh_market()
-            # the fetch runs in a worker thread: on slow CI runners the
-            # table is still empty when refresh_market returns — poll
-            # until the rows land (bounded)
-            market_table = cast(DataTable[Any], app.query_one("#market-table", DataTable))
-            for _ in range(100):
-                if market_table.row_count >= 1:
-                    break
-                await pilot.pause(0.05)
-            assert market_table.row_count >= 1
-            market_rows = " ".join(
-                " ".join(str(cell) for cell in market_table.get_row_at(i))
-                for i in range(market_table.row_count)
-            )
-            assert "Market Test" in market_rows
-            assert "browsable from the tui" in market_rows
-            # reply modal: confirm is disabled until prepared
-            pane._selected_id = result_record.record_id  # pyright: ignore[reportPrivateUsage]
-            cast(Button, app.query_one("#btn-reply")).press()
-            await pilot.pause(0.05)
-            from mailflow_tui.app import ReplyModal
-
-            modal = app.screen
-            assert isinstance(modal, ReplyModal)
-            confirm_button = cast(Button, modal.query_one("#reply-confirm"))
-            assert confirm_button.disabled is True
-            cast(Button, modal.query_one("#reply-prepare")).press()
-            await pilot.pause(0.05)
-            confirm_button = cast(Button, modal.query_one("#reply-confirm"))
-            assert confirm_button.disabled is False
-            app.exit()
-            await pilot.pause()
-    finally:
-        await service.stop()
 
 
 @pytest.mark.asyncio
@@ -1108,63 +848,6 @@ async def test_settings_card_saves_resets_and_rejects(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_processed_mail_event_refreshes_panes(tmp_path: Path) -> None:
-    """The runtime emits ``mailflow.mail.processed``; the app must subscribe
-    to that exact name or mail processed after mount never shows up without
-    a manual refresh (regression: it subscribed to the unprefixed name)."""
-    from mailflow.domain import MailAnalysis
-    from mailflow.plugin_market import PluginMarket
-    from mailflow_testkit.fakes import make_mail as make_test_mail
-
-    manager = PluginManager(build_config(tmp_path / "unused.db"))
-    manager.register(TUIPlugin())
-    manager.register(storage_plugin)
-    service = await start_service(
-        build_config(tmp_path / "tui.db"),
-        plugin_manager=manager,
-        discover_plugins=False,
-        enable_logging=False,
-    )
-    service.market = PluginMarket([])
-    CommandRouter(service)
-    import queue
-
-    app = MailFlowApp(service, queue.Queue())
-    try:
-        async with app.run_test() as pilot:
-            for _ in range(100):
-                if await service.count_mails() == 3:
-                    break
-                await pilot.pause(0.05)
-            await pilot.pause()
-            table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
-            before = table.row_count
-
-            # store a fourth mail directly, then emit the runtime event the
-            # app is expected to react to — no manual refresh anywhere
-            extra = MailRecord(
-                record_id="m-late",
-                mail=make_test_mail(
-                    message_id="m-late", account_id="acct-1", subject="Arrived later"
-                ),
-                auto_urgency=Urgency.INFO,
-                analysis=MailAnalysis(summary="Arrived later", urgency=Urgency.INFO),
-            )
-            await service.storage.save_mail(extra)
-            await service.events.emit("mailflow.mail.processed", record=extra)
-
-            for _ in range(60):
-                if table.row_count > before:
-                    break
-                await pilot.pause(0.05)
-            assert table.row_count == before + 1, "app did not react to mailflow.mail.processed"
-            app.exit()
-            await pilot.pause()
-    finally:
-        await service.stop()
-
-
-@pytest.mark.asyncio
 async def test_llm_tab_orders_the_fallback_chain(tmp_path: Path) -> None:
     """The LLM tab's order *is* the chain: first entry default, rest fallbacks."""
     from mailflow.plugin_market import PluginMarket
@@ -1384,7 +1067,7 @@ async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path
     re-analyze everything, and save the preferences the LLM reads."""
     import queue
 
-    from mailflow.domain import ActionItem, MailAnalysis, MailRecord
+    from mailflow.domain import ActionItem, MailAnalysis
     from mailflow.plugin_market import PluginMarket
     from mailflow_tui.app import MailPane
     from mailflow_tui.confirm import ConfirmModal

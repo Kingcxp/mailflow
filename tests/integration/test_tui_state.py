@@ -15,6 +15,7 @@ from mailflow.domain import (
     MailAddress,
     PluginSnapshot,
     ProcessorNote,
+    Urgency,
 )
 from mailflow.i18n import I18n
 from mailflow.protocol import json_value
@@ -136,6 +137,18 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
             assert "SummaryNeedle" in text(app, "#mail-summary")
             result, _ = await ToolRegistry(service).call("find_mail", {"contains": query})
             assert "id=target" in result and "id=other" not in result
+        search.value = "no matching mail"
+        await settle(pilot)
+        assert keys(table) == [] and not text(app, "#mail-summary").strip()
+        search.value = "SubjectNeedle"
+        await settle(pilot)
+        app.query_one("#urgency-select", Select).value = "ad"
+        await settle(pilot)
+        stored = await service.storage.get_mail("target")
+        assert stored.manual_urgency is Urgency.AD and stored.auto_urgency is Urgency.IMPORTANT
+        app.query_one("#urgency-select", Select).value = "auto"
+        await settle(pilot)
+        assert (await service.storage.get_mail("target")).manual_urgency is None
         assert "Dismiss me" in text(app, "#mail-actions")
         assert await service.delete_action("deleted")
         await emit("action.deleted", item_id="deleted")
