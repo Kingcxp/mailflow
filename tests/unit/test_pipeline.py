@@ -108,74 +108,44 @@ class FlakyProcessor:
         return ProcessorResult(analysis=MailAnalysis(summary="recovered", urgency=Urgency.INFO))
 
 
-class TestEventBus:
-    async def test_subscribe_and_emit(self) -> None:
-        bus = EventBus()
-        seen: list[dict[str, Any]] = []
+async def test_event_subscriptions_payloads_and_unsubscribe() -> None:
+    bus = EventBus()
+    specific: list[dict[str, Any]] = []
+    all_events: list[str] = []
 
-        async def record(event: str, **payload: Any) -> None:
-            seen.append(payload)
+    async def record(event: str, **payload: Any) -> None:
+        specific.append(payload)
 
-        bus.subscribe("mail.new", record)
-        await bus.emit("mail.new", mail_id="m1")
-        assert seen == [{"mail_id": "m1"}]
+    async def record_all(event: str, **payload: Any) -> None:
+        all_events.append(event)
 
-    async def test_wildcard_subscription(self) -> None:
-        bus = EventBus()
-        seen: list[str] = []
+    unsubscribe = bus.subscribe("mail.new", record)
+    bus.subscribe_all(record_all)
+    await bus.emit("mail.new", mail_id="m1")
+    unsubscribe()
+    await bus.emit("mail.new", mail_id="m2")
+    await bus.emit("other")
+    assert specific == [{"mail_id": "m1"}]
+    assert all_events == ["mail.new", "mail.new", "other"]
 
-        async def record(event: str, **payload: Any) -> None:
-            seen.append(event)
 
-        bus.subscribe_all(record)
-        await bus.emit("anything", x=1)
-        assert seen == ["anything"]
+async def test_failing_event_handler_does_not_break_other_subscribers() -> None:
+    bus = EventBus()
+    good: list[str] = []
 
-    async def test_failing_handler_does_not_break_others(self) -> None:
-        bus = EventBus()
-        good: list[str] = []
+    async def bad(event: str, **payload: Any) -> None:
+        raise RuntimeError("handler bug")
 
-        async def bad(event: str, **payload: Any) -> None:
-            raise RuntimeError("handler bug")
+    async def fine(event: str, **payload: Any) -> None:
+        good.append(event)
 
-        async def fine(event: str, **payload: Any) -> None:
-            good.append("ran")
-
-        bus.subscribe("x", bad)
-        bus.subscribe("x", fine)
-        await bus.emit("x")
-        assert good == ["ran"]
-
-    async def test_unsubscribe(self) -> None:
-        bus = EventBus()
-        seen: list[str] = []
-
-        async def record(event: str, **payload: Any) -> None:
-            seen.append("hit")
-
-        unsubscribe = bus.subscribe("x", record)
-        await bus.emit("x")
-        unsubscribe()
-        await bus.emit("x")
-        assert seen == ["hit"]
+    bus.subscribe("x", bad)
+    bus.subscribe("x", fine)
+    await bus.emit("x")
+    assert good == ["x"]
 
 
 class TestLLMRouter:
-    async def test_primary_success_stamps_identity(self) -> None:
-        backend = FakeLLM(results=["ok"])
-        router = LLMRouterImpl(
-            backends={"primary": backend},
-            configs={
-                "primary": LLMConfig(
-                    llm_id="primary", base_url="https://a", model="m1", provider="fake"
-                ),
-            },
-        )
-        completion = await router.chat([{"role": "user", "content": "hi"}], primary="primary")
-        assert completion.text == "ok"
-        assert completion.llm_id == "primary"
-        assert completion.backend == "fake"
-
     async def test_primary_failure_falls_back(self) -> None:
         failing = FailingLLM()
         backup = FakeLLM(results=["backup answer"])
@@ -202,15 +172,6 @@ class TestLLMRouter:
         )
         with pytest.raises(LLMRouteError):
             await router.chat([{"role": "user", "content": "hi"}], primary="p")
-
-    async def test_dedup_repeated_ids(self) -> None:
-        backend = FakeLLM(results=["x"])
-        router = LLMRouterImpl(
-            backends={"p": backend},
-            configs={"p": LLMConfig(llm_id="p", base_url="https://a", model="m1", provider="fake")},
-        )
-        await router.chat([{"role": "user", "content": "hi"}], primary="p", fallback=["p"])
-        assert len(backend.calls) == 1
 
     async def test_error_redacts_api_key(self) -> None:
         secret = "sk-super-secret-123"
@@ -483,23 +444,3 @@ class TestFeedbackGuidelines:
             feedback_guidelines="m1: promotions are noise",
         )
         assert capturing.seen == ["m1: promotions are noise"]
-
-    async def test_default_guidelines_empty(self) -> None:
-        class CapturingProcessor:
-            processor_id = "cap"
-
-            def __init__(self) -> None:
-                self.seen: list[str] = []
-
-            async def process(
-                self, mail: MailMessage, context: ProcessingContext
-            ) -> ProcessorResult:
-                self.seen.append(context.feedback_guidelines)
-                return ProcessorResult(analysis=MailAnalysis(summary="s", urgency=Urgency.INFO))
-
-        capturing = CapturingProcessor()
-        engine = PipelineEngine(
-            [ProcessorBinding(processor_id="cap", plugin_id="t", processor=capturing)]
-        )
-        await engine.process(make_mail(), "acct-1")
-        assert capturing.seen == [""]

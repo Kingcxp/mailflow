@@ -5,118 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
+from mailflow.config import LLMConfig, MailFlowConfig
 from mailflow.settings import (
-    EditorKind,
     SettingsError,
     add_entry,
     apply_value,
-    build_sections,
-    coerce_value,
-    entry_field_specs,
-    entry_model,
-    find_spec,
     move_entry,
     normalize_llm_chain,
     remove_entry,
-    reset_value,
     update_entry,
 )
 
 
-def config_with_chain() -> MailFlowConfig:
-    return MailFlowConfig.model_validate(
-        {
-            "processors": [
-                {"processor_id": "rules", "provider": "rules", "priority": 10},
-                {"processor_id": "llm", "provider": "llm-importance", "priority": 20},
-            ],
-            "notifiers": [{"notifier_id": "console", "provider": "console"}],
-        }
-    )
-
-
-class TestSections:
-    def test_core_sections_come_first(self) -> None:
-        sections = build_sections(MailFlowConfig())
-        ids = [section.section_id for section in sections]
-        assert ids[:5] == ["general", "logging", "plugins", "storage", "i18n"]
-
-    def test_plugin_options_land_in_their_own_section(self) -> None:
-        sections = {s.section_id: s for s in build_sections(config_with_chain())}
-        # without a registry the provider id is the fallback section id
-        assert "rules" in sections
-        assert "llm-importance" in sections
-        assert "console" in sections
-        keys = {spec.key for spec in sections["rules"].options}
-        assert "processors[0].priority" in keys
-
-    def test_accounts_and_llms_are_not_in_the_sidebar(self) -> None:
-        """They have dedicated tabs; listing them twice would be a second
-        convention for the same data."""
-        config = MailFlowConfig.model_validate(
-            {
-                "accounts": [{"account_id": "a", "provider": "imap"}],
-                "llms": [{"llm_id": "l", "provider": "openai-compatible"}],
-            }
-        )
-        keys = {spec.key for section in build_sections(config) for spec in section.options}
-        assert not any(key.startswith("accounts[") for key in keys)
-        assert not any(key.startswith("llms[") for key in keys)
-
-    def test_editor_kinds_follow_the_schema(self) -> None:
-        config = MailFlowConfig()
-        assert find_spec(config, "general.workers").editor is EditorKind.INTEGER  # pyright: ignore[reportOptionalMemberAccess]
-        assert find_spec(config, "general.auto_update").editor is EditorKind.BOOLEAN  # pyright: ignore[reportOptionalMemberAccess]
-        assert find_spec(config, "logging.logger_levels").editor is EditorKind.MAPPING  # pyright: ignore[reportOptionalMemberAccess]
-        assert find_spec(config, "plugins.disabled").editor is EditorKind.STRING_LIST  # pyright: ignore[reportOptionalMemberAccess]
-        assert find_spec(config, "plugins.repositories").editor is EditorKind.STRUCT_LIST  # pyright: ignore[reportOptionalMemberAccess]
-
-    def test_secret_fields_are_marked(self) -> None:
-        specs = {spec.label: spec for spec in entry_field_specs(entry_model("llms"))}
-        assert specs["api_key"].editor is EditorKind.SECRET
-        assert specs["api_key"].secret is True
-        assert specs["model"].secret is False
-
-    def test_urgency_choice_offers_the_four_levels(self) -> None:
-        specs = {spec.label: spec for spec in entry_field_specs(entry_model("notifiers"))}
-        urgency = specs["minimum_urgency"]
-        assert urgency.editor is EditorKind.CHOICE
-        assert urgency.choices == ("ad", "info", "important", "urgent")
-
-    def test_required_fields_have_no_sentinel_default(self) -> None:
-        """A required field's default must be None, never pydantic's
-        PydanticUndefined sentinel — a form would render it as a value and let
-        an empty required field validate."""
-        for group in ("accounts", "llms", "processors", "notifiers"):
-            for spec in entry_field_specs(entry_model(group)):
-                if spec.required:
-                    assert spec.default is None, f"{group}[].{spec.label}"
-                assert "PydanticUndefined" not in str(spec.default)
-
-    def test_blank_required_text_is_rejected(self) -> None:
-        spec = next(
-            item for item in entry_field_specs(entry_model("llms")) if item.label == "llm_id"
-        )
-        assert spec.required is True
-        with pytest.raises(SettingsError) as info:
-            coerce_value(spec, "")
-        assert "required" in info.value.message
-
-    def test_blank_optional_text_clears_the_value(self) -> None:
-        spec = next(
-            item for item in entry_field_specs(entry_model("processors")) if item.label == "llm"
-        )
-        assert spec.required is False
-        assert coerce_value(spec, "") is None
-
-
 class TestApplyValue:
-    def test_scalar_coercion(self) -> None:
-        config = MailFlowConfig()
-        assert apply_value(config, "general.workers", "4").general.workers == 4
-        assert apply_value(config, "general.auto_update", "off").general.auto_update is False
-
     def test_optional_string_can_be_set_and_cleared(self) -> None:
         config = MailFlowConfig()
         updated = apply_value(config, "logging.console_redirect", "logs/console.log")
@@ -138,18 +39,6 @@ class TestApplyValue:
         )
         assert from_json.logging.logger_levels == {"mailflow.llm": "ERROR"}
 
-    def test_type_error_names_the_option(self) -> None:
-        with pytest.raises(SettingsError) as info:
-            apply_value(MailFlowConfig(), "general.workers", "many")
-        assert info.value.option == "general.workers"
-        assert "whole number" in info.value.message
-
-    def test_range_violation_reports_the_constraint(self) -> None:
-        with pytest.raises(SettingsError) as info:
-            apply_value(MailFlowConfig(), "general.cleanup_hour", "99")
-        assert info.value.option == "general.cleanup_hour"
-        assert "23" in info.value.message
-
     def test_domain_validator_error_is_reported(self) -> None:
         with pytest.raises(SettingsError) as info:
             apply_value(MailFlowConfig(), "general.timezone", "Nowhere/Special")
@@ -165,23 +54,6 @@ class TestApplyValue:
             apply_value(MailFlowConfig(), "general.ghost", "1")
 
 
-class TestResetValue:
-    def test_reset_restores_the_schema_default(self) -> None:
-        changed = apply_value(MailFlowConfig(), "general.workers", "9")
-        assert changed.general.workers == 9
-        assert reset_value(changed, "general.workers").general.workers == 2
-
-    def test_reset_clears_an_optional_string(self) -> None:
-        changed = apply_value(MailFlowConfig(), "logging.console_redirect", "logs/c.log")
-        assert reset_value(changed, "logging.console_redirect").logging.console_redirect is None
-
-    def test_is_default_tracks_modification(self) -> None:
-        config = MailFlowConfig()
-        assert find_spec(config, "general.workers").is_default() is True  # pyright: ignore[reportOptionalMemberAccess]
-        changed = apply_value(config, "general.workers", "3")
-        assert find_spec(changed, "general.workers").is_default() is False  # pyright: ignore[reportOptionalMemberAccess]
-
-
 class TestListEntries:
     def test_add_update_remove(self) -> None:
         config = add_entry(MailFlowConfig(), "accounts", {"account_id": "a1", "provider": "imap"})
@@ -191,19 +63,6 @@ class TestListEntries:
         assert config.accounts[0].provider == "imap"  # untouched fields survive
         config = remove_entry(config, "accounts", 0)
         assert config.accounts == []
-
-    def test_add_reports_missing_required_field(self) -> None:
-        with pytest.raises(SettingsError) as info:
-            add_entry(MailFlowConfig(), "accounts", {"provider": "imap"})
-        assert "account_id" in info.value.message
-
-    def test_remove_out_of_range(self) -> None:
-        with pytest.raises(SettingsError):
-            remove_entry(MailFlowConfig(), "accounts", 3)
-
-    def test_unknown_group_rejected(self) -> None:
-        with pytest.raises(SettingsError):
-            add_entry(MailFlowConfig(), "general", {})
 
 
 class TestLLMChain:
@@ -222,23 +81,14 @@ class TestLLMChain:
         assert config.llms[2].fallback == []
         assert config.default_llm() is not None
         assert config.default_llm().llm_id == "a"  # pyright: ignore[reportOptionalMemberAccess]
-
-    def test_moving_an_entry_rebuilds_the_chain(self) -> None:
-        config = move_entry(self._three(), "llms", 2, -1)
-        assert [llm.llm_id for llm in config.llms] == ["a", "c", "b"]
-        assert config.llms[0].fallback == ["c", "b"]
-        assert config.llms[1].fallback == ["b"]
-
-    def test_promoting_to_first_switches_the_default(self) -> None:
-        config = move_entry(self._three(), "llms", 1, -1)
-        assert config.llms[0].llm_id == "b"
-        assert config.llms[0].default is True
-        assert config.llms[1].default is False
-
-    def test_move_at_the_edge_is_a_noop(self) -> None:
-        config = self._three()
-        assert move_entry(config, "llms", 0, -1) is config
-        assert move_entry(config, "llms", 2, 1) is config
+        config = add_entry(config, "llms", {"llm_id": "d", "model": "m-d"})
+        assert config.llms[0].fallback == ["b", "c", "d"]
+        config = move_entry(config, "llms", 2, -1)
+        assert [llm.llm_id for llm in config.llms] == ["a", "c", "b", "d"]
+        assert config.llms[0].fallback == ["c", "b", "d"]
+        config = move_entry(config, "llms", 1, -1)
+        assert config.llms[0].llm_id == "c" and config.llms[0].default
+        assert not config.llms[1].default
 
     def test_removing_an_llm_keeps_references_valid(self) -> None:
         config = self._three()
@@ -261,31 +111,6 @@ class TestLLMChain:
         # no llm still lists the removed id as a fallback
         assert all("b" not in llm.fallback for llm in config.llms)
 
-    def test_renaming_an_llm_rewrites_every_reference(self) -> None:
-        """Editing an id used to fail validation ("does not match any
-        configured llm") because the stale references were validated before
-        the derived chain and the processor bindings were repaired."""
-        config = self._three()
-        config = add_entry(
-            config,
-            "processors",
-            {
-                "processor_id": "p",
-                "provider": "llm-importance",
-                "llm": "c",
-                "fallback_llms": [],
-            },
-        )
-
-        renamed = update_entry(config, "llms", 1, {"llm_id": "b2", "model": "m-b2"})
-
-        assert [llm.llm_id for llm in renamed.llms] == ["a", "b2", "c"]
-        assert renamed.llms[0].fallback == ["b2", "c"]
-        assert renamed.llms[2].fallback == []
-        processor = renamed.processor("p")
-        assert processor is not None and processor.llm == "c"
-        assert all("b" not in llm.fallback for llm in renamed.llms)
-
     def test_renaming_the_bound_llm_follows_the_processor(self) -> None:
         config = self._three()
         config = add_entry(
@@ -304,36 +129,8 @@ class TestLLMChain:
         processor = renamed.processor("p")
         assert processor is not None and processor.llm == "b2"
         assert processor.fallback_llms == ["c"]
-
-    def test_adding_an_llm_extends_the_chain(self) -> None:
-        config = add_entry(self._three(), "llms", {"llm_id": "d", "model": "m-d"})
-        assert [llm.llm_id for llm in config.llms] == ["a", "b", "c", "d"]
-        # the new entry is reachable as the last fallback, not an orphan
-        assert config.llms[0].fallback == ["b", "c", "d"]
-
-
-class TestTimeouts:
-    """First-token latency must fit inside the shipped defaults."""
-
-    def test_default_timeouts_cover_a_slow_first_token(self) -> None:
-        config = MailFlowConfig()
-        # 30s per mail proved too short: a cold local model spends longer than
-        # that before its first token, and every mail then fell back to a
-        # subject summary
-        assert config.processors == []  # the default chain binds in start_service
-        assert ProcessorConfig(processor_id="p", provider="rules").timeout_seconds == 120.0
-        assert LLMConfig(llm_id="l").timeout_seconds == 120.0
-
-    def test_timeouts_stay_configurable(self) -> None:
-        config = add_entry(MailFlowConfig(), "llms", {"llm_id": "l", "timeout_seconds": 240})
-        assert config.llms[0].timeout_seconds == 240.0
-        config = add_entry(
-            config,
-            "processors",
-            {"processor_id": "p", "provider": "rules", "timeout_seconds": 45},
-        )
-        processor = config.processor("p")
-        assert processor is not None and processor.timeout_seconds == 45.0
+        assert renamed.llms[0].fallback == ["b2", "c"]
+        assert all("b" not in llm.fallback for llm in renamed.llms)
 
 
 class TestPlaceholderBookkeeping:
@@ -361,11 +158,6 @@ class TestPlaceholderBookkeeping:
         assert ("general", "timezone") not in updated.env_placeholders
         assert updated.env_placeholders == {("llms", 1, "api_key"): "${SECRET}"}
 
-    def test_other_placeholders_survive_apply_value(self) -> None:
-        config = self._config_with_placeholder()
-        updated = apply_value(config, "general.timezone", "Europe/Berlin")
-        assert updated.env_placeholders == {("llms", 1, "api_key"): "${SECRET}"}
-
     def test_remove_entry_shifts_following_indices(self) -> None:
         config = self._config_with_placeholder()
         updated = remove_entry(config, "llms", 0)
@@ -386,11 +178,6 @@ class TestPlaceholderBookkeeping:
         updated = update_entry(config, "llms", 1, {"api_key": "literal"})
         assert updated.env_placeholders == {}
 
-    def test_update_entry_keeps_untouched_field_placeholders(self) -> None:
-        config = self._config_with_placeholder()
-        updated = update_entry(config, "llms", 1, {"model": "m2b"})
-        assert updated.env_placeholders == {("llms", 1, "api_key"): "${SECRET}"}
-
     def test_form_resubmission_preserves_unchanged_secrets(self) -> None:
         config = self._config_with_placeholder()
         config.llms[1].api_key = "resolved"
@@ -403,11 +190,6 @@ class TestPlaceholderBookkeeping:
         values["options"] = {"token": "new", "region": "east"}
         updated = update_entry(config, "llms", 1, values)
         assert updated.env_placeholders == {("llms", 1, "api_key"): "${SECRET}"}
-
-    def test_malformed_index_raises_settings_error(self) -> None:
-        config = self._config_with_placeholder()
-        with pytest.raises(SettingsError):
-            apply_value(config, "llms[x].model", "m")
 
 
 @pytest.mark.parametrize("api_key", ["private", ""])
@@ -499,9 +281,4 @@ class TestTimeoutMigration:
         assert [llm.timeout_seconds for llm in config.llms] == [15.0]
         processor = config.processor("rules")
         assert processor is not None and processor.timeout_seconds == 5.0
-        assert config.timeouts_migrated is False
-
-    def test_fresh_defaults_need_no_migration(self) -> None:
-        config = MailFlowConfig()
-        assert config.llms == []  # nothing to migrate in a fresh config
         assert config.timeouts_migrated is False

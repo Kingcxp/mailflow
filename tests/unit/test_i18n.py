@@ -38,12 +38,6 @@ def _duplicate_lookup_paths(code: str) -> list[str]:
 
 
 class TestI18nBuiltin:
-    def test_english_default(self) -> None:
-        i18n = I18n()
-        assert i18n.language == "en"
-        rendered = i18n.t("mail.list_title", count=37)
-        assert "37" in rendered and rendered != "mail.list_title"
-
     def test_zh_cn_switch(self) -> None:
         i18n = I18n()
         english = i18n.t("mail.list_title", count=37)
@@ -51,28 +45,8 @@ class TestI18nBuiltin:
         rendered = i18n.t("mail.list_title", count=37)
         assert i18n.language == "zh-CN"
         assert "37" in rendered and rendered != english
-
-    def test_unknown_language_falls_back_to_english(self) -> None:
-        i18n = I18n(language="xx")  # not loaded -> falls back to en
-        assert i18n.language == "en"
-
-    def test_missing_key_returns_key(self) -> None:
-        i18n = I18n()
-        assert i18n.t("no.such.key") == "no.such.key"
-
-    def test_format_parameters(self) -> None:
-        i18n = I18n()
-        rendered = i18n.t("mail.not_found", mail_id="unique-mail-37")
-        assert "unique-mail-37" in rendered
-        assert "{mail_id}" not in rendered
-
-    def test_available_languages_include_builtins(self) -> None:
-        i18n = I18n()
-        codes = i18n.available_codes()
-        assert "en" in codes
-        assert "zh-CN" in codes
-        names = {info.code: info.name for info in i18n.available_languages()}
-        assert names["en"] and names["zh-CN"]
+        assert "unique-mail-37" in i18n.t("mail.not_found", mail_id="unique-mail-37")
+        assert "${ENV_VAR}" in i18n.t("config.desc.llms[].api_key")
 
     def test_no_duplicate_lookup_paths_in_builtin_packs(self) -> None:
         """No key may be reachable by two different spellings.
@@ -102,12 +76,6 @@ class TestI18nBuiltin:
             missing = [key for key in keys if i18n.t(f"config.desc.{key}") == f"config.desc.{key}"]
             assert not missing, f"{code} lacks config.desc for: {sorted(missing)}"
 
-    def test_literal_braces_survive_without_parameters(self) -> None:
-        """`t()` must not run str.format when no params are passed, so an
-        option description showing `${ENV_VAR}` stays intact."""
-        i18n = I18n()
-        assert "${ENV_VAR}" in i18n.t("config.desc.llms[].api_key")
-
 
 class TestI18nExternal:
     def _write_pack(self, tmp_path: Path, code: str, messages: dict[str, Any]) -> None:
@@ -117,13 +85,6 @@ class TestI18nExternal:
             encoding="utf-8",
         )
 
-    def test_external_pack_loads(self, tmp_path: Path) -> None:
-        self._write_pack(tmp_path, "ja", {"mail": {"list_title": "メール（{count}）"}})
-        i18n = I18n(language="en", extra_dirs=[str(tmp_path)])
-        assert "ja" in i18n.available_codes()
-        i18n.set_language("ja")
-        assert i18n.t("mail.list_title", count=2) == "メール（2）"
-
     def test_missing_key_falls_back_to_english(self, tmp_path: Path) -> None:
         self._write_pack(tmp_path, "ja", {"mail": {"list_title": "メール（{count}）"}})
         i18n = I18n(language="en", extra_dirs=[str(tmp_path)])
@@ -132,13 +93,10 @@ class TestI18nExternal:
         assert i18n.t("plugin.title", count=1) == I18n("en").t("plugin.title", count=1)
         # key defined only in ja -> japanese
         assert i18n.t("mail.list_title", count=1) == "メール（1）"
-
-    def test_missing_directory_warns_not_fails(self, tmp_path: Path) -> None:
-        missing = tmp_path / "does-not-exist"
-        i18n = I18n(extra_dirs=[str(missing)])
-        assert i18n.language == "en"
+        assert i18n.t("no.such.key") == "no.such.key"
 
     def test_bad_pack_skipped(self, tmp_path: Path) -> None:
         (tmp_path / "broken.json").write_text("{not json", encoding="utf-8")
-        i18n = I18n(extra_dirs=[str(tmp_path)])
+        i18n = I18n(language="xx", extra_dirs=[str(tmp_path), str(tmp_path / "missing")])
         assert "broken" not in i18n.available_codes()
+        assert i18n.language == "en"

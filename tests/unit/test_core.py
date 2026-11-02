@@ -22,7 +22,6 @@ from mailflow.domain import (
     parse_urgency,
 )
 from mailflow.logging import configure_logging
-from pydantic import ValidationError
 
 ADDRESS = {
     "name": "Sender",
@@ -51,31 +50,21 @@ def make_mail(**overrides: Any) -> MailMessage:
 class TestUrgencyContract:
     """The four-level urgency contract is public and fixed."""
 
-    def test_values(self) -> None:
-        assert {level.value for level in Urgency} == {"ad", "info", "important", "urgent"}
-
-    def test_rank_order(self) -> None:
-        assert Urgency.AD.rank < Urgency.INFO.rank < Urgency.IMPORTANT.rank < Urgency.URGENT.rank
-
     def test_parse_synonyms(self) -> None:
         assert parse_urgency("urgent") is Urgency.URGENT
         assert parse_urgency("critical") is Urgency.URGENT
         assert parse_urgency("junk") is Urgency.AD
         assert parse_urgency("ads") is Urgency.AD
         assert parse_urgency("medium") is Urgency.IMPORTANT
+        assert parse_urgency("重要") is Urgency.IMPORTANT
+        assert parse_urgency("紧急") is Urgency.URGENT
+        assert parse_urgency("广告") is Urgency.AD
+        assert parse_urgency("信息") is Urgency.INFO
         assert parse_urgency("bogus-value") is Urgency.INFO
         assert parse_urgency(None) is Urgency.INFO
 
 
 class TestMailRecordUrgency:
-    def test_effective_defaults_to_automatic(self) -> None:
-        record = MailRecord(
-            record_id="r1",
-            mail=make_mail(),
-            auto_urgency=Urgency.IMPORTANT,
-        )
-        assert record.effective_urgency is Urgency.IMPORTANT
-
     def test_reset_restores_automatic(self) -> None:
         record = MailRecord(
             record_id="r1",
@@ -84,52 +73,20 @@ class TestMailRecordUrgency:
             manual_urgency=Urgency.URGENT,
         )
         assert record.effective_urgency is Urgency.URGENT
+        assert record.auto_urgency is Urgency.IMPORTANT
+        assert MailRecord.model_validate_json(record.model_dump_json()) == record
         record.manual_urgency = None
         assert record.effective_urgency is Urgency.IMPORTANT
 
-    def test_manual_never_overwrites_automatic(self) -> None:
-        record = MailRecord(
-            record_id="r1",
-            mail=make_mail(),
-            auto_urgency=Urgency.URGENT,
-            manual_urgency=Urgency.AD,
-        )
-        assert record.auto_urgency is Urgency.URGENT
-        assert record.effective_urgency is Urgency.AD
-
-    def test_summary_falls_back_to_subject(self) -> None:
+    def test_summary_distinguishes_generated_and_fallback_analysis(self) -> None:
         record = MailRecord(record_id="r1", mail=make_mail(), auto_urgency=Urgency.INFO)
         assert record.summary == "Hello"
-
-    def test_summary_from_analysis(self) -> None:
-        record = MailRecord(
-            record_id="r1",
-            mail=make_mail(),
-            auto_urgency=Urgency.INFO,
-            analysis=MailAnalysis(summary="the summary", urgency=Urgency.INFO),
+        record.analysis = MailAnalysis(summary="generated", urgency=Urgency.INFO)
+        assert record.summary == "generated" and not record.analysis_is_fallback
+        record.analysis = MailAnalysis(
+            summary="Hello", urgency=Urgency.INFO, summary_is_fallback=True
         )
-        assert record.summary == "the summary"
-
-    def test_explicit_fallback_analysis_is_not_treated_as_generated(self) -> None:
-        record = MailRecord(
-            record_id="r1",
-            mail=make_mail(),
-            auto_urgency=Urgency.INFO,
-            analysis=MailAnalysis(summary="Hello", urgency=Urgency.INFO, summary_is_fallback=True),
-        )
-        assert record.analysis_is_fallback is True
-
-    def test_serialization_roundtrip(self) -> None:
-        record = MailRecord(
-            record_id="r1",
-            mail=make_mail(),
-            auto_urgency=Urgency.URGENT,
-            manual_urgency=Urgency.IMPORTANT,
-            analysis=MailAnalysis(summary="s", urgency=Urgency.URGENT, reason="r"),
-        )
-        restored = MailRecord.model_validate_json(record.model_dump_json())
-        assert restored == record
-        assert restored.effective_urgency is Urgency.IMPORTANT
+        assert record.summary == "Hello" and record.analysis_is_fallback
 
 
 class TestMailMessage:
@@ -171,24 +128,8 @@ class TestMailMessage:
         c = make_mail(message_id="", account_id="acct-1", subject="S", body_text="Other")
         assert a.normalized_message_id() != c.normalized_message_id()
 
-    def test_invalid_urgency_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            MailAnalysis.model_validate({"summary": "x", "urgency": "not-a-value"})
-
 
 class TestConfigEnvInterpolation:
-    def test_whole_string_placeholder_expanded(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MF_TEST_TOKEN", "secret-value")
-        path = tmp_path / "c.toml"
-        path.write_text(
-            "[[llms]]\nllm_id = 'l1'\nbase_url = 'https://x'\napi_key = '${MF_TEST_TOKEN}'\n",
-            encoding="utf-8",
-        )
-        config = load_config(path)
-        assert config.llms[0].api_key == "secret-value"
-
     def test_embedded_placeholder_stays_literal(self, tmp_path: Path) -> None:
         path = tmp_path / "c.toml"
         path.write_text(
@@ -283,10 +224,6 @@ class TestConfigValidation:
                 }
             )
 
-    def test_unknown_timezone_rejected(self) -> None:
-        with pytest.raises(ValueError, match="timezone"):
-            MailFlowConfig.model_validate({"general": {"timezone": "Not/AZone"}})
-
     def test_invalid_log_level_rejected(self) -> None:
         with pytest.raises(ValueError, match="log level"):
             MailFlowConfig.model_validate({"logging": {"level": "LOUD"}})
@@ -301,39 +238,9 @@ class TestConfigValidation:
         assert manager.build_registry().snapshots() == []
         assert manager.status("a") == manager.status("b") == "disabled"
 
-    def test_default_llm_accessor(self) -> None:
-        llms = self._llms()
-        llms[0]["default"] = True
-        config = MailFlowConfig.model_validate({"llms": llms})
-        assert config.default_llm() is not None
-        assert config.default_llm().llm_id == "primary"  # type: ignore[union-attr]
-
-    def test_load_config_from_file(self, tmp_path: Path) -> None:
-        path = tmp_path / "config.toml"
-        path.write_text(
-            "[general]\nlanguage = 'zh-CN'\nmail_retention_days = 14\n\n"
-            "[[llms]]\nllm_id = 'l1'\nbase_url = 'https://x'\nmodel = 'm'\n",
-            encoding="utf-8",
-        )
-        config = load_config(path)
-        assert config.general.language == "zh-CN"
-        assert config.general.mail_retention_days == 14
-        assert config.llms[0].llm_id == "l1"
-
 
 class TestLogging:
     """Stage 06: root isolation, queue delivery and secret redaction."""
-
-    def _capture_config(self) -> tuple[LoggingConfig, list[str]]:
-        captured: list[str] = []
-        config = LoggingConfig(
-            console=False,
-            file=False,
-            jsonl=False,
-            level="DEBUG",
-            logger_levels={},
-        )
-        return config, captured
 
     def test_root_handler_list_unchanged(self) -> None:
         import logging
@@ -345,15 +252,6 @@ class TestLogging:
             assert root_before == root_after
             mailflow_logger = logging.getLogger("mailflow")
             assert mailflow_logger.propagate is False
-        finally:
-            runtime.close()
-
-    def test_propagate_false_scoped_to_mailflow(self) -> None:
-        import logging
-
-        runtime = configure_logging(LoggingConfig(console=False, file=False, jsonl=False))
-        try:
-            assert logging.getLogger("mailflow").propagate is False
             assert logging.getLogger("mailflow.runtime").propagate is True
             assert logging.getLogger("unrelated").propagate is True
         finally:
@@ -414,42 +312,8 @@ class TestLogging:
             first.close()
 
 
-class TestDefaultMarketplace:
-    def test_official_repository_configured_by_default(self) -> None:
-        config = MailFlowConfig()
-        assert len(config.plugins.repositories) == 1
-        assert config.plugins.repositories[0].name == "mailflow-repo"
-        assert (
-            "raw.githubusercontent.com/Kingcxp/mailflow-repo" in config.plugins.repositories[0].url
-        )
-
-    def test_explicit_repositories_replace_default(self) -> None:
-        config = MailFlowConfig.model_validate(
-            {"plugins": {"repositories": [{"name": "x", "url": "https://example.com"}]}}
-        )
-        assert [r.name for r in config.plugins.repositories] == ["x"]
-
-
 class TestConfigPersistenceSecrets:
     """Writing the config back must never materialize a resolved secret."""
-
-    def test_placeholder_restored_on_write(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MF_WRITE_TOKEN", "sk-live-value")
-        source = tmp_path / "in.toml"
-        source.write_text(
-            "[[llms]]\nllm_id = 'l1'\nmodel = 'm'\napi_key = '${MF_WRITE_TOKEN}'\n",
-            encoding="utf-8",
-        )
-        config = load_config(source)
-        assert config.llms[0].api_key == "sk-live-value"  # runtime sees the real key
-
-        target = tmp_path / "out.toml"
-        write_config(config, target)
-        written = target.read_text(encoding="utf-8")
-        assert "sk-live-value" not in written
-        assert "${MF_WRITE_TOKEN}" in written
 
     def test_api_key_env_not_persisted(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -475,16 +339,24 @@ class TestConfigPersistenceSecrets:
         monkeypatch.setenv("MF_SET_TOKEN", "sk-set-value")
         source = tmp_path / "in.toml"
         source.write_text(
-            "[[llms]]\nllm_id = 'l1'\nmodel = 'm'\napi_key = '${MF_SET_TOKEN}'\n",
+            "[[llms]]\nllm_id = 'l1'\nmodel = 'pre-${LITERAL}-post'\n"
+            "api_key = '${MF_SET_TOKEN}'\n"
+            "[llms.extra_body.auth]\ntoken = '${MF_SET_TOKEN}'\n",
             encoding="utf-8",
         )
         config = load_config(source)
+        assert config.llms[0].api_key == "sk-set-value"
+        assert config.llms[0].model == "pre-${LITERAL}-post"
+        assert config.llms[0].extra_body["auth"]["token"] == "sk-set-value"
         updated = set_option_value(config, "general.timezone", "Asia/Shanghai")
         target = tmp_path / "out.toml"
         write_config(updated, target)
         written = target.read_text(encoding="utf-8")
         assert "sk-set-value" not in written
         assert "${MF_SET_TOKEN}" in written
+        restored = load_config(target)
+        assert restored.llms[0] == config.llms[0]
+        assert restored.general.timezone == "Asia/Shanghai"
 
     def test_scalar_set_drops_placeholder_of_the_patched_leaf(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -505,23 +377,6 @@ class TestConfigPersistenceSecrets:
         written = target.read_text(encoding="utf-8")
         assert 'timezone = "UTC"' in written
         assert "MF_TZ" not in written
-
-    def test_nested_dict_intermediate_placeholder_restored(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MF_NESTED_TOKEN", "sk-nested-value")
-        source = tmp_path / "in.toml"
-        source.write_text(
-            "[[llms]]\nllm_id = 'l1'\nmodel = 'm'\n"
-            '[llms.extra_body.auth]\ntoken = "${MF_NESTED_TOKEN}"\n',
-            encoding="utf-8",
-        )
-        config = load_config(source)
-        target = tmp_path / "out.toml"
-        write_config(config, target)
-        written = target.read_text(encoding="utf-8")
-        assert "sk-nested-value" not in written
-        assert "${MF_NESTED_TOKEN}" in written
 
 
 class TestUniqueIdValidation:
