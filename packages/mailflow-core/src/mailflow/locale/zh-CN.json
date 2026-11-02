@@ -1002,7 +1002,9 @@
       "smart_review_invalid_time": "时间无效——请使用 YYYY-MM-DD HH:MM",
       "smart_review_invalid_window": "结束时间必须晚于开始时间",
       "reparse_one_start": "正在重新解析 {subject}…",
-      "plugin_status_error": "加载失败"
+      "plugin_status_error": "加载失败",
+      "data_load_failed": "加载失败：{error}",
+      "mail_search_placeholder": "搜索主题、发件人、正文、摘要或附件…"
     },
     "update": {
       "applied_title": "已应用的更新",

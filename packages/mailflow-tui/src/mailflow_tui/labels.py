@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 from mailflow.config import is_secret_key
-from mailflow.domain import Urgency
+from mailflow.domain import MailRecord, Urgency
 
 _URGENCY_LABEL_KEYS: dict[str, str] = {
     "ad": "tui.urgency_opt_ad",
@@ -21,6 +21,20 @@ def urgency_label(service: Any, urgency: Urgency | str) -> str:
     value = urgency.value if isinstance(urgency, Urgency) else str(urgency)
     key = _URGENCY_LABEL_KEYS.get(value)
     return service.t(key) if key else value
+
+
+def analysis_status(service: Any, record: MailRecord) -> str:
+    """Use the same failure/fallback status in mail and action details."""
+    failed = [note for note in record.processor_notes if note.status == "failed"]
+    if failed:
+        key = (
+            "tui.detail_analysis_failed"
+            if record.analysis_is_fallback
+            else "tui.detail_analysis_partial"
+        )
+        error = "; ".join(f"{note.processor_id}: {note.message}" for note in failed[:2])
+        return str(service.t(key, error=error_detail(service, error)))
+    return str(service.t("tui.detail_analysis_unavailable")) if record.analysis_is_fallback else ""
 
 
 def _is_secret_field(key: str) -> bool:
@@ -89,4 +103,4 @@ def error_message(
     )
 
 
-__all__ = ["error_detail", "error_message", "urgency_label"]
+__all__ = ["analysis_status", "error_detail", "error_message", "urgency_label"]

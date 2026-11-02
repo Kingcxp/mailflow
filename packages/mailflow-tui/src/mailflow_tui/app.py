@@ -24,6 +24,7 @@ from mailflow.domain import (
     ReplyState,
     SmartActionResult,
     Urgency,
+    to_utc,
 )
 from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
@@ -55,7 +56,7 @@ from textual.widgets import (
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
-from mailflow_tui.labels import error_detail, error_message, urgency_label
+from mailflow_tui.labels import analysis_status, error_detail, error_message, urgency_label
 from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.profile import UserProfileModal
 from mailflow_tui.repos import ReposScreen
@@ -65,11 +66,24 @@ from mailflow_tui.seminars import SeminarReviewModal
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
+from mailflow_tui.view_state import TableView
 from mailflow_tui.widgets import SafeSelect, SearchToggle
 
 logger = logging.getLogger("mailflow.tui")
 
 _BLANK = ""
+
+
+def _load_error(service: MailFlowService, exc: Exception) -> str:
+    message = service.t("tui.data_load_failed", error=error_detail(service, exc))
+    return f"[red]{escape(message)}[/red]"
+
+
+def _relabel_buttons(owner: Any, labels: dict[str, str]) -> None:
+    for ident, key in labels.items():
+        button = owner.query_one_optional(f"#{ident}", Button)
+        if button is not None:
+            button.label = owner._service.t(key)
 
 
 def _localize(service: MailFlowService, value: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
@@ -97,10 +111,7 @@ def _action_type_label(service: MailFlowService, action_type: str) -> str:
 
 def _action_time_range(service: MailFlowService, item: ActionItem) -> str:
     """Show an action's UTC storage times in the configured local timezone."""
-    start = _localize(service, item.due_at)
-    if item.due_end is None or item.due_end == item.due_at:
-        return start
-    return f"{start} ~ {_localize(service, item.due_end)}"
+    return item.time_range_in(service.config.general.timezone)
 
 
 def _remove_column(table: DataTable[Any], key: str) -> None:
@@ -149,7 +160,8 @@ def _safe_set_value(select: Any, value: Any) -> None:
     try:
         if select is None or not _select_ready(select):
             return
-        select.value = value  # pyright: ignore[reportUnknownMemberType]
+        with select.prevent(Select.Changed):
+            select.value = value  # pyright: ignore[reportUnknownMemberType]
     except (QueryError, InvalidSelectValueError):
         pass
 
@@ -180,21 +192,22 @@ def _apply_options(owner: Any, selector: str, pairs: list[tuple[str, str]]) -> N
         owner._options_seeded = True
         return
     owner._options_signatures = {**signatures, selector: signature}
-    current = select.value
-    try:
-        select.set_options(pairs)  # pyright: ignore[reportUnknownMemberType]
-    except QueryError:
-        # torn down between the ready check and the poke (pane remount race)
-        return
-    if current is not Select.NULL:
-        # the new option list may no longer contain the current value (the
-        # last todo of a filtered type was just deleted, so that type vanished
-        # from the dropdown): assigning it raises InvalidSelectValueError and
-        # kills the app. Skip the restore — the stale-selection reset below
-        # (or the widget's own default) resolves the dropdown.
-        legal = {value for _prompt, value in pairs}
-        if str(current) in legal:
-            _safe_set_value(select, current)
+    with select.prevent(Select.Changed):
+        current = select.value
+        try:
+            select.set_options(pairs)  # pyright: ignore[reportUnknownMemberType]
+        except QueryError:
+            # torn down between the ready check and the poke (pane remount race)
+            return
+        if current is not Select.NULL:
+            # the new option list may no longer contain the current value (the
+            # last todo of a filtered type was just deleted, so that type vanished
+            # from the dropdown): assigning it raises InvalidSelectValueError and
+            # kills the app. Skip the restore — the stale-selection reset below
+            # (or the widget's own default) resolves the dropdown.
+            legal = {value for _prompt, value in pairs}
+            if str(current) in legal:
+                _safe_set_value(select, current)
 
 
 class ReplyModal(ModalScreen[Any]):
@@ -563,9 +576,15 @@ class ActionModal(ModalScreen[Any]):
     async def on_mount(self) -> None:
         """Load the source mail: a todo without its original message context
         (subject, sender, body) forces the user to hunt through the mail tab."""
-        record = await self._service.get_mail(self._item.mail_id)
         node = self.query_one_optional("#action-mail-detail", Static)
         if node is None:
+            return
+        if not self._item.mail_id:
+            return
+        try:
+            record = await self._service.get_mail(self._item.mail_id)
+        except Exception as exc:
+            node.update(_load_error(self._service, exc))
             return
         if record is None:
             node.update(f"[dim]{self._service.t('tui.action_mail_missing')}[/dim]")
@@ -581,16 +600,21 @@ class ActionModal(ModalScreen[Any]):
             body = re.sub(r"<[^>]+>", " ", body)
             body = re.sub(r"[ \t\r\f\v]+", " ", body).strip()
         lines: RichText = RichText()
+        status = analysis_status(self._service, record)
+        if status:
+            lines.append(status + "\n", style="red")
         lines.append(f"{self._service.t('tui.column_subject')}: ", style="bold")
         lines.append(f"{mail.subject}\n")
         lines.append(f"{self._service.t('tui.column_sender')}: ", style="bold")
         lines.append(f"{mail.sender.display or mail.sender.address}\n")
         lines.append(f"{self._service.t('tui.column_date')}: ", style="bold")
         lines.append(f"{_localize(self._service, mail.date)}\n")
-        analysis_summary = record.analysis.summary if record.analysis else ""
-        if analysis_summary:
-            lines.append(f"{self._service.t('tui.detail_summary')}:\n", style="bold")
-            lines.append(f"{analysis_summary}\n")
+        summary = self._service.display_text(record.summary)
+        lines.append(f"{self._service.t('tui.detail_summary')}:\n", style="bold")
+        lines.append(summary or self._service.t("tui.detail_analysis_unavailable"))
+        if record.analysis_is_fallback and summary:
+            lines.append(f" ({self._service.t('tui.detail_summary_fallback')})", style="yellow")
+        lines.append("\n")
         reason = record.analysis.reason if record.analysis else ""
         if reason:
             lines.append(f"{self._service.t('tui.detail_reason')}:\n", style="bold")
@@ -624,6 +648,8 @@ class MailPane(Vertical):
         self._service = service
         self._records: list[MailRecord] = []
         self._selected_id: str | None = None
+        self._detail_record_id: str | None = None
+        self._rendering = False
         # refresh_mail runs from several entry points (mount worker, filter
         # changes, reload-all); concurrent clear+add_row passes interleave
         # into DuplicateKeys — serialize them
@@ -655,30 +681,37 @@ class MailPane(Vertical):
         self._operation_status = ""
 
     def compose(self) -> ComposeResult:
-        # the urgency Select auto-selects "auto" while mounting and fires
-        # Changed; swallow that programmatic event (and the relabel restore)
-        # so it never stamps an override onto the selected mail
         self._urgency_suppress = True
+        remote = bool(getattr(self._service, "remote", False))
         with Horizontal(id="mail-search-row"):
             yield Input(
-                placeholder=self._service.t("tui.smart_action_placeholder"), id="mail-search"
+                placeholder=self._service.t(
+                    "tui.mail_search_placeholder" if remote else "tui.smart_action_placeholder"
+                ),
+                id="mail-search",
             )
             yield SearchToggle("regex", ident="mail-search-regex")
             yield SearchToggle("case", ident="mail-search-case")
-            yield Button(self._service.t("tui.smart_action"), id="smart-action", variant="primary")
+            if not remote:
+                yield Button(
+                    self._service.t("tui.smart_action"), id="smart-action", variant="primary"
+                )
         yield RichLog(id="smart-action-progress", max_lines=8, wrap=True)
         yield Static("", id="mail-empty-hint")
         with Horizontal():
             yield DataTable(id="mail-table")
             with ScrollableContainer(id="mail-detail"):
-                yield Static("", id="mail-analysis-status")
-                yield Static("", id="mail-operation-status")
-                yield Static("", id="mail-summary")
-                yield Static("", id="mail-reason")
-                yield Static("", id="mail-actions")
-                yield Static("", id="mail-body")
-                yield Static("", id="mail-attachments")
-                yield Static("", id="mail-notes")
+                for ident in (
+                    "mail-analysis-status",
+                    "mail-operation-status",
+                    "mail-summary",
+                    "mail-reason",
+                    "mail-actions",
+                    "mail-body",
+                    "mail-attachments",
+                    "mail-notes",
+                ):
+                    yield Static("", id=ident)
         with Horizontal(id="mail-controls"):
             yield SafeSelect(self._urgency_options(), id="urgency-select", allow_blank=False)
             yield SafeSelect(
@@ -693,46 +726,37 @@ class MailPane(Vertical):
                 allow_blank=False,
             )
             with Vertical(id="mail-actions-buttons"):
-                with Horizontal(id="mail-actions-row1"):
-                    yield Button(
-                        self._service.t("tui.btn_refresh"), id="btn-refresh", variant="primary"
-                    )
-                    yield Button(self._service.t("tui.btn_trash"), id="btn-trash", variant="error")
-                    yield Button(
-                        self._service.t("tui.btn_ask_correct"),
-                        id="btn-ask-correct",
-                        variant="warning",
-                    )
-                with Horizontal(id="mail-actions-row2"):
-                    yield Button(
-                        self._service.t("tui.btn_reply"), id="btn-reply", variant="success"
-                    )
-                    yield Button(
-                        self._service.t("tui.btn_reparse"),
-                        id="btn-reparse",
-                        variant="primary",
-                    )
-                    yield Button(
-                        self._service.t("tui.btn_reparse_failed"),
-                        id="btn-reparse-failed",
-                        variant="error",
-                    )
-                with Horizontal(id="mail-actions-row3"):
-                    yield Button(
-                        self._service.t("tui.btn_purge_expired"),
-                        id="btn-purge-expired",
-                        variant="warning",
-                    )
-                    yield Button(
-                        self._service.t("tui.btn_reparse_all"),
-                        id="btn-reparse-all",
-                        variant="primary",
-                    )
-                    yield Button(
-                        self._service.t("tui.btn_profile"),
-                        id="btn-profile",
-                        variant="success",
-                    )
+                for index, buttons in enumerate(self._button_rows(), 1):
+                    with Horizontal(id=f"mail-actions-row{index}"):
+                        for ident, key, variant in buttons:
+                            if remote and ident not in {
+                                "btn-refresh",
+                                "btn-trash",
+                                "btn-reply",
+                                "btn-purge-expired",
+                            }:
+                                continue
+                            yield Button(self._service.t(key), id=ident, variant=variant)
+
+    @staticmethod
+    def _button_rows() -> tuple[tuple[tuple[str, str, Any], ...], ...]:
+        return (
+            (
+                ("btn-refresh", "tui.btn_refresh", "primary"),
+                ("btn-trash", "tui.btn_trash", "error"),
+                ("btn-ask-correct", "tui.btn_ask_correct", "warning"),
+            ),
+            (
+                ("btn-reply", "tui.btn_reply", "success"),
+                ("btn-reparse", "tui.btn_reparse", "primary"),
+                ("btn-reparse-failed", "tui.btn_reparse_failed", "error"),
+            ),
+            (
+                ("btn-purge-expired", "tui.btn_purge_expired", "warning"),
+                ("btn-reparse-all", "tui.btn_reparse_all", "primary"),
+                ("btn-profile", "tui.btn_profile", "success"),
+            ),
+        )
 
     async def on_mount(self) -> None:
         self._urgency_suppress = False
@@ -788,6 +812,29 @@ class MailPane(Vertical):
 
     async def relabel(self) -> None:
         self._columns_done = False
+        _relabel_buttons(
+            self,
+            {
+                ident: key
+                for row in self._button_rows()
+                for ident, key, _variant in row
+                if not (
+                    ident.startswith("btn-reparse")
+                    and self._reparse_worker is not None
+                    and self._reparse_worker.is_running
+                )
+            },
+        )
+        self._set_smart_label(
+            "tui.smart_action_cancel" if self._smart_action_running else "tui.smart_action"
+        )
+        search = self.query_one_optional("#mail-search", Input)
+        if search is not None:
+            search.placeholder = self._service.t(
+                "tui.mail_search_placeholder"
+                if getattr(self._service, "remote", False)
+                else "tui.smart_action_placeholder"
+            )
         self._urgency_suppress = True
         try:
             _apply_options(self, "#urgency-select", self._urgency_options())
@@ -806,10 +853,19 @@ class MailPane(Vertical):
         async with self._refresh_lock:
             if getattr(self, "_smart_action_running", False):
                 return
-            if self._smart_action_result is not None:
-                await self._render_smart_action_result(self._smart_action_result)
-                return
-            await self._refresh_mail_unlocked()
+            try:
+                if self._smart_action_result is not None:
+                    current = {r.record_id: r for r in await self._service.list_mails()}
+                    self._smart_action_result.records = [
+                        current[r.record_id]
+                        for r in self._smart_action_result.records
+                        if r.record_id in current
+                    ]
+                    await self._render_smart_action_result(self._smart_action_result)
+                else:
+                    await self._refresh_mail_unlocked()
+            except Exception as exc:
+                self._set_static("#mail-empty-hint", _load_error(self._service, exc))
 
     async def _render_records(
         self,
@@ -826,20 +882,20 @@ class MailPane(Vertical):
         table = self._mail_table()
         if table is None:
             return
-        table.clear()
-        self._ensure_columns()
-        self._refresh_view_options()
-        for position, record in enumerate(records, start=1):
-            urgency = record.effective_urgency
-            table.add_row(
-                _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
-                RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
-                escape(record.mail.subject or self._service.t("tui.mail_no_subject")),
-                escape(record.mail.sender.address),
-                key=record.record_id,
-            )
-            if position % 50 == 0:
-                await asyncio.sleep(0)
+        view = TableView.capture(table, self._selected_id)
+        self._rendering = True
+        try:
+            with table.prevent(DataTable.RowHighlighted, DataTable.RowSelected):
+                table.clear()
+                self._ensure_columns()
+                self._refresh_view_options()
+                for position, record in enumerate(records, start=1):
+                    table.add_row(*self._mail_cells(record), key=record.record_id)
+                    if position % 50 == 0:
+                        await asyncio.sleep(0)
+                self._selected_id = view.restore(table)
+        finally:
+            self._rendering = False
         hint = self.query_one_optional("#mail-empty-hint", Static)
         if hint is not None:
             if status_hint:
@@ -851,10 +907,19 @@ class MailPane(Vertical):
             else:
                 hint.update(_BLANK)
                 hint.display = "none"  # pyright: ignore[reportUnknownMemberType]
-        visible_ids = {record.record_id for record in records}
-        if self._selected_id not in visible_ids:
-            self._selected_id = records[0].record_id if records else None
+        selected = next((r for r in records if r.record_id == self._selected_id), None)
+        if selected is not None:
+            self._sync_urgency_select(selected)
         await self._show_selected()
+
+    def _mail_cells(self, record: MailRecord) -> tuple[Any, ...]:
+        urgency = record.effective_urgency
+        return (
+            _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
+            RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
+            RichText(record.mail.subject or self._service.t("tui.mail_no_subject")),
+            RichText(record.mail.sender.display),
+        )
 
     async def _render_smart_action_result(self, result: SmartActionResult) -> None:
         """Render what the instruction produced, by content rather than intent.
@@ -1217,7 +1282,7 @@ class MailPane(Vertical):
         stream them into the table (the search may complete while this
         reads — appending is still correct, _render_records re-renders)."""
         records = [r for r in await self._service.list_mails() if r.record_id in match_ids]
-        if records:
+        if records and self._smart_action_running:
             await self._append_records(records)
 
     async def _append_records(self, records: list[MailRecord]) -> None:
@@ -1233,37 +1298,23 @@ class MailPane(Vertical):
         for record in ordered:
             if record.record_id in existing:
                 continue
-            urgency = record.effective_urgency
-            table.add_row(
-                RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
-                escape(
-                    " ".join((record.summary or record.mail.subject or "").split())
-                    or self._service.t("tui.mail_no_subject")
-                ),
-                escape(record.mail.sender.address),
-                _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
-                key=record.record_id,
-            )
+            table.add_row(*self._mail_cells(record), key=record.record_id)
             existing.add(record.record_id)
 
     async def _refresh_mail_unlocked(self) -> None:
-        if getattr(self, "_smart_action_running", False):
-            # a search owns the table (preview stream + result render): a
-            # refresh landing mid-search would clear the streamed previews
+        if self._smart_action_running or self._mail_table() is None:
             return
-        table = self._mail_table()
-        if table is None:
+        records = await self._service.list_mails()
+        if self._smart_action_running:
             return
-        self._ensure_columns()
-        self._refresh_view_options()
+        self._records = records
         search = self.query_one_optional("#mail-search", Input)
-        query = search.value.strip() if search is not None else ""
-        regex_control = self.query_one_optional("#mail-search-regex", SearchToggle)
-        case_control = self.query_one_optional("#mail-search-case", SearchToggle)
+        regex = self.query_one_optional("#mail-search-regex", SearchToggle)
+        case = self.query_one_optional("#mail-search-case", SearchToggle)
         matcher = build_search_matcher(
-            query,
-            regex=bool(regex_control.value) if regex_control is not None else False,
-            case_sensitive=bool(case_control.value) if case_control is not None else False,
+            search.value if search is not None else "",
+            regex=bool(regex.value) if regex is not None else False,
+            case_sensitive=bool(case.value) if case is not None else False,
         )
         if matcher.error:
             self._set_static(
@@ -1272,89 +1323,20 @@ class MailPane(Vertical):
             )
             return
         self._mail_matcher = matcher
-        table.clear()
-        if query and self._records:
-            # while searching, filter the in-memory cache synchronously
-            records = list(self._records)
-            if not getattr(self, "_cache_reread_running", False):
-                self._cache_reread_running = True
-
-                async def _background_reread() -> None:
-                    try:
-                        self._records = await self._service.list_mails()
-                    finally:
-                        self._cache_reread_running = False
-
-                self.run_worker(_background_reread(), exclusive=True, group="mail-cache")
-        else:
-            records = self._records = await self._service.list_mails()
-        if getattr(self, "_smart_action_running", False):
-            # a search started while this refresh was reading storage: the
-            # search's own renders (preview stream, result set) own the
-            # table now — a late render here would wipe them
-            return
-        if query:
+        if matcher.query:
             records = [record for record in records if self._matches(record, matcher)]
         urgency_filter = self._select_value("#mail-urgency-filter")
         if urgency_filter != "all":
-            records = [
-                record for record in records if record.effective_urgency.value == urgency_filter
-            ]
-        # stable two-pass sort: newest first, then urgency when requested —
-        # the default view puts urgent mail on top without losing recency
-        records.sort(key=lambda record: record.mail.received_at, reverse=True)
+            records = [r for r in records if r.effective_urgency.value == urgency_filter]
+        records = sorted(records, key=lambda r: r.mail.received_at, reverse=True)
         if self._select_value("#mail-sort") == "urgency":
-            records.sort(key=lambda record: record.effective_urgency.rank, reverse=True)
-        for position, record in enumerate(records, start=1):
-            urgency = record.effective_urgency
-            table.add_row(
-                _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
-                RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
-                escape(record.mail.subject or self._service.t("tui.mail_no_subject")),
-                escape(record.mail.sender.address),
-                key=record.record_id,
-            )
-            if position % 50 == 0:
-                # yield to the event loop so the UI stays interactive while
-                # a large mailbox renders
-                await asyncio.sleep(0)
-        hint = self.query_one_optional("#mail-empty-hint", Static)
-        if hint is not None:
-            status = self._pending_status_hint
-            if status:
-                # a one-shot status from an applied operation wins over the
-                # empty/blank state for exactly one render
-                self._pending_status_hint = ""
-                hint.update(status)
-                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
-            elif not records:
-                if self._records:
-                    hint.update(self._service.t("tui.mail_no_match"))
-                else:
-                    hint.update(self._service.t("tui.mail_empty"))
-                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
-            else:
-                hint.update(_BLANK)
-                # an empty Static still occupies a row; hide it so the
-                # search box and the mail table sit flush (the redundant
-                # gap between them comes from this placeholder)
-                hint.display = "none"  # pyright: ignore[reportUnknownMemberType]
-        visible_ids = {record.record_id for record in records}
-        if self._selected_id not in visible_ids:
-            self._selected_id = records[0].record_id if records else None
-        # keep the override dropdown in sync with the selected mail without
-        # re-triggering the mutation handler
-        selected = next((r for r in records if r.record_id == self._selected_id), None)
-        if selected is not None:
-            wanted = "auto" if selected.manual_urgency is None else selected.manual_urgency.value
-            self._urgency_suppress = True
-            try:
-                select = self._urgency_select()
-                if select is not None and _select_ready(select) and str(select.value) != wanted:
-                    _safe_set_value(select, wanted)
-            finally:
-                self._urgency_suppress = False
-        await self._show_selected()
+            records.sort(key=lambda r: r.effective_urgency.rank, reverse=True)
+        status, self._pending_status_hint = self._pending_status_hint, ""
+        await self._render_records(
+            records,
+            empty_hint_key="tui.mail_no_match" if self._records else "tui.mail_empty",
+            status_hint=status,
+        )
 
     def _select_value(self, selector: str) -> str:
         select = _typed_select(self, selector if selector.startswith("#") else f"#{selector}")
@@ -1379,12 +1361,9 @@ class MailPane(Vertical):
 
     def _matches(self, record: MailRecord, matcher: SearchMatcher) -> bool:
         """Search subject, sender, summary and body through one matcher."""
-        blob = f"{record.mail.subject} {record.mail.sender.address} {record.summary}"
-        if matcher.matches(blob):
-            return True
-        from mailflow.ocr import searchable_mail_text
+        from mailflow.ocr import searchable_record_text
 
-        return matcher.matches(searchable_mail_text(record.mail))
+        return matcher.matches(searchable_record_text(record))
 
     def _schedule_mail_filter(self) -> None:
         self._mail_filter_generation += 1
@@ -1417,10 +1396,12 @@ class MailPane(Vertical):
             self._schedule_mail_filter()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id != "mail-table" or self._rendering:
+            return
         self._selected_id = event.row_key.value
         if self._selected_id is None:
             return
-        record = await self._service.get_mail(self._selected_id)
+        record = next((r for r in self._records if r.record_id == self._selected_id), None)
         if record is not None:
             self._sync_urgency_select(record)
         await self._show_selected()
@@ -1429,7 +1410,12 @@ class MailPane(Vertical):
         """Cursor movement (arrow keys) highlights rows without selecting;
         the detail pane must follow the highlight so what the user looks at
         is what the right side shows."""
-        if event.row_key.value is None or getattr(self, "_smart_action_running", False):
+        if (
+            event.data_table.id != "mail-table"
+            or self._rendering
+            or event.row_key.value is None
+            or getattr(self, "_smart_action_running", False)
+        ):
             return
         self._selected_id = event.row_key.value
         record = next((r for r in self._records if r.record_id == self._selected_id), None)
@@ -1602,6 +1588,13 @@ class MailPane(Vertical):
             await self._render_smart_action_result(result)
 
     async def on_select_changed(self, event: Select.Changed) -> None:
+        try:
+            await self._handle_select_changed(event)
+        except Exception as exc:
+            message = f"[red]{escape(error_message(self._service, exc))}[/red]"
+            self._set_operation_status(message)
+
+    async def _handle_select_changed(self, event: Select.Changed) -> None:
         if event.select.id in ("mail-urgency-filter", "mail-sort"):
             await self.refresh_mail()
         elif (
@@ -1624,6 +1617,7 @@ class MailPane(Vertical):
 
     def _clear_mail_detail(self) -> None:
         """Remove detail from a record no longer visible in the table."""
+        self._detail_record_id = None
         for selector in (
             "#mail-analysis-status",
             "#mail-operation-status",
@@ -1650,26 +1644,33 @@ class MailPane(Vertical):
         if self._selected_id is None:
             self._clear_mail_detail()
             return
-        record = await self._service.get_mail(self._selected_id)
+        selected_id = self._selected_id
+        detail = self.query_one_optional("#mail-detail", ScrollableContainer)
+        try:
+            record = await self._service.get_mail(selected_id)
+            existing = (
+                await self._service.get_feedback(selected_id)
+                if record is not None and not getattr(self._service, "remote", False)
+                else None
+            )
+        except Exception as exc:
+            if selected_id == self._selected_id:
+                self._clear_mail_detail()
+                self._set_static("#mail-analysis-status", _load_error(self._service, exc))
+            return
+        if selected_id != self._selected_id:
+            return
         if record is None:
             self._clear_mail_detail()
-            return
-        service = self._service
-        failed_notes = [note for note in record.processor_notes if note.status == "failed"]
-        failure_detail = "; ".join(
-            f"{note.processor_id}: {note.message}" for note in failed_notes[:2]
-        )
-        if failure_detail:
-            status_key = (
-                "tui.detail_analysis_failed"
-                if record.analysis_is_fallback
-                else "tui.detail_analysis_partial"
+            self._set_static_text(
+                "#mail-analysis-status",
+                RichText(self._service.t("mail.not_found", mail_id=selected_id), style="yellow"),
             )
-            status = service.t(status_key, error=failure_detail)
-        elif record.analysis_is_fallback:
-            status = service.t("tui.detail_analysis_unavailable")
-        else:
-            status = ""
+            return
+        same_record = self._detail_record_id == selected_id
+        self._detail_record_id = selected_id
+        service = self._service
+        status = analysis_status(service, record)
         self._set_static_text(
             "#mail-analysis-status",
             RichText(status, style="red") if status else RichText(""),
@@ -1743,17 +1744,17 @@ class MailPane(Vertical):
                 "\n" + service.t("tui.detail_reply_required", answer=service.t("common.yes")),
                 style="bold yellow",
             )
-        if not getattr(service, "remote", False):
-            existing = await service.get_feedback(record.record_id)
-            if existing:
-                reply_line.append(
-                    f"\n{service.t('tui.feedback_marker')}: {existing}", style="bold yellow"
-                )
+        if existing:
+            reply_line.append(
+                f"\n{service.t('tui.feedback_marker')}: {existing}", style="bold yellow"
+            )
         reply_line.append(
             f"\n{service.t('tui.urgency_label')}: {urgency_label(service, record.effective_urgency)} "
             f"({service.t('tui.detail_manual_marker') if record.manual_urgency is not None else service.t('tui.detail_auto_marker')})"
         )
         self._set_static_text("#mail-notes", reply_line)
+        if detail is not None and not same_record:
+            detail.scroll_to(x=0, y=0, animate=False, force=True, immediate=True)
 
     def _set_static_text(self, selector: str, content: RichText | None) -> None:
         """Update a detail Static with Rich ``Text`` — console markup in the
@@ -1794,6 +1795,13 @@ class MailPane(Vertical):
         self._set_static("#mail-operation-status", content)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        try:
+            await self._handle_button_pressed(event)
+        except Exception as exc:
+            message = f"[red]{escape(error_message(self._service, exc))}[/red]"
+            self._set_operation_status(message)
+
+    async def _handle_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "smart-action":
             # The search itself awaits network I/O. Keep the message handler
@@ -1858,12 +1866,6 @@ class MailPane(Vertical):
             )
             return
         if button_id == "btn-reply":
-            if getattr(self._service, "remote", False):
-                self._set_static(
-                    "#mail-notes",
-                    f"[yellow]{self._service.t('tui.reply_local_only')}[/yellow]",
-                )
-                return
             record = await self._service.get_mail(self._selected_id)
             if record is not None:
                 # textual types Widget.app loosely; the cast pins the concrete app
@@ -2189,8 +2191,17 @@ class MailPane(Vertical):
             raise
 
     def select_mail(self, mail_id: str) -> None:
+        self._clear_smart_action_result()
+        search = self.query_one_optional("#mail-search", Input)
+        if search is not None:
+            search.value = ""
+        urgency = _typed_select(self, "#mail-urgency-filter")
+        if urgency is not None:
+            _safe_set_value(urgency, "all")
         self._selected_id = mail_id
-        self.call_after_refresh(lambda: self._show_selected())
+        self.run_worker(
+            self.refresh_mail(), exclusive=True, group="mail-refresh", exit_on_error=False
+        )
 
 
 class ActionsPane(Vertical):
@@ -2275,16 +2286,42 @@ class ActionsPane(Vertical):
 
     async def relabel(self) -> None:
         self._columns_done = False
+        _relabel_buttons(
+            self,
+            {
+                "actions-add": "tui.btn_add_todo",
+                "actions-edit": "tui.btn_edit",
+                "actions-delete": "tui.btn_delete",
+            },
+        )
+        search = self.query_one_optional("#actions-search", Input)
+        if search is not None:
+            search.placeholder = self._service.t("tui.actions_search_placeholder")
+        _apply_options(
+            self,
+            "#actions-range",
+            [
+                (self._service.t("tui.range_all"), "all"),
+                (self._service.t("tui.range_today"), "today"),
+                (self._service.t("tui.range_week"), "week"),
+            ],
+        )
         await self.refresh_actions()
 
     async def refresh_actions(self) -> None:
         async with self._refresh_lock:
-            await self._refresh_actions_unlocked()
+            try:
+                await self._refresh_actions_unlocked()
+            except Exception as exc:
+                hint = self.query_one_optional("#actions-hint", Static)
+                if hint is not None:
+                    hint.update(_load_error(self._service, exc))
 
     async def _refresh_actions_unlocked(self) -> None:
         table = self._actions_table()
         if table is None:
             return
+        loaded = await self._service.list_actions()
         search = self.query_one_optional("#actions-search", Input)
         regex = self.query_one_optional("#actions-search-regex", SearchToggle)
         case = self.query_one_optional("#actions-search-case", SearchToggle)
@@ -2304,13 +2341,15 @@ class ActionsPane(Vertical):
         # a refresh must not throw the user out of the list they were reading:
         # remember the cursor row and scroll offset, restore them below when
         # the row still exists
-        previous_scroll_y = int(table.scroll_y)
-        previous_row_key = self._cursor_row_key()
+        view = TableView.capture(table)
         table.clear()
         self._ensure_columns()
-        self._items = await self._service.list_actions()
+        self._items = loaded
         items = list(self._items)
+        types = sorted({item.action_type for item in self._items})
         type_filter = self._select_value("#actions-type-filter")
+        if type_filter not in {"all", *types}:
+            type_filter = "all"
         if type_filter != "all":
             items = [item for item in items if item.action_type == type_filter]
         range_mode = self._select_value("#actions-range")
@@ -2329,7 +2368,11 @@ class ActionsPane(Vertical):
             else:
                 lower = now
                 upper = now + timedelta(days=7)
-            items = [item for item in items if lower <= item.due_at < upper]
+            items = [
+                item
+                for item in items
+                if to_utc(item.due_at) < upper and (to_utc(item.due_end or item.due_at) >= lower)
+            ]
         if matcher.query:
             items = [
                 item
@@ -2338,7 +2381,6 @@ class ActionsPane(Vertical):
                     f"{item.summary} {item.action_type} {item.notes} {item.location} {item.url}"
                 )
             ]
-        types = sorted({item.action_type for item in self._items})
         _apply_options(
             self,
             "#actions-type-filter",
@@ -2365,41 +2407,16 @@ class ActionsPane(Vertical):
             # for something still ahead
             style = "dim" if self._service.is_action_expired(item) else ""
             table.add_row(
-                RichText(escape(_action_time_range(self._service, item)), style=style),
-                RichText(escape(_action_type_label(self._service, item.action_type)), style=style),
-                RichText(escape(item.summary), style=style),
-                RichText(escape(item.notes or "-"), style=style),
-                RichText(escape(item.mail_id), style=style),
+                RichText(_action_time_range(self._service, item), style=style),
+                RichText(_action_type_label(self._service, item.action_type), style=style),
+                RichText(item.summary, style=style),
+                RichText(item.notes or "-", style=style),
+                RichText(item.mail_id, style=style),
                 key=item.item_id,
             )
             if position % 50 == 0:
                 await asyncio.sleep(0)
-        self._restore_actions_view(table, previous_row_key, previous_scroll_y)
-
-    def _restore_actions_view(
-        self, table: DataTable[Any], previous_row_key: str | None, previous_scroll_y: int
-    ) -> None:
-        """Put the cursor back on its row and the list back at its offset."""
-        rows = {str(row_key.value or "") for row_key in table.rows}
-        if previous_row_key and previous_row_key in rows:
-            table.move_cursor(row=table.get_row_index(previous_row_key), scroll=False)
-            table.scroll_y = previous_scroll_y
-            return
-        # the row is gone (deleted, filtered out): keep the offset as close as
-        # the shorter list allows rather than jumping to the top
-        table.scroll_y = max(0, min(previous_scroll_y, max(0, table.row_count - 1)))
-
-    def _cursor_row_key(self) -> str | None:
-        """Row key under the cursor, or None when there is no valid row."""
-        table = self._actions_table()
-        if table is None:
-            return None
-        row_index = table.cursor_row
-        if row_index < 0 or row_index >= table.row_count:
-            return None
-        from textual.coordinate import Coordinate
-
-        return str(table.coordinate_to_cell_key(Coordinate(row_index, 0)).row_key.value or "")
+        view.restore(table)
 
     def _select_value(self, selector: str) -> str:
         select = _typed_select(self, selector)
@@ -2433,6 +2450,8 @@ class ActionsPane(Vertical):
             self._schedule_actions_filter()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id != "actions-table":
+            return
         item = next((i for i in self._items if i.item_id == event.row_key.value), None)
         if item is None:
             return
@@ -2483,6 +2502,13 @@ class ActionsPane(Vertical):
         )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        try:
+            await self._handle_button_pressed(event)
+        except Exception as exc:
+            message = f"[red]{escape(error_message(self._service, exc))}[/red]"
+            self.query_one("#actions-hint", Static).update(message)
+
+    async def _handle_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "actions-edit":
             self.edit_selected()
             return
@@ -2517,6 +2543,7 @@ class RuntimePane(Vertical):
         self._selected_plugin: str | None = None
         self._detail_open_for: str | None = None
         self._refresh_lock = asyncio.Lock()
+        self._load_failed = False
 
     def compose(self) -> ComposeResult:
         with ScrollableContainer(id="runtime-scroll"):
@@ -2556,6 +2583,16 @@ class RuntimePane(Vertical):
 
     async def relabel(self) -> None:
         self._columns_done = False
+        _relabel_buttons(
+            self,
+            {
+                "runtime-plugin-disable": "tui.btn_disable",
+                "runtime-plugin-enable": "tui.btn_enable",
+                "runtime-plugin-uninstall": "tui.btn_uninstall",
+            },
+        )
+        self._set_static("#runtime-plugins", self._service.t("tui.runtime_plugins"))
+        self._set_static("#runtime-plugins-hint", self._service.t("tui.runtime_plugins_help"))
         await self.refresh_runtime()
 
     def _set_static(self, selector: str, content: str) -> None:
@@ -2583,16 +2620,26 @@ class RuntimePane(Vertical):
 
     async def refresh_runtime(self) -> None:
         async with self._refresh_lock:
-            await self._refresh_runtime_unlocked()
+            try:
+                await self._refresh_runtime_unlocked()
+                if self._load_failed:
+                    self._set_static("#runtime-status", "")
+                    self._load_failed = False
+            except Exception as exc:
+                self._load_failed = True
+                self._set_static("#runtime-status", _load_error(self._service, exc))
 
     async def _refresh_runtime_unlocked(self) -> None:
         if getattr(self._service, "remote", False):
             await cast(Any, self._service).refresh_snapshot()
         snapshot = self._service.snapshot()
         service = self._service
+        scroll = self.query_one_optional("#runtime-scroll", ScrollableContainer)
+        offset = (scroll.scroll_x, scroll.scroll_y) if scroll is not None else (0.0, 0.0)
         table = self._plugins_table()
         if table is None:
             return
+        view = TableView.capture(table)
         table.clear()
         self._ensure_columns()
         for plugin in snapshot.plugins:
@@ -2610,6 +2657,7 @@ class RuntimePane(Vertical):
                 status_text,
                 key=plugin.plugin_id,
             )
+        self._selected_plugin = view.restore(table)
         adapters = "\n".join(
             escape(f"  {c.component_id} (plugin: {c.plugin_id})")
             for c in snapshot.components
@@ -2654,8 +2702,14 @@ class RuntimePane(Vertical):
             "#runtime-storage",
             f"\n[bold]{service.t('tui.runtime_storage')}:[/bold] {snapshot.storage or '-'}",
         )
+        if scroll is not None:
+            scroll.call_after_refresh(
+                lambda: scroll.scroll_to(x=offset[0], y=offset[1], animate=False, force=True)
+            )
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id != "runtime-plugins-table":
+            return
         plugin_id = cast(str, event.row_key.value)
         self._selected_plugin = plugin_id
         status = self._service.plugin_status(plugin_id)
@@ -2664,6 +2718,13 @@ class RuntimePane(Vertical):
         self.query_one("#runtime-status", Static).update(
             escape(f"{plugin_id} — {self._service.t(f'tui.plugin_status_{status}')}{detail}")
         )
+
+    async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if (
+            event.data_table.id == "runtime-plugins-table"
+            and event.cursor_row == event.data_table.cursor_row
+        ):
+            self._selected_plugin = str(event.row_key.value)
 
     def _open_plugin_detail(self, plugin_id: str) -> None:
         """Open the plugin's detail dialog instantly.
@@ -3886,6 +3947,13 @@ class MailFlowApp(App[None]):
             ("ctrl+8", "tab-settings"),
             ("ctrl+9", "tab-logs"),
         ):
+            if self._remote and tab_id in {
+                "tab-mailboxes",
+                "tab-llms",
+                "tab-market",
+                "tab-notifications",
+            }:
+                continue
             self._bindings.bind(key, f"goto_tab('{tab_id}')", show=False)
         if refresh:
             self.refresh_bindings()
@@ -3944,14 +4012,8 @@ class MailFlowApp(App[None]):
                 # marketplace installs run uv against the local environment
                 with TabPane(self._service.t("tui.tab_market"), id="tab-market"):
                     yield MarketPane(self._service)
-            with TabPane(self._service.t("tui.tab_notifications"), id="tab-notifications"):
-                if self._remote:
-                    yield Static(
-                        self._service.t(
-                            "remote.unsupported", operation=self._service.t("tui.tab_notifications")
-                        )
-                    )
-                else:
+            if not self._remote:
+                with TabPane(self._service.t("tui.tab_notifications"), id="tab-notifications"):
                     yield NotificationsPane(self._service)
             with TabPane(self._service.t("tui.tab_settings"), id="tab-settings"):
                 yield SettingsPane(self._service)
@@ -3975,11 +4037,7 @@ class MailFlowApp(App[None]):
             self._eager_market_fetch(), exclusive=True, group="market-eager", exit_on_error=False
         )
         self._refresh_lock = asyncio.Lock()
-        self._service.on("mailflow.mail.processed", self._on_mail_processed)
-        # a periodic sweep retires spent schedule entries outside any user
-        # action: without this the Actions table keeps showing them
-        self._service.on("action.expired", self._on_mail_processed)
-        self._service.on("language.changed", self._on_language_changed)
+        self._subscriptions = [self._service.on("*", self._on_service_event)]
         if self._splash:
             from mailflow_tui.splash import SplashScreen
 
@@ -4019,6 +4077,29 @@ class MailFlowApp(App[None]):
         # the service runs on the same loop as the app: schedule directly
         self._apply_language()
 
+    async def on_unmount(self) -> None:
+        for unsubscribe in getattr(self, "_subscriptions", []):
+            if callable(unsubscribe):
+                unsubscribe()
+
+    async def _on_service_event(self, event: str, **payload: Any) -> None:
+        if event == "language.changed":
+            await self._on_language_changed(event, **payload)
+        elif event.startswith(
+            (
+                "mail.",
+                "action.",
+                "plugin.",
+                "config.",
+                "gateway.",
+                "mailflow.mail.processed",
+                "mailflow.runtime.",
+                "mailflow.cleanup.",
+                "mailflow.records.",
+            )
+        ):
+            self._schedule_reload()
+
     def _pane_factories(self) -> dict[str, tuple[Callable[[Any], Any], str]]:
         return {
             "tab-mail": (MailPane, "tui.tab_mail"),
@@ -4039,11 +4120,7 @@ class MailFlowApp(App[None]):
         return keys
 
     def _apply_language(self) -> None:
-        """Re-translate tab titles and remount every composed pane.
-
-        Remounting (instead of patching individual labels) guarantees the
-        whole UI — buttons, placeholders, table headers, static titles —
-        switches to the new language at once."""
+        """Translate the current views without discarding their reading state."""
         self.title = self._service.t("tui.title")
         self._reset_shortcuts(refresh=True)
         tabs = self.query_one(TabbedContent)
@@ -4067,6 +4144,10 @@ class MailFlowApp(App[None]):
                 continue  # lazy: composes with current language on activation
             container = panes.first()
             if not container.is_attached or not container.children:
+                continue
+            content = container.children[0]
+            if isinstance(content, (MailPane, ActionsPane, RuntimePane)):
+                await content.relabel()
                 continue
             await container.remove_children()
             if not container.is_attached:

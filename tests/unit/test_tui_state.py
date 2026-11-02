@@ -1,0 +1,338 @@
+"""Local and remote users keep their view while data and language change."""
+
+from __future__ import annotations
+
+import queue
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+from mailflow.domain import (
+    ActionItem,
+    Attachment,
+    MailAddress,
+    PluginSnapshot,
+    ProcessorNote,
+)
+from mailflow.i18n import I18n
+from mailflow.protocol import json_value
+from mailflow.tools import ToolRegistry
+from mailflow_server.app import create_app
+from mailflow_server.client import RemoteClient
+from mailflow_tui.app import (
+    ActionModal,
+    ActionsPane,
+    MailFlowApp,
+    MailPane,
+    MarketPane,
+    ReplyModal,
+    RuntimePane,
+)
+from mailflow_tui.remote import RemoteServiceAdapter
+from test_commands import commands_service, make_record
+from textual.containers import ScrollableContainer
+from textual.coordinate import Coordinate
+from textual.widgets import Button, DataTable, Input, Select, Static, TabbedContent, TextArea
+
+
+@pytest.fixture(params=[False, True], ids=["local", "remote"])
+def host(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Any:
+    service = commands_service()
+    service.config.plugins.repositories = []
+    service.config.server.username, service.config.server.password = "admin", "secret"
+    snapshot = service.snapshot
+    plugins = [PluginSnapshot(plugin_id=f"plugin-{i:02}", name=f"Plugin {i}") for i in range(35)]
+    monkeypatch.setattr(
+        service, "snapshot", lambda: snapshot().model_copy(update={"plugins": plugins})
+    )
+    monkeypatch.setattr(MailFlowApp, "_eager_market_fetch", AsyncMock())
+    monkeypatch.setattr(MailFlowApp, "_preload_market_cache", AsyncMock())
+    monkeypatch.setattr(MarketPane, "on_mount", AsyncMock())
+    failures: set[str] = set()
+    transport = httpx.ASGITransport(app=create_app(service))
+
+    async def respond(req: httpx.Request) -> httpx.Response:
+        if req.url.path in failures:
+            return httpx.Response(503, json={"detail": "offline [retry]"})
+        return await transport.handle_async_request(req)
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    client = RemoteClient("http://fake", "admin", "secret")
+    remote = bool(request.param)
+    view = (
+        RemoteServiceAdapter(client, json_value(service.snapshot()), I18n()) if remote else service
+    )
+    app = MailFlowApp(view, queue.Queue(), remote=remote)
+
+    async def emit(event: str, **payload: Any) -> None:
+        if remote:
+            await client._dispatch(event, json_value(payload))
+        else:
+            await service.events.emit(event, **payload)
+
+    return service, view, app, emit, failures
+
+
+def keys(table: DataTable[Any]) -> list[str]:
+    return [str(key.value) for key in table.rows]
+
+
+def cursor(table: DataTable[Any]) -> str:
+    return str(table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value)
+
+
+def text(app: Any, ident: str) -> str:
+    return str(app.query_one(ident, Static).render())
+
+
+async def settle(pilot: Any) -> None:
+    """Wait for debounced reads, event workers and the resulting layout."""
+    await pilot.pause()
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause()
+
+
+async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(host: Any) -> None:
+    service, view, app, emit, _failures = host
+    now = datetime.now(UTC)
+    action = ActionItem(
+        item_id="deleted",
+        mail_id="target",
+        summary="Dismiss me",
+        action_type="exam",
+        due_at=now + timedelta(hours=1),
+    )
+    target = make_record("target", subject="SubjectNeedle", action=action)
+    target.mail.sender = MailAddress(name="NameNeedle", address="sender@example.com")
+    target.mail.body_text = "BodyNeedle"
+    target.mail.attachments = [Attachment(filename="PosterNeedle.png")]
+    target.mail.image_text = "OCRNeedle"
+    assert target.analysis is not None
+    target.analysis.summary = "SummaryNeedle"
+    await service.storage.save_mail(target)
+    await service.storage.save_mail(make_record("other", subject="unrelated"))
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        pane = app.query_one(MailPane)
+        table = app.query_one("#mail-table", DataTable)
+        search = app.query_one("#mail-search", Input)
+        for query in (
+            "SubjectNeedle",
+            "NameNeedle",
+            "BodyNeedle",
+            "SummaryNeedle",
+            "PosterNeedle",
+            "OCRNeedle",
+        ):
+            search.value = query
+            await settle(pilot)
+            assert keys(table) == ["target"], query
+            assert "SummaryNeedle" in text(app, "#mail-summary")
+            result, _ = await ToolRegistry(service).call("find_mail", {"contains": query})
+            assert "id=target" in result and "id=other" not in result
+        assert "Dismiss me" in text(app, "#mail-actions")
+        assert await service.delete_action("deleted")
+        await emit("action.deleted", item_id="deleted")
+        await pilot.pause()
+        await pane.refresh_mail()
+        await app.query_one(ActionsPane).refresh_actions()
+        assert "Dismiss me" not in text(app, "#mail-actions")
+        assert app.query_one("#actions-table", DataTable).row_count == 0
+        assert not (await view.get_mail("target")).action_items
+        assert not (await service.runtime._approaching_actions(now, 1, now=now))
+        # Visibility is a view; the saved analysis remains available for reanalysis.
+        assert (await service.storage.get_mail("target")).action_items == [action]
+
+
+async def test_events_language_and_refresh_keep_reading_state(host: Any) -> None:
+    service, _view, app, emit, _failures = host
+    now = datetime.now(UTC)
+    for i in range(40):
+        record = make_record(f"mail-{i:02}", subject=f"Keep {i:02}")
+        record.mail.received_at = now + timedelta(minutes=i)
+        record.mail.body_text = "\n".join(f"Body line {j}" for j in range(150))
+        await service.storage.save_mail(record)
+        await service.add_action(f"Todo {i:02}", now + timedelta(days=1, minutes=i))
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        mail = app.query_one(MailPane)
+        actions = app.query_one(ActionsPane)
+        runtime = app.query_one(RuntimePane)
+        search = app.query_one("#mail-search", Input)
+        search.value = "Keep"
+        app.query_one("#mail-urgency-filter", Select).value = "important"
+        app.query_one("#mail-sort", Select).value = "urgency"
+        await settle(pilot)
+        table = app.query_one("#mail-table", DataTable)
+        table.move_cursor(row=30)
+        await pilot.pause()
+        detail = app.query_one("#mail-detail", ScrollableContainer)
+        detail.scroll_to(y=18, animate=False, force=True)
+        await pilot.pause()
+        mail_state = cursor(table), table.scroll_y, detail.scroll_y
+        assert mail_state[1] > 0 and mail_state[2] > 0
+        app.query_one(TabbedContent).active = "tab-actions"
+        app.query_one("#actions-search", Input).value = "Todo"
+        app.query_one("#actions-range", Select).value = "week"
+        app.query_one("#actions-type-filter", Select).value = "errand"
+        await settle(pilot)
+        action_table = app.query_one("#actions-table", DataTable)
+        action_table.move_cursor(row=30)
+        await pilot.pause()
+        action_state = cursor(action_table), action_table.scroll_y
+        assert action_state[1] > 0
+        app.query_one(TabbedContent).active = "tab-runtime"
+        plugin_table = app.query_one("#runtime-plugins-table", DataTable)
+        plugin_table.move_cursor(row=25)
+        await pilot.pause()
+        plugin_state = cursor(plugin_table), plugin_table.scroll_y
+        incoming = make_record("mail-new", subject="Keep incoming")
+        incoming.mail.received_at = now + timedelta(days=1)
+        await service.storage.save_mail(incoming)
+        await emit("mailflow.mail.processed", record=incoming)
+        await settle(pilot)
+        assert table.row_count == 41
+        service.i18n.set_language("zh-CN")
+        await emit("language.changed", language="zh-CN")
+        await settle(pilot)
+        assert app.query_one(MailPane) is mail
+        assert app.query_one(ActionsPane) is actions
+        assert app.query_one(RuntimePane) is runtime
+        assert (cursor(table), table.scroll_y, detail.scroll_y) == mail_state
+        assert (cursor(action_table), action_table.scroll_y) == action_state
+        assert (cursor(plugin_table), plugin_table.scroll_y) == plugin_state
+        assert search.value == "Keep"
+        assert app.query_one("#mail-urgency-filter", Select).value == "important"
+        assert app.query_one("#mail-sort", Select).value == "urgency"
+        assert app.query_one("#actions-search", Input).value == "Todo"
+        assert app.query_one("#actions-range", Select).value == "week"
+        assert app.query_one("#actions-type-filter", Select).value == "errand"
+        assert str(app.query_one("#btn-refresh", Button).label) == service.t("tui.btn_refresh")
+        assert app.query_one(TabbedContent).active == "tab-runtime"
+        assert all(record.manual_urgency is None for record in await service.storage.list_mails())
+        # A new selection wins over the previous refresh's layout callback.
+        app.query_one(TabbedContent).active = "tab-mail"
+        await settle(pilot)
+        await mail.refresh_mail()
+        table.move_cursor(row=35)
+        await settle(pilot)
+        assert cursor(table) == keys(table)[35]
+        assert table.scroll_y > mail_state[1]
+
+
+async def test_failure_details_agree_and_missing_mail_has_visible_state(host: Any) -> None:
+    service, _view, app, _emit, _failures = host
+    now = datetime.now(UTC)
+    action = ActionItem(
+        item_id="action",
+        mail_id="failed",
+        summary="Attend",
+        action_type="meeting",
+        due_at=now,
+    )
+    record = make_record("failed", action=action)
+    assert record.analysis is not None
+    record.analysis.summary_is_fallback = True
+    record.processor_notes = [
+        ProcessorNote(
+            processor_id="llm",
+            plugin_id="fake",
+            status="failed",
+            message="offline [retry]",
+            started_at=now,
+            finished_at=now,
+        )
+    ]
+    await service.storage.save_mail(record)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        assert "offline [retry]" in text(app, "#mail-analysis-status")
+        assert service.t("tui.detail_summary_fallback") in text(app, "#mail-summary")
+        app.push_screen(ActionModal(app._service, action))
+        await pilot.pause()
+        assert text(app.screen, "#action-mail-detail").startswith(
+            text(app, "#mail-analysis-status")
+        )
+        assert service.t("tui.detail_summary_fallback") in text(app.screen, "#action-mail-detail")
+        app.screen.dismiss()
+        pane = app.query_one(MailPane)
+        pane._selected_id = "missing"
+        await pane._show_selected()
+        assert service.t("mail.not_found", mail_id="missing") in text(app, "#mail-analysis-status")
+        assert not text(app, "#mail-summary")
+
+
+async def test_remote_errors_preserve_data_then_recover_and_only_supported_actions_show(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Use the same mock HTTP boundary as the parametrized local/remote tests.
+    service = commands_service()
+    service.config.server.username, service.config.server.password = "admin", "secret"
+    await service.storage.save_mail(make_record())
+    await service.add_action("Remote todo", datetime.now(UTC) + timedelta(days=1))
+    asgi = httpx.ASGITransport(app=create_app(service))
+    failures: set[str] = set()
+
+    async def respond(req: httpx.Request) -> httpx.Response:
+        if req.url.path in failures:
+            return httpx.Response(503, json={"detail": "offline [retry]"})
+        return await asgi.handle_async_request(req)
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(
+            transport=httpx.MockTransport(respond),
+            **kwargs,
+        ),
+    )
+    view = RemoteServiceAdapter(
+        RemoteClient("http://fake", "admin", "secret"), json_value(service.snapshot()), I18n()
+    )
+    app = MailFlowApp(view, queue.Queue(), remote=True)
+    failures.update({"/mails", "/actions", "/snapshot"})
+    async with app.run_test(size=(140, 45)) as pilot:
+        await pilot.pause()
+        assert app.query_one("#mail-table", DataTable).row_count == 0
+        assert app.query_one("#actions-table", DataTable).row_count == 0
+        for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
+            assert "offline [retry]" in text(app, ident)
+        failures.clear()
+        await app._reload_all()
+        failures.update({"/mails", "/actions", "/snapshot"})
+        await app._reload_all()
+        for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
+            assert "offline [retry]" in text(app, ident)
+        assert app.query_one("#mail-table", DataTable).row_count == 1
+        assert app.query_one("#actions-table", DataTable).row_count == 1
+        failures.add("/mails/m1")
+        app.query_one("#btn-trash", Button).press()
+        await pilot.pause()
+        assert "offline [retry]" in text(app, "#mail-operation-status")
+        assert await service.storage.get_mail("m1") is not None
+        failures.clear()
+        await app._reload_all()
+        for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
+            assert "offline" not in text(app, ident)
+        assert not app.query("#smart-action, #btn-reparse, #btn-ask-correct, #btn-profile")
+        assert not app.query("#tab-mailboxes, #tab-llms, #tab-notifications, #tab-market")
+        app.query_one("#btn-reply", Button).press()
+        await pilot.pause()
+        assert isinstance(app.screen, ReplyModal)
+        assert app.screen.query_one("#reply-body", TextArea).text == "I will attend."
+        assert len(service.storage.drafts) == 1
+        draft_screen = app.screen
+        draft_screen.query_one("#reply-body", TextArea).text = "My unfinished reply"
+        service.i18n.set_language("zh-CN")
+        await view.client._dispatch("language.changed", {"language": "zh-CN"})
+        await pilot.pause()
+        assert app.screen is draft_screen
+        assert draft_screen.query_one("#reply-body", TextArea).text == "My unfinished reply"

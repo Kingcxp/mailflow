@@ -1002,7 +1002,9 @@
       "smart_review_invalid_time": "Invalid date/time — use YYYY-MM-DD HH:MM",
       "smart_review_invalid_window": "End time must be after start time",
       "reparse_one_start": "Re-analyzing {subject}…",
-      "plugin_status_error": "load failed"
+      "plugin_status_error": "load failed",
+      "data_load_failed": "Unable to load data: {error}",
+      "mail_search_placeholder": "Search subject, sender, body, summary or attachments…"
     },
     "update": {
       "applied_title": "Applied updates",
