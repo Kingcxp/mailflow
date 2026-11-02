@@ -896,16 +896,18 @@ class TestExpiredMail:
         )
         await storage.save_mail(_expired_record("bare-info", urgency=Urgency.INFO))
         await storage.save_mail(
-            TestExpiredMailGuards._rich("failed-ad", urgency=Urgency.AD, failed_note=True)
+            TestExpiredMailGuards.rich_record("failed-ad", urgency=Urgency.AD, failed_note=True)
         )
         await storage.save_mail(
-            TestExpiredMailGuards._rich("fallback-ad", urgency=Urgency.AD, summary_is_fallback=True)
+            TestExpiredMailGuards.rich_record(
+                "fallback-ad", urgency=Urgency.AD, summary_is_fallback=True
+            )
         )
         await storage.save_mail(
             _expired_record("no-analysis", urgency=Urgency.AD).model_copy(update={"analysis": None})
         )
         await storage.save_mail(
-            TestExpiredMailGuards._rich(
+            TestExpiredMailGuards.rich_record(
                 "ongoing", urgency=Urgency.INFO, due_in_hours=-2, due_end_in_hours=20
             )
         )
@@ -991,7 +993,7 @@ class TestExpiredMailGuards:
         return new_service()
 
     @staticmethod
-    def _rich(
+    def rich_record(
         record_id: str,
         *,
         urgency: Urgency,
@@ -1026,7 +1028,7 @@ class TestExpiredMailGuards:
         """A manual classification landing while the dialog is open wins."""
         service = self._service()
         storage = cast(Any, service.storage)
-        await storage.save_mail(self._rich("sweepme", urgency=Urgency.AD))
+        await storage.save_mail(self.rich_record("sweepme", urgency=Urgency.AD))
         expired = await service.list_expired_mails()
         assert [record.record_id for record in expired] == ["sweepme"]
 
@@ -1042,8 +1044,8 @@ class TestExpiredMailGuards:
     async def test_purge_only_touches_the_ids_it_was_given(self) -> None:
         service = self._service()
         storage = cast(Any, service.storage)
-        await storage.save_mail(self._rich("first", urgency=Urgency.AD))
-        await storage.save_mail(self._rich("second", urgency=Urgency.AD))
+        await storage.save_mail(self.rich_record("first", urgency=Urgency.AD))
+        await storage.save_mail(self.rich_record("second", urgency=Urgency.AD))
 
         assert await service.purge_expired_mails(["first"]) == 1
 

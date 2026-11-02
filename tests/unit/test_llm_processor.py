@@ -13,7 +13,6 @@ from mailflow.domain import Urgency
 from mailflow.processors import (
     LLMImportanceProcessor,
     extract_json,
-    parse_due_at,
 )
 from mailflow_testkit.fakes import make_mail
 
@@ -66,13 +65,6 @@ def make_processor(router: StubRouter) -> LLMImportanceProcessor:
 
 
 class TestExtractJson:
-    def test_plain_json(self) -> None:
-        assert extract_json('{"a": 1}') == {"a": 1}
-
-    def test_fenced_json(self) -> None:
-        text = 'Here is the result:\n```json\n{"a": 2}\n```\nHope that helps.'
-        assert extract_json(text) == {"a": 2}
-
     def test_prose_wrapped_json_brace_slice(self) -> None:
         text = 'Sure, the answer is {"urgency": "urgent"} done.'
         assert extract_json(text) == {"urgency": "urgent"}
@@ -82,21 +74,13 @@ class TestExtractJson:
             extract_json("no json here")
 
 
-class TestParseDueAt:
-    def test_aware_passthrough(self) -> None:
-        value = parse_due_at("2026-06-10T09:00:00+08:00", "UTC")
-        assert value.utcoffset() is not None
-        assert value.hour == 9
-
-    def test_naive_gets_context_timezone(self) -> None:
-        value = parse_due_at("2026-06-10T09:00:00", "Asia/Shanghai")
-        assert value.tzinfo is not None
-        assert value.utcoffset().total_seconds() == 8 * 3600  # type: ignore[union-attr]
-
-
 class TestLLMImportanceProcessor:
     async def test_critical_exam_with_student_id(self) -> None:
-        router = StubRouter(CRITICAL_EXAM_JSON)
+        payload = CRITICAL_EXAM_JSON.replace('"urgent"', '"Critical"')
+        router = StubRouter(
+            '<think>{"summary": "Private reasoning"}</think>\n'
+            f"Here is the answer:\n```json\n{payload}\n```\nDone."
+        )
         processor = make_processor(router)
         mail = make_mail(
             subject="Final calculus exam", body_text="Bring your student ID to the exam hall."
@@ -106,6 +90,7 @@ class TestLLMImportanceProcessor:
         assert result.analysis is not None
         analysis = result.analysis
         assert analysis.urgency is Urgency.URGENT
+        assert analysis.summary == "Final calculus exam on June 10 at 09:00"
         assert analysis.reply_required is True
         assert analysis.suggested_reply == "I will attend the exam."
         assert result.llm_used == "primary"
@@ -117,7 +102,8 @@ class TestLLMImportanceProcessor:
         assert item.action_type == "exam"
         assert item.summary == "Attend the final calculus exam"
         assert item.notes == "Bring student ID and calculator"
-        assert item.due_at.tzinfo is not None
+        assert item.due_at == datetime(2026, 6, 10, 1, 0, tzinfo=UTC)
+        assert item.due_end == datetime(2026, 6, 10, 3, 0, tzinfo=UTC)
 
         joined = "\n".join(m["content"] for m in router.last_messages)
         assert "Final calculus exam" in joined
@@ -190,36 +176,20 @@ class TestLLMImportanceProcessor:
             {"summary": "Invalid window", "action_type": "errand", "must_do": true,
              "due_at": "2026-06-02T09:00:00+00:00", "due_end": "2026-06-02T09:00:00+00:00"},
             {"summary": "Renew registration", "action_type": "registration", "must_do": "yes",
-             "due_at": "2026-06-02T09:00:00+00:00", "due_end": "2026-06-02T10:00:00+00:00"}
+             "due_at": "2026-06-02T09:00:00", "due_end": "2026-06-02T10:00:00"}
           ]
         }"""
         processor = make_processor(StubRouter(payload))
 
-        result = await processor.process(make_mail(), CONTEXT)
+        result = await processor.process(
+            make_mail(), CONTEXT.model_copy(update={"timezone": "Asia/Shanghai"})
+        )
 
         assert result.analysis is not None
         assert [item.summary for item in result.analysis.action_items] == ["Renew registration"]
         assert result.analysis.action_items[0].action_type == "registration"
-        assert result.analysis.action_items[0].due_end == datetime(2026, 6, 2, 10, tzinfo=UTC)
-
-    async def test_urgency_case_and_synonym_normalized(self) -> None:
-        payload = CRITICAL_EXAM_JSON.replace('"urgent"', '"Critical"')
-        router = StubRouter(payload)
-        processor = make_processor(router)
-        result = await processor.process(make_mail(), CONTEXT)
-        assert result.analysis is not None
-        assert result.analysis.urgency is Urgency.URGENT
-
-    async def test_no_action_items(self) -> None:
-        router = StubRouter(
-            '{"summary": "Just a notice", "urgency": "info", "reason": "", '
-            '"reply_required": false, "suggested_reply": "", "action_items": [], "notes": ""}'
-        )
-        processor = make_processor(router)
-        result = await processor.process(make_mail(), CONTEXT)
-        assert result.analysis is not None
-        assert result.analysis.urgency is Urgency.INFO
-        assert result.analysis.action_items == []
+        assert result.analysis.action_items[0].due_at == datetime(2026, 6, 2, 1, tzinfo=UTC)
+        assert result.analysis.action_items[0].due_end == datetime(2026, 6, 2, 2, tzinfo=UTC)
 
     async def test_empty_model_summary_is_explicitly_marked_as_fallback(self) -> None:
         router = StubRouter(
@@ -234,6 +204,8 @@ class TestLLMImportanceProcessor:
         assert result.analysis is not None
         assert result.analysis.summary == mail.subject
         assert result.analysis.summary_is_fallback is True
+        assert result.analysis.urgency is Urgency.INFO
+        assert result.analysis.action_items == []
 
     async def test_no_llm_configured_leaves_rules_result_intact(self) -> None:
         config = ProcessorConfig(processor_id="p1", provider="llm-importance", llm=None)
@@ -289,36 +261,6 @@ class TestLLMEnhancers:
                 )
             return None
 
-    async def test_enhancer_prompt_messages_and_output(self) -> None:
-        router = StubRouter(CRITICAL_EXAM_JSON)
-        config = ProcessorConfig(
-            processor_id="p1",
-            provider="llm-importance",
-            llm="primary",
-            fallback_llms=["backup"],
-        )
-        processor = LLMImportanceProcessor(config, router, enhancers=[self.AppendingEnhancer()])
-        result = await processor.process(make_mail(), CONTEXT)
-        # system prompt appended
-        assert any(
-            "Extra: always answer in Chinese." in m["content"]
-            for m in router.last_messages
-            if m["role"] == "system"
-        )
-        # extra message injected after the user message
-        assert {"role": "user", "content": "Be very concise."} in router.last_messages
-        # post-processing adjusted the parsed analysis
-        assert result.analysis is not None
-        assert "confirmed by enhancer" in result.analysis.reason
-
-    async def test_no_enhancers_unchanged(self) -> None:
-        router = StubRouter(CRITICAL_EXAM_JSON)
-        processor = make_processor(router)
-        result = await processor.process(make_mail(), CONTEXT)
-        assert result.analysis is not None
-        assert "confirmed by enhancer" not in result.analysis.reason
-        assert len(router.last_messages) == 2  # system + user only
-
     async def test_host_keeps_enhancers_when_factories_are_validated(self) -> None:
         from mailflow.config import LLMConfig, MailFlowConfig
         from mailflow.processors import register_builtin_processors
@@ -338,28 +280,26 @@ class TestLLMEnhancers:
         analysis, notes, _, _ = await pipeline.process(make_mail(), CONTEXT.account_id)
 
         assert "confirmed by enhancer" in analysis.reason
+        assert any(
+            "Extra: always answer in Chinese." in message["content"]
+            for message in router.last_messages
+            if message["role"] == "system"
+        )
         assert {"role": "user", "content": "Be very concise."} in router.last_messages
         assert not any(note.status == "failed" for note in notes)
 
 
-class TestSummaryLanguage:
-    async def test_language_option_injects_instruction(self) -> None:
-        router = StubRouter(CRITICAL_EXAM_JSON)
-        config = ProcessorConfig(
+async def test_analysis_request_carries_mail_dates_profile_feedback_and_ocr() -> None:
+    router = StubRouter(CRITICAL_EXAM_JSON)
+    processor = LLMImportanceProcessor(
+        ProcessorConfig(
             processor_id="p1",
             provider="llm-importance",
             llm="primary",
             options={"language": "zh-CN"},
-        )
-        processor = LLMImportanceProcessor(config, router)
-        await processor.process(make_mail(), CONTEXT)
-        user_message = next(m for m in router.last_messages if m["role"] == "user")
-        assert "zh-CN" in user_message["content"]
-
-
-async def test_analysis_request_carries_mail_dates_profile_feedback_and_ocr() -> None:
-    router = StubRouter(CRITICAL_EXAM_JSON)
-    processor = make_processor(router)
+        ),
+        router,
+    )
     sent = datetime(2026, 5, 20, 14, 30, tzinfo=UTC)
     mail = make_mail(
         subject="Date-sensitive notice",
@@ -387,48 +327,8 @@ async def test_analysis_request_carries_mail_dates_profile_feedback_and_ocr() ->
         sent.isoformat(),
         context.now.isoformat(),
         context.user_profile,
+        "zh-CN",
         distinct,
     ):
         assert value in request
     assert request.count(repeated) == 1
-
-
-class TestThinkBlockStripping:
-    def _processor_with_text(self, text: str) -> LLMImportanceProcessor:
-        config = ProcessorConfig(
-            processor_id="p",
-            provider="llm-importance",
-            llm="l1",
-            fallback_llms=[],
-            options={},
-        )
-
-        class Router:
-            async def chat(
-                self,
-                messages: list[dict[str, Any]],
-                *,
-                primary: str,
-                fallback: list[str] | None = None,
-                options: dict[str, Any] | None = None,
-            ) -> Any:
-                from mailflow.contracts import LLMCompletion
-
-                return LLMCompletion(text=text, model="m")
-
-        return LLMImportanceProcessor(config, cast(Any, Router()))
-
-    async def test_think_block_is_stripped_before_parsing(self) -> None:
-        import json as jsonlib
-
-        payload: dict[str, Any] = {
-            "summary": "s",
-            "urgency": "info",
-            "reason": "r",
-            "action_items": [],
-        }
-        text = "<think>chain of thought...</think>\n" + jsonlib.dumps(payload)
-        processor = self._processor_with_text(text)
-        result = await processor.process(make_mail(), CONTEXT)
-        assert result.analysis is not None
-        assert "chain of thought" not in (result.analysis.summary + result.analysis.reason)
