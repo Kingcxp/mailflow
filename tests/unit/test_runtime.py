@@ -510,22 +510,36 @@ async def test_hourly_summary_respects_closed_hours_preferences_and_delivery_rec
             calls.append(messages)
             from mailflow.contracts import LLMCompletion
 
+            if len(calls) == 1:
+                raise TimeoutError("model unavailable")
             return LLMCompletion(text="Hour briefing: one important mail.")
 
     class Notifier:
+        fail = True
+
         async def push_text(self, text: str) -> None:
             pushed.append(("default", text))
 
         async def push_to_target(self, target: str, text: str) -> None:
+            if target == "group:777" and self.fail:
+                self.fail = False
+                raise TimeoutError("notifier unavailable")
             pushed.append((target, text))
 
     storage = FakeStorage()
     mail = make_mail()
     mail.received_at = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
-    await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
+    for index in range(51):
+        record = mail.model_copy(update={"subject": f"hour-mail-{index:03d}"})
+        await storage.save_mail(MailRecord(record_id=f"hour-{index}", mail=record))
     config = MailFlowConfig.model_validate(
         {
-            "general": {"workers": 1, "hourly_summary": False},
+            "general": {
+                "workers": 1,
+                "hourly_summary": False,
+                "timezone": "Asia/Shanghai",
+                "summary_language": "zh-CN",
+            },
             "llms": [{"llm_id": "llm-1"}],
         }
     )
@@ -543,7 +557,7 @@ async def test_hourly_summary_respects_closed_hours_preferences_and_delivery_rec
                 provider="onebot",
                 options={
                     "hourly_summary": True,
-                    "targets": ["group:888", "group:999"],
+                    "targets": ["group:888", "group:999", "group:777"],
                 },
             )
         ],
@@ -559,13 +573,26 @@ async def test_hourly_summary_respects_closed_hours_preferences_and_delivery_rec
     )
     assert calls == [] and pushed == []
     await storage.set_preference("hourly_summary.chat.onebot.n0.999", "off")
-    assert await runtime._fire_hourly_summary(closed, config.general) == 1  # pyright: ignore[reportPrivateUsage]
-    assert pushed == [("group:888", "Hour briefing: one important mail.")]
+    # A failed model call and then one failed destination must both be retryable.
     assert await runtime._fire_hourly_summary(closed, config.general) == 0  # pyright: ignore[reportPrivateUsage]
-    assert len(calls) == 1 and len(pushed) == 1
+    assert not await storage.get_preference("hourly_summary.2026-08-16T09:00")
+    assert await runtime._fire_hourly_summary(closed, config.general) == 0  # pyright: ignore[reportPrivateUsage]
+    assert not await storage.get_preference("hourly_summary.2026-08-16T09:00")
+    assert [target for target, _ in pushed] == ["group:888"]
+    calls_before_retry = len(calls)
+    assert await runtime._fire_hourly_summary(closed, config.general) == 1  # pyright: ignore[reportPrivateUsage]
+    assert [target for target, _ in pushed] == ["group:888", "group:777"]
+    assert pushed[0][1] == pushed[1][1]
+    assert len(calls) == calls_before_retry  # reuse the completed briefing, not the model
+    prompt = "\n".join(message["content"] for call in calls[1:] for message in call)
+    assert all(prompt.count(f"hour-mail-{index:03d}") == 1 for index in range(51))
+    assert "zh-CN" in prompt and "Asia/Shanghai" in prompt
+    assert "2026-08-16T17:00:00+08:00" in prompt
+    assert await runtime._fire_hourly_summary(closed, config.general) == 0  # pyright: ignore[reportPrivateUsage]
+    assert len(calls) == calls_before_retry and len(pushed) == 2
     assert await runtime._fire_hourly_summary(closed + timedelta(hours=1), config.general) == 0  # pyright: ignore[reportPrivateUsage]
     assert await storage.get_preference("hourly_summary.2026-08-16T10:00")
-    assert len(calls) == 1
+    assert len(calls) == calls_before_retry
 
 
 class TestFailedReanalysisKeepsPrevious:
