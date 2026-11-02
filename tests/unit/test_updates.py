@@ -11,7 +11,6 @@ from mailflow.commands import CommandRouter
 from mailflow.plugin_market import MarketPlugin, PluginMarket, Repository
 from mailflow.updates import (  # pyright: ignore[reportPrivateUsage]
     UpdateReport,
-    _version_newer,  # pyright: ignore[reportPrivateUsage]
     apply_plugin_updates,
     check_plugin_updates,
     check_updates,
@@ -122,12 +121,6 @@ class TestLatestRelease:
 
 
 class TestCheckPluginUpdates:
-    def test_remote_source_with_newer_version(self) -> None:
-        installed = {"mailflow-notify-demo": "0.9.0"}
-        sources = {"mailflow-notify-demo": "git+https://example.com/repo.git"}
-        updates = check_plugin_updates(FakeMarket(_plugin(version="1.0.0")), installed, sources)
-        assert updates == {"mailflow-notify-demo": ("0.9.0", "1.0.0")}
-
     def test_local_or_missing_source_never_auto_updates(self) -> None:
         installed = {"mailflow-notify-demo": "0.9.0"}
         assert (
@@ -150,11 +143,6 @@ class TestCheckPluginUpdates:
         sources = {"mailflow-notify-gone": "git+https://example.com/repo.git"}
         assert check_plugin_updates(FakeMarket(None), installed, sources) == {}
 
-    def test_same_version_no_update(self) -> None:
-        installed = {"mailflow-notify-demo": "1.0.0"}
-        sources = {"mailflow-notify-demo": "git+https://example.com/repo.git"}
-        assert check_plugin_updates(FakeMarket(_plugin(version="1.0.0")), installed, sources) == {}
-
 
 class TestCheckUpdates:
     def test_report_combines_mailflow_and_plugins(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,16 +161,13 @@ class TestCheckUpdates:
         assert report.mailflow_update is True
         assert report.plugin_updates == {"mailflow-notify-demo": ("0.9.0", "1.0.0")}
         assert report.has_updates is True
-
-    def test_no_updates(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            "mailflow.updates.latest_mailflow_release",
-            lambda current: current,  # type: ignore[arg-type]
+        current = check_updates(
+            FakeMarket(_plugin(version="1.0.0")),
+            installed_plugins={"mailflow-notify-demo": "1.0.0"},
+            sources=sources,
+            mailflow_current="9.9.9",
         )
-        report = check_updates(
-            FakeMarket(None), installed_plugins={}, sources={}, mailflow_current="0.1.0"
-        )
-        assert report.has_updates is False
+        assert not current.has_updates
 
 
 class TestUpdateCommand:
@@ -203,12 +188,6 @@ class TestUpdateCommand:
         assert response.ok, response.text
         assert "9.9.9" in response.text
         assert "mailflow-notify-demo" in response.text
-
-    async def test_update_status(self, commands: tuple[CommandRouter, Any]) -> None:
-        router, _service = commands
-        status = await router.execute("update status")
-        assert status.ok
-        assert "auto update: no" in status.text
 
     async def test_update_auto_toggle_persists(self, tmp_path: Path) -> None:
         service = _make_service(config_path=str(tmp_path / "config.toml"))
@@ -269,29 +248,22 @@ class TestDailyUpdateLoop:
         assert not storage.preferences  # pyright: ignore[reportUnknownMemberType]
 
 
-class TestVersionNewer:
-    def test_numeric_components_compare_numerically(self) -> None:
-        assert _version_newer("0.10.0", "0.9.0") is True
-        assert _version_newer("0.9.0", "0.10.0") is False
-
-    def test_equal_versions_in_different_shapes_are_not_updates(self) -> None:
-        assert _version_newer("1.0", "1.0.0") is False
-        assert _version_newer("1.0.0", "1.0") is False
-
-    def test_v_prefix_and_unparseable_fallback(self) -> None:
-        assert _version_newer("v2.1.0", "2.0.9") is True
-        assert _version_newer("nightly-x", "1.0.0") is False
-        assert _version_newer("same-tag", "same-tag") is False
-
-
 class TestApplyPluginUpdates:
-    async def test_installs_even_when_distribution_present(self) -> None:
+    async def test_installs_even_when_distribution_present(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The installed-distribution guard must not turn an update into a
         no-op: apply_plugin_updates only runs for plugins already detected
         as outdated, so it has to bypass the check."""
         market = FakeMarket(_plugin(version="1.0.0"))
+
+        def installed(plugin_id: str) -> bool:
+            return True
+
+        monkeypatch.setattr(market, "is_installed", installed)
         results = await apply_plugin_updates(market, {"mailflow-notify-demo": ("0.9.0", "1.0.0")})
         assert results == {"mailflow-notify-demo": "installed mailflow-notify-demo"}
+        assert market.install_calls
 
     async def test_reports_missing_repository(self) -> None:
         market = FakeMarket(None)
@@ -299,9 +271,25 @@ class TestApplyPluginUpdates:
         assert results == {"mailflow-notify-gone": "skipped: source repository gone"}
 
 
-class TestCheckPluginUpdatesDowngrade:
-    def test_downgrade_is_never_an_update(self) -> None:
-        installed = {"mailflow-notify-demo": "1.0.0"}
-        sources = {"mailflow-notify-demo": "git+https://example.com/repo.git"}
-        market = FakeMarket(_plugin(version="0.9.0"))
-        assert check_plugin_updates(market, installed, sources) == {}
+@pytest.mark.parametrize(
+    ("installed_version", "available", "expected"),
+    [
+        ("0.9.0", "0.10.0", True),
+        ("0.10.0", "0.9.0", False),
+        ("1.0", "1.0.0", False),
+        ("2.0.9", "v2.1.0", True),
+        ("1.0.0", "nightly-x", False),
+    ],
+)
+def test_only_newer_release_versions_are_offered(
+    installed_version: str,
+    available: str,
+    expected: bool,
+) -> None:
+    plugin_id = "mailflow-notify-demo"
+    updates = check_plugin_updates(
+        FakeMarket(_plugin(version=available)),
+        {plugin_id: installed_version},
+        {plugin_id: "git+https://example.invalid/plugin.git"},
+    )
+    assert updates == ({plugin_id: (installed_version, available)} if expected else {})

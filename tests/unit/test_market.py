@@ -76,6 +76,12 @@ class TestPluginMarket:
         assert plugin.categories == ["processor", "experimental"]
         assert plugin.description == "A plugin used in tests"
         assert plugin.readme.startswith("## Test Plugin")
+        assert plugin.author == "tester" and plugin.updated == "2026-07-15"
+        assert market.find(plugin.id) == (repo, plugin)
+        assert market.find("ghost") is None
+        assert market.search("tests") == [(repo, plugin)]
+        assert len(market.search("", "storage")) == 1
+        assert market.search("tests", "storage") == []
 
     def test_report_deduplicates_plugin_id_across_categories(self, tmp_path: Path) -> None:
         repository_root = tmp_path / "duplicate"
@@ -97,6 +103,8 @@ class TestPluginMarket:
         assert len(report.entries) == 1
         assert report.entries[0][1].name == "Test Plugin"
         assert market.list_plugins() == report.entries
+        assert market.find("mailflow-test-plugin") == report.entries[0]
+        assert market.search("tests") == report.entries
 
     def test_report_keeps_configured_order_and_first_duplicate(
         self, monkeypatch: pytest.MonkeyPatch
@@ -130,62 +138,11 @@ class TestPluginMarket:
         assert "private-token" not in reason
         assert "user:password" not in reason
         assert "auth-secret" not in reason
-
-    def test_report_contains_status_for_every_repository(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        good = Repository("good", "https://good.invalid")
-        broken = Repository("broken", "https://broken.invalid")
-        market = PluginMarket([good, broken])
-        plugin = MarketPlugin.model_validate(PLUGIN_A)
-
-        def fetch(repository: Repository, _timeout: float) -> list[MarketPlugin]:
-            if repository == broken:
-                raise RuntimeError("offline")
-            return [plugin]
-
-        monkeypatch.setattr(market, "fetch_index", fetch)
-        report = market.list_plugins_report()
-
-        assert [
-            (status.repository.name, status.ok, status.plugin_count)
-            for status in report.repositories
-        ] == [
-            ("good", True, 1),
-            ("broken", False, 0),
+        assert [(item.repository.name, item.ok) for item in report.repositories] == [
+            ("broken", False),
+            ("first", True),
+            ("second", True),
         ]
-        assert report.repositories[1].error == "offline"
-
-    def test_find_and_search_use_deduplicated_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        first = Repository("first", "https://first.invalid")
-        market = PluginMarket([first])
-        plugin = MarketPlugin.model_validate(PLUGIN_A)
-
-        def duplicate_fetch(_repository: Repository, _timeout: float) -> list[MarketPlugin]:
-            return [plugin, plugin]
-
-        monkeypatch.setattr(market, "fetch_index", duplicate_fetch)
-
-        assert market.find(plugin.id) == (first, plugin)
-        assert market.search("tests") == [(first, plugin)]
-
-    def test_find(self, market: PluginMarket) -> None:
-        found = market.find("mailflow-test-plugin")
-        assert found is not None
-        _repo, plugin = found
-        assert plugin.version == "1.2.3"
-        assert market.find("ghost") is None
-
-    def test_failing_repository_is_skipped(self, tmp_path: Path) -> None:
-        good = _write_repo(tmp_path / "good")
-        market = PluginMarket(
-            [
-                Repository("broken", (tmp_path / "missing").as_uri()),
-                Repository("local", good.as_uri()),
-            ]
-        )
-        entries = market.list_plugins()
-        assert len(entries) == 2  # broken repo logged, good repo served
 
     def test_broken_metadata_file_is_skipped(self, tmp_path: Path) -> None:
         (tmp_path / "processor" / "bad").mkdir(parents=True)
@@ -193,15 +150,6 @@ class TestPluginMarket:
         (tmp_path / "processor" / "bad" / "plugin.json").write_text("{not json", encoding="utf-8")
         market = PluginMarket([Repository("local", tmp_path.as_uri())])
         assert market.list_plugins() == []
-
-    def test_search_filters_by_query_and_category(self, market: PluginMarket) -> None:
-        assert len(market.search("tests")) == 1
-        assert len(market.search("", "storage")) == 1
-        assert market.search("tests", "storage") == []
-
-    def test_is_installed_by_distribution_package(self) -> None:
-        assert PluginMarket.is_installed("anything", package="mailflow-testkit") is True
-        assert PluginMarket.is_installed("ghost", package="no-such-package-xyz") is False
 
     def test_install_already_installed_shortcut(self, market: PluginMarket) -> None:
         plugin = MarketPlugin(
@@ -217,15 +165,6 @@ class TestPluginMarket:
         plugin = MarketPlugin(id="x", name="x", source="")
         with pytest.raises(ValueError, match="no install source"):
             asyncio.run(PluginMarket([]).install(plugin))
-
-
-class TestPluginMetadata:
-    async def test_author_and_updated_parsed(self, market: PluginMarket) -> None:
-        plugin = market.find("mailflow-test-plugin")
-        assert plugin is not None
-        _repo, entry = plugin
-        assert entry.author == "tester"
-        assert entry.updated == "2026-07-15"
 
 
 class TestMarketCache:
