@@ -79,7 +79,7 @@ async def test_refresh_keeps_the_cursor_row_and_the_scroll_offset(tmp_path: Path
             await pane.refresh_actions()
             table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
             assert table.row_count == 30
-            assert expected_due in str(table.get_row_at(0)[0])
+            assert expected_due in str(table.get_cell(next(iter(table.rows)), "time"))
 
             # put the cursor deep enough that the list has really scrolled
             table.move_cursor(row=25)
@@ -125,8 +125,8 @@ async def test_expired_rows_are_dimmed_and_future_rows_are_not(tmp_path: Path) -
             assert table.row_count == 2
 
             styles = {
-                str(table.get_row_at(index)[2]): str(table.get_row_at(index)[2].style)
-                for index in range(2)
+                str(table.get_cell(key, "content")): str(table.get_cell(key, "content").style)
+                for key in table.rows
             }
             assert "dim" in styles["Just ended"], styles
             assert "dim" not in styles["Still ahead"], styles

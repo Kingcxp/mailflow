@@ -2556,7 +2556,10 @@ Return every candidate in this batch."""
 
     @admin_operation
     async def restore_mail(self, record_id: str) -> MailRecord | None:
-        return await self.storage.restore_from_trash(record_id)
+        record = await self.storage.restore_from_trash(record_id)
+        if record is not None:
+            await self.events.emit("mail.restored", record_id=record_id)
+        return record
 
     @admin_operation
     async def purge_all_processed(self) -> tuple[int, int]:

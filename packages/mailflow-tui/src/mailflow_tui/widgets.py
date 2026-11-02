@@ -19,9 +19,12 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, cast
 
+from rich.text import Text
+from textual import events
+from textual.binding import Binding
 from textual.css.query import QueryError
 from textual.message import Message
-from textual.widgets import Button, Select
+from textual.widgets import Button, DataTable, Select
 from textual.widgets._select import SelectCurrent, SelectOverlay
 
 
@@ -69,7 +72,109 @@ class SafeSelect(Select[object]):  # pyright: ignore[reportUnsafeMultipleInherit
         self.post_message(changed)
 
 
-__all__ = ["SafeSelect", "SearchToggle"]
+__all__ = ["SafeSelect", "SearchToggle", "SelectionTable"]
+
+
+class SelectionTable(DataTable[Any]):
+    """Checked rows are independent of the row being read or edited."""
+
+    BINDINGS: ClassVar[list[Any]] = [
+        Binding("space", "toggle_check", show=False),
+        Binding("ctrl+a", "toggle_all", show=False),
+        Binding("escape", "clear_checks", show=False),
+        Binding("shift+up", "extend_selection(-1)", show=False),
+        Binding("shift+down", "extend_selection(1)", show=False),
+    ]
+
+    class SelectionChanged(Message):
+        def __init__(self, table: SelectionTable) -> None:
+            super().__init__()
+            self.table = table
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.checked_keys: set[str] = set()
+        self._anchor: str | None = None
+
+    def check_label(self, key: str) -> Text:
+        return Text("[x]" if key in self.checked_keys else "[ ]", style="bold cyan")
+
+    def visible_keys(self) -> list[str]:
+        return [str(row.key.value) for row in self.ordered_rows]
+
+    def retain_checks(self, available: set[str]) -> None:
+        self.set_checks(self.checked_keys & available)
+
+    def set_checks(self, keys: set[str]) -> None:
+        if keys == self.checked_keys:
+            return
+        self.checked_keys = set(keys)
+        for key in self.visible_keys():
+            self.update_cell(key, "selected", self.check_label(key))
+        self.post_message(self.SelectionChanged(self))
+
+    def _key_at(self, row: int) -> str | None:
+        keys = self.visible_keys()
+        return keys[row] if 0 <= row < len(keys) else None
+
+    def _check_range(self, key: str) -> None:
+        keys = self.visible_keys()
+        if self._anchor not in keys:
+            self._anchor = key
+        start, end = sorted((keys.index(self._anchor), keys.index(key)))
+        self.set_checks(self.checked_keys | set(keys[start : end + 1]))
+
+    def action_toggle_check(self) -> None:
+        key = self._key_at(self.cursor_row)
+        if key is not None:
+            self._anchor = key
+            self.set_checks(self.checked_keys ^ {key})
+
+    def action_toggle_all(self) -> None:
+        visible = set(self.visible_keys())
+        self.set_checks(
+            self.checked_keys - visible
+            if visible <= self.checked_keys
+            else self.checked_keys | visible
+        )
+
+    def action_clear_checks(self) -> None:
+        self._anchor = None
+        self.set_checks(set())
+
+    def action_extend_selection(self, direction: int) -> None:
+        if not self.row_count:
+            return
+        if self._anchor is None:
+            self._anchor = self._key_at(self.cursor_row)
+        self.move_cursor(row=max(0, min(self.row_count - 1, self.cursor_row + direction)))
+        key = self._key_at(self.cursor_row)
+        if key is not None:
+            self._check_range(key)
+
+    def on_click(self, event: events.Click) -> None:
+        meta = event.style.meta
+        row, column = meta.get("row"), meta.get("column")
+        if event.button != 1 or not isinstance(row, int):
+            return
+        if row == -1 and column == 0:
+            self.action_toggle_all()
+        elif row >= 0 and (column == 0 or event.ctrl or event.shift):
+            key = self._key_at(row)
+            if key is None:
+                return
+            if event.shift and self._anchor is None:
+                self._anchor = self._key_at(self.cursor_row)
+            self.move_cursor(row=row)
+            if event.shift:
+                self._check_range(key)
+            else:
+                self.action_toggle_check()
+        else:
+            return
+        self.focus()
+        event.stop()
+        event.prevent_default()
 
 
 class SearchToggle(Button):

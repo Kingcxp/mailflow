@@ -150,7 +150,9 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
                     break
                 await asyncio.sleep(0.05)
             assert int(table.row_count) == 1
-            assert "Pick up your student ID card" in str(table.get_row_at(0)[2])
+            assert "Pick up your student ID card" in str(
+                table.get_cell(next(iter(table.rows)), "subject")
+            )
             assert pane._smart_action_result is not None  # pyright: ignore[reportPrivateUsage]
             app.exit()
             await pilot.pause()
@@ -1441,6 +1443,24 @@ async def test_bulk_reparse_stop_covers_reanalyze_failed_and_never_latches(
                 await pilot.pause(0.05)
             await pilot.pause(0.1)
             assert not failed_button.disabled
+            await app.workers.wait_for_complete()
+            table = app.query_one("#mail-table", DataTable)
+            table.focus()
+            table.move_cursor(row=0)
+            await pilot.press("space", "down", "space")
+            expected = {
+                (await service.get_mail(str(key.value))).mail.message_id
+                for key in list(table.rows)[:2]
+            }
+            processed.clear()
+            app.query_one("#btn-reparse", Button).press()
+            for _ in range(80):
+                if isinstance(app.screen, ConfirmModal):
+                    app.screen.query_one("#confirm-run", Button).press()
+                    break
+                await pilot.pause(0.05)
+            await app.workers.wait_for_complete()
+            assert set(processed) == expected, "only the two checked messages are re-analyzed"
             app.exit()
             await pilot.pause()
     finally:

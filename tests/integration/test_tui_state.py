@@ -31,7 +31,9 @@ from mailflow_tui.app import (
     ReplyModal,
     RuntimePane,
 )
+from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.remote import RemoteServiceAdapter
+from mailflow_tui.widgets import SelectionTable
 from textual.containers import ScrollableContainer
 from textual.coordinate import Coordinate
 from textual.widgets import Button, DataTable, Input, Select, Static, TabbedContent, TextArea
@@ -95,6 +97,89 @@ async def settle(pilot: Any) -> None:
     await pilot.pause()
     await pilot.app.workers.wait_for_complete()
     await pilot.pause()
+
+
+async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
+    host: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _view, app, emit, _failures = host
+    for ident in ("old-1", "old-2", "keep"):
+        record = make_record(
+            ident, Urgency.AD if ident.startswith("old") else Urgency.IMPORTANT, subject=ident
+        )
+        record.mail.received_at = datetime.now(UTC) - timedelta(days=3)
+        await service.storage.save_mail(record)
+    past = datetime.now(UTC) - timedelta(hours=1)
+    actions = [await service.add_action(f"Expired {i}", past) for i in range(2)]
+    future = await service.add_action("Keep future", datetime.now(UTC) + timedelta(days=2))
+    storage = cast(MemoryStorage, service.storage)
+    delete = storage.delete_mail
+    failing = {"old-2"}
+
+    async def delete_with_failure(ident: str, **kwargs: Any) -> None:
+        if ident in failing:
+            raise OSError("private storage failure")
+        await delete(ident, **kwargs)
+
+    monkeypatch.setattr(storage, "delete_mail", delete_with_failure)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await settle(pilot)
+        table = app.query_one("#mail-table", SelectionTable)
+        app.query_one("#mail-urgency-filter", Select).value = "expired"
+        await settle(pilot)
+        assert set(keys(table)) == {"old-1", "old-2"}
+        await pilot.click("#mail-table", offset=(2, 2))
+        await pilot.click("#mail-table", offset=(2, 3), shift=True)
+        assert all(str(table.get_cell(key, "selected")) == "[x]" for key in keys(table))
+        app.query_one("#mail-search", Input).value = "old-1"
+        await settle(pilot)
+        await emit("language.changed", language="zh-CN")
+        await settle(pilot)
+        assert keys(table) == ["old-1"]
+        app.query_one("#btn-trash", Button).press()
+        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        assert "old-1" in text(app.screen, "#confirm-body") and "old-2" in text(
+            app.screen, "#confirm-body"
+        )
+        await pilot.press(
+            "enter"
+        )  # Cancel has focus; neither visible nor hidden selection is deleted.
+        await settle(pilot)
+        assert await service.count_mails() == 3
+        app.query_one("#btn-trash", Button).press()
+        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        app.screen.query_one("#confirm-run", Button).press()
+        await settle(pilot)
+        assert await service.storage.get_mail("old-1") is None
+        assert await service.storage.get_mail("old-2") is not None
+        assert "private storage failure" not in text(app, "#mail-operation-status")
+        app.query_one("#mail-search", Input).value = ""
+        await settle(pilot)
+        assert keys(table) == ["old-2"] and str(table.get_cell("old-2", "selected")) == "[x]"
+        failing.clear()
+        app.query_one("#btn-trash", Button).press()
+        await settle(pilot)
+        assert await service.count_mails() == 1
+        table.focus()
+        await pilot.press("ctrl+z")
+        await settle(pilot)
+        assert await service.storage.get_mail("old-2") is not None
+        assert await service.storage.get_mail("old-1") is None
+        assert await service.storage.get_mail("keep") is not None
+        # The same selection controls operate on the current task filter.
+        app.query_one(TabbedContent).active = "tab-actions"
+        app.query_one("#actions-range", Select).value = "expired"
+        await settle(pilot)
+        todos = app.query_one("#actions-table", SelectionTable)
+        assert set(keys(todos)) == {item.item_id for item in actions}
+        todos.focus()
+        await pilot.press("ctrl+a", "escape", "space", "shift+down")
+        app.query_one("#actions-delete", Button).press()
+        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        app.screen.query_one("#confirm-run", Button).press()
+        await settle(pilot)
+        assert [item.item_id for item in await service.list_actions()] == [future.item_id]
+        assert todos.row_count == 0
 
 
 async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(host: Any) -> None:
