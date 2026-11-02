@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+import logging
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import Any, cast
 
 from mailflow.config import is_secret_key
@@ -21,6 +23,15 @@ def urgency_label(service: Any, urgency: Urgency | str) -> str:
     value = urgency.value if isinstance(urgency, Urgency) else str(urgency)
     key = _URGENCY_LABEL_KEYS.get(value)
     return service.t(key) if key else value
+
+
+def relabel_buttons(owner: Any, labels: Mapping[str, str]) -> None:
+    from textual.widgets import Button
+
+    for ident, key in labels.items():
+        button = owner.query_one_optional(f"#{ident}", Button)
+        if button is not None:
+            button.label = owner._service.t(key)
 
 
 def analysis_status(service: Any, record: MailRecord) -> str:
@@ -43,7 +54,7 @@ def _is_secret_field(key: str) -> bool:
     return not normalized.endswith("_env") and is_secret_key(normalized)
 
 
-def _secret_values(value: Any, *, sensitive: bool = False) -> set[str]:
+def secret_values(value: Any, *, sensitive: bool = False) -> set[str]:
     """Collect configured secret values without assuming a concrete service."""
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
@@ -54,7 +65,7 @@ def _secret_values(value: Any, *, sensitive: bool = False) -> set[str]:
         for key, child in mapping.items():
             child_key = str(key)
             values.update(
-                _secret_values(
+                secret_values(
                     child,
                     sensitive=sensitive
                     or child_key.lower() == "headers"
@@ -66,9 +77,33 @@ def _secret_values(value: Any, *, sensitive: bool = False) -> set[str]:
         sequence = cast("list[Any] | tuple[Any, ...]", value)
         sequence_values: set[str] = set()
         for child in sequence:
-            sequence_values.update(_secret_values(child, sensitive=sensitive))
+            sequence_values.update(secret_values(child, sensitive=sensitive))
         return sequence_values
     return {value} if sensitive and isinstance(value, str) and value else set()
+
+
+@contextmanager
+def redact_operation_logs(service: Any, *, extra_secrets: Iterable[str] = ()) -> Iterator[None]:
+    """Protect unsaved credentials while plugins and HTTP clients perform an operation."""
+    from mailflow.logging import SecretRedactionFilter, get_active_runtime
+
+    secrets = secret_values(getattr(service, "config", None))
+    secrets.update(secret for secret in extra_secrets if secret)
+    ordered = sorted(secrets, key=len, reverse=True)
+    runtime = get_active_runtime()
+    if runtime is not None:
+        for secret in ordered:
+            runtime.add_secret(secret)
+    redactor = SecretRedactionFilter(ordered)
+    loggers = [logging.getLogger(name) for name in ("", "mailflow", "httpx", "httpcore")]
+    targets: list[Any] = [*loggers, *{handler for log in loggers for handler in log.handlers}]
+    for target in targets:
+        target.addFilter(redactor)
+    try:
+        yield
+    finally:
+        for target in targets:
+            target.removeFilter(redactor)
 
 
 def error_detail(
@@ -80,7 +115,7 @@ def error_detail(
 ) -> str:
     """Return an error detail with every configured credential redacted."""
     detail = str(error)
-    secrets = _secret_values(getattr(service, "config", None))
+    secrets = secret_values(getattr(service, "config", None))
     secrets.update(secret for secret in extra_secrets if secret)
     for secret in sorted(secrets, key=len, reverse=True):
         detail = detail.replace(secret, "***")
@@ -103,4 +138,12 @@ def error_message(
     )
 
 
-__all__ = ["analysis_status", "error_detail", "error_message", "urgency_label"]
+__all__ = [
+    "analysis_status",
+    "error_detail",
+    "error_message",
+    "redact_operation_logs",
+    "relabel_buttons",
+    "secret_values",
+    "urgency_label",
+]

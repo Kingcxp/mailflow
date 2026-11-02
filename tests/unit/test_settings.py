@@ -410,19 +410,22 @@ class TestPlaceholderBookkeeping:
             apply_value(config, "llms[x].model", "m")
 
 
-def test_provider_change_does_not_carry_credentials_or_options() -> None:
+@pytest.mark.parametrize("api_key", ["private", ""])
+def test_provider_change_does_not_carry_credentials_or_options(api_key: str) -> None:
     config = MailFlowConfig(
         llms=[
             LLMConfig(
                 llm_id="main",
                 model="model",
-                api_key="private",
+                api_key=api_key,
                 base_url="https://old",
                 options={"old": True},
                 headers={"Authorization": "private"},
+                extra_body={"provider_option": True},
             )
         ]
     )
+    config.env_placeholders[("llms", 0, "api_key")] = "${OLD_API_KEY}"
     updated = update_entry(
         config, "llms", 0, {"provider": "google-vertex", "options": {"project": "p"}}
     )
@@ -430,6 +433,8 @@ def test_provider_change_does_not_carry_credentials_or_options() -> None:
     assert updated.llms[0].api_key == ""
     assert updated.llms[0].base_url != "https://old"
     assert updated.llms[0].headers == {}
+    assert updated.llms[0].extra_body == {}
+    assert updated.env_placeholders == {}
 
 
 @pytest.mark.parametrize("patch", [False, True])

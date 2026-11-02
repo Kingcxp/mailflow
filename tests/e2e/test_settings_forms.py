@@ -230,7 +230,7 @@ async def test_editing_an_llm_id_saves_and_rewrites_references(tmp_path: Path) -
         await service.stop()
 
 
-async def test_llm_form_required_validation_and_eye_toggle(tmp_path: Path) -> None:
+async def test_llm_form_numeric_error_preserves_input_and_eye_toggle(tmp_path: Path) -> None:
     from mailflow_tui.settings import EntryFormScreen
 
     service = await start_service_quiet(tmp_path)
@@ -262,18 +262,21 @@ async def test_llm_form_required_validation_and_eye_toggle(tmp_path: Path) -> No
             await pilot.pause(0.1)
             assert api_input.password is True
 
-            # leaving a required extra empty blocks the save with a red,
-            # field-naming message instead of dismissing the form
+            # Reject an invalid number while keeping the form's other inputs.
             app.screen.query_one("#field-llm-id", Input).value = "test-llm"
             app.screen.query_one("#field-model", Input).value = "gpt-test"
+            app.screen.query_one("#extra-max-tokens", Input).value = "invalid"
             app.screen.query_one("#entry-form-save", Button).press()
             await pilot.pause(0.2)
 
             status_text = str(app.screen.query_one("#entry-form-status", Static).render())
-            assert "api key is required" in status_text.lower()
+            assert (
+                service.t("tui.field_must_be_number", field=service.t("tui.form_fields.max_tokens"))
+                in status_text
+            )
             assert results == []  # form stays open
 
-            # filling the remaining required field unblocks the save
+            app.screen.query_one("#extra-max-tokens", Input).value = ""
             app.screen.query_one("#extra-api-key", Input).value = "sk-test"
             app.screen.query_one("#entry-form-save", Button).press()
             await pilot.pause(0.2)

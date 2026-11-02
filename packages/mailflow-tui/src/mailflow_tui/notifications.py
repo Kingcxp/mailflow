@@ -19,14 +19,22 @@ from typing import Any, ClassVar
 
 import httpx
 from mailflow.domain import Urgency, parse_urgency
-from mailflow.service import MailFlowService
+from mailflow.service import ConfigReloadError, MailFlowService
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.widgets import Button, DataTable, Select, Static
 
 from mailflow_tui.gateway_guide import GatewayGuideModal
-from mailflow_tui.labels import error_detail, error_message, urgency_label
+from mailflow_tui.labels import (
+    error_detail,
+    error_message,
+    redact_operation_logs,
+    relabel_buttons,
+    urgency_label,
+)
+from mailflow_tui.view_state import TableView
 from mailflow_tui.widgets import SafeSelect
 
 _URGENCY_ORDER = (Urgency.AD, Urgency.INFO, Urgency.IMPORTANT, Urgency.URGENT)
@@ -56,7 +64,10 @@ class _NotifierProbe:
                         f"{url}/get_login_info", json={}, headers=onebot_headers
                     )
                 if response.status_code == 200:
-                    payload_data: dict[str, Any] = dict(response.json().get("data") or {})
+                    payload = response.json()
+                    if payload.get("status") == "failed" or payload.get("retcode", 0) != 0:
+                        return str(t("tui.bots_not_logged_in"))
+                    payload_data: dict[str, Any] = dict(payload.get("data") or {})
                     nickname = str(payload_data.get("nickname", "?"))
                     user_id = str(payload_data.get("user_id", "?"))
                     return str(t("tui.bots_logged_in_as", name=nickname, uid=user_id))
@@ -68,7 +79,7 @@ class _NotifierProbe:
                 async with httpx.AsyncClient(timeout=6.0) as client:
                     response = await client.get(f"{url}/health")
                 if response.status_code == 200:
-                    payload: Any = response.json()
+                    payload = response.json()
                     if isinstance(payload, dict) and payload.get("logged_in"):
                         return str(t("tui.bots_online"))
                     return str(t("tui.bots_not_logged_in"))
@@ -108,7 +119,7 @@ class _NotifierProbe:
                     response = await client.get(url)
                 return str(
                     t("tui.bots_online")
-                    if response.status_code < 500
+                    if 200 <= response.status_code < 300
                     else http_status(response.status_code)
                 )
             if provider == "console":
@@ -209,7 +220,7 @@ class NotificationsPane(Vertical):
     def _render_rows(self, statuses: dict[str, str] | None = None) -> None:
         statuses = statuses or {}
         table: DataTable[Any] = self.query_one("#notifications-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
-        selected_key = self._selected_id
+        view = TableView.capture(table, self._selected_id)
         table.clear()  # pyright: ignore[reportUnknownMemberType]
         for entry in self._all_notifiers():
             notifier_id = str(entry["notifier_id"])
@@ -225,16 +236,14 @@ class NotificationsPane(Vertical):
                 ),
                 urgency_label(self._service, str(entry["urgency"])),
                 escape(targets),
-                statuses.get(notifier_id, "-"),
+                Text(error_detail(self._service, statuses.get(notifier_id, "-"))),
                 key=notifier_id,
             )
         # re-rendering clears the table and drops the cursor: restore the
         # previously selected row so in-place actions keep targeting it
-        if selected_key is not None:
-            for index, key in enumerate(table.rows):  # pyright: ignore[reportUnknownMemberType]
-                if str(getattr(key, "value", "")) == selected_key:
-                    table.move_cursor(row=index, animate=False)  # pyright: ignore[reportUnknownMemberType]
-                    break
+        self._selected_id = view.restore(table)
+        if table.row_count == 0:
+            self.query_one("#notifications-status", Static).update(self._service.t("tui.empty"))
 
     def on_mount(self) -> None:
         self._ensure_columns()
@@ -248,10 +257,29 @@ class NotificationsPane(Vertical):
         self._timer = self.set_interval(self._PROBE_INTERVAL, self._periodic_check)
 
     async def relabel(self) -> None:
+        relabel_buttons(
+            self,
+            {
+                "notif-add": "tui.btn_add",
+                "notif-edit": "tui.btn_edit",
+                "notif-delete": "tui.btn_delete",
+                "notif-relogin": "tui.notif_relogin",
+                "notif-toggle": "tui.notifications_toggle",
+                "notif-check": "tui.notifications_check",
+            },
+        )
+        self.query_one("#notifications-title", Static).update(
+            self._service.t("tui.notifications_title")
+        )
+        self.query_one("#notifications-help", Static).update(
+            escape(self._service.t("tui.notifications_help"))
+        )
         table: DataTable[Any] = self.query_one("#notifications-table", DataTable)
+        view = TableView.capture(table, self._selected_id)
         table.clear(columns=True)  # pyright: ignore[reportUnknownMemberType]
         self._ensure_columns()
         self._render_rows()
+        self._selected_id = view.restore(table)
         self._refresh_urgency_options()
         self._sync_selection_controls()
 
@@ -336,8 +364,12 @@ class NotificationsPane(Vertical):
             from mailflow_tui.settings import EntryFormScreen
 
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-                EntryFormScreen(self._service, "notifiers"),
-                callback=self._after_form,
+                EntryFormScreen(
+                    self._service,
+                    "notifiers",
+                    on_save=lambda values: self._submit_form(None, values),
+                ),
+                callback=self._form_closed,
             )
             return
         if button_id == "notif-edit":
@@ -451,44 +483,67 @@ class NotificationsPane(Vertical):
         from mailflow_tui.settings import EntryFormScreen
 
         values = found[0].model_dump()
+        index = self._service.config.notifiers.index(found[0])
         self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-            EntryFormScreen(self._service, "notifiers", values=values),
-            callback=self._after_edit,
-        )
-
-    def _after_edit(self, result: dict[str, Any] | None) -> None:
-        if not result:
-            return
-        notifier_id = str(result.get("notifier_id") or self._selected_id or "")
-        index = next(
-            (
-                i
-                for i, n in enumerate(self._service.config.notifiers)
-                if n.notifier_id == notifier_id
+            EntryFormScreen(
+                self._service,
+                "notifiers",
+                values=values,
+                on_save=lambda result: self._submit_form(index, result),
             ),
-            None,
-        )
-        if index is None:
-            return
-        self.run_worker(
-            self._save_edited_notifier(index, notifier_id, result),
-            exclusive=True,
-            group="notif-setup",
-            exit_on_error=False,
+            callback=self._form_closed,
         )
 
-    async def _save_edited_notifier(
-        self, index: int, notifier_id: str, values: dict[str, Any]
-    ) -> None:
+    def _form_closed(self, result: dict[str, Any] | None) -> None:
+        if result is None:
+            self.query_one("#notifications-status", Static).update(
+                self._service.t("tui.form_cancelled")
+            )
+
+    async def _submit_form(self, index: int | None, values: dict[str, Any]) -> bool:
+        values = dict(values)
+        guided = values.pop("_guided", False)
+        provider = str(values.get("provider") or "")
+        gateway = self._gateway_for(self._service, provider) if guided else None
+        instance_id = str(values.get("notifier_id") or "")
+        if gateway is not None:
+            result = await self.app.push_screen_wait(
+                GatewayGuideModal(
+                    self._service, gateway, instance_id, dict(values.get("options") or {})
+                )
+            )
+            if result is None:
+                return False
+            endpoint_key = {
+                "napcat": "http_url",
+                "wechatpadpro": "base_url",
+                "telegram": "api_base",
+            }.get(gateway, "gateway_url")
+            values["options"] = {
+                **dict(values.get("options") or {}),
+                endpoint_key: result.get("endpoint", ""),
+                "gateway": gateway,
+            }
+            values["provider"] = "onebot" if gateway == "napcat" else gateway
+        warning = ""
         try:
-            await self._service.update_config_entry("notifiers", index, values)
-        except Exception as exc:
-            self._show_error(exc)
-            return
+            if index is None:
+                await self._service.add_config_entry("notifiers", values)
+            else:
+                await self._service.update_config_entry("notifiers", index, values)
+        except ConfigReloadError as exc:
+            warning = str(exc)
+        except Exception:
+            if gateway is not None:
+                await self._service.gateway_shutdown(gateway, instance_id)
+            raise
         self.refresh_data()
         self.query_one("#notifications-status", Static).update(
-            f"[green]{self._service.t('tui.notifications_configured_ok', instance=notifier_id)}[/green]"
+            escape(
+                warning or self._service.t("tui.notifications_configured_ok", instance=instance_id)
+            )
         )
+        return True
 
     @staticmethod
     def _gateway_for(service: MailFlowService, provider: str) -> str | None:
@@ -502,30 +557,6 @@ class NotificationsPane(Vertical):
     def _gateway_from_options(options: dict[str, Any]) -> str | None:
         gateway = options.get("gateway")
         return str(gateway) if gateway else None
-
-    def _after_form(self, values: dict[str, Any] | None) -> None:
-        """Form dismissed → persist, or run the guided gateway setup."""
-        if not values:
-            return
-        guided = values.pop("_guided", False)
-        provider = str(values.get("provider") or "")
-        gateway = self._gateway_for(self._service, provider)
-        if guided and gateway is not None:
-            instance_id = str(values.get("notifier_id") or f"{gateway}-1")
-            options = dict(values.get("options") or {})
-            self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-                GatewayGuideModal(self._service, gateway, instance_id, options),
-                callback=lambda result, form_values=values: self._after_guide(
-                    gateway, instance_id, result, form_values
-                ),
-            )
-            return
-        self.run_worker(
-            self._save_manual_notifier(values),
-            exclusive=True,
-            group="notif-setup",
-            exit_on_error=False,
-        )
 
     def _after_guide(
         self,
@@ -589,17 +620,6 @@ class NotificationsPane(Vertical):
             f"[green]{self._service.t('tui.notifications_configured_ok', instance=instance_id)}[/green]"
         )
 
-    async def _save_manual_notifier(self, values: dict[str, Any]) -> None:
-        try:
-            await self._service.add_config_entry("notifiers", values)
-        except Exception as exc:
-            self._show_error(exc)
-            return
-        self.refresh_data()
-        self.query_one("#notifications-status", Static).update(
-            f"[green]{self._service.t('tui.notifications_saved_manual')}[/green]"
-        )
-
     async def _delete_selected(self) -> None:
         if self._selected_id is None:
             self.query_one("#notifications-status", Static).update(
@@ -624,12 +644,31 @@ class NotificationsPane(Vertical):
                 )
                 self.query_one("#notifications-status", Static).update(f"[red]{message}[/red]")
                 return
-        await self._service.remove_config_entry("notifiers", index)
+        warning = ""
+        try:
+            await self._service.remove_config_entry("notifiers", index)
+        except ConfigReloadError as exc:
+            warning = str(exc)
+        except Exception as exc:
+            self._show_error(exc)
+            return
         self._selected_id = None
         self._render_rows()
         self._sync_selection_controls()
+        self.query_one("#notifications-status", Static).update(
+            escape(
+                warning
+                or self._service.t(
+                    "tui.entry_removed", group=self._service.t("tui.tab_notifications")
+                )
+            )
+        )
 
     async def _check_all(self) -> None:
+        with redact_operation_logs(self._service):
+            await self._check_connections()
+
+    async def _check_connections(self) -> None:
         status_node = self.query_one("#notifications-status", Static)
         status_node.update(self._service.t("tui.loading"))
         instances = [
@@ -643,7 +682,15 @@ class NotificationsPane(Vertical):
 
             async def _bounded(provider: str, options: dict[str, Any]) -> str:
                 async with sem:
-                    return await _NotifierProbe.probe(provider, options, self._service.t)
+                    from mailflow.domain import ComponentKind
+
+                    probe = self._service.registry.probe(ComponentKind.NOTIFIER, provider)
+                    try:
+                        if probe is not None:
+                            return await probe(options, self._service.t)
+                        return await _NotifierProbe.probe(provider, options, self._service.t)
+                    except Exception as exc:
+                        return error_message(self._service, exc)
 
             probes = [_bounded(provider, options) for _, provider, options in instances]
             outcomes = await asyncio.gather(*probes)
@@ -675,7 +722,7 @@ class NotificationsPane(Vertical):
             if status == "error":
                 error = error_detail(self._service, getattr(instance, "error", "") or "")
                 gateway_by_id[str(instance.instance_id)] = (
-                    f"[red]{self._service.t('tui.bots_need_reconfig')}[/red] ({escape(error)})"
+                    f"{self._service.t('tui.bots_need_reconfig')} ({error})"
                 )
         if not gateway_by_id:
             return

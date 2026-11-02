@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from string import Formatter
 from typing import Any, cast
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -60,3 +61,25 @@ def test_every_referenced_key_exists_in_both_packs() -> None:
 
 def test_packs_have_parity() -> None:
     assert _locale_keys("zh-CN") == _locale_keys("en")
+
+
+def test_form_and_gateway_states_render_with_matching_parameters() -> None:
+    from mailflow.i18n import I18n
+
+    english, chinese = I18n("en"), I18n("zh-CN")
+    keys = {
+        key
+        for key in english.keys("en")
+        if key.startswith(("tui.form_", "tui.gateway_phase_", "tui.remote_"))
+    }
+    assert keys
+    for key in keys:
+        en, zh = english.t(key), chinese.t(key)
+        en_params = {name for _text, name, _spec, _conversion in Formatter().parse(en) if name}
+        zh_params = {name for _text, name, _spec, _conversion in Formatter().parse(zh) if name}
+        assert en_params == zh_params, key
+        values = dict.fromkeys(en_params, "sample")
+        for i18n in (english, chinese):
+            rendered = i18n.t(key, **values)
+            assert rendered and rendered != key
+            assert all(f"{{{name}}}" not in rendered for name in en_params), key

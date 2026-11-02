@@ -583,8 +583,17 @@ def update_entry(
     previous = dict(entries[index])
     provider_changed = "provider" in values and values["provider"] != previous.get("provider")
     retained = dict(previous)
+    provider_fields = (
+        "options",
+        "base_url",
+        "api_key",
+        "api_key_env",
+        "headers",
+        "query",
+        "extra_body",
+    )
     if provider_changed:
-        for name in ("options", "base_url", "api_key", "api_key_env", "headers", "query"):
+        for name in provider_fields:
             retained.pop(name, None)
     merged = {**retained, **values}
     try:
@@ -602,6 +611,9 @@ def update_entry(
     updated.env_placeholders = _carried_placeholders(config)
     for path in list(updated.env_placeholders):
         if path[:2] != (group, index):
+            continue
+        if provider_changed and path[2] in provider_fields:
+            updated.env_placeholders.pop(path, None)
             continue
         old_value: Any = previous
         new_value: Any = entries[index]

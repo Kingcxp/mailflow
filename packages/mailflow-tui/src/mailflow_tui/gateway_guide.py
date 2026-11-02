@@ -30,7 +30,7 @@ from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
     Static,
 )
 
-from mailflow_tui.labels import error_detail
+from mailflow_tui.labels import error_detail, redact_operation_logs, secret_values
 
 _LEVEL_COLORS = {
     "DEBUG": "dim",
@@ -152,6 +152,10 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._last_progress_message = ""
         self._guide_worker: Any = None
         self._cancelling = False
+        self._accepted = False
+        self._phase = "detecting"
+        self._sudo_future: asyncio.Future[str] | None = None
+        self._manual_login = asyncio.Event()
         self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -229,10 +233,10 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             self._run_guide(), exclusive=True, group="gateway-guide", exit_on_error=False
         )
 
-    def on_unmount(self) -> None:
+    async def on_unmount(self) -> None:
         """Never leave QR polling alive after the modal closes."""
-        if self._guide_worker is not None:
-            self._guide_worker.cancel()
+        if not self._accepted:
+            await self._cancel_and_cleanup(dismiss=False)
 
     # -- log pane ---------------------------------------------------------------
 
@@ -241,6 +245,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         node = self.query_one_optional("#guide-log", RichLog)  # pyright: ignore[reportUnknownVariableType]
         if node is None:
             return
+        message = escape(
+            error_detail(self._service, message, extra_secrets=secret_values(self._options))
+        )
         stamp = datetime.now().strftime("%H:%M:%S")
         color = _LEVEL_COLORS.get(level, "")
         if color:
@@ -251,7 +258,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     def _set_status(self, text: str, style: str = "") -> None:
         node = self.query_one_optional("#guide-status", Static)
         if node is not None:
-            node.update(f"[{style}]{text}[/{style}]" if style else text)
+            text = error_detail(self._service, text, extra_secrets=secret_values(self._options))
+            node.update(f"[{style}]{escape(text)}[/{style}]" if style else escape(text))
+
+    def _set_phase(self, phase: str) -> None:
+        self._phase = phase
+        self._set_status(self._t(f"tui.gateway_phase_{phase}"))
 
     def _set_qr(self, text: str) -> None:
         # the QR lives in its own panel above the log; pin the panel
@@ -316,10 +328,15 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     # -- guide flow --------------------------------------------------------------
 
     async def _run_guide(self) -> None:
+        with redact_operation_logs(self._service, extra_secrets=secret_values(self._options)):
+            await self._run_steps()
+
+    async def _run_steps(self) -> None:
         service = self._service
         provider = self._provider
         try:
             # 1. detect
+            self._set_phase("detecting")
             self._log("INFO", self._t("tui.bots_guide_detecting"))
             detected = await service.gateway_detect(provider)
             detected_message = detected or self._t("tui.bots_guide_not_detected")
@@ -328,6 +345,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             # 2. provision (install + start); while the provisioner works,
             # poll the shared InstallProgress (injected into its options)
             # to render a live download/install progress bar
+            self._set_phase("installing")
             self._log("INFO", self._t("tui.bots_guide_provisioning"))
             self._update_progress(
                 0.0, self._t("tui.bots_guide_downloading", provider=self._provider)
@@ -348,6 +366,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 "endpoint": instance.endpoint,
                 "options": self._options,
             }
+            self._set_phase("login")
             await self._qr_loop(service, provider)
         except asyncio.CancelledError:
             if not self._cancelling:
@@ -355,12 +374,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     await service.gateway_shutdown(provider, self._instance_id)
             raise
         except Exception as exc:
+            self._set_phase("cleanup")
             with contextlib.suppress(Exception):
                 await service.gateway_shutdown(provider, self._instance_id)
             self._result = None
-            message = self._t(
-                "tui.bots_guide_failed", error=escape(error_detail(self._service, exc))
-            )
+            self._phase = "failed"
+            message = self._t("tui.bots_guide_failed", error=error_detail(self._service, exc))
             self._log("ERROR", message)
             self._set_status(message, "red")
             return
@@ -380,7 +399,14 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             ):
                 last_pct = progress.percent
                 self._last_progress_message = progress.message
-                self._update_progress(progress.percent, progress.message)
+                stage = (
+                    progress.stage
+                    if progress.stage in {"downloading", "installing", "starting"}
+                    else "installing"
+                )
+                if stage != self._phase:
+                    self._set_phase(stage)
+                self._update_progress(progress.percent, self._t(f"tui.gateway_phase_{stage}"))
 
         # the installer may need sudo (Linux apt under sudo -S): inject a
         # prompt callback so the password is asked in the guide UI at the
@@ -436,6 +462,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         prompt.styles.display = "block"  # pyright: ignore[reportUnknownMemberType]
         field.focus()
         fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._sudo_future = fut
 
         def _submit() -> None:
             if not fut.done():
@@ -447,6 +474,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         try:
             return await fut
         finally:
+            self._sudo_future = None
             self._sudo_submit = None
             prompt.styles.display = "none"  # pyright: ignore[reportUnknownMemberType]
             field.value = ""
@@ -467,6 +495,10 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
 
     _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 
+    async def _wait_qr_tick(self) -> None:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._manual_login.wait(), timeout=5.0)
+
     async def _qr_loop(self, service: MailFlowService, provider: str) -> None:
         """Poll the QR endpoint until the session logs in or 5 min passes.
 
@@ -484,17 +516,19 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._logged_no_qr = False
         while time.monotonic() < deadline and not getattr(self, "_qr_done", False):
             qr = await service.gateway_qr(provider, self._instance_id)
+            if getattr(self, "_qr_done", False):
+                break
             if qr.startswith("ERROR:"):
                 # diagnostic from the provisioner (e.g. QR file not
                 # created yet, log tail). The first launch of an AppImage
                 # is slow (extract + QQ boot), so keep waiting — only log
                 # it once and do not abort the loop.
-                message = qr[len("ERROR:") :].strip()
+                message = self._t("common.error", message=qr[len("ERROR:") :].strip())
                 if message != getattr(self, "_last_qr_diag", None):
                     self._log("WARN", message)
                     self._last_qr_diag = message
                 self._set_status(message, "yellow")
-                await asyncio.sleep(5.0)
+                await self._wait_qr_tick()
                 continue
             if qr == self._QR_LOGGED_IN:
                 self._set_qr(self._logged_in_banner())
@@ -526,11 +560,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._set_status(
                     self._t("tui.bots_guide_qr_pending", provider=self._provider), "yellow"
                 )
-            await asyncio.sleep(5.0)
+            await self._wait_qr_tick()
         # the loop also exits via the manual "I'm logged in" button
-        # (_qr_done), which already logged the success and set a green
-        # status; only report a timeout when the deadline genuinely hit
-        if not getattr(self, "_qr_done", False):
+        # (_qr_done). Keep endpoint checks in this worker so Cancel also
+        # interrupts a manually confirmed login.
+        if getattr(self, "_qr_done", False):
+            await self._finish_login(service, provider)
+        else:
             self._log("ERROR", self._t("tui.bots_guide_qr_timeout"))
             self._set_status(self._t("tui.bots_guide_qr_timeout"), "red")
             await service.gateway_shutdown(provider, self._instance_id)
@@ -539,6 +575,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     def _finish_ready(self) -> None:
         """Login done: enable the Done button so the user explicitly
         finishes the flow (Cancel keeps meaning abort)."""
+        self._phase = "ready"
         done = self.query_one_optional("#guide-done", Button)
         if done is not None:
             done.disabled = False
@@ -589,6 +626,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             # the gateway is up and logged in: finish with the result so
             # the caller persists the notifier entry
             if self._result is not None:
+                self._accepted = True
                 self.dismiss(self._result)
             return
         if event.button.id == "guide-logged-in":
@@ -596,37 +634,56 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             # QR polling and enable Done — Done remains the explicit
             # final confirmation that saves the notifier
             self._qr_done = True
+            self._manual_login.set()
+            event.button.disabled = True
             self._set_qr(self._logged_in_banner())
             self._log("INFO", self._t("tui.bots_guide_logged_in"))
             self._set_status(self._t("tui.bots_guide_logged_in"), "green")
-            # Verify the gateway endpoint is reachable before enabling Done
-            await self._finish_login(self._service, self._provider)
             return
         if event.button.id == "guide-cancel":
             await self._cancel_and_cleanup()
             return
 
-    async def _cancel_and_cleanup(self) -> None:
+    async def _cancel_and_cleanup(self, *, dismiss: bool = True) -> None:
         """Abort the wizard: stop the gateway we started so no orphan
         process keeps running, then close without saving."""
         if self._cancelling:
             return
         self._cancelling = True
+        self._set_phase("cancelling")
+        for button in self.query("#guide-actions Button"):
+            button.disabled = True
+        if self._sudo_future is not None:
+            self._sudo_future.cancel()
         if self._guide_worker is not None:
             self._guide_worker.cancel()
+            from textual.worker import WorkerCancelled
+
+            with contextlib.suppress(WorkerCancelled):
+                await self._guide_worker.wait()
         self._log("WARN", self._t("tui.bots_guide_cancelled"))
         try:
+            self._set_phase("stopping")
             await self._service.gateway_shutdown(self._provider, self._instance_id)
+            self._set_phase("cleanup")
             self._log("INFO", self._t("tui.bots_guide_stopped"))
         except Exception as exc:
             self._log(
                 "ERROR",
                 self._t(
                     "tui.bots_guide_stop_failed",
-                    error=escape(error_detail(self._service, exc)),
+                    error=error_detail(self._service, exc),
                 ),
             )
-        self.dismiss(None)
+            self._cancelling = False
+            cancel = self.query_one_optional("#guide-cancel", Button)
+            if cancel is not None:
+                cancel.disabled = False
+            self._set_phase("failed")
+            return
+        self._phase = "cancelled"
+        if dismiss:
+            self.dismiss(None)
 
     def action_dismiss_modal(self) -> None:
         # escape = abort, same as Cancel

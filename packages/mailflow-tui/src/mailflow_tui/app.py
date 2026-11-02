@@ -57,6 +57,7 @@ from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
 from mailflow_tui.labels import analysis_status, error_detail, error_message, urgency_label
+from mailflow_tui.labels import relabel_buttons as _relabel_buttons
 from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.profile import UserProfileModal
 from mailflow_tui.repos import ReposScreen
@@ -77,13 +78,6 @@ _BLANK = ""
 def _load_error(service: MailFlowService, exc: Exception) -> str:
     message = service.t("tui.data_load_failed", error=error_detail(service, exc))
     return f"[red]{escape(message)}[/red]"
-
-
-def _relabel_buttons(owner: Any, labels: dict[str, str]) -> None:
-    for ident, key in labels.items():
-        button = owner.query_one_optional(f"#{ident}", Button)
-        if button is not None:
-            button.label = owner._service.t(key)
 
 
 def _localize(service: MailFlowService, value: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
@@ -4146,7 +4140,18 @@ class MailFlowApp(App[None]):
             if not container.is_attached or not container.children:
                 continue
             content = container.children[0]
-            if isinstance(content, (MailPane, ActionsPane, RuntimePane)):
+            if isinstance(
+                content,
+                (
+                    MailPane,
+                    ActionsPane,
+                    RuntimePane,
+                    AccountsPane,
+                    LLMPane,
+                    NotificationsPane,
+                    SettingsPane,
+                ),
+            ):
                 await content.relabel()
                 continue
             await container.remove_children()

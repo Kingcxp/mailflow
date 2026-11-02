@@ -9,9 +9,11 @@ import base64
 import contextlib
 import json
 import queue as queue_module
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, cast
+from urllib.parse import urlsplit
 
 import httpx
 from httpx import AsyncClient
@@ -24,6 +26,7 @@ from mailflow.replies import ReplyError
 from mailflow.settings import EditorKind, OptionSpec, SettingsSection
 from mailflow_server.client import RemoteClient, RemoteUnsupported
 from textual.containers import Horizontal, Vertical
+from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -32,6 +35,9 @@ from textual.widgets import (
     Static,
     Switch,
 )
+from textual.worker import WorkerCancelled
+
+from mailflow_tui.labels import error_detail, redact_operation_logs
 
 _SESSION_FILE = Path.home() / ".mailflow" / "tui-session.json"
 
@@ -51,9 +57,18 @@ def load_session() -> dict[str, Any]:
 
 def save_session(data: dict[str, Any]) -> None:
     _SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _SESSION_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    with contextlib.suppress(OSError):
-        _SESSION_FILE.chmod(0o600)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=_SESSION_FILE.parent, delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+        temporary.chmod(0o600)
+        temporary.replace(_SESSION_FILE)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def clear_password() -> None:
@@ -109,6 +124,9 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         super().__init__()
         self._session = session
         self._i18n = I18n(language=str(session.get("language") or "en"))
+        self._connection: Any = None
+        self._connecting = False
+        self._bindings.bind("escape", "cancel_connection", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._i18n.t(key, **params)
@@ -135,11 +153,60 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
             yield Static("", id="login-status")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "login-connect" and self._connecting:
+            await self.action_cancel_connection()
+            return
         if event.button.id == "login-quit":
+            await self.action_cancel_connection()
             self.dismiss(None)
             return
         if event.button.id != "login-connect":
             return
+        self._connecting = True
+        self._connection = self.run_worker(
+            self._connect(), group="remote-login", exit_on_error=False
+        )
+
+    async def action_cancel_connection(self) -> None:
+        if self._connecting and self._connection is not None:
+            self._connection.cancel()
+            with contextlib.suppress(WorkerCancelled):
+                await self._connection.wait()
+            self._connecting = False
+            self.query_one("#login-connect", Button).label = self._t("tui.remote_connect")
+            self.query_one("#login-status", Static).update(self._t("tui.form_cancelled"))
+            for node in self.query("Input, Switch"):
+                node.disabled = False
+
+    async def _connect(self) -> None:
+        self._connecting = True
+        button = self.query_one("#login-connect", Button)
+        button.label = self._t("tui.btn_cancel")
+        for node in self.query("Input, Switch"):
+            node.disabled = True
+        try:
+            password = self.query_one("#login-pass", Input).value
+            with redact_operation_logs(self, extra_secrets=(password,)):
+                await self._connect_once()
+        except asyncio.CancelledError:
+            self.query_one("#login-status", Static).update(self._t("tui.form_cancelled"))
+            raise
+        except Exception as exc:
+            password = self.query_one("#login-pass", Input).value
+            message = self._t(
+                "tui.form_failed", error=error_detail(self, exc, extra_secrets=(password,))
+            )
+            self.query_one("#login-status", Static).update(escape(message))
+        finally:
+            self._connecting = False
+            button.label = self._t("tui.remote_connect")
+            for node in self.query("Input, Switch"):
+                node.disabled = False
+
+    def t(self, key: str, **params: Any) -> str:
+        return self._t(key, **params)
+
+    async def _connect_once(self) -> None:
         url = self.query_one("#login-url", Input).value.strip().rstrip("/")
         user = self.query_one("#login-user", Input).value.strip()
         password = self.query_one("#login-pass", Input).value
@@ -148,13 +215,21 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         if not url or not user or not password:
             status.update(f"[red]{self._t('tui.remote_fields_required')}[/red]")
             return
+        address = urlsplit(url)
+        if (
+            address.scheme not in ("http", "https")
+            or not address.hostname
+            or address.username is not None
+        ):
+            status.update(self._t("tui.remote_invalid_url"))
+            return
         status.update(f"[dim]{self._t('tui.remote_connecting')}[/dim]")
         try:
             async with AsyncClient(base_url=url, timeout=10.0) as probe:
                 response = await probe.get("/snapshot", headers=basic_header(user, password))
         except (httpx.HTTPError, ValueError) as exc:
             status.update(
-                f"[red]{self._t('tui.remote_unreachable', url=url, error=type(exc).__name__)}[/red]"
+                f"[red]{escape(self._t('tui.remote_unreachable', url=url, error=type(exc).__name__))}[/red]"
             )
             return
         if response.status_code == 401:
@@ -170,7 +245,16 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         try:
             payload: Any = response.json()
         except ValueError:
-            payload = {}
+            status.update(self._t("tui.remote_invalid_response"))
+            return
+        if not isinstance(payload, dict) or "version" not in payload:
+            status.update(self._t("tui.remote_invalid_response"))
+            return
+        try:
+            RuntimeSnapshot.model_validate(payload)
+        except ValueError:
+            status.update(self._t("tui.remote_invalid_response"))
+            return
         if isinstance(payload, dict):
             language = cast("dict[str, Any]", payload).get("language")
             if language:
@@ -178,6 +262,7 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         if save:
             session["saved_password"] = password
         save_session(session)
+        status.update(self._t("tui.remote_connected"))
         self.dismiss({"url": url, "username": user, "password": password})
 
 
