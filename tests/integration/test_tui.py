@@ -184,20 +184,14 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
         await service.stop()
 
 
-async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> None:
-    """The model searches, inspects the schedule, then stages the seminar.
-
-    Everything it stages waits for the confirmation dialog; only after the
-    user accepts does the entry exist — and it carries the [SEMINAR] marker
-    and its source-mail backlink.
-    """
+async def test_smart_query_task_crud_requires_confirmation(tmp_path: Path) -> None:
+    """Queries create, find, edit and delete ordinary tasks through one confirmation."""
     import queue
 
     from mailflow.contracts import LLMCompletion, ToolCall
     from mailflow.domain import ActionOrigin
     from mailflow.plugin_market import PluginMarket
-    from mailflow_tui.app import MailPane
-    from mailflow_tui.smart_action_review import SmartActionReviewModal
+    from mailflow_tui.smart_action_review import SmartActionReviewModal, SmartOperationEditModal
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
@@ -212,7 +206,7 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
     CommandRouter(service)
 
     class ActingRouter:
-        """Searches by keyword, then stages the event it found."""
+        mode = "add"
 
         async def chat(self, messages: list[Any], **kwargs: Any) -> LLMCompletion:
             tool_results = [
@@ -223,29 +217,56 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
                     text="",
                     model="smart",
                     tool_calls=[
-                        ToolCall(call_id="c1", name="find_mail", arguments={"contains": "lecture"})
+                        ToolCall(
+                            call_id="c1",
+                            name="find_mail" if self.mode == "add" else "list_actions",
+                            arguments={"contains": "lecture"}
+                            if self.mode == "add"
+                            else {"query": "Project review"},
+                        )
                     ],
                 )
             if len(tool_results) == 1:
+                if self.mode != "add":
+                    item_id = next(
+                        line.split()[1].removeprefix("id=")
+                        for line in tool_results[0].splitlines()
+                        if line.startswith("- id=")
+                    )
+                    return LLMCompletion(
+                        text="",
+                        model="smart",
+                        tool_calls=[
+                            ToolCall(
+                                call_id="c2",
+                                name="edit_action" if self.mode == "edit" else "delete_action",
+                                arguments={"item_id": item_id, "clear_end": True}
+                                if self.mode == "edit"
+                                else {"item_id": item_id},
+                            )
+                        ],
+                    )
                 return LLMCompletion(
                     text="",
                     model="smart",
                     tool_calls=[
                         ToolCall(
                             call_id="c2",
-                            name="schedule_event",
+                            name="add_action",
                             arguments={
-                                "title": "Research colloquium",
-                                "starts_at": "2099-10-15T14:00:00+08:00",
-                                "ends_at": "2099-10-15T15:30:00+08:00",
+                                "summary": "Project review",
+                                "due_at": "2099-10-15T14:00:00+08:00",
+                                "due_end": "2099-10-15T15:30:00+08:00",
                                 "location": "Room 201",
+                                "action_type": "meeting",
                             },
                         )
                     ],
                 )
-            return LLMCompletion(text="Staged the colloquium for your schedule.", model="smart")
+            return LLMCompletion(text="Task change ready for confirmation.", model="smart")
 
-    service.router = cast(Any, ActingRouter())
+    router = ActingRouter()
+    service.router = cast(Any, router)
     app = MailFlowApp(service, queue.Queue())
     try:
         async with app.run_test(size=(160, 50)) as pilot:
@@ -253,9 +274,8 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
                 if await service.count_mails() == 3:
                     break
                 await pilot.pause(0.05)
-            pane = app.query_one(MailPane)
             search = app.query_one("#mail-search", Input)
-            search.value = "把研讨会邮件加入我的日程"
+            search.value = "查找包含 lecture 的邮件，并在2099年10月15日14:00添加项目复核待办"
 
             def modal() -> SmartActionReviewModal | None:
                 screens = [s for s in app.screen_stack if isinstance(s, SmartActionReviewModal)]
@@ -270,12 +290,6 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
             assert prompt is not None, "a staged schedule entry must ask before it is added"
             # nothing exists until the user confirms
             assert await service.storage.list_custom_actions() == []
-            # the executed steps are visible while the dialog waits, and the
-            # literal condition the user stated went out as `contains`
-            result = pane._smart_action_result  # pyright: ignore[reportPrivateUsage]
-            assert result is not None
-            assert 'find_mail {"contains": "lecture"}' in result.tool_steps
-            assert result.pending and result.pending[0].tool == "schedule_event"
             prompt.query_one("#smart-review-apply", Button).press()
             for _ in range(120):
                 if await service.storage.list_custom_actions():
@@ -283,11 +297,44 @@ async def test_smart_action_schedules_matched_seminar_mail(tmp_path: Path) -> No
                 await pilot.pause(0.05)
 
             scheduled = await service.storage.list_custom_actions()
-            assert [item.summary for item in scheduled] == ["Research colloquium"]
-            assert scheduled[0].action_type == "other"
+            assert [item.summary for item in scheduled] == ["Project review"]
+            assert scheduled[0].action_type == "meeting"
             assert "2099-10-15T06:00:00+00:00" in scheduled[0].due_at.isoformat()
             assert scheduled[0].mail_id == ""  # a plain event, not a mail import
-            assert scheduled[0].origin is not ActionOrigin.SEMINAR
+            assert scheduled[0].origin is ActionOrigin.CUSTOM
+            assert scheduled[0].due_end is not None
+            await until(pilot, lambda: modal() is None)
+
+            router.mode = "edit"
+            search.value = "清除 Project review 待办的结束时间"
+            app.query_one("#smart-action", Button).press()
+            await until(pilot, lambda: modal() is not None)
+            prompt = modal()
+            assert prompt is not None
+            assert (await service.storage.list_custom_actions())[0].due_end is not None
+            prompt.query_one("#smart-review-edit-0", Button).press()
+            await until(pilot, lambda: isinstance(app.screen, SmartOperationEditModal))
+            assert app.screen.query_one("#smart-review-end", Input).value == ""
+            assert app.screen.query_one("#smart-review-type", Input).value == "meeting"
+            app.screen.query_one("#smart-review-location", Input).value = "Office 4"
+            app.screen.query_one("#smart-review-save-edit", Button).press()
+            await until(pilot, lambda: isinstance(app.screen, SmartActionReviewModal))
+            app.screen.query_one("#smart-review-apply", Button).press()
+            await until(pilot, lambda: modal() is None)
+            await pilot.pause()
+            edited = (await service.storage.list_custom_actions())[0]
+            assert edited.due_end is None and edited.location == "Office 4"
+            assert edited.action_type == "meeting" and edited.item_id == scheduled[0].item_id
+
+            router.mode = "delete"
+            search.value = "删除 Project review 待办"
+            app.query_one("#smart-action", Button).press()
+            await until(pilot, lambda: modal() is not None)
+            assert len(await service.storage.list_custom_actions()) == 1
+            app.screen.query_one("#smart-review-apply", Button).press()
+            await until(pilot, lambda: modal() is None)
+            await pilot.pause()
+            assert await service.storage.list_custom_actions() == []
             app.exit()
             await pilot.pause()
     finally:
@@ -302,7 +349,7 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
 
     from mailflow.contracts import LLMCompletion, ToolCall
     from mailflow.plugin_market import PluginMarket
-    from mailflow_tui.confirm import ConfirmModal
+    from mailflow_tui.smart_action_review import SmartActionReviewModal
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
@@ -358,11 +405,13 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
             search = app.query_one("#mail-search", Input)
             search.value = "把广告邮件都删掉"
 
-            def modal() -> ConfirmModal | None:
+            def modal() -> SmartActionReviewModal | None:
                 screens = [
                     s
                     for s in app.screen_stack
-                    if isinstance(s, ConfirmModal) and s.is_mounted and s.query("#confirm-run")
+                    if isinstance(s, SmartActionReviewModal)
+                    and s.is_mounted
+                    and s.query("#smart-review-apply")
                 ]
                 return screens[-1] if screens else None
 
@@ -373,13 +422,13 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
                 await pilot.pause(0.05)
             prompt = modal()
             assert prompt is not None, "a staged delete must ask before removing mail"
-            body = str(prompt.query_one("#confirm-body", Static).render())
+            body = str(prompt.query_one("#smart-review-op-0", Static).render())
             assert "1" in body  # the real matched count, not the mailbox size
 
             # nothing is removed while the dialog is open
             assert await service.count_mails() == 3
             # cancelling leaves the mailbox untouched
-            prompt.query_one("#confirm-cancel", Button).press()
+            prompt.query_one("#smart-review-cancel", Button).press()
             for _ in range(40):
                 if modal() is None:
                     break
@@ -395,7 +444,10 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
                 await pilot.pause(0.05)
             prompt = modal()
             assert prompt is not None
-            prompt.query_one("#confirm-run", Button).press()
+            assert "Huge promotion sale" in str(
+                prompt.query_one("#smart-review-op-0", Static).render()
+            )
+            prompt.query_one("#smart-review-apply", Button).press()
             for _ in range(120):
                 if await service.count_mails() == 2:
                     break

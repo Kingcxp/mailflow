@@ -119,7 +119,7 @@ class TestLLMImportanceProcessor:
           "summary": "Old reminder", "urgency": "important", "reason": "carries a deadline",
           "reply_required": false, "suggested_reply": "",
           "action_items": [
-            {"summary": "Attend the seminar", "action_type": "meeting", "must_do": false,
+            {"summary": "Attend the meeting", "action_type": "meeting", "must_do": false,
              "due_at": "2026-09-23T18:00:00+08:00"},
             {"summary": "Submit the annual report", "action_type": "errand", "must_do": true,
              "due_at": "2026-12-02T09:00:00+08:00"}
@@ -127,7 +127,7 @@ class TestLLMImportanceProcessor:
           "notes": ""}"""
         router = StubRouter(payload)
         processor = make_processor(router)
-        mail = make_mail(subject="Reminder: seminar tomorrow").model_copy(
+        mail = make_mail(subject="Reminder: meeting tomorrow").model_copy(
             update={
                 "date": datetime(2026, 9, 22, 10, 0, tzinfo=UTC),
                 "received_at": datetime(2026, 9, 22, 10, 0, tzinfo=UTC),

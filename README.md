@@ -28,7 +28,7 @@ without one, deterministic rules remain available.
 |---|---|
 | Mail | Multiple accounts, historical browsing, body/attachment-name/OCR search, manual urgency and reanalysis |
 | Batch actions | Check rows, Shift-select a range, Ctrl+A for visible results, delete expired mail and undo the last deletion |
-| Tasks | Mail obligations, custom tasks, seminar review, reminders and summaries |
+| Tasks | Mail obligations, custom tasks, reminders and summaries |
 | Replies | Continue saved drafts; prepare and confirm before sending; failed sends remain retryable |
 | Notifications | Configure chat-platform instances and notification targets; export NoneBot or AstrBot plugins |
 | Plugins | Install, enable or disable mail sources, model backends, processors, notifiers, storage and gateways |
@@ -38,9 +38,10 @@ Mail deletion moves records to recoverable trash. Defaults are 30-day mail reten
 7-day trash retention and cleanup at 04:00 in the configured timezone. Automatic updates
 are disabled by default.
 
-Smart instructions propose changes for confirmation. Search evaluates mail excerpts,
+Smart query finds or deletes mail, manages tasks and shows live progress. Changes
+require confirmation. Search evaluates mail excerpts,
 so long messages can contain relevant text outside the excerpt. Remote TUI supports
-mail, tasks and reply workflows; smart instructions, conversational correction and
+mail, tasks and reply workflows; smart query, conversational correction and
 local plugin/process management are currently local-only.
 
 ## Other entry points

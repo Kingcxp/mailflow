@@ -181,7 +181,7 @@ importance levels, judged by what the recipient must DO.
   or required action makes a mail important even when it arrives as a bulk
   notice, newsletter or invitation.
 - "info" (green #67C23A): optional or FYI — event announcements the recipient MAY
-  attend, lectures and seminars without attendance requirements, club activities,
+  attend, optional events without attendance requirements, club activities,
   general notices, newsletters, postings with no action and no deadline for them.
 - "ad" (gray #909399): unusable mail only — unsolicited sales and promotions,
   spam, and automated system chatter without usable content (routine login
@@ -198,7 +198,7 @@ Rules:
 3. Routine login/password/delivery notices without usable information or a
    required action are "ad". A security threat, a required password change or
    a delivery problem the recipient must resolve is at least "important".
-   Lectures and seminars without mandatory attendance are "info" even with a date; raise
+   Optional events without mandatory attendance are "info" even with a date; raise
    them only when attendance is required of THIS recipient or an action (register,
    RSVP, submit) is demanded. When an event is optional it yields no action item
    (see rule 5).
@@ -207,8 +207,7 @@ Rules:
    deadline they are liable for (a fee, a required submission, an exam), an
    appointment they have to attend, a pickup, or a meeting/conference they are
    required to attend or must reply to. Do NOT create an action item for
-   optional or self-selected matters — events they may freely skip (seminars,
-   talks, lectures, workshops, club activities), and also anything they may
+   optional or self-selected matters — events they may freely skip (talks, workshops, club activities), and also anything they may
    simply choose not to do: voluntary surveys, feedback forms, optional
    sign-ups and registrations for events they are not required to attend.
    Those belong in the summary and reason only. A registration is actionable

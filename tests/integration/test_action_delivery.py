@@ -190,9 +190,7 @@ async def test_custom_storage_owns_deletion_even_with_legacy_analysis_origin() -
     assert await service.runtime.action_store.dismissed() == frozenset()
 
 
-@pytest.mark.parametrize(
-    "origin", [ActionOrigin.CUSTOM, ActionOrigin.SEMINAR, ActionOrigin.ANALYSIS]
-)
+@pytest.mark.parametrize("origin", [ActionOrigin.CUSTOM, ActionOrigin.ANALYSIS])
 async def test_expiry_and_retention_preserve_ongoing_window(origin: ActionOrigin) -> None:
     storage = MemoryStorage()
     item = await schedule(storage)

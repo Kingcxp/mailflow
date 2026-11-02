@@ -17,7 +17,6 @@ from typing import Any, ClassVar, cast
 
 from mailflow.domain import (
     ActionItem,
-    ActionOrigin,
     MailRecord,
     PendingOperation,
     ReplyDraft,
@@ -26,6 +25,7 @@ from mailflow.domain import (
     Urgency,
     to_utc,
 )
+from mailflow.errors import error_text
 from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
 from rich.text import Text as RichText
@@ -69,7 +69,6 @@ from mailflow_tui.profile import UserProfileModal
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
 from mailflow_tui.search import SearchMatcher, build_search_matcher
-from mailflow_tui.seminars import SeminarReviewModal
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
@@ -99,7 +98,6 @@ _ACTION_TYPE_KEYS: dict[str, str] = {
     "exam": "tui.action_type_exam",
     "meeting": "tui.action_type_meeting",
     "other": "tui.action_type_other",
-    "seminar": "tui.action_type_seminar",
 }
 
 
@@ -586,7 +584,7 @@ class ActionModal(ModalScreen[Any]):
         yield Static(self._service.t("tui.action_detail"), id="action-title")
         with ScrollableContainer(id="action-detail-scroll"):
             # every field below is model/user text (summaries routinely
-            # contain "[SEMINAR]"-style brackets); Rich Text is never parsed
+            # contain "[NOTICE]"-style brackets); Rich Text is never parsed
             # as console markup, so the values render verbatim
             yield Label(
                 RichText.assemble(
@@ -636,8 +634,7 @@ class ActionModal(ModalScreen[Any]):
             yield Static("", id="action-mail-detail")
         # outside the scroll box: always visible, never scrolls away
         with Horizontal(id="action-footer"):
-            if not (item.origin is ActionOrigin.ANALYSIS and item.mail_id):
-                yield Button(self._service.t("tui.btn_edit"), id="action-edit", variant="primary")
+            yield Button(self._service.t("tui.btn_edit"), id="action-edit", variant="primary")
             yield Button(self._service.t("tui.btn_close"), id="action-close", variant="default")
 
     async def on_mount(self) -> None:
@@ -770,7 +767,7 @@ class MailPane(Vertical):
                 yield Button(
                     self._service.t("tui.smart_action"), id="smart-action", variant="primary"
                 )
-        yield RichLog(id="smart-action-progress", max_lines=8, wrap=True)
+        yield RichLog(id="smart-action-progress", max_lines=200, wrap=True)
         yield Static("", id="mail-empty-hint")
         with Horizontal():
             yield SelectionTable(id="mail-table")
@@ -1028,11 +1025,13 @@ class MailPane(Vertical):
             hints.append(
                 self._service.t(
                     "tui.smart_action_steps",
-                    steps="; ".join(result.tool_steps[-4:]),
+                    count=len(result.tool_steps),
                 )
             )
         if result.final_text:
             hints.append(result.final_text)
+        if result.failure_reasons and not result.failed_mails:
+            hints.extend(result.failure_reasons)
         if result.failed_mails:
             key = "tui.smart_action_partial" if result.records else "tui.smart_action_incomplete"
             hints.append(
@@ -1069,196 +1068,56 @@ class MailPane(Vertical):
         )
 
     async def _prepare_and_review_pending(self, result: SmartActionResult) -> None:
-        """Normalize pending schedules, review them, then confirm mail writes."""
-        pending = list(result.pending)
-        wanted_candidates = {
-            str(candidate_id)
-            for operation in pending
-            for candidate_id in (
-                operation.arguments.get("candidate_ids", [])
-                if operation.tool == "schedule_seminars"
-                else [operation.arguments.get("candidate_id")]
-            )
-            if candidate_id
-        }
-        candidates = await self._service.list_seminar_candidates() if wanted_candidates else []
-        candidate_map = {candidate.candidate_id: candidate for candidate in candidates}
-        # a bulk stage may carry per-candidate title/notes templates; they must
-        # survive the expansion into single-candidate operations or the review
-        # modal would show, and apply, the un-customized titles
-        bulk_title_overrides: dict[str, str] = {}
-        bulk_notes_overrides: dict[str, str] = {}
-        actions = (
-            await self._service.list_actions()
-            if any(op.tool in {"edit_action", "delete_action"} for op in pending)
-            else []
-        )
-        action_map = {item.item_id: item for item in actions}
+        """Show one editable confirmation for all proposed changes."""
+        action_map = {item.item_id: item for item in await self._service.list_actions_all()}
         operations: list[PendingOperation] = []
-        review_ids: list[str] = []
-
-        def _iso(value: Any) -> Any:
-            return value.isoformat() if isinstance(value, datetime) else value
-
-        def _candidate_operation(candidate_id: str) -> PendingOperation:
-            candidate = candidate_map.get(candidate_id)
-            if candidate is None:
-                return PendingOperation(
-                    tool="schedule_seminar", arguments={"candidate_id": candidate_id}
-                )
-            if candidate.starts_at is None:
-                review_ids.append(candidate_id)
-                return PendingOperation(
-                    tool="review_seminar", arguments={"candidate_id": candidate_id}
-                )
-            return PendingOperation(
-                tool="schedule_seminar",
-                arguments={
-                    "candidate_id": candidate_id,
-                    "title": bulk_title_overrides.get(candidate_id, candidate.title),
-                    "starts_at": _iso(candidate.starts_at),
-                    "ends_at": _iso(candidate.ends_at),
-                    "timezone": candidate.timezone,
-                    "location": candidate.location,
-                    "url": candidate.url,
-                    "description": bulk_notes_overrides.get(candidate_id, candidate.description),
-                    "clear_end": candidate.ends_at is None,
-                },
-            )
-
-        for operation in pending:
-            tool = operation.tool
-            args = dict(operation.arguments)
-            if tool == "review_seminar":
-                candidate_id = str(args.get("candidate_id") or "")
-                if candidate_id:
-                    review_ids.append(candidate_id)
-                continue
-            if tool == "schedule_seminars":
-                bulk_title_overrides.update(
-                    {
-                        str(key): str(value)
-                        for key, value in (
-                            cast("dict[Any, Any]", args.get("title_overrides") or {}).items()
-                        )
-                    }
-                )
-                bulk_notes_overrides.update(
-                    {
-                        str(key): str(value)
-                        for key, value in (
-                            cast("dict[Any, Any]", args.get("notes_overrides") or {}).items()
-                        )
-                    }
-                )
-                for candidate_id in cast("list[str]", args.get("candidate_ids") or []):
-                    candidate_operation = _candidate_operation(str(candidate_id))
-                    if candidate_operation.tool != "review_seminar":
-                        operations.append(candidate_operation)
-                continue
-            if tool == "schedule_seminar":
-                operation = _candidate_operation(str(args.get("candidate_id") or ""))
-                if operation.tool == "review_seminar":
-                    continue
-                operations.append(operation)
-                continue
-            if tool == "schedule_event":
-                args = {
-                    "summary": args.get("title") or args.get("summary") or "",
-                    "due_at": _iso(args.get("starts_at") or args.get("due_at")),
-                    "due_end": _iso(args.get("ends_at") or args.get("due_end")),
-                    "action_type": args.get("action_type") or "other",
-                    "notes": args.get("notes") or "",
-                    "location": args.get("location") or "",
-                    "url": args.get("url") or "",
-                }
-                operation = PendingOperation(
-                    tool="add_action",
-                    arguments=args,
-                    summary_key=operation.summary_key,
-                    summary_params=operation.summary_params,
-                )
-            elif tool in {"edit_action", "delete_action"}:
-                item = action_map.get(str(args.get("item_id") or ""))
+        for pending in result.pending:
+            operation = pending.model_copy(deep=True)
+            if operation.tool == "delete_mail":
+                subjects: list[str] = []
+                for record_id in operation.record_ids[:5]:
+                    record = await self._service.get_mail(record_id)
+                    if record is not None:
+                        subjects.append(record.mail.subject)
+                operation.arguments["subjects"] = subjects
+            if operation.tool in {"edit_action", "delete_action"}:
+                item = action_map.get(str(operation.arguments.get("item_id") or ""))
                 if item is not None:
-                    args = {
+                    operation.arguments = {
                         "item_id": item.item_id,
                         "summary": item.summary,
-                        "due_at": _iso(item.due_at),
-                        "due_end": _iso(item.due_end),
+                        "due_at": item.due_at.isoformat(),
+                        "due_end": item.due_end.isoformat() if item.due_end else None,
                         "action_type": item.action_type,
                         "notes": item.notes,
                         "location": item.location,
                         "url": item.url,
                         "origin": item.origin.value,
-                        **args,
+                        **operation.arguments,
                     }
-                operation = PendingOperation(
-                    tool=tool,
-                    arguments=args,
-                    summary_key=operation.summary_key,
-                    summary_params=operation.summary_params,
-                )
+                    if operation.arguments.get("clear_end"):
+                        operation.arguments["due_end"] = None
             operations.append(operation)
-
-        reviewed_tools = {"add_action", "edit_action", "delete_action", "schedule_seminar"}
-        review_operations = [
-            operation for operation in operations if operation.tool in reviewed_tools
-        ]
-        remaining = [operation for operation in operations if operation.tool not in reviewed_tools]
-        if review_operations:
-            reviewed = await self._ask_screen(
-                SmartActionReviewModal(self._service, review_operations, candidate_map)
-            )
-            if reviewed is None:
-                return
-            review_operations = cast(list[PendingOperation], reviewed)
-        if remaining:
-            lines = [
-                self._service.t(op.summary_key, **op.summary_params)
-                for op in remaining
-                if op.summary_key
-            ]
-            body = self._service.t("tui.agent_pending_body", count=len(remaining))
-            if lines:
-                body += "\n\n" + "\n".join(f"• {line}" for line in lines)
-            confirmed = await self._ask_screen(
-                ConfirmModal(
-                    self._service,
-                    title=self._service.t("tui.agent_pending_title"),
-                    body=body,
-                    confirm_label=self._service.t("tui.btn_apply"),
-                    variant="warning",
-                )
-            )
-            if not confirmed:
-                return
-        await self._apply_pending_unlocked(result, [*review_operations, *remaining], review_ids)
+        reviewed = await self._ask_screen(SmartActionReviewModal(self._service, operations))
+        if reviewed is None:
+            result.pending.clear()
+            progress_log = self.query_one_optional("#smart-action-progress", RichLog)
+            if progress_log is not None:
+                progress_log.write(self._service.t("tui.smart_changes_cancelled"))
+            return
+        await self._apply_pending_unlocked(result, cast(list[PendingOperation], reviewed))
 
     async def _apply_pending_unlocked(
         self,
         result: SmartActionResult,
         operations: list[PendingOperation] | None = None,
-        review_ids: list[str] | None = None,
     ) -> None:
-        """Apply every staged operation, reporting what really happened.
-
-        A staged operation that fails (record already gone, invalid time) is
-        counted as a failure instead of aborting the batch, and the count the
-        user sees is the number of writes that actually landed. A proposal the
-        model could not schedule on its own is handed to the review form
-        rather than guessed at.
-        """
-        applied = 0
-        failed = 0
-        deleted = 0
-        for_review = list(review_ids or [])
-        for operation in operations if operations is not None else result.pending:
-            if operation.tool == "review_seminar":
-                candidate_id = str(operation.arguments.get("candidate_id") or "")
-                if candidate_id:
-                    for_review.append(candidate_id)
-                continue
+        """Apply confirmed changes once and show failures without aborting the batch."""
+        applied = failed = deleted = 0
+        selected = list(operations if operations is not None else result.pending)
+        result.pending.clear()
+        progress_log = self.query_one_optional("#smart-action-progress", RichLog)
+        for operation in selected:
             try:
                 changed = await self._apply_operation(operation.tool, operation.arguments)
                 applied += changed
@@ -1266,82 +1125,32 @@ class MailPane(Vertical):
                     deleted += changed
             except Exception as exc:
                 failed += 1
-                logger.warning("staged %r failed: %s", operation.tool, exc)
+                logger.warning("staged %r failed (%s)", operation.tool, type(exc).__name__)
+                if progress_log is not None:
+                    progress_log.write(error_text(exc, self._service.t))
         result.deleted = deleted
         self._clear_smart_action_result()
+        key = "tui.agent_applied" if not failed else "tui.agent_applied_partial"
+        self._pending_status_hint = self._service.t(key, applied=applied, failed=failed)
+        if progress_log is not None:
+            progress_log.write(self._pending_status_hint)
         await self.refresh_mail()
         cast(MailFlowApp, self.app).schedule_reload()  # pyright: ignore[reportUnknownMemberType]
-        key = "tui.agent_applied" if not failed else "tui.agent_applied_partial"
-        self._pending_status_hint = (
-            f"[green]{self._service.t(key, applied=applied, failed=failed)}[/green]"
-        )
-        if for_review:
-            review_set = set(for_review)
-            candidates = [
-                candidate
-                for candidate in await self._service.list_seminar_candidates()
-                if candidate.candidate_id in review_set
-            ]
-            if candidates:
-                cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-                    SeminarReviewModal(self._service, candidates),
-                    callback=self._refresh_after_review,
-                )
-
-    def _refresh_after_review(self, changed: bool | None) -> None:
-        if changed:
-            cast(MailFlowApp, self.app).schedule_reload()  # pyright: ignore[reportUnknownMemberType]
 
     async def _apply_operation(self, tool: str, arguments: dict[str, Any]) -> int:
-        """Apply one confirmed staged operation; returns how many writes landed."""
+        """Apply one confirmed operation through the permission-aware service."""
         from datetime import datetime as _datetime
 
         if tool == "delete_mail":
-            return await self._service.delete_mails(cast("list[str]", arguments["record_ids"]))
-        if tool == "schedule_seminar":
-            title = str(arguments.get("title") or "").strip()
-            await self._service.import_seminar(
-                str(arguments["candidate_id"]),
-                title=title or None,
-                starts_at=_datetime.fromisoformat(str(arguments["starts_at"]))
-                if arguments.get("starts_at")
-                else None,
-                ends_at=_datetime.fromisoformat(str(arguments["ends_at"]))
-                if arguments.get("ends_at")
-                else None,
-                clear_end=bool(arguments.get("clear_end", False)),
-                timezone=str(arguments["timezone"]) if arguments.get("timezone") else None,
-                location=str(arguments["location"]) if "location" in arguments else None,
-                url=str(arguments["url"]) if "url" in arguments else None,
-                description=str(arguments["description"]) if "description" in arguments else None,
+            return await self._service.delete_mails(
+                cast("list[str]", arguments.get("record_ids", []))
             )
-            return 1
-        if tool == "schedule_seminars":
-            applied = 0
-            title_overrides = cast("dict[str, str]", arguments.get("title_overrides") or {})
-            notes_overrides = cast("dict[str, str]", arguments.get("notes_overrides") or {})
-            for candidate_id in cast("list[str]", arguments["candidate_ids"]):
-                # the candidate may resolve to an already-imported item (the
-                # service dedupes); apply the staged overrides only when the
-                # entry is actually created
-                await self._service.import_seminar(
-                    str(candidate_id),
-                    title=title_overrides.get(str(candidate_id)),
-                    description=notes_overrides.get(str(candidate_id)),
-                )
-                applied += 1
-            return applied
-        if tool in {"schedule_event", "add_action"}:
-            due_raw = arguments.get("due_at") or arguments.get("starts_at")
-            end_raw = arguments.get("due_end") or arguments.get("ends_at")
+        if tool == "add_action":
+            end_raw = arguments.get("due_end")
             await self._service.add_action(
-                str(arguments.get("summary") or arguments.get("title") or ""),
-                _datetime.fromisoformat(str(due_raw)),
-                action_type=str(
-                    arguments.get("action_type") or "other"
-                    if tool == "schedule_event"
-                    else arguments.get("action_type") or "errand"
-                ),
+                str(arguments.get("summary") or ""),
+                _datetime.fromisoformat(str(arguments.get("due_at"))),
+                action_type=str(arguments.get("action_type") or "errand"),
                 due_end=_datetime.fromisoformat(str(end_raw)) if end_raw else None,
                 notes=str(arguments.get("notes") or ""),
                 location=str(arguments.get("location") or ""),
@@ -1349,11 +1158,10 @@ class MailPane(Vertical):
             )
             return 1
         if tool == "edit_action":
-            item_id = str(arguments["item_id"])
             due_raw = arguments.get("due_at")
             end_raw = arguments.get("due_end")
             await self._service.edit_action(
-                item_id,
+                str(arguments["item_id"]),
                 summary=str(arguments["summary"]) if "summary" in arguments else None,
                 due_at=_datetime.fromisoformat(str(due_raw)) if due_raw else None,
                 action_type=str(arguments["action_type"]) if "action_type" in arguments else None,
@@ -1365,8 +1173,8 @@ class MailPane(Vertical):
             )
             return 1
         if tool == "delete_action":
-            return 1 if await self._service.delete_action(str(arguments["item_id"])) else 0
-        raise ValueError(f"unstaged tool {tool!r}")
+            return int(await self._service.delete_action(str(arguments["item_id"])))
+        raise ValueError(self._service.t("tui.smart_action_failed"))
 
     async def _preview_matches(self, match_ids: set[str]) -> None:
         """Fetch preview records missing from the cache from storage and
@@ -1434,7 +1242,7 @@ class MailPane(Vertical):
         records = sorted(records, key=lambda r: r.mail.received_at, reverse=True)
         if self._select_value("#mail-sort") == "urgency":
             records.sort(key=lambda r: r.effective_urgency.rank, reverse=True)
-        status, self._pending_status_hint = self._pending_status_hint, ""
+        status = self._pending_status_hint
         await self._render_records(
             records,
             empty_hint_key="tui.mail_no_match" if self._records else "tui.mail_empty",
@@ -1592,6 +1400,7 @@ class MailPane(Vertical):
 
     def _clear_smart_action_result(self) -> None:
         """Return to the ordinary mailbox view after an explicit user action."""
+        self._pending_status_hint = ""
         self._smart_review_result = None
         if self._smart_action_result is not None:
             self._smart_action_result = None
@@ -1665,11 +1474,18 @@ class MailPane(Vertical):
             detail_params: dict[str, Any] = {}
             if isinstance(detail, tuple):
                 detail_key, detail_params = detail
+                if detail_key in {"smart_tool", "smart_tool_done"}:
+                    detail_params = {
+                        **detail_params,
+                        "tool": self._service.t(f"tui.smart_tool_{detail_params.get('tool', '')}"),
+                    }
                 detail_text = self._service.t(f"tui.{detail_key}", **detail_params)
             else:
                 detail_text = detail
             message = self._service.t(
-                "tui.smart_action_progress",
+                "tui.smart_scan_progress"
+                if stage in {"match", "warmup"}
+                else "tui.smart_action_progress",
                 stage=self._service.t(f"tui.smart_stage_{stage}"),
                 done=done,
                 total=total,
@@ -1708,7 +1524,7 @@ class MailPane(Vertical):
             result = await task
         except asyncio.CancelledError:
             return  # the cancellation path above restored the ordinary view
-        except Exception:
+        except Exception as exc:
             if self._smart_action_task is not task:
                 return
             self._smart_action_task = None
@@ -1718,7 +1534,7 @@ class MailPane(Vertical):
             self._set_smart_label("tui.smart_action")
             await self.refresh_mail()
             if hint is not None:
-                hint.update(f"[red]{self._service.t('tui.smart_action_failed')}[/red]")
+                hint.update(f"[red]{escape(error_text(exc, self._service.t))}[/red]")
                 hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
             return
         if self._smart_action_task is not task:
@@ -1796,7 +1612,7 @@ class MailPane(Vertical):
 
         Every dynamic field (summary, reason, action items, body, processor
         notes) is pipeline/model/user text that may contain square brackets
-        ("[SEMINAR] …", a pydantic error repr with ``input_value={'item':
+        ("[NOTICE] …", a pydantic error repr with ``input_value={'item':
         …}``). Textual 8.2.8's ``escape()`` does not neutralize those — the
         markup parser swallows bracket tags or raises "Expected markup
         value" and kills the app mid mail-switch. Render each field as Rich

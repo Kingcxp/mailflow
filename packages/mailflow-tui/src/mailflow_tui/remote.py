@@ -507,15 +507,6 @@ class RemoteServiceAdapter:
     async def smart_action(self, instruction: str, *, progress: Any = None) -> Any:
         raise self._unsupported("smart_action")
 
-    async def list_seminar_candidates(self, **options: Any) -> list[Any]:
-        raise self._unsupported("list_seminar_candidates")
-
-    async def import_seminar(self, candidate_id: str, **options: Any) -> Any:
-        raise self._unsupported("import_seminar")
-
-    async def reject_seminar(self, candidate_id: str) -> bool:
-        raise self._unsupported("reject_seminar")
-
     async def user_profile(self) -> str:
         raise self._unsupported("user_profile")
 

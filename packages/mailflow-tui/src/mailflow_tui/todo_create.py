@@ -139,7 +139,7 @@ class TodoCreateModal(ModalScreen[bool]):
 
 
 class TodoEditModal(TodoCreateModal):
-    """Modal form for editing a custom todo or imported seminar."""
+    """Modal form for editing a task."""
 
     def __init__(self, service: MailFlowService, item: ActionItem) -> None:
         super().__init__(service)

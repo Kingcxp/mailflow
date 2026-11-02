@@ -6,6 +6,8 @@ Released changes are summarized here. Detailed implementation history is in Git.
 
 ### Changed
 
+- Unified smart query around general mail and task tools with live progress; removed topic-specific discovery, import and review workflows.
+
 - Unified plugin contracts, external discovery, dependency installation and offline validation across hosts and the plugin repository.
 - Aligned mail identity, source progress, attachment/OCR handling and reanalysis with account-scoped, retryable processing.
 - Unified task visibility, reminders, reply confirmation, permissions and local/remote data conversion.
@@ -18,7 +20,6 @@ Released changes are summarized here. Detailed implementation history is in Git.
 - Keep failed notification deliveries retryable and avoid repeating successful destinations.
 - Stop old runtime, gateway and bridge resources during reload and shutdown.
 - Preserve smart-query ordering, progress and incomplete results; ground relative dates in the configured timezone.
-- Keep seminar candidates recovered from truncated replies even when the retry fails.
 - Isolate mail content from system instructions and discard malformed correction proposals.
 - Include every mail in hourly summaries, apply the configured language and retain completed briefings during delivery retries.
 - Cancel queries and progress tasks when input changes or the interface closes.

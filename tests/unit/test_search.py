@@ -37,7 +37,7 @@ def test_mail_body_and_image_text_preserve_case_sensitive_search() -> None:
     record = MailRecord(
         record_id="search",
         mail=make_mail(body_text="", body_html="<b>Room</b> Y908").model_copy(
-            update={"image_text": "Research Seminar"}
+            update={"image_text": "Research Meeting"}
         ),
     )
     text = searchable_mail_text(record.mail)

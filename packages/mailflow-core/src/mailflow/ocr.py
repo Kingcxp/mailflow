@@ -16,7 +16,7 @@ Design constraints, in order:
   worth reading and the caller runs :func:`extract_text` off the event loop.
 - **Untrusted output.** Recognised text is model/OCR output: it is data to
   search and to reason about, never an instruction to follow. It is normalized
-  before use because engines split words at glyph gaps ("Se minar").
+  before use because engines split words at glyph gaps ("Up date").
 """
 
 from __future__ import annotations
@@ -87,9 +87,8 @@ def _load_engine() -> Any | None:
 def collapsed_text(text: str) -> str:
     """The same text with every letter-to-letter gap closed.
 
-    Recognition inserts spaces where a glyph has a gap — "PAIR Research Se
-    minar" is a real observed result for "Seminar" — so a plain substring test
-    for the user's word fails on text that plainly contains it.
+    Recognition can insert spaces within a word, such as "Up date" instead
+    of "Update". Search needs both the original and gap-closed forms.
 
     This form is a *matching aid only*: collapsing every letter gap also glues
     legitimate word boundaries ("Room Y908 and Zoom" becomes "roomy908
@@ -104,7 +103,7 @@ def searchable_forms(text: str) -> list[str]:
 
     A match in either counts. Keeping the original means ordinary phrases
     ("room y908") still match; adding the closed form means a word the engine
-    split ("se minar") does too.
+    split ("up date") does too.
     """
     lowered = text.casefold()
     collapsed = collapsed_text(lowered)

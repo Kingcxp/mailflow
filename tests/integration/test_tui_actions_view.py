@@ -247,7 +247,7 @@ async def test_a_long_plan_keeps_its_buttons_on_screen(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 24)) as pilot:
             await pilot.pause()
             body = "12 change(s) are ready to apply.\n\n" + "\n".join(
-                f"• Add the seminar “Proceedings of the {i}th international colloquium "
+                f"• Add the meeting “Proceedings of the {i}th international colloquium "
                 "on linguistics and applied language studies” at 2026-11-"
                 f"{10 + i}T14:00:00+08:00 to the schedule"
                 for i in range(1, 13)

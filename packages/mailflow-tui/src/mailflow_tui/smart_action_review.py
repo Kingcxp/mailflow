@@ -1,8 +1,4 @@
-"""Editable review surface for staged smart-action operations.
-
-Nothing in this modal calls a mutating service method. It edits private copies
-of pending operations and returns those copies only when the user selects Apply.
-"""
+"""Review proposed mail and task changes before applying them."""
 
 from __future__ import annotations
 
@@ -10,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
-from mailflow.domain import PendingOperation, SeminarCandidate
+from mailflow.domain import PendingOperation
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
@@ -21,16 +17,10 @@ from textual.widgets import Button, Input, Static, TextArea
 class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
     BINDINGS: ClassVar[list[Any]] = []
 
-    def __init__(
-        self,
-        service: MailFlowService,
-        operations: list[PendingOperation],
-        seminar_candidates: dict[str, SeminarCandidate],
-    ) -> None:
+    def __init__(self, service: MailFlowService, operations: list[PendingOperation]) -> None:
         super().__init__()
         self._service = service
         self._operations = [operation.model_copy(deep=True) for operation in operations]
-        self._seminar_candidates = dict(seminar_candidates)
         self._labels: dict[int, Static] = {}
         self._bindings.bind("escape", "cancel", self._t("tui.smart_review_cancel"))
 
@@ -41,7 +31,7 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
         if not value:
             return ""
         try:
-            moment = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+            moment = datetime.fromisoformat(str(value))
             if moment.tzinfo is None:
                 moment = moment.replace(tzinfo=UTC)
             return moment.astimezone(ZoneInfo(self._service.config.general.timezone)).strftime(
@@ -52,39 +42,23 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
 
     def _description(self, index: int, operation: PendingOperation) -> str:
         args = operation.arguments
-        candidate = self._seminar_candidates.get(str(args.get("candidate_id") or ""))
-        title = str(
-            args.get("summary") or args.get("title") or (candidate.title if candidate else "")
-        )
-        action_type = str(args.get("action_type") or "")
-        start = (
-            args.get("due_at")
-            or args.get("starts_at")
-            or (candidate.starts_at if candidate else None)
-        )
-        end = (
-            args.get("due_end") or args.get("ends_at") or (candidate.ends_at if candidate else None)
-        )
-        notes = str(
-            args.get("notes")
-            or args.get("description")
-            or (candidate.description if candidate else "")
-        )
-        location = str(args.get("location") or (candidate.location if candidate else ""))
-        url = str(args.get("url") or (candidate.url if candidate else ""))
-        parts = [self._t(f"tui.smart_review_operation_{operation.tool}"), title]
-        if action_type:
-            parts.append(action_type)
-        if start:
-            parts.append(self._local_time(start))
-        if end:
-            parts.append(self._local_time(end))
-        if location:
-            parts.append(location)
-        if url:
-            parts.append(url)
-        if notes:
-            parts.append(notes)
+        if operation.tool == "delete_mail":
+            count = len(args.get("record_ids", []))
+            subjects = " · ".join(args.get("subjects", []))
+            if subjects and count > 5:
+                subjects += "…"
+            return self._t("tui.agent_pending_delete", count=count) + (
+                f" · {subjects}" if subjects else ""
+            )
+        parts = [
+            self._t(f"tui.smart_review_operation_{operation.tool}"),
+            str(args.get("summary") or operation.summary_params.get("summary") or ""),
+            self._local_time(args.get("due_at")),
+            self._local_time(args.get("due_end")),
+            str(args.get("location") or ""),
+            str(args.get("url") or ""),
+            str(args.get("notes") or ""),
+        ]
         if operation.tool == "delete_action":
             key = (
                 "tui.smart_review_delete_analysis"
@@ -92,26 +66,10 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
                 else "tui.smart_review_delete_item"
             )
             parts.append(self._t(key))
-        if operation.tool == "edit_action" and args.get("origin") == "analysis":
-            parts.append(self._t("tui.smart_review_analysis_readonly"))
-        # the parts after the localized label are model/user text: a title
-        # like "[SEMINAR] …" (our own template!) or a notes field with an
-        # unbalanced "[" is content, not console markup. The row widget
-        # renders with markup=False, so keep the text verbatim — escaping
-        # here would only show a stray backslash.
         return " · ".join(part for part in parts if part)
 
     def _can_edit(self, operation: PendingOperation) -> bool:
-        if operation.tool not in {
-            "add_action",
-            "schedule_event",
-            "edit_action",
-            "schedule_seminar",
-        }:
-            return False
-        return not (
-            operation.tool == "edit_action" and operation.arguments.get("origin") == "analysis"
-        )
+        return operation.tool in {"add_action", "edit_action"}
 
     def compose(self) -> ComposeResult:
         with Vertical(id="smart-review-dialog"):
@@ -119,11 +77,6 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
             with ScrollableContainer(id="smart-review-operations"):
                 for index, operation in enumerate(self._operations):
                     with Horizontal(classes="smart-review-row"):
-                        # markup=False: the description is model/user text
-                        # (titles like "[SEMINAR] …" are routine); Textual's
-                        # console-markup parser treats such brackets as tags
-                        # — even escape()d ones vanish or raise — so render
-                        # the row verbatim instead
                         label = Static(
                             self._description(index, operation),
                             id=f"smart-review-op-{index}",
@@ -133,49 +86,32 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
                         yield label
                         if self._can_edit(operation):
                             yield Button(
-                                self._t("tui.smart_review_edit"),
-                                id=f"smart-review-edit-{index}",
-                                variant="primary",
+                                self._t("tui.smart_review_edit"), id=f"smart-review-edit-{index}"
                             )
-            yield Static(self._t("tui.smart_review_apply_notice"), id="smart-review-notice")
             yield Static("", id="smart-review-error")
             with Horizontal(id="smart-review-buttons"):
-                yield Button(
-                    self._t("tui.smart_review_apply"), id="smart-review-apply", variant="success"
-                )
+                yield Button(self._t("tui.btn_apply"), id="smart-review-apply", variant="primary")
                 yield Button(self._t("tui.smart_review_cancel"), id="smart-review-cancel")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        button_id = event.button.id or ""
-        if button_id == "smart-review-apply":
-            self.dismiss([operation.model_copy(deep=True) for operation in self._operations])
-        elif button_id == "smart-review-cancel":
+        ident = event.button.id or ""
+        if ident == "smart-review-cancel":
             self.dismiss(None)
-        elif button_id.startswith("smart-review-edit-"):
-            try:
-                index = int(button_id.rsplit("-", 1)[1])
-            except ValueError:
-                return
-            if not 0 <= index < len(self._operations):
-                return
-            operation = self._operations[index]
+        elif ident == "smart-review-apply":
+            self.dismiss(self._operations)
+        elif ident.startswith("smart-review-edit-"):
+            index = int(ident.rsplit("-", 1)[1])
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-                SmartOperationEditModal(self._service, operation, self._seminar_candidates),
+                SmartOperationEditModal(self._service, self._operations[index]),
                 lambda values: self._updated(index, values),
             )
 
     def _updated(self, index: int, values: dict[str, Any] | None) -> None:
-        if values is None or not 0 <= index < len(self._operations):
+        if values is None:
             return
         operation = self._operations[index]
-        operation.arguments = {**operation.arguments, **values}
-        label = self._labels.get(index)
-        if label is not None:
-            # the widget was built with markup=False; update keeps it verbatim
-            label.update(self._description(index, operation))
-        error = self.query_one_optional("#smart-review-error", Static)
-        if error is not None:
-            error.update("")
+        operation.arguments.update(values)
+        self._labels[index].update(self._description(index, operation))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -184,16 +120,10 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
 class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
     BINDINGS: ClassVar[list[Any]] = []
 
-    def __init__(
-        self,
-        service: MailFlowService,
-        operation: PendingOperation,
-        candidates: dict[str, SeminarCandidate],
-    ) -> None:
+    def __init__(self, service: MailFlowService, operation: PendingOperation) -> None:
         super().__init__()
         self._service = service
         self._operation = operation.model_copy(deep=True)
-        self._candidate = candidates.get(str(operation.arguments.get("candidate_id") or ""))
         self._bindings.bind("escape", "cancel", self._t("tui.smart_review_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -203,7 +133,7 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
         if not raw:
             return ""
         try:
-            value = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw))
+            value = datetime.fromisoformat(str(raw))
             if value.tzinfo is None:
                 value = value.replace(tzinfo=UTC)
             return value.astimezone(ZoneInfo(self._service.config.general.timezone)).strftime(
@@ -214,61 +144,27 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
 
     def compose(self) -> ComposeResult:
         args = self._operation.arguments
-        candidate = self._candidate
-        seminar = self._operation.tool == "schedule_seminar"
-        title = args.get("summary") or args.get("title") or (candidate.title if candidate else "")
-        start = (
-            args.get("due_at")
-            or args.get("starts_at")
-            or (candidate.starts_at if candidate else None)
-        )
-        end = (
-            args.get("due_end") or args.get("ends_at") or (candidate.ends_at if candidate else None)
-        )
-        notes = (
-            args.get("notes")
-            or args.get("description")
-            or (candidate.description if candidate else "")
-        )
         with Vertical(id="smart-review-edit-dialog"):
             yield Static(self._t("tui.smart_review_edit_title"), id="smart-review-edit-title")
             with ScrollableContainer(id="smart-review-edit-fields"):
-                yield Static(self._t("tui.smart_review_summary"), classes="todo-label")
-                yield Input(value=str(title or ""), id="smart-review-summary")
-                if not seminar:
-                    yield Static(self._t("tui.smart_review_action_type"), classes="todo-label")
-                    yield Input(
-                        value=str(args.get("action_type") or "errand"), id="smart-review-type"
+                for key, field, default in (
+                    ("summary", "summary", ""),
+                    ("action_type", "type", "errand"),
+                    ("start", "start", ""),
+                    ("end", "end", ""),
+                ):
+                    yield Static(self._t(f"tui.smart_review_{key}"), classes="todo-label")
+                    value = (
+                        self._time_text(args.get("due_at" if field == "start" else "due_end"))
+                        if field in {"start", "end"}
+                        else str(args.get("action_type" if field == "type" else key) or default)
                     )
-                yield Static(self._t("tui.smart_review_start"), classes="todo-label")
-                yield Input(value=self._time_text(start), id="smart-review-start")
-                yield Static(self._t("tui.smart_review_end"), classes="todo-label")
-                yield Input(value=self._time_text(end), id="smart-review-end")
-                if seminar:
-                    yield Static(self._t("tui.seminar_timezone_label"), classes="todo-label")
-                    yield Input(
-                        value=str(
-                            args.get("timezone")
-                            or (
-                                candidate.timezone
-                                if candidate
-                                else self._service.config.general.timezone
-                            )
-                        ),
-                        id="smart-review-timezone",
-                    )
+                    yield Input(value=value, id=f"smart-review-{field}")
                 yield Static(self._t("tui.smart_review_notes"), classes="todo-label")
-                yield TextArea(str(notes or ""), id="smart-review-notes")
-                yield Static(self._t("tui.smart_review_location"), classes="todo-label")
-                yield Input(
-                    value=str(args.get("location") or (candidate.location if candidate else "")),
-                    id="smart-review-location",
-                )
-                yield Static(self._t("tui.smart_review_url"), classes="todo-label")
-                yield Input(
-                    value=str(args.get("url") or (candidate.url if candidate else "")),
-                    id="smart-review-url",
-                )
+                yield TextArea(str(args.get("notes") or ""), id="smart-review-notes")
+                for field in ("location", "url"):
+                    yield Static(self._t(f"tui.smart_review_{field}"), classes="todo-label")
+                    yield Input(value=str(args.get(field) or ""), id=f"smart-review-{field}")
             yield Static("", id="smart-review-edit-error")
             with Horizontal(id="smart-review-edit-buttons"):
                 yield Button(
@@ -286,75 +182,39 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
 
     def _save(self) -> None:
         error = self.query_one("#smart-review-edit-error", Static)
-        summary = str(self.query_one("#smart-review-summary", Input).value).strip()
-        is_seminar = self._operation.tool == "schedule_seminar"
-        action_type = (
-            str(self.query_one("#smart-review-type", Input).value).strip() if not is_seminar else ""
-        )
-        if not summary or (not is_seminar and not action_type):
-            error.update(f"[yellow]{self._t('tui.smart_review_required')}[/yellow]")
+        summary = self.query_one("#smart-review-summary", Input).value.strip()
+        action_type = self.query_one("#smart-review-type", Input).value.strip()
+        if not summary or not action_type:
+            error.update(self._t("tui.smart_review_required"))
             return
-        start_raw = str(self.query_one("#smart-review-start", Input).value).strip()
-        end_raw = str(self.query_one("#smart-review-end", Input).value).strip()
         try:
             zone = ZoneInfo(self._service.config.general.timezone)
-            start = datetime.strptime(start_raw, "%Y-%m-%d %H:%M").replace(tzinfo=zone)
+            start = datetime.strptime(
+                self.query_one("#smart-review-start", Input).value.strip(), "%Y-%m-%d %H:%M"
+            ).replace(tzinfo=zone)
+            end_raw = self.query_one("#smart-review-end", Input).value.strip()
             end = (
                 datetime.strptime(end_raw, "%Y-%m-%d %H:%M").replace(tzinfo=zone)
                 if end_raw
                 else None
             )
         except ValueError:
-            error.update(f"[yellow]{self._t('tui.smart_review_invalid_time')}[/yellow]")
+            error.update(self._t("tui.smart_review_invalid_time"))
             return
         if end is not None and end <= start:
-            error.update(f"[yellow]{self._t('tui.smart_review_invalid_window')}[/yellow]")
+            error.update(self._t("tui.smart_review_invalid_window"))
             return
-        notes = self.query_one("#smart-review-notes", TextArea).text.strip()
-        location = str(self.query_one("#smart-review-location", Input).value).strip()
-        url = str(self.query_one("#smart-review-url", Input).value).strip()
-        if is_seminar:
-            values: dict[str, Any] = {
-                "title": summary,
-                "starts_at": start.isoformat(),
-                "ends_at": end.isoformat() if end else None,
-                "clear_end": end is None,
-                "timezone": str(self.query_one("#smart-review-timezone", Input).value).strip(),
-                "description": notes,
-                "location": location,
-                "url": url,
-            }
-        elif self._operation.tool == "schedule_event":
-            values = {
-                "title": summary,
-                "starts_at": start.isoformat(),
-                "ends_at": end.isoformat() if end else None,
-                "action_type": action_type,
-                "notes": notes,
-                "location": location,
-                "url": url,
-            }
-        elif self._operation.tool == "edit_action":
-            values = {
-                "summary": summary,
-                "due_at": start.isoformat(),
-                "due_end": end.isoformat() if end else None,
-                "clear_end": end is None,
-                "action_type": action_type,
-                "notes": notes,
-                "location": location,
-                "url": url,
-            }
-        else:
-            values = {
-                "summary": summary,
-                "due_at": start.isoformat(),
-                "due_end": end.isoformat() if end else None,
-                "action_type": action_type,
-                "notes": notes,
-                "location": location,
-                "url": url,
-            }
+        values: dict[str, Any] = {
+            "summary": summary,
+            "due_at": start.isoformat(),
+            "due_end": end.isoformat() if end else None,
+            "action_type": action_type,
+            "notes": self.query_one("#smart-review-notes", TextArea).text.strip(),
+            "location": self.query_one("#smart-review-location", Input).value.strip(),
+            "url": self.query_one("#smart-review-url", Input).value.strip(),
+        }
+        if self._operation.tool == "edit_action":
+            values["clear_end"] = end is None
         self.dismiss(values)
 
     def action_cancel(self) -> None:

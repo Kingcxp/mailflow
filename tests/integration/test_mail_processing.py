@@ -34,7 +34,7 @@ async def test_ocr_receives_real_bytes_and_text_survives_storage_and_search(
 
     def recognize(images: list[Any], **kwargs: Any) -> str:
         seen.extend(image.data for image in images)
-        return "Research Se minar room Y908"
+        return "Research Up date room Y908"
 
     monkeypatch.setattr(ocr, "extract_mail_images", recognize)
     mail = parse_mime(image_mail(), "account", ocr_enabled=True)
@@ -45,9 +45,9 @@ async def test_ocr_receives_real_bytes_and_text_survives_storage_and_search(
         {}, analysis=MailAnalysis(summary="Poster", urgency=Urgency.INFO)
     )
     stored = await runtime.process_mail_now(mail)
-    assert stored is not None and stored.mail.image_text == "Research Se minar room Y908"
+    assert stored is not None and stored.mail.image_text == "Research Up date room Y908"
     assert stored.mail.attachments[0].data is None
-    assert CommandRouter._matches_query(stored, "seminar")  # pyright: ignore[reportPrivateUsage]
+    assert CommandRouter._matches_query(stored, "update")  # pyright: ignore[reportPrivateUsage]
     assert CommandRouter._matches_query(stored, "y908")  # pyright: ignore[reportPrivateUsage]
     assert (await storage.list_mails())[0].mail.image_text == stored.mail.image_text
 

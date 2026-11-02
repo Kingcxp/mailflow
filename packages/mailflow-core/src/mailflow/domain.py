@@ -216,34 +216,11 @@ class ActionOrigin(StrEnum):
 
     ANALYSIS = "analysis"
     CUSTOM = "custom"
-    SEMINAR = "seminar"
 
-
-class SeminarStatus(StrEnum):
-    """Review state of a discovered seminar; imports are always explicit."""
-
-    PENDING = "pending"
-    REJECTED = "rejected"
-    IMPORTED = "imported"
-    EXPIRED = "expired"
-
-
-class SeminarCandidate(BaseModel):
-    """A provider-neutral seminar proposal grounded in one source mail."""
-
-    candidate_id: str
-    mail_id: str
-    title: str
-    starts_at: datetime | None = None
-    ends_at: datetime | None = None
-    timezone: str = "UTC"
-    location: str = ""
-    url: str = ""
-    description: str = ""
-    confidence: int = 0
-    evidence: str = ""
-    status: SeminarStatus = SeminarStatus.PENDING
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    @classmethod
+    def _missing_(cls, value: object) -> ActionOrigin | None:
+        # Older imports remain ordinary editable tasks without special workflows.
+        return cls.CUSTOM if isinstance(value, str) else None
 
 
 class ActionItem(BaseModel):
@@ -437,10 +414,10 @@ class SmartActionResult(BaseModel):
     """Outcome of one free-form instruction executed as a tool-calling loop.
 
     ``tool_steps`` records what the model actually ran (``find_mail
-    {"contains": "seminar"}``), ``final_text`` is its closing summary, and
+    {"contains": "invoice"}``), ``final_text`` is its closing summary, and
     ``pending`` are the mutating operations awaiting the user's confirmation.
 
-    ``delete_mail``/``schedule_event``/``add_action``/``edit_action``/
+    ``delete_mail``/``add_action``/``edit_action``/
     ``delete_action`` never take effect here: the caller applies them through
     the service once the user confirms, because a destructive or calendar
     change never runs straight from a model's judgement. ``deleted`` records
@@ -452,8 +429,6 @@ class SmartActionResult(BaseModel):
     failed_mails: int = 0
     failed_batches: int = 0
     failure_reasons: list[str] = Field(default_factory=lambda: [])
-    scheduled: list[ActionItem] = Field(default_factory=lambda: [])
-    needs_review: list[SeminarCandidate] = Field(default_factory=lambda: [])
     pending: list[PendingOperation] = Field(default_factory=lambda: [])
     tool_steps: list[str] = Field(default_factory=lambda: [])
     final_text: str = ""
@@ -462,25 +437,7 @@ class SmartActionResult(BaseModel):
     @property
     def is_complete(self) -> bool:
         """True only when no candidate batch was unavailable or malformed."""
-        return self.failed_mails == 0
-
-
-class SeminarDiscoveryResult(BaseModel):
-    """Seminar scan outcome, including batches the model could not inspect."""
-
-    candidates: list[SeminarCandidate] = Field(default_factory=lambda: [])
-    total_mails: int = 0
-    evaluated_mails: int = 0
-    failed_mails: int = 0
-    failed_batches: int = 0
-    failed_record_ids: list[str] = Field(default_factory=lambda: [])
-    failure_reasons: list[str] = Field(default_factory=lambda: [])
-    """One short phrase per failed batch, so a retry reads as the right fix
-    instead of the mail looking unreadable."""
-
-    @property
-    def is_complete(self) -> bool:
-        return self.failed_batches == 0
+        return self.failed_mails == 0 and not self.failure_reasons
 
 
 class TrashRecord(BaseModel):
@@ -686,9 +643,6 @@ __all__ = [
     "ReplyDraft",
     "ReplyState",
     "RuntimeSnapshot",
-    "SeminarCandidate",
-    "SeminarDiscoveryResult",
-    "SeminarStatus",
     "SmartActionResult",
     "SmartSearchResult",
     "StyleSpan",

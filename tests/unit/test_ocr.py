@@ -10,8 +10,8 @@ from mailflow import ocr
 from mailflow.domain import Attachment
 
 OCR_RESULTS: list[tuple[object, str]] = [
-    ([[[], "Research Seminar", 0.99]], "Research Seminar"),
-    (([[[], "Research Seminar", 0.99]], [0.01]), "Research Seminar"),
+    ([[[], "Research Meeting", 0.99]], "Research Meeting"),
+    (([[[], "Research Meeting", 0.99]], [0.01]), "Research Meeting"),
     (None, ""),
     ([None, [], [0], [[], "  ", 0.99], [[], "Kept", 0.99]], "Kept"),
 ]

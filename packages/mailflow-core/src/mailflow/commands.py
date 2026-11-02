@@ -716,10 +716,7 @@ class CommandRouter:
                 StyleSpan(
                     text=f"\n{self._t('action.header_time')}: {self._fmt_time(action.due_at)}"
                 ),
-                StyleSpan(
-                    text=f"\n{self._t('action.header_type')}: "
-                    f"{self._t('action.type_seminar') if action.action_type == 'seminar' else action.action_type}"
-                ),
+                StyleSpan(text=f"\n{self._t('action.header_type')}: {action.action_type}"),
                 StyleSpan(text=f"\n{self._t('action.header_summary')}: {action.summary}"),
                 StyleSpan(text=f"\n{self._t('action.header_notes')}: {action.notes or '-'}"),
                 StyleSpan(
@@ -831,7 +828,7 @@ class CommandRouter:
         )
 
     async def _action_edit(self, args: list[str]) -> CommandResponse:
-        """Edit a custom or imported seminar action by id or list number."""
+        """Edit a task by id or list number."""
         if not args:
             return self._err(self._t("action.edit_usage"))
         action = await self._find_action(args[0])

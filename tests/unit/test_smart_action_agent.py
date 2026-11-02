@@ -71,8 +71,8 @@ async def seed(service: MailFlowService) -> None:
     storage = cast(Any, service.storage)
     await storage.save_mail(
         MailRecord(
-            record_id="seminar-1",
-            mail=_mail("seminar-1", subject="Seminar invitation", body="A seminar on Friday"),
+            record_id="meeting-1",
+            mail=_mail("meeting-1", subject="Meeting invitation", body="A meeting on Friday"),
             auto_urgency=Urgency.INFO,
         )
     )
@@ -119,29 +119,29 @@ class TestReadLoop:
     async def test_tool_result_reaches_the_next_turn_and_the_result(self) -> None:
         router = ScriptedRouter(
             [
-                call("find_mail", {"contains": "seminar"}),
-                call("read_mail", {"record_id": "seminar-1"}),
-                text("Found the seminar invitation."),
+                call("find_mail", {"contains": "meeting"}),
+                call("read_mail", {"record_id": "meeting-1"}),
+                text("Found the meeting invitation."),
             ]
         )
         service = make_service(router)
         await seed(service)
 
-        result = await run_agent(service, cast(Any, router), "show me the seminar mail")
+        result = await run_agent(service, cast(Any, router), "show me the meeting mail")
 
         assert result.tool_steps == [
-            'find_mail {"contains": "seminar"}',
-            'read_mail {"record_id": "seminar-1"}',
+            'find_mail {"contains": "meeting"}',
+            'read_mail {"record_id": "meeting-1"}',
         ]
-        assert result.final_text == "Found the seminar invitation."
+        assert result.final_text == "Found the meeting invitation."
         assert result.pending == []
-        assert [record.record_id for record in result.records] == ["seminar-1"]
+        assert [record.record_id for record in result.records] == ["meeting-1"]
         assert result.total_mails == 2
         # the second turn really carried the tool result back
         second_turn = router.calls[1]
         assert second_turn[-1]["role"] == "tool"
         assert second_turn[-1]["tool_call_id"] == "c1"
-        assert "seminar-1" in second_turn[-1]["content"]
+        assert "meeting-1" in second_turn[-1]["content"]
         # the assistant turn replays in the OpenAI wire shape
         assert second_turn[-2]["tool_calls"][0]["function"]["name"] == "find_mail"
         assert router.calls[2][-1]["role"] == "tool"
@@ -153,22 +153,22 @@ class TestReadLoop:
         assert all(specs for specs in router.tool_arguments)
 
     async def test_results_include_every_match_in_source_order(self) -> None:
-        router = ScriptedRouter([call("find_mail", {"contains": "seminar"}), text("Found all.")])
+        router = ScriptedRouter([call("find_mail", {"contains": "meeting"}), text("Found all.")])
         service = make_service(router)
         storage = cast(Any, service.storage)
         for index in range(45):
             when = datetime(2026, 1, 1, 9, index, tzinfo=UTC)
-            mail = _mail(f"seminar-{index}", subject=f"Seminar {index}", body="Event")
+            mail = _mail(f"meeting-{index}", subject=f"Meeting {index}", body="Event")
             mail = mail.model_copy(update={"date": when, "received_at": when})
             await storage.save_mail(
-                MailRecord(record_id=f"seminar-{index}", mail=mail, auto_urgency=Urgency.INFO)
+                MailRecord(record_id=f"meeting-{index}", mail=mail, auto_urgency=Urgency.INFO)
             )
 
-        result = await run_agent(service, cast(Any, router), "show all seminar mail")
+        result = await run_agent(service, cast(Any, router), "show all meeting mail")
 
         assert len(result.records) == 45
         assert [record.record_id for record in result.records] == [
-            f"seminar-{index}" for index in reversed(range(45))
+            f"meeting-{index}" for index in reversed(range(45))
         ]
         assert "matched: 45 mail(s)" in router.calls[1][-1]["content"]
 
@@ -189,7 +189,7 @@ class TestReadLoop:
         service = make_service(router)
         await seed(service)
 
-        result = await run_agent(service, cast(Any, router), "seminar mail and my schedule")
+        result = await run_agent(service, cast(Any, router), "meeting mail and my schedule")
 
         assert result.tool_steps == [
             'find_mail {"query": "mail"}',
@@ -197,14 +197,14 @@ class TestReadLoop:
         ]
         roles = [m["role"] for m in router.calls[-1]]
         assert roles.count("tool") == 2
-        assert [record.record_id for record in result.records] == ["invoice-1", "seminar-1"]
+        assert [record.record_id for record in result.records] == ["invoice-1", "meeting-1"]
 
     async def test_a_tool_error_is_fed_back_and_the_loop_continues(self) -> None:
         router = ScriptedRouter(
             [
                 call("teleport"),
                 call("delete_mail", {"record_ids": ["ghost"]}),
-                call("find_mail", {"contains": "seminar"}, call_id="c2"),
+                call("find_mail", {"contains": "meeting"}, call_id="c2"),
                 text("Recovered."),
             ]
         )
@@ -225,7 +225,7 @@ class TestReadLoop:
 @pytest.mark.parametrize(
     ("instruction", "allowed"),
     [
-        ("find all seminar emails", False),
+        ("find all meeting emails", False),
         ("clean up old email", False),
         ("move the invoice to trash", True),
         ("删除匹配的邮件", True),
@@ -293,14 +293,14 @@ class TestLoopBounds:
         assert result.final_text
 
     async def test_a_failing_progress_callback_does_not_abort_the_work(self) -> None:
-        router = ScriptedRouter([call("find_mail", {"contains": "seminar"}), text("Done.")])
+        router = ScriptedRouter([call("find_mail", {"contains": "meeting"}), text("Done.")])
         service = make_service(router)
         await seed(service)
 
         def broken(stage: str, done: int, total: int, detail: Any) -> None:
             raise RuntimeError("the host blew up while drawing")
 
-        result = await run_agent(service, cast(Any, router), "seminar mail", progress=broken)
+        result = await run_agent(service, cast(Any, router), "meeting mail", progress=broken)
 
         assert result.final_text == "Done."
 
@@ -324,3 +324,26 @@ class TestCancellation:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+async def test_model_failure_keeps_reads_without_offering_partial_writes() -> None:
+    class FailingRouter(ScriptedRouter):
+        async def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> LLMCompletion:
+            if self.calls:
+                raise RuntimeError("offline transport failure")
+            return await super().chat(messages, **kwargs)
+
+    first_turn = call("find_mail", {"contains": "invoice"})
+    first_turn.tool_calls.append(
+        ToolCall(call_id="delete", name="delete_mail", arguments={"record_ids": ["invoice"]})
+    )
+    router = FailingRouter([first_turn])
+    service = make_service(router)
+    await service.storage.save_mail(
+        MailRecord(record_id="invoice", mail=_mail("invoice", subject="Invoice", body="Amount due"))
+    )
+    result = await service.smart_action("Delete the invoice")
+    assert result.pending == []
+    assert [record.record_id for record in result.records] == ["invoice"]
+    assert not result.is_complete and result.failure_reasons
+    assert await service.count_mails() == 1

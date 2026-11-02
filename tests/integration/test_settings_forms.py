@@ -802,57 +802,6 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
         await service.stop()
 
 
-async def test_seminar_review_requires_explicit_import(tmp_path: Path) -> None:
-    """A discovered proposal stays out of the schedule until the user confirms it."""
-    import json
-    from datetime import UTC, datetime
-
-    from mailflow.domain import ActionOrigin, SeminarCandidate
-    from mailflow_tui.seminars import SeminarReviewModal
-
-    service = await start_service_quiet(tmp_path)
-    CommandRouter(service)
-    candidate = SeminarCandidate(
-        candidate_id="seminar-test-1",
-        mail_id="mail-1",
-        title="Initial title",
-        starts_at=datetime(2099, 1, 2, 9, 0, tzinfo=UTC),
-        timezone="UTC",
-        location="Room 201",
-        url="https://events.example.test/seminar",
-        description="Bring questions.",
-        confidence=92,
-    )
-    await service.storage.set_preference(
-        "seminars.candidates", json.dumps([candidate.model_dump(mode="json")])
-    )
-    app = MailFlowApp(cast(Any, service), queue_module.Queue())
-    try:
-        async with app.run_test(size=(140, 50)) as pilot:
-            await pilot.pause(0.2)
-            assert await service.storage.list_custom_actions() == []
-            app.push_screen(SeminarReviewModal(service, [candidate]))
-            await pilot.pause(0.2)
-            assert isinstance(app.screen, SeminarReviewModal)
-
-            app.screen.query_one("#seminar-title", Input).value = "Edited seminar"
-            app.screen.query_one("#seminar-import", Button).press()
-            await _wait_until(pilot, lambda: not isinstance(app.screen, SeminarReviewModal))
-
-            custom = await service.storage.list_custom_actions()
-            assert len(custom) == 1
-            imported = custom[0]
-            # every imported seminar carries the marker prefix
-            assert imported.summary == "[SEMINAR] Edited seminar"
-            assert imported.mail_id == "mail-1"
-            assert imported.origin is ActionOrigin.SEMINAR
-            assert imported.location == "Room 201"
-            app.exit()
-            await pilot.pause()
-    finally:
-        await service.stop()
-
-
 async def test_logs_export_saves_buffer_to_file(tmp_path: Path) -> None:
     """The Logs tab export button opens a directory tree + filename form;
     saving writes the buffered lines to <name>.log (suffix appended when

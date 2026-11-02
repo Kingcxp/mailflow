@@ -41,7 +41,7 @@ mail-derived tasks.
 
 ## Tasks, reminders and replies
 
-Mail-derived, custom and seminar tasks retain their own storage/deletion rules.
+Mail-derived and custom tasks retain their own storage/deletion rules.
 Their shared effective view drives lists, search, reminders, digests and cleanup,
 so a deleted task cannot reappear in another view. Due dates and reminder
 windows use the configured timezone. Delivery receipts are saved after a

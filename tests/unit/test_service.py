@@ -10,7 +10,6 @@ from typing import Any, cast
 import pytest
 from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
 from mailflow.contracts import (
-    LLMCompletion,
     LLMRouter,
     MailMessage,
     ProcessorResult,
@@ -23,8 +22,6 @@ from mailflow.domain import (
     MailRecord,
     ProcessorNote,
     ReplyState,
-    SeminarCandidate,
-    SeminarStatus,
     Urgency,
 )
 from mailflow.events import EventBus
@@ -313,17 +310,17 @@ class TestSmartSearch:
                 user = messages[-1]["content"]
                 if user.startswith("Reply with"):
                     return TestSmartSearch.model_completion("ok")
-                assert "线上研讨会通知" in user
+                assert "线上项目会议通知" in user
                 return TestSmartSearch.model_completion('[{"id": "m1", "relevance": 100}]')
 
         service = new_service(BilingualRouter())
         storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=20).model_copy(update={"subject": "线上研讨会通知"})
+        mail = make_mail("m1", minute=20).model_copy(update={"subject": "线上项目会议通知"})
         await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
         other = make_mail("m2", minute=10)
         await storage.save_mail(MailRecord(record_id=other.normalized_message_id(), mail=other))
 
-        result = await service.smart_search("我需要参加线上研讨会")
+        result = await service.smart_search("我需要参加线上项目会议")
 
         assert [record.mail.message_id for record in result.records] == ["m1"]
 
@@ -448,197 +445,6 @@ class TestSmartSearch:
         assert result.is_complete
 
 
-class TestSeminarDiscovery:
-    """Seminar discovery must remain review-only, timezone-safe and idempotent."""
-
-    async def test_discovers_review_only_candidate_and_imports_once(self) -> None:
-        opaque_record_id = "opaque-record-id@example.test"
-
-        class SeminarRouter:
-            def __init__(self) -> None:
-                self.listing = ""
-                self.calls = 0
-
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                self.calls += 1
-                self.listing = messages[-1]["content"]
-                title = "Research colloquium" if self.calls == 1 else "Reworded colloquium"
-                return model_completion(
-                    "["
-                    f'{{"id":"m1","title":"{title}",'
-                    '"starts_at":"2030-10-15T14:00:00+08:00",'
-                    '"ends_at":"2030-10-15T15:30:00+08:00",'
-                    '"timezone":"Asia/Shanghai","location":"Room 201",'
-                    '"url":"https://events.example.test/seminar",'
-                    '"description":"Guest lecture",'
-                    '"confidence":93,"evidence":"15 October, Room 201"}'
-                    "]"
-                )
-
-        router = SeminarRouter()
-        service = new_service(router)
-        storage = cast(Any, service.storage)
-        mail = make_mail("source-message", minute=10).model_copy(
-            update={"subject": "Research seminar invitation"}
-        )
-        await storage.save_mail(MailRecord(record_id=opaque_record_id, mail=mail))
-        stages: list[tuple[str, int, int, Any]] = []
-
-        def _progress(stage: str, done: int, total: int, detail: Any) -> None:
-            stages.append((stage, done, total, detail))
-
-        result = await service.discover_seminars(progress=_progress)
-
-        assert opaque_record_id not in router.listing
-        assert result.total_mails == 1
-        assert result.evaluated_mails == 1
-        assert result.failed_mails == 0
-        assert result.is_complete
-        assert stages[0][:3] == ("scan", 0, 1)
-        assert stages[-1][:3] == ("scan", 1, 1)
-        assert await service.list_actions() == []
-        candidate = result.candidates[0]
-        assert candidate.mail_id == opaque_record_id
-        assert candidate.starts_at == datetime(2030, 10, 15, 6, tzinfo=UTC)
-        assert candidate.status is SeminarStatus.PENDING
-        repeated = (await service.discover_seminars()).candidates[0]
-        assert repeated.candidate_id == candidate.candidate_id
-        assert repeated.title == "Reworded colloquium"
-
-        first = await service.import_seminar(candidate.candidate_id)
-        second = await service.import_seminar(candidate.candidate_id)
-
-        assert first.item_id == candidate.candidate_id
-        assert second == first
-        assert first.origin is ActionOrigin.SEMINAR
-        assert first.due_end == datetime(2030, 10, 15, 7, 30, tzinfo=UTC)
-        assert len(await storage.list_custom_actions()) == 1
-        saved = await service.list_seminar_candidates(include_resolved=True)
-        assert saved[0].status is SeminarStatus.IMPORTED
-        assert (await service.discover_seminars()).candidates == []
-
-    async def test_malformed_batch_is_retried_and_reported_incomplete(self) -> None:
-        class MalformedRouter:
-            def __init__(self) -> None:
-                self.calls = 0
-
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                self.calls += 1
-                return model_completion('I found a seminar: {"id":"m1","title":"invented"} maybe?')
-
-        router = MalformedRouter()
-        service = new_service(router)
-        storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        stages: list[tuple[str, int, int, Any]] = []
-
-        def _progress(stage: str, done: int, total: int, detail: Any) -> None:
-            stages.append((stage, done, total, detail))
-
-        result = await service.discover_seminars(progress=_progress)
-
-        assert router.calls == 2
-        assert result.candidates == []
-        assert result.evaluated_mails == 0
-        assert result.failed_mails == 1
-        assert result.failed_batches == 1
-        assert not result.is_complete
-        assert stages[-1][3][0] == "seminar_batch_unreadable"
-
-    async def test_expired_candidate_requires_future_edited_confirmation(self) -> None:
-        class PastSeminarRouter:
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                return model_completion(
-                    '[{"id":"m1","title":"Past seminar",'
-                    '"starts_at":"2020-01-01T10:00:00+08:00",'
-                    '"timezone":"Asia/Shanghai"}]'
-                )
-
-        service = new_service(PastSeminarRouter())
-        storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        candidate = (await service.discover_seminars()).candidates[0]
-
-        assert candidate.status is SeminarStatus.EXPIRED
-        with pytest.raises(ValueError):
-            await service.import_seminar(candidate.candidate_id)
-
-        imported = await service.import_seminar(
-            candidate.candidate_id,
-            starts_at=datetime(2030, 2, 1, 10, 0),
-            timezone="Asia/Shanghai",
-        )
-
-        assert imported.due_at == datetime(2030, 2, 1, 2, 0, tzinfo=UTC)
-
-    async def test_rejected_candidate_remains_hidden_after_repeat_scan(self) -> None:
-        class SeminarRouter:
-            async def chat(self, messages: Any, **kwargs: Any) -> Any:
-                return model_completion(
-                    '[{"id":"m1","title":"Seminar",'
-                    '"starts_at":"2030-02-01T10:00:00+08:00",'
-                    '"timezone":"Asia/Shanghai"}]'
-                )
-
-        service = new_service(SeminarRouter())
-        storage = cast(Any, service.storage)
-        mail = make_mail("m1", minute=10)
-        await storage.save_mail(MailRecord(record_id=mail.normalized_message_id(), mail=mail))
-        candidate = (await service.discover_seminars()).candidates[0]
-
-        assert await service.reject_seminar(candidate.candidate_id)
-        result = await service.discover_seminars()
-
-        assert result.candidates == []
-        saved = await service.list_seminar_candidates(include_resolved=True)
-        assert saved[0].status is SeminarStatus.REJECTED
-
-
-@pytest.mark.parametrize("prefix", ["", "Here you go:\n```json\n"], ids=["raw", "fenced"])
-async def test_truncated_discovery_keeps_complete_candidates(prefix: str) -> None:
-    rows = [
-        {
-            "id": "m1",
-            "title": "First",
-            "starts_at": "2099-01-01T09:00:00Z",
-            "meta": {"a": {"b": 1}},
-        },
-        {"id": "m2", "title": "Second", "starts_at": "2099-01-02T09:00:00Z"},
-    ]
-
-    class TruncatedRouter:
-        calls = 0
-
-        async def chat(self, messages: Any, **kwargs: Any) -> Any:
-            self.calls += 1
-            if self.calls == 2 and not prefix:
-                raise TimeoutError("retry unavailable")
-            recovered = rows if self.calls == 1 else rows[:1]
-            return model_completion(
-                prefix + json.dumps(recovered)[:-1] + ',{"id":"m3","title":"Cut'
-            )
-
-    service = new_service(TruncatedRouter())
-    for index in range(3):
-        await service.storage.save_mail(
-            MailRecord(
-                record_id=f"record-{index}",
-                mail=make_mail(f"mail-{index}", minute=3 - index),
-            )
-        )
-    result = await service.discover_seminars()
-    assert not result.is_complete
-    assert result.failed_mails == 3
-    assert set(result.failed_record_ids) == {"record-0", "record-1", "record-2"}
-    assert {(item.mail_id, item.title) for item in result.candidates} == {
-        ("record-0", "First"),
-        ("record-1", "Second"),
-    }
-    assert await service.list_actions() == []
-
-
 async def test_smart_action_without_model_reports_unavailable() -> None:
     service = new_service(None)
     service.config.llms = []
@@ -727,7 +533,7 @@ class TestActionMutations:
         assert stored[other.item_id].summary == "Submit the form"
         assert len(stored) == 2
 
-    async def test_analysis_actions_cannot_be_edited(self) -> None:
+    async def test_editing_mail_tasks_survives_refresh_and_deletion(self) -> None:
         service = self.make_service()
         storage = cast(Any, service.storage)
         record = make_record()
@@ -751,84 +557,17 @@ class TestActionMutations:
             )
         )
 
-        with pytest.raises(ValueError, match="analysis-action"):
-            await service.edit_action("analysis-action", summary="Changed")
-
-        assert (await storage.list_mails())[0].action_items == [source_action]
-        assert await storage.list_custom_actions() == []
-
-    async def test_seminar_import_conflicts_do_not_write(self) -> None:
-        service = self.make_service()
-        storage = cast(Any, service.storage)
-        start = datetime(2099, 6, 1, 9, tzinfo=UTC)
-        candidate = SeminarCandidate(
-            candidate_id="seminar-1",
-            mail_id="m1",
-            title="Research colloquium",
-            starts_at=start,
-            ends_at=start + timedelta(hours=1),
-        )
-        await storage.set_preference("seminars.candidates", f"[{candidate.model_dump_json()}]")
-        existing = ActionItem(
-            item_id="custom-1",
-            mail_id="",
-            summary="[SEMINAR] Research colloquium",
-            action_type="meeting",
-            due_at=start,
-            due_end=start + timedelta(hours=1),
-            origin=ActionOrigin.CUSTOM,
-        )
-        await storage.save_custom_action(existing)
-
-        with pytest.raises(ValueError) as error:
-            await service.import_seminar(candidate.candidate_id)
-
-        assert existing.summary in str(error.value)
-        assert existing.time_range in str(error.value)
-        assert await storage.list_custom_actions() == [existing]
-        saved_candidate = await service.list_seminar_candidates(include_resolved=True)
-        assert saved_candidate[0].status is SeminarStatus.PENDING
-
-    async def test_reimport_of_title_drifted_same_event_returns_existing(self) -> None:
-        """The same event announced by two mails yields two candidates whose
-        titles drift; importing both must end with ONE schedule row."""
-        service = self.make_service()
-        storage = cast(Any, service.storage)
-        start = datetime(2099, 6, 1, 9, tzinfo=UTC)
-        end = start + timedelta(hours=1)
-        first = SeminarCandidate(
-            candidate_id="seminar-a",
-            mail_id="m1",
-            title="Graph Learning Seminar",
-            starts_at=start,
-            ends_at=end,
-            location="Room 101",
-        )
-        second = SeminarCandidate(
-            candidate_id="seminar-b",
-            mail_id="m2",
-            title="Seminars on graph learning",  # title drift, same event
-            starts_at=start,
-            ends_at=end,
-            location="Room 101",
-        )
-        await storage.set_preference(
-            "seminars.candidates",
-            f"[{first.model_dump_json()}, {second.model_dump_json()}]",
-        )
-
-        imported_first = await service.import_seminar(first.candidate_id)
-        imported_second = await service.import_seminar(second.candidate_id)
-
-        assert imported_second == imported_first
-        actions = await storage.list_custom_actions()
-        assert len(actions) == 1
-        # both candidates are marked imported so repeat scans stop offering them
-        statuses = {
-            candidate.status
-            for candidate in await service.list_seminar_candidates(include_resolved=True)
-        }
-        assert statuses == {SeminarStatus.IMPORTED}
+        changed = await service.edit_action("analysis-action", summary="Changed")
+        assert changed.origin is ActionOrigin.CUSTOM
+        assert changed.mail_id == record.record_id
+        assert [item.summary for item in await service.list_actions()] == ["Changed"]
+        # A fresh analysis can contain the original task without undoing the edit.
+        original = (await storage.list_mails())[0]
+        await storage.save_mail(original.model_copy(deep=True))
+        assert [item.summary for item in await service.list_actions()] == ["Changed"]
+        assert original.action_items == [source_action]
+        assert await service.delete_action(changed.item_id)
+        assert await service.list_actions() == []
 
 
 def _expired_record(
@@ -878,7 +617,6 @@ class TestClearAllRecords:
         await service.delete_mail("already-deleted")
         await service.add_action("Submit the form", datetime.now(UTC) + timedelta(days=2))
         await storage.set_preference("actions.dismissed", '["stale|key|errand"]')
-        await storage.set_preference("seminars.candidates", '[{"candidate_id":"stale"}]')
 
         moved, actions = await service.clear_all_records()
 
@@ -888,7 +626,6 @@ class TestClearAllRecords:
         assert await service.list_actions_all() == []
         assert len(await service.list_trash()) == 2
         assert await storage.get_preference("actions.dismissed") == "[]"
-        assert await storage.get_preference("seminars.candidates") == "[]"
         assert await service.clear_all_records() == (0, 0)
         assert len(await service.list_trash()) == 2
         restored = await service.process_mail(record.mail)
@@ -933,15 +670,15 @@ class TestExpiredMail:
                 "ongoing", urgency=Urgency.INFO, due_in_hours=-2, due_end_in_hours=20
             )
         )
-        await storage.save_mail(_expired_record("seminar-source", urgency=Urgency.INFO))
+        await storage.save_mail(_expired_record("meeting-source", urgency=Urgency.INFO))
         await storage.save_custom_action(
             ActionItem(
-                item_id="seminar",
-                mail_id="seminar-source",
+                item_id="meeting",
+                mail_id="meeting-source",
                 summary="Colloquium",
-                action_type="seminar",
+                action_type="meeting",
                 due_at=datetime.now(UTC) + timedelta(days=3),
-                origin=ActionOrigin.SEMINAR,
+                origin=ActionOrigin.CUSTOM,
             )
         )
 
@@ -1167,157 +904,6 @@ class TestLLMFallbackBinding:
         await service.update_config_entry("llms", 0, {"model": "changed"})
 
         assert self._processor(service.config).fallback_llms == ["backup"]
-
-
-class TestSeminarCandidateDedupe:
-    """Discovery, review and import must agree on which events are distinct."""
-
-    @pytest.mark.parametrize(
-        ("overrides", "expected_mails"),
-        [
-            pytest.param(
-                [{"id": "m1"}, {"id": "m1", "title": "  quantum   seminar ", "confidence": 95}],
-                ["mail-one"],
-                id="duplicate-within-mail",
-            ),
-            pytest.param(
-                [{}, {"title": "  quantum   seminar ", "confidence": 95}],
-                ["mail-two"],
-                id="duplicate-across-mails",
-            ),
-            pytest.param(
-                [{}, {"starts_at": "2099-11-09T06:00:00Z"}],
-                ["mail-one", "mail-two"],
-                id="different-dates",
-            ),
-            pytest.param(
-                [{"starts_at": None}, {"starts_at": None, "confidence": 95}],
-                ["mail-two"],
-                id="untimed-title",
-            ),
-            pytest.param(
-                [
-                    {"location": "Room 101, Bldg B"},
-                    {"title": "Reworded seminar", "location": "room 101, bldg b", "confidence": 95},
-                ],
-                ["mail-two"],
-                id="same-venue-reworded-title",
-            ),
-            pytest.param(
-                [
-                    {"title": "Parallel Session A", "location": "Room 1"},
-                    {"title": "Parallel Session B", "location": "Room 2"},
-                ],
-                ["mail-one", "mail-two"],
-                id="parallel-events",
-            ),
-            pytest.param(
-                [
-                    {"url": "https://events.example.test/live"},
-                    {
-                        "title": "Reworded webinar",
-                        "url": "https://events.example.test/live",
-                        "confidence": 95,
-                    },
-                ],
-                ["mail-two"],
-                id="same-online-event",
-            ),
-        ],
-    )
-    async def test_discovery_lists_distinct_events_and_keeps_stable_ids(
-        self, overrides: list[dict[str, Any]], expected_mails: list[str]
-    ) -> None:
-        payloads = [
-            {
-                "id": f"m{index + 1}",
-                "title": "Quantum Seminar",
-                "starts_at": "2099-11-02T06:00:00Z",
-                "confidence": 70,
-                **changes,
-            }
-            for index, changes in enumerate(overrides)
-        ]
-
-        class SeminarRouter:
-            async def chat(self, messages: Any, **kwargs: Any) -> LLMCompletion:
-                return model_completion(json.dumps(payloads))
-
-        service = new_service(SeminarRouter())
-        for record_id, minute in [("mail-one", 10), ("mail-two", 9)]:
-            await service.storage.save_mail(
-                MailRecord(record_id=record_id, mail=make_mail(record_id, minute=minute))
-            )
-        first = await service.discover_seminars()
-        assert first.is_complete and first.evaluated_mails == 2
-        assert sorted(item.mail_id for item in first.candidates) == sorted(expected_mails)
-        assert await service.list_seminar_candidates() == first.candidates
-        assert await service.list_actions() == []
-        repeated = await service.discover_seminars()
-        assert {item.candidate_id for item in repeated.candidates} == {
-            item.candidate_id for item in first.candidates
-        }
-
-    async def rediscover_imported_event(
-        self,
-    ) -> tuple[MailFlowService, SeminarCandidate, ActionItem]:
-        payloads: list[dict[str, Any]] = [
-            {
-                "id": "m1",
-                "title": "Already Imported",
-                "starts_at": "2099-11-02T06:00:00Z",
-                "confidence": 10,
-            }
-        ]
-
-        class SeminarRouter:
-            async def chat(self, messages: Any, **kwargs: Any) -> LLMCompletion:
-                return model_completion(json.dumps(payloads))
-
-        service = new_service(SeminarRouter())
-        await service.storage.save_mail(
-            MailRecord(record_id="mail-one", mail=make_mail("one", minute=10))
-        )
-        candidate = (await service.discover_seminars()).candidates[0]
-        action = await service.import_seminar(candidate.candidate_id)
-        await service.storage.save_mail(
-            MailRecord(record_id="mail-two", mail=make_mail("two", minute=9))
-        )
-        payloads.append({**payloads[0], "id": "m2", "confidence": 99})
-
-        await service.discover_seminars()
-        return service, candidate, action
-
-    async def test_imported_event_keeps_status_and_action_when_a_duplicate_arrives(self) -> None:
-        service, candidate, action = await self.rediscover_imported_event()
-        listed = await service.list_seminar_candidates(include_resolved=True)
-        assert [(item.candidate_id, item.status) for item in listed] == [
-            (candidate.candidate_id, SeminarStatus.IMPORTED)
-        ]
-        assert [item.item_id for item in await service.list_actions()] == [action.item_id]
-        assert await service.list_seminar_candidates() == []
-
-    @pytest.mark.parametrize("status", [SeminarStatus.IMPORTED, SeminarStatus.REJECTED])
-    async def test_expiring_duplicate_does_not_hide_a_resolved_event(
-        self, status: SeminarStatus
-    ) -> None:
-        service = new_service(None)
-        resolved = SeminarCandidate(
-            candidate_id="resolved",
-            mail_id="one",
-            title="Past event",
-            starts_at=datetime.now(UTC) - timedelta(days=1),
-            status=status,
-        )
-        duplicate = resolved.model_copy(
-            update={"candidate_id": "duplicate", "mail_id": "two", "status": SeminarStatus.PENDING}
-        )
-        await service.storage.set_preference(
-            "seminars.candidates",
-            json.dumps([duplicate.model_dump(mode="json"), resolved.model_dump(mode="json")]),
-        )
-        assert await service.list_seminar_candidates() == []
-        assert await service.list_seminar_candidates(include_resolved=True) == [resolved]
 
 
 class TestMarketplaceService:

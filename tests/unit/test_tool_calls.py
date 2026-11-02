@@ -157,7 +157,7 @@ def test_streamed_tool_call_fragments_are_joined_and_parsed() -> None:
                 {
                     "delta": {
                         "tool_calls": [
-                            {"index": 0, "function": {"arguments": 'tains": "seminar"}'}}
+                            {"index": 0, "function": {"arguments": 'tains": "meeting"}'}}
                         ]
                     },
                     "finish_reason": "tool_calls",
@@ -175,7 +175,7 @@ def test_streamed_tool_call_fragments_are_joined_and_parsed() -> None:
     assert len(calls) == 1
     assert calls[0].call_id == "call_1"
     assert calls[0].name == "find_mail"
-    assert calls[0].arguments == {"contains": "seminar"}
+    assert calls[0].arguments == {"contains": "meeting"}
 
 
 def test_streamed_tool_call_with_unparseable_arguments_still_returns() -> None:
@@ -277,7 +277,7 @@ def test_tools_are_sent_and_a_tool_result_turn_round_trips(
     payload = {"model": "m1", "choices": [{"message": {"content": "done"}}]}
     _install(monkeypatch, FakeHTTPResponse(payload))
     messages: list[MessageDict] = [
-        {"role": "user", "content": "the seminar mail"},
+        {"role": "user", "content": "the meeting mail"},
         {
             "role": "assistant",
             "content": "",
@@ -285,7 +285,7 @@ def test_tools_are_sent_and_a_tool_result_turn_round_trips(
                 {
                     "id": "call_1",
                     "type": "function",
-                    "function": {"name": "find_mail", "arguments": '{"contains": "seminar"}'},
+                    "function": {"name": "find_mail", "arguments": '{"contains": "meeting"}'},
                 }
             ],
         },
@@ -324,7 +324,7 @@ def test_responses_backend_maps_function_calls(monkeypatch: pytest.MonkeyPatch) 
                 "type": "function_call",
                 "call_id": "call_9",
                 "name": "find_mail",
-                "arguments": '{"contains": "seminar"}',
+                "arguments": '{"contains": "meeting"}',
             },
         ],
     }
@@ -332,7 +332,7 @@ def test_responses_backend_maps_function_calls(monkeypatch: pytest.MonkeyPatch) 
 
     completion = asyncio.run(
         ResponsesBackend(_config("openai-responses")).chat(
-            [{"role": "user", "content": "seminar mail"}], tools=TOOLS
+            [{"role": "user", "content": "meeting mail"}], tools=TOOLS
         )
     )
 
@@ -355,7 +355,7 @@ def test_responses_backend_sends_tool_results_as_input_items(
     asyncio.run(
         ResponsesBackend(_config("openai-responses")).chat(
             [
-                {"role": "user", "content": "seminar mail"},
+                {"role": "user", "content": "meeting mail"},
                 {
                     "role": "assistant",
                     "content": "",
@@ -479,7 +479,7 @@ def _gemini_payload() -> dict[str, Any]:
                 "content": {
                     "role": "model",
                     "parts": [
-                        {"functionCall": {"name": "find_mail", "args": {"contains": "seminar"}}}
+                        {"functionCall": {"name": "find_mail", "args": {"contains": "meeting"}}}
                     ],
                 },
                 "finishReason": "STOP",
@@ -503,7 +503,7 @@ def test_google_backends_map_function_calls(
 
     completion = asyncio.run(
         backend_cls(_config(provider, **options)).chat(
-            [{"role": "user", "content": "the seminar mail"}], tools=TOOLS
+            [{"role": "user", "content": "the meeting mail"}], tools=TOOLS
         )
     )
 
@@ -514,7 +514,7 @@ def test_google_backends_map_function_calls(
     assert completion.text == ""
     assert len(completion.tool_calls) == 1
     assert completion.tool_calls[0].name == "find_mail"
-    assert completion.tool_calls[0].arguments == {"contains": "seminar"}
+    assert completion.tool_calls[0].arguments == {"contains": "meeting"}
     assert completion.tool_calls[0].call_id  # synthesised: this protocol has no id
 
 

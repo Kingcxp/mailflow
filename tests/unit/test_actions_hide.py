@@ -225,10 +225,10 @@ async def test_a_swept_mail_entry_stays_hidden_across_reanalysis(
     assert await service.list_actions() == []
 
 
-async def test_spent_custom_and_seminar_entries_are_deleted_for_real(
+async def test_spent_custom_and_meeting_entries_are_deleted_for_real(
     service: MailFlowService,
 ) -> None:
-    """User todos and imported seminars are not mail-owned: the sweep removes
+    """User todos and imported meetings are not mail-owned: the sweep removes
     them from storage instead of only hiding them."""
     store = cast(Any, service.storage)
     now = datetime.now(UTC)
@@ -239,13 +239,13 @@ async def test_spent_custom_and_seminar_entries_are_deleted_for_real(
         action_type="errand",
         due_at=now - timedelta(days=2),
     )
-    spent_seminar = ActionItem(
-        item_id="seminar-old",
+    spent_meeting = ActionItem(
+        item_id="meeting-old",
         mail_id="m1",
-        summary="上周的研讨会",
-        action_type="seminar",
+        summary="上周的项目会议",
+        action_type="meeting",
         due_at=now - timedelta(days=4),
-        origin=ActionOrigin.SEMINAR,
+        origin=ActionOrigin.CUSTOM,
     )
     kept = ActionItem(
         item_id="todo-new",
@@ -254,7 +254,7 @@ async def test_spent_custom_and_seminar_entries_are_deleted_for_real(
         action_type="errand",
         due_at=now + timedelta(days=7),
     )
-    for item in (spent, spent_seminar, kept):
+    for item in (spent, spent_meeting, kept):
         store.custom[item.item_id] = item
 
     assert await service.purge_expired_actions() == 2
@@ -275,17 +275,21 @@ async def test_custom_todo_delete_is_real(service: MailFlowService) -> None:
     assert await service.list_actions() == []
 
 
-async def test_imported_seminar_delete_is_real(service: MailFlowService) -> None:
+async def test_legacy_import_remains_an_editable_deletable_task(service: MailFlowService) -> None:
     item = ActionItem(
-        item_id="seminar-1",
+        item_id="meeting-1",
         mail_id="m1",
-        summary="Research seminar",
-        action_type="seminar",
+        summary="Research meeting",
+        action_type="meeting",
         due_at=datetime.now(UTC) + timedelta(days=1),
-        origin=ActionOrigin.SEMINAR,
+        origin=ActionOrigin.CUSTOM,
     )
+    item = ActionItem.model_validate({**item.model_dump(mode="json"), "origin": "legacy-import"})
+    assert item.origin is ActionOrigin.CUSTOM
     store = cast(Any, service.storage)
     store.custom[item.item_id] = item
+    changed = await service.edit_action(item.item_id, summary="Updated task")
+    assert changed.summary == "Updated task"
 
     assert await service.delete_action(item.item_id) is True
     assert store.custom == {}
@@ -385,11 +389,11 @@ class TestEventDedupe:
         equal_time_later_input = right.model_copy(update={"item_id": "c"})
         assert dedupe_actions([equal_time_later_input, right]) == [equal_time_later_input]
 
-    async def test_blank_summaries_and_seminar_markers_are_not_rewritten(self) -> None:
+    async def test_blank_summaries_and_meeting_markers_are_not_rewritten(self) -> None:
         blank_left = self._item("a", mail_id="m1", summary="  ")
         blank_right = self._item("b", mail_id="m2", summary="")
         plain = self._item("c", mail_id="m3", summary="人工智能前沿讲座")
-        marked = self._item("d", mail_id="m4", summary="[SEMINAR] 人工智能前沿讲座")
+        marked = self._item("d", mail_id="m4", summary="[NOTICE] 人工智能前沿讲座")
 
         assert not actions_duplicate(blank_left, blank_right)
         assert not actions_duplicate(plain, marked)
