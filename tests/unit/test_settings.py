@@ -391,10 +391,70 @@ class TestPlaceholderBookkeeping:
         updated = update_entry(config, "llms", 1, {"model": "m2b"})
         assert updated.env_placeholders == {("llms", 1, "api_key"): "${SECRET}"}
 
+    def test_form_resubmission_preserves_unchanged_secrets(self) -> None:
+        config = self._config_with_placeholder()
+        config.llms[1].api_key = "resolved"
+        config.llms[1].options = {"token": "old", "region": "west"}
+        config.env_placeholders[("llms", 1, "options", "token")] = "${TOKEN}"
+        values = config.llms[1].model_dump()
+        values["model"] = "changed"
+        updated = update_entry(config, "llms", 1, values)
+        assert updated.env_placeholders == config.env_placeholders
+        values["options"] = {"token": "new", "region": "east"}
+        updated = update_entry(config, "llms", 1, values)
+        assert updated.env_placeholders == {("llms", 1, "api_key"): "${SECRET}"}
+
     def test_malformed_index_raises_settings_error(self) -> None:
         config = self._config_with_placeholder()
         with pytest.raises(SettingsError):
             apply_value(config, "llms[x].model", "m")
+
+
+def test_provider_change_does_not_carry_credentials_or_options() -> None:
+    config = MailFlowConfig(
+        llms=[
+            LLMConfig(
+                llm_id="main",
+                model="model",
+                api_key="private",
+                base_url="https://old",
+                options={"old": True},
+                headers={"Authorization": "private"},
+            )
+        ]
+    )
+    updated = update_entry(
+        config, "llms", 0, {"provider": "google-vertex", "options": {"project": "p"}}
+    )
+    assert updated.llms[0].options == {"project": "p"}
+    assert updated.llms[0].api_key == ""
+    assert updated.llms[0].base_url != "https://old"
+    assert updated.llms[0].headers == {}
+
+
+@pytest.mark.parametrize("patch", [False, True])
+def test_failed_config_replace_keeps_original_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    patch: bool,
+) -> None:
+    from mailflow.config import patch_config_value, write_config
+
+    config_path = tmp_path / "config.toml"
+    original = '[general]\nlanguage = "en"\n'
+    config_path.write_text(original, encoding="utf-8")
+
+    def fail_replace(_source: Path, _target: Path) -> None:
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError):
+        if patch:
+            patch_config_value(config_path, "general.language", "zh-CN")
+        else:
+            write_config(MailFlowConfig(), config_path)
+    assert config_path.read_text(encoding="utf-8") == original
+    assert list(tmp_path.iterdir()) == [config_path]
 
 
 class TestTimeoutMigration:

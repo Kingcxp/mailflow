@@ -581,7 +581,12 @@ def update_entry(
     if not 0 <= index < len(entries):
         raise SettingsError(group, f"{group}[{index}] does not exist")
     previous = dict(entries[index])
-    merged = {**entries[index], **values}
+    provider_changed = "provider" in values and values["provider"] != previous.get("provider")
+    retained = dict(previous)
+    if provider_changed:
+        for name in ("options", "base_url", "api_key", "api_key_env", "headers", "query"):
+            retained.pop(name, None)
+    merged = {**retained, **values}
     try:
         entry = model.model_validate(merged)
     except ValidationError as exc:
@@ -595,8 +600,16 @@ def update_entry(
         )
     updated = _revalidate(data, group)
     updated.env_placeholders = _carried_placeholders(config)
-    for name in values:
-        updated.env_placeholders.pop((group, index, str(name)), None)
+    for path in list(updated.env_placeholders):
+        if path[:2] != (group, index):
+            continue
+        old_value: Any = previous
+        new_value: Any = entries[index]
+        for part in path[2:]:
+            old_value = old_value.get(part) if isinstance(old_value, dict) else None
+            new_value = new_value.get(part) if isinstance(new_value, dict) else None
+        if old_value != new_value:
+            updated.env_placeholders.pop(path, None)
     return updated
 
 

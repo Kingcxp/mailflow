@@ -552,6 +552,10 @@ def _bind_llm_processor(config: MailFlowConfig) -> MailFlowConfig:
     return config.bind_analysis_processor()
 
 
+class ConfigReloadError(RuntimeError):
+    """The configuration was saved, but applying it to the runtime failed."""
+
+
 class _DraftLocks:
     """Serialize every mutation of a draft, including the provider send."""
 
@@ -2745,9 +2749,13 @@ Return every candidate in this batch."""
             try:
                 await self.reload_runtime()
             except Exception as exc:
-                logger.error("hot reload failed after %s change: %s", key, exc)
-                await self.events.emit("config.reload_failed", key=key, error=str(exc))
-                raise RuntimeError(self.t("tui.settings_reload_failed", error=str(exc))) from exc
+                detail = str(exc)
+                for secret in sorted(_collect_secrets(updated), key=len, reverse=True):
+                    if secret:
+                        detail = detail.replace(secret, "***")
+                logger.error("hot reload failed after %s change: %s", key, detail)
+                await self.events.emit("config.reload_failed", key=key, error=detail)
+                raise ConfigReloadError(self.t("tui.settings_reload_failed", error=detail)) from exc
 
     @admin_operation
     async def set_setting(self, key: str, raw_value: Any) -> OptionSpec | None:

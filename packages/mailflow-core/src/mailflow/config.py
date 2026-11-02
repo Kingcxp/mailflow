@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -820,8 +821,26 @@ def write_config(config: MailFlowConfig, path: str | Path) -> None:
     data: dict[str, Any] = _restore_secret_placeholders(config).model_dump(mode="python")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as handle:
-        tomli_w.dump(strip_none(data), handle)
+    _write_atomic(path, tomli_w.dumps(strip_none(data)))
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """A failed write must leave the last usable configuration intact."""
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.exists():
+            temporary.chmod(path.stat().st_mode)
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def patch_config_value(path: str | Path, key: str, value: Any) -> bool:
@@ -844,7 +863,7 @@ def patch_config_value(path: str | Path, key: str, value: Any) -> bool:
     patched = _patch_section_line(raw, group, leaf, value_repr)
     if patched is None:
         return False
-    path.write_text(patched, encoding="utf-8")
+    _write_atomic(path, patched)
     return True
 
 
