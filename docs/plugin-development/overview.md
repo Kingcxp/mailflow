@@ -1,199 +1,107 @@
-# Plugin development overview
+# Plugin development
 
-A MailFlow plugin is a Python distribution that exposes a `plugin` singleton
-implementing two Pluggy hooks (group `mailflow.plugins`). It can provide one
-or more components: mail sources, LLM backends, processors, notifiers or a
-storage backend.
+The authoritative interfaces are
+[contracts.py](../../packages/mailflow-core/src/mailflow/contracts.py), with
+[domain models](../../packages/mailflow-core/src/mailflow/domain.py) and
+[configuration models](../../packages/mailflow-core/src/mailflow/config.py).
+Implement the current core contract in both bundled and marketplace plugins;
+do not copy protocol definitions into separate guides.
 
-## Anatomy
+## Component types
 
-```
-plugins/mailflow-mail-fake/
-├── pyproject.toml
-└── src/mailflow_mail_fake/
-    ├── __init__.py       # re-exports `plugin`
-    └── plugin.py         # PluginInfo + register hooks
-```
+| Kind / decorator | Required behavior |
+| --- | --- |
+| Mail source / `source` | Emit normalized mail; close owned connections; implement reply and optional history/preflight capabilities as declared |
+| LLM backend / `llm` | Return `LLMCompletion`, including tool calls; accept `temperature`, `options` and `tools` |
+| Processor / `processor` | Process `MailMessage` with `ProcessingContext`, return `ProcessorResult`, respect continue/stop decisions |
+| LLM enhancer / `llm_enhancer` | Adapt system prompts, extra messages and resulting analysis through the three enhancer hooks |
+| Notifier / `notifier` | Deliver a record; declare text/target capabilities only when actually implemented; propagate delivery failures |
+| Storage / `storage` | Implement the complete storage protocol, including analysis updates, drafts, preferences, tasks and trash |
+| Gateway / `gateway_provisioner` | Detect, install, start, inspect, provide QR data and stop an instance; isolate owned resources |
+| Framework export / `bot_exporter` | Synchronously turn `BotExportContext` into `BotExportResult` and a usable generated host |
 
-```toml
-[project]
-name = "mailflow-mail-fake"
-version = "0.1.0"
-dependencies = ["mailflow-core"]
+## Registration and dependencies
 
-[project.entry-points."mailflow.plugins"]
-fake-mail = "mailflow_mail_fake.plugin:plugin"
-```
-
-## Hooks
-
-**Declarative style (recommended)** — one definition plus one decorated
-class per component; ids resolve from the decorator argument,
-`component_id`/`backend_id`/`processor_id` attributes, or the class name:
+A distribution exposes one entry point in the `mailflow.plugins` group. The
+entry point resolves to a plugin object implementing the two pluggy hooks;
+`define_plugin` can generate them:
 
 ```python
+from mailflow.config import NotifierConfig
+from mailflow.domain import MailRecord
 from mailflow.plugin_api import define_plugin
 
-PLUGIN = define_plugin(
-    "mailflow-mail-fake",  # unique across all plugins
-    name="Fake Mail Source",
-    version="0.1.0",
-    description="...",
-)
+PLUGIN = define_plugin("mailflow-notify-demo", name="Demo", version="0.1.0")
 
 
-@PLUGIN.source("fake")
-class FakeSource:
-    async def run(self, emit, stop_event) -> None: ...
+@PLUGIN.notifier("demo")
+class DemoNotifier:
+    def __init__(self, config: NotifierConfig) -> None:
+        self.config = config
+
+    async def notify(self, record: MailRecord) -> None:
+        print(record.mail.subject)
 
 
 plugin = PLUGIN.build()
 ```
 
-Available decorators: `@PLUGIN.source`, `@PLUGIN.processor`, `@PLUGIN.llm`,
-`@PLUGIN.notifier`, `@PLUGIN.storage`, `@PLUGIN.bot_exporter` — the
-component kinds are collected automatically. The scaffold templates
-generate this style, so a new plugin is a definition plus one class.
-
-**Classic style** — the two hooks by hand, equivalent to the declarative
-API:
-
-```python
-from mailflow.plugins import PluginInfo
-
-PLUGIN_INFO = PluginInfo(
-    plugin_id="mailflow-mail-fake",
-    name="Fake Mail Source",
-    version="0.1.0",
-    description="...",
-    kinds=[ComponentKind.MAIL_SOURCE],
-)
-
-
-class MyPlugin:
-    def mailflow_plugin_info(self) -> PluginInfo:
-        return PLUGIN_INFO
-
-    def mailflow_register(self, registrar, config) -> None:
-        registrar.add_source("fake", build_source)  # see per-kind guides
-
-
-plugin = MyPlugin()
+```toml
+[project.entry-points."mailflow.plugins"]
+mailflow-notify-demo = "mailflow_notify_demo.plugin:plugin"
 ```
 
-`plugin_id` must be unique — a duplicate registration is rejected. A
-broken `info`/`register` hook is isolated: the plugin is skipped and startup
-continues (the failure is logged).
+Most factories receive their corresponding typed configuration. Gateway
+provisioner factories take no arguments; exporters receive `BotExportContext`.
+For custom hooks, form fields and probes, use
+[PluginRegistrar](../../packages/mailflow-core/src/mailflow/registry.py).
+The declarative registration API is
+[plugin_api.py](../../packages/mailflow-core/src/mailflow/plugin_api.py).
 
-## Rules
+Declare `mailflow-core` and all runtime dependencies in `pyproject.toml`.
+Keep the distribution name, plugin ID, version and marketplace metadata aligned;
+configuration `provider` selects the registered component ID. Avoid importing
+bundled hosts or another plugin's private implementation. Installations must
+resolve dependencies and report missing imports rather than silently skip them.
 
-- Depend only on `mailflow-core` (or other plugin packages); never import
-  hosts. Core never imports your plugin.
-- Register **component ids** (e.g. `fake`, `sqlite`, `openai-compatible`),
-  not package names — configuration references component ids.
-- Declare `kinds` so snapshots and `plugin list` show what you provide.
-- Never log credentials; sanitize error text before it can reach persisted
-  notes.
-## Declaring forms and probes
+## Behavior that matters
 
-Fields and probes are registered through the classic registrar inside
-`mailflow_register` (the declarative `PluginBuilder` currently covers
-component factories only):
+Sources must use account/source-scoped mail identity. Advance a live UID/cursor
+only after `emit` succeeds, preserve retryable items after batch failure, and
+keep history browsing independent of live progress. Keep attachment bytes until
+OCR/extraction completes. Handle cancellation and close network resources.
 
-```python
-from mailflow.forms import FormField
+LLM transports must forward the caller's supported request parameters and return
+structured tool calls. Preserve message roles and tool results. Unsupported
+capabilities need an explicit error; never silently discard tools. A backend
+that only accepts `messages` is incompatible with current routing.
 
+Storage must preserve manual urgency, feedback and local task state during
+reanalysis, deduplicate retries, and retain valid analysis when a new attempt
+fails. Reply send failures must retain draft content. Notifiers must raise on
+failed delivery so the runtime can retry without recording success.
 
-def mailflow_register(self, registrar, config) -> None:
-    registrar.add_source("imap", ImapSource)
-    registrar.add_form_fields(
-        ComponentKind.MAIL_SOURCE,
-        "imap",
-        [
-            FormField(field_id="host", kind="string", default="imap.example.com", required=True),
-            FormField(field_id="use_tls", kind="boolean", default=True),
-        ],
-    )
+Gateways own only their instance's processes, ports, files and bridges. Failed
+startup and cancellation must clean up newly allocated resources. Generated bot
+hosts must stop their service and pass external identity into shared permissions.
+
+All hosts use bundled registration plus external entry-point discovery with the
+same enable/disable filters. Loading errors must name the plugin and cause.
+A plugin update or toggle may require restart; report that requirement.
+User-visible form labels, progress and errors need English and Chinese resources.
+
+## Validation and publishing
+
+Use testkit fakes for source, model, notifier, HTTP and process boundaries.
+Validate signatures, actual parameter forwarding, result types and declared
+capabilities, including failure/cancellation paths; instantiation alone is not
+a contract test.
+
+```bash
+make validate-plugins
 ```
 
-`registrar.add_form_fields(kind, component_id, fields)` is
-`PluginRegistrar.add_form_fields`; the runtime snapshot reads them back via
-`ComponentRegistry.form_fields(kind, component_id)`. `FormField.kind` is
-one of the `Literal` strings `string | password | number | boolean | list |
-select | textarea` (the `FormFieldKind` type alias in `mailflow.forms`).
-`label_key`/`description_key` carry locale keys and fall back to the
-built-in `tui.extras_<id>` labels.
-
-**Probes** verify a configured component live — they back the form's Test
-button and the Notifications tab status column:
-
-```python
-async def probe_imap(config: dict, instance: ImapSource) -> str:
-    return "logged-in-as user"  # or "offline: connection refused"
-
-
-registrar.add_probe(ComponentKind.MAIL_SOURCE, "imap", probe_imap)
-```
-
-`ProbeFn = Callable[[dict[str, Any], Any], Awaitable[str]]`: the raw config
-mapping plus the instantiated component; return a human-readable status
-string. Components without a probe report `"not probed"`.
-
-The contract is **capability-based, not literal-type-based**: a
-`mail_source` plugin may connect to anything "like a mailbox" (IMAP, a
-chat platform, an API) and declare exactly the fields its transport needs.
-The marketplace validates a plugin by loading it, instantiating every
-registered factory and probing — it never assumes a known component-id
-vocabulary.
-
-## Gateway provisioners
-
-`gateway` is both a marketplace category and a component kind
-(`ComponentKind.GATEWAY_PROVISIONER`). A gateway plugin installs / starts /
-supervises an external bot runtime (NapCat, OpenWeChat) and drives
-its QR login from inside the TUI; the `NotificationsPane` routes
-gateway-backed notifiers through it. Author one with the `gateway`
-scaffold (`mailflow plugin new --kind gateway`) or the declarative
-decorator:
-
-```python
-from typing import Any
-
-from mailflow.contracts import GatewayInstance, GatewayProvisioner
-
-
-@PLUGIN.gateway_provisioner("napcat")
-class NapCatProvisioner(GatewayProvisioner):
-    async def detect(self) -> str: ...
-    async def install(self, instance_id: str, options: dict[str, Any]) -> None: ...
-    async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance: ...
-    async def stop(self, instance_id: str) -> None: ...
-    async def status(self, instance_id: str) -> GatewayInstance: ...
-    async def qr(self, instance_id: str) -> str: ...
-```
-
-The factory registered by the decorator is the zero-argument callable that
-returns the provisioner object; `mailflow.gateway.GatewayManager` drives the
-lifecycle (persist, restart on crash, stop on shutdown).
-
-See `docs/architecture/tui-notifications-and-plugin-ecosystem.md` §1 for
-the guided-setup flow.
-
-## Guides
-
-- `mail-source.md` — emit normalized mails, send replies
-- `processor.md` — classify/filter mails in the chain
-- `llm-backend.md` — a chat-completions transport
-- `notifier.md` — deliver computed analyses
-- `storage.md` — durable persistence with trash semantics
-- `bot-exporter.md` — turn a configured instance into a chatbot-framework plugin
-
-See [development/deployment.md](../development/deployment.md) for the
-three-platform setup (Windows/Linux/macOS): running the project, exporting
-bot plugins, installing plugins, and managing a service from CLI/TUI/chat.
-
-## Testing
-
-Register your plugin through the normal hooks in tests and drive it via
-`start_service` (see `tests/e2e/test_start_service.py`), or test the class
-directly with the `mailflow-testkit` fakes (`make_mail`, `FakeLLMBackend`).
+Marketplace layout, metadata, README generation and the companion validator are
+documented in the [plugin repository](https://github.com/Kingcxp/mailflow-repo).
+Its validator calls the same `mailflow-testkit` contract checks as this workspace.
+Keep live credentials and external services out of automated verification.

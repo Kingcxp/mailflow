@@ -1,272 +1,68 @@
-<div align="center">
-
 # MailFlow
 
-**统一多账户邮件收件箱：插件化过滤、LLM 智能分析、富终端界面与可嵌入核心**
+[English](README.md)
 
-*Unified multi-account mail inbox — plugin pipeline, LLM analysis, rich TUI, embeddable core*
+MailFlow 将多个邮件账户汇入同一个收件箱，提供本地存储、可选的模型分析、
+待办提醒、确认后发送的回复和聊天通知。可通过终端界面、命令行或远程服务使用。
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+## 开始使用
 
-[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![uv](https://img.shields.io/badge/uv-workspace-6c33af?logo=astral)](https://docs.astral.sh/uv/)
-[![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-742%20collected-3776AB)]()
-[![Type checking](https://img.shields.io/badge/mypy%2Fpyright-strict-67C23A)]()
-[![Linting](https://img.shields.io/badge/ruff-passing-67C23A)]()
-[![Status](https://img.shields.io/badge/status-v0.1.0%20baseline-E6A23C)]()
-
-</div>
-
-MailFlow 把来自多个账户和提供商的邮件汇成一条流，用四级紧急度契约给每封邮件分类，
-从邮件中提取带时间的待办（考试、会议、跑腿）形成日程表并提醒，把一切存进可恢复的回收站，
-再通过 Textual 终端界面、彩色命令外壳或任何内嵌核心的聊天机器人宿主呈现出来。
-用插件扩展它——邮件源、LLM 后端、处理器、通知器、存储、机器人导出器——插件从插件商城安装。
-
-## 功能特性
-
-- **多账户、多适配器** —— 提供商适配器合并成一条有界流；单账户故障隔离。
-- **四级紧急度契约** —— `ad #909399`（垃圾）· `info #67C23A`（有用）· `important #E6A23C`（值得读）· `urgent #F56C6C`（立即处理）。
-  颜色是公开契约的一部分，CLI、TUI 与通知器共用。
-- **LLM 分析** —— OpenAI 兼容的 chat completions（可用于 OpenCode 中继、llama.cpp、vLLM）、Anthropic、Google Gemini 与 Vertex 后端；具名 LLM 按序回退；
-  结构化摘要、理由、回复草稿与带时间的待办项。
-- **带时间待办 + 提醒** —— 考试/会议/跑腿，含时间、类型、内容与准备备注，可下钻到源邮件；
-  到期前两天固定时刻与到期日零点触发提醒。
-- **两步确认回复** —— 起草 → 准备（短期令牌）→ 确认；防重复发送，编辑会使令牌失效。
-  重开会继续未完成的草稿，Ctrl+S 保存，Esc 保存并关闭。
-- **邮件与待办批量操作** —— 点击勾选、Shift 连选、Ctrl+A 全选当前结果；可筛选过期项目、
-  预览删除范围、重试失败项，并用 Ctrl+Z 撤销最近一批邮件删除。搜索使用已加载数据，
-  远程实时连接状态可见，重连后自动刷新。
-- **可恢复保留策略** —— 可配置邮件保留期（默认 30 天），每日 04:00 清理；删除的邮件可在回收站恢复 7 天。
-- **丰富的日志** —— 基于队列的富控制台输出、轮转文件、JSONL；级别、重定向与密钥脱敏全部可配置；
-  绝不触碰宿主的根日志器。
-- **i18n** —— 内置英文（默认）与简体中文；其他语言以纯数据 JSON 包加载；语言选择持久化。
-- **插件商城**（VS Code 风格）—— 搜索、分类筛选、Markdown 详情，命令行与 TUI 均可安装/卸载/启用/禁用；
-  内置插件按类别组织（mail_source、processor、llm_backend、llm_enhancer、notifier、storage、bot_exporter、gateway）；
-  IMAP 邮件源内置 QQ、163、Outlook、Gmail 预设，LLM 内置 OpenAI 兼容、Anthropic、Google Gemini 与 Vertex 格式；
-  禁用插件绝不会导致启动失败（孤立配置项会跳过并告警）。
-- **机器人框架导出** —— 把配置好的实例导出为 NoneBot2、AstrBot 或任何其他聊天机器人框架的插件
-  （`mailflow export --framework <id>`、带文件树的 TUI 导出向导、`make bot-plugin-*`）；
-  导出器本身也是插件，新框架只需安装一个插件，无需改动核心。
-- **VS Code 风格的设置界面** —— TUI 设置标签页是一个可搜索的编辑器：左侧是分类侧边栏
-  （通用、日志、插件、存储、语言，以及每个拥有配置项的插件各占一节），右侧每个配置项
-  一张卡片，包含说明、默认值、与类型匹配的编辑控件、保存与恢复默认。输入不合法时会
-  指出哪一项、哪里不合法；整份配置校验不通过则不会写入。来自 `${环境变量}` 或
-  `api_key_env` 的密钥绝不会被写回配置文件。
-- **邮箱与大模型标签页** —— 通过表单新增、编辑、删除邮箱账户与大模型。大模型列表顺序
-  即路由策略：第一项为默认，其后每一项都是前面的后备。
-- **浏览并解析已有邮件** —— 新用户可以分页浏览 MailFlow 配置之前就已收到的邮件，只
-  勾选需要的进行解析；被选中的邮件走与实时邮件完全相同的处理流程，已解析过的会跳过。
-- **质量门槛** —— 当前收集 742 个单元、集成和端到端用例；可选 OCR 与文件链接用例可能跳过。
-  Ruff、mypy 和 pyright 严格检查通过。内置与市场插件使用离线契约验证，集成测试覆盖邮件接收、
-  分析、SQLite、通知、远程接口和远程终端界面的完整链路。
-- **远程访问** —— 支持带身份认证的 REST、WebSocket 服务和远程终端界面；进程管理仅在本地模式开放。
-
-## 安装
-
-### 1. 前置要求
-
-| 要求 | 用途 | 检查 |
-|---|---|---|
-| **Python ≥ 3.11** | 运行 MailFlow | `python --version` |
-| **[uv](https://docs.astral.sh/uv/) ≥ 0.5** | 工作区/依赖管理 | `uv --version` |
-| **git** | 克隆仓库 | `git --version` |
-
-按功能可选：
-
-| 功能 | 额外要求 |
-|---|---|
-| TUI 终端界面 | Windows 下建议 Windows Terminal，其它任意 ANSI 终端 |
-| QQ 机器人（NapCat） | 见下方"聊天平台前置要求" |
-| 微信网关 | OpenWeChat 使用 Go；WeChatPadPro 使用 Docker Compose |
-| 构建单文件可执行 | dev 依赖组自带 Nuitka；使用本地 C 编译器，下载工具需明确传入 `--download-tools` |
-
-### 2. 安装 uv
-
-**Windows**（PowerShell）：
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-# 或：winget install --id=astral-sh.uv -e
-```
-
-**macOS / Linux**：
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# 或：brew install uv
-```
-
-### 3. 获取 MailFlow 并同步依赖
+需要 Python 3.11+、[uv](https://docs.astral.sh/uv/) 和 Git。
 
 ```bash
 git clone https://github.com/Kingcxp/mailflow.git
 cd mailflow
 uv sync --locked --all-packages --group dev
-```
-
-`uv` 会创建虚拟环境、以可编辑方式安装全部工作区包以及 dev 依赖组
-（pytest、ruff、mypy、pyright、nuitka）。若系统没有 Python 3.11+，uv 会
-自动下载。
-
-### 聊天平台前置要求（QQ 机器人 / NapCat）
-
-NapCat 网关运行完整的 QQ 桌面客户端，Linux 上需要额外系统库；Windows 与
-macOS 除 MailFlow 本身外无需其它——Windows 上机器人需要本机安装 QQ 桌面
-客户端以供注入。
-
-**Linux（Debian/Ubuntu）**：
-
-```bash
-sudo apt-get install -y xvfb xauth fuse libnss3 libgbm1 libasound2 \
-  libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
-  libxcomposite1 libxdamage1 libxrandr2 libxfixes3 libgtk-3-0 \
-  libpango-1.0-0 libcairo2
-```
-
-（MailFlow 部署时会校验这些库，缺失时打印这条完整命令。）
-
-**macOS**：不支持 NapCat 的 Linux AppImage 部署方式；如需在 macOS 上使用
-QQ，请参考 [NapCat 项目](https://github.com/NapNeko) 的 Docker 部署方案。
-
-## 快速开始
-
-```bash
-# 编辑 configs/development.toml：填入你的邮箱与 LLM 端点
-uv run mailflow tui -c configs/development.toml
-uv run mailflow shell -c configs/development.toml
-
-# 或复制示例配置，填入令牌后运行
 cp configs/example.toml configs/local.toml
-export YOUR_TOKEN=your-token
-uv run mailflow run -c configs/local.toml
+uv run mailflow tui -c configs/local.toml
 ```
 
-详见 [docs/development/setup.md](docs/development/setup.md)。
+启动后在界面中添加账户和模型，也可以直接编辑复制的 TOML 文件。密钥建议通过
+环境变量提供，`configs/local.toml` 不会被 Git 跟踪。模型并非必需，未配置时仍可使用规则处理。
 
-## 命令
+## 已有功能
 
-```
-help                      彩色命令文档
-mail list|show|delete|urgency <id> <level|auto>
-action list|show|add|delete   定时任务；add "<摘要>" --due "YYYY-MM-DD HH:MM" [--type] [--notes]
-plugin list|show          插件、适配器、账户、llms、绑定
-plugin repo add|list|remove    管理插件商城
-plugin market list|show|search <query>   浏览/搜索带 markdown 详情的插件
-plugin install|uninstall <id>  安装或移除插件
-plugin enable|disable <id>     启用/禁用插件（下次启动生效）
-export --framework <id> --output <dir>   生成聊天机器人框架插件（NoneBot、AstrBot 等）
-reply create|compose cn/en|edit|prepare|confirm|cancel   compose：信件模板（自动日期、署名右对齐）
-lang get|set <code>       切换语言（持久化）
-trash list|restore        恢复已删除的邮件
-config list|get|set       查看和修改每个选项
-```
+| 范围 | 功能 |
+|---|---|
+| 邮件 | 多账户、历史邮件浏览、正文／附件名／图片识别文本搜索、手动优先级和重新分析 |
+| 批量操作 | 点选、Shift 范围选择、Ctrl+A 选择可见结果、清理过期邮件、撤销上一次删除 |
+| 待办 | 邮件事项、自定义待办、研讨会审核、提醒和摘要 |
+| 回复 | 继续编辑已保存草稿，准备并确认后发送，失败后保留内容供重试 |
+| 通知 | 配置聊天平台实例和接收目标，导出 NoneBot 或 AstrBot 插件 |
+| 插件 | 安装、启用或禁用邮件源、模型后端、处理器、通知器、存储和网关 |
+| 语言 | 内置中文和英文，可加载额外的 JSON 语言包 |
 
-## 内嵌到机器人或服务
+删除邮件会移入回收站。默认保留邮件 30 天、回收站内容 7 天，在配置时区的
+凌晨 04:00 清理。自动更新默认关闭。
 
-```python
-from mailflow.service import start_service
-from mailflow_bundled import create_plugin_manager
+智能指令提出的修改需要确认。智能查询使用邮件节选，长邮件中未进入节选的内容可能漏检。
+远程终端支持邮件、待办和回复；智能指令、对话纠正及本地插件和进程管理目前仅在本地模式提供。
 
-service = await start_service(
-    config,
-    plugin_manager=create_plugin_manager(config),
-    extra_log_handlers=[my_host_handler],
-)
-snapshot = service.snapshot()  # 插件、账户、LLMs、绑定
-mails = await service.list_mails()  # 完整记录 + 分析 + 待办
-service.on("mailflow.mail.processed", handler)  # 异步事件
-await service.commands.execute("mail list")
-await service.stop()
-```
-
-详见 [docs/development/embedding.md](docs/development/embedding.md)。
-
-## 紧急度契约
-
-| 级别       | 颜色    | 含义                                             |
-| ----------- | -------- | ------------------------------------------------- |
-| `ad`        | #909399  | 无关广告 / 垃圾                                  |
-| `info`      | #67C23A  | 有用但不紧急（课程通知）                          |
-| `important` | #E6A23C  | 需要阅读（验证码）                                |
-| `urgent`    | #F56C6C  | 必须现在或在特定时间处理（考试）                  |
-
-手动覆盖在设置期间优先；重置恢复自动值。
-
-## 质量门槛
+## 其他入口
 
 ```bash
-make help           # 跨平台目标列表
-make check          # 先运行测试和离线插件验证，再检查格式与类型
-make coverage       # 覆盖 packages/、plugins/ 和命令行子进程
-make build          # 全部工作区 wheel 输出到 dist/wheels/
-make bot-plugin-nonebot | bot-plugin-astrbot   # 导出 NoneBot / AstrBot 插件
-make bot-plugin FRAMEWORK=<id> OUTPUT=<dir>     # 为任意已安装导出器导出
-make exe-standalone # Nuitka standalone（onefile 前的冒烟测试）
-make exe-onefile
-make validate-plugins # 使用核心契约和模拟连接验证内置插件
-make clean          # 清理构建、测试产物；保留环境、数据和日志
+uv run mailflow shell -c configs/local.toml
+uv run mailflow command "help" -c configs/local.toml
+uv run mailflow serve -c configs/local.toml
+uv run mailflow tui --remote http://127.0.0.1:8800 -c configs/local.toml
 ```
 
-## 文档
+远程使用前需配置服务端凭据。命令及参数以 `help` 输出为准。
+账户、模型、图片文字识别、网关和远程连接设置见[配置说明](docs/configuration/overview.md)。
 
-| 领域 | 链接 |
-| ---- | ----- |
-| 架构 | [总览](docs/architecture/overview.md) · [领域与邮件](docs/architecture/domain-and-mail.md) · [插件](docs/architecture/plugin-system.md) · [流水线](docs/architecture/pipeline.md) · [LLM](docs/architecture/llm.md) · [日志](docs/architecture/logging.md) · [存储与保留](docs/architecture/storage-and-retention.md) · [回复](docs/architecture/replies.md) · [TUI](docs/architecture/tui.md) · [机器人导出](docs/architecture/bot-export.md) · [平台登录](docs/architecture/bot-login.md) · [通知与插件](docs/architecture/tui-notifications-and-plugin-ecosystem.md) |
-| 开发 | [环境搭建](docs/development/setup.md) · [部署](docs/development/deployment.md) · [内嵌](docs/development/embedding.md) · [测试](docs/development/tests.md) · [质量](docs/development/quality.md) · [打包](docs/development/packaging.md) |
-| 插件开发 | [总览](docs/plugin-development/overview.md) · [邮件源](docs/plugin-development/mail-source.md) · [处理器](docs/plugin-development/processor.md) · [LLM 后端](docs/plugin-development/llm-backend.md) · [通知器](docs/plugin-development/notifier.md) · [存储](docs/plugin-development/storage.md) · [机器人导出器](docs/plugin-development/bot-exporter.md) |
-| 决策 | [ADRs](docs/adr/0001-uv-workspace.md) · [0002-pluggy-pipeline](docs/adr/0002-pluggy-pipeline.md) · [0003-host-independent-core](docs/adr/0003-host-independent-core.md) |
-| 构建历史 | [BUILD_LOG](docs/build-log/BUILD_LOG.md) · [English README](README.md) |
+## 文档入口
 
-## 插件商城
+| 用途 | 文档 |
+|---|---|
+| 配置和使用 | [配置说明](docs/configuration/overview.md) |
+| 开发、测试和构建 | [开发说明](docs/development/setup.md) |
+| 数据规则和处理流程 | [架构说明](docs/architecture/overview.md) |
+| 将服务嵌入其他程序 | [服务嵌入](docs/development/embedding.md) |
+| 编写插件 | [插件接口](docs/plugin-development/overview.md) |
+| 查找或发布插件 | [插件仓库](https://github.com/Kingcxp/mailflow-repo) |
+| 版本变化 | [更新记录](CHANGELOG.md) |
 
-从远程仓库浏览并安装插件：
+开发命令统一从 `make help` 查看。核心不依赖界面和具体服务商：`packages/` 放核心与宿主，
+`plugins/` 放内置插件，`configs/` 和 `translations/` 放配置与语言包示例。
 
-```bash
-uv run mailflow plugin repo add mailflow-repo https://github.com/Kingcxp/mailflow-repo
-uv run mailflow plugin market list
-uv run mailflow plugin market show mailflow-notify-ntfy
-uv run mailflow plugin install mailflow-notify-ntfy     # 重启后加载
-```
-
-[mailflow-repo](https://github.com/Kingcxp/mailflow-repo) 仓库承载商城：每个插件一个文件夹，
-按类别分组，添加插件只需一个 pull request，绝不触碰其他插件的文件。
-其 docs/ 目录是插件开发指南，pull request 工作流只校验每个 PR 改动的插件。
-
-商城刷新会分别报告每个仓库的状态。仓库离线时，TUI 与命令会保留该仓库
-带来源标记的旧缓存并显示为过期；成功但为空的仓库会清除旧条目。本地与
-远程安装共用同一套来源记录流程；内置插件可以禁用，但不能卸载。
-
-**写你自己的插件** —— TUI 提供新插件向导（Market 标签 → New）：在目录树中选择文件夹，
-可选创建子文件夹，选择模板类别（邮件源 / 处理器 / LLM 后端 / 通知器 / 存储 / 机器人导出器 / LLM 增强器 / 网关），
-MailFlow 生成完整可加载的模板。内嵌核心的宿主也可通过 `mailflow.plugin_template.scaffold_plugin` 使用向导。
-
-**把 MailFlow 导出为机器人插件** —— Market 标签的 Export 按钮打开同一个目录树向导，
-选择框架（NoneBot、AstrBot 等）后从你的配置实例导出可安装的框架插件。
-命令行等价物是 `mailflow export --framework <id> --output <dir>`；导出器是插件，
-新框架只需安装一次。导出的插件内置完整聊天命令面：以 `mailflow`（NoneBot）或
-`/mailflow`（AstrBot）开头的消息会分发到共享命令路由器，长回复自动拆分为多条消息，
-每日日程摘要也会分页推送到聊天。参见 [docs/architecture/bot-export.md](docs/architecture/bot-export.md)。
-
-**本地化与样式** —— 插件可在 plugin.json 中提供多语言一句话简介与 markdown readme
-（`descriptions` / `readmes`）；CLI 与 TUI 自动使用与应用语言匹配的版本，
-`market show` 用富 markdown 效果渲染 readme（**粗体**、~~删除线~~、`<span style="color:#ff5500">彩色文字</span>`）。
-
-## 项目布局
-
-```
-packages/mailflow-core      与宿主无关的领域、流水线、服务门面、机器人导出
-packages/mailflow-bundled   组合根：官方插件集
-packages/mailflow-cli       富 Typer 宿主（run/command/shell/export/...）
-packages/mailflow-tui       Textual UI（邮件/邮箱/待办/大模型/运行时/日志/插件市场/设置）
-packages/mailflow-testkit   测试用确定性假件（mailflow-mail-fake 是仅用于开发的源插件）
-plugins/*                   可发现的适配器、处理器与机器人导出器
-configs/ · translations/    示例配置与语言包
-docs/                       架构、开发、代理文档
-```
-
-## 协议
-
-MIT。IMAP 已内置，支持通用服务器及 QQ、163、Outlook、Gmail 预设；Gmail API 和 Outlook Graph 邮件源位于插件仓库。
-参见 [CHANGELOG.md](CHANGELOG.md)。
+许可：MIT。

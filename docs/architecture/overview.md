@@ -1,90 +1,80 @@
-# Architecture overview
+# Architecture
 
-MailFlow is a plugin pipeline for unified mail: multiple provider adapters
-merge into one bounded stream, an ordered processor chain classifies each
-mail (four-level urgency, summary, reply flag, timed action items), results
-are persisted with a recoverable trash, and CLI/TUI/bot hosts render the
-system state through one embeddable service facade. A reminder scheduler
-fires on timed action items (configurable fixed time two days before the due
-date, and 00:00 on the due day); a plugin marketplace browses remote
-repositories and installs plugins; every configuration option is inspectable
-and settable from commands and the TUI.
+MailFlow is one mail service with several hosts. The CLI, TUI, REST/WebSocket
+server and exported bot plugins share the same configuration, plugin registry,
+service methods and permission rules.
 
-## Layers
+## Code map
 
-```
-Hosts (mailflow-cli, mailflow-tui, chat bots)
-        │  command router / service facade (snapshots, queries, mutations)
-        │  bot export (mailflow.bot_export — CLI export / TUI wizard / make)
-        ▼
-mailflow-core          domain · config · settings · contracts · registry
-                       plugins · events · llm router · pipeline · processors
-                       logging · i18n · runtime · service · commands
-                       bot_export · plugin_market · plugin_template · updates
-        ▲  component factories (ownership stamped at registration)
-        │
-plugins/*              mail sources · storage · llm backends · processors
-                       notifiers · bot exporters
-mailflow-bundled       composition root: the official plugin set
-```
+| Location | Responsibility |
+| --- | --- |
+| `packages/mailflow-core` | Domain models, contracts, configuration, processing, scheduling, commands and service lifecycle |
+| `packages/mailflow-bundled` | Explicit registration of the plugins shipped with the application |
+| `packages/mailflow-cli` | Command-line entry points |
+| `packages/mailflow-tui` | Local and remote terminal interface |
+| `packages/mailflow-server` | Authenticated REST/WebSocket transport and remote adapter |
+| `packages/mailflow-testkit` | Reusable fakes and offline plugin-contract checks |
+| `plugins` | Bundled mail, model, notification, storage and framework-export components |
+| [Plugin repository](https://github.com/Kingcxp/mailflow-repo) | Marketplace metadata, additional plugins and their usage instructions |
 
-Dependency direction is strictly inward: Core never imports concrete
-plugins or UI frameworks; hosts never contain business logic.
+## Mail processing
 
-## Public boundary
+An enabled source emits a normalized `MailMessage` into the runtime queue. Workers
+apply the configured processor chain, merge analysis, persist a `MailRecord`
+and publish events and eligible notifications. Without a usable model, rule
+processing remains available.
 
-Everything a host needs lives on `MailFlowService`:
+Mail identity includes its source/account scope: identical Message-ID values
+from different accounts remain separate. Retrying the same mail is idempotent.
+A source advances its live cursor only after the runtime accepts the mail;
+browsing history does not advance that cursor. A failed batch must leave unread
+or unaccepted items available for retry.
 
-- `snapshot()` — plugins, components, accounts (status/errors), LLMs,
-  processor→LLM/fallback bindings, storage, language, timezone.
-- Queries — `list_mails`, `get_mail`, `count_mails`, `list_actions`,
-  `list_trash`.
-- Mutations — `set_mail_urgency` (manual override / reset), `delete_mail`,
-  `restore_mail`, `set_language` (persisted), `run_cleanup`.
-- Reply workflow — `create_reply`, `edit_draft`, `prepare_reply` (token),
-  `confirm_reply` (validated, double-send safe), `cancel_reply`.
-- `commands.execute(line)` — transport-neutral command responses.
-- Configuration — `list_config_options`, `get_config_option`,
-  `set_config_value` (persisted, comment-preserving), `config_path`.
-- Settings editor — `settings_sections`, `settings_option`, `set_setting`,
-  `reset_setting`, and `add/update/remove/move_config_entry` for the list
-  groups (see `../configuration/overview.md`).
-- Mailbox history — `history_accounts`, `fetch_history` (browse mail that
-  arrived before MailFlow was configured), `is_mail_known`, `process_mail`
-  (analyze a user-picked mail through the normal pipeline path).
-- Marketplace — `service.market` (fetch indexes, browse, install),
-  `market_fetch_report` (isolated repository outcomes plus stale-cache fallback),
-  `market_repository_statuses`, and `plugin_repo_add/remove`.
-- Updates — `check_updates`, `apply_updates`, `installed_plugin_versions`.
-- Events — `service.on("mailflow.mail.processed" | "mailflow.action.reminder"
-  | "mail.deleted" | ...)`; runtime events are `mailflow.`-prefixed. The full
-  table with payloads is in `../development/embedding.md`.
+Attachment bytes remain available during extraction and optional OCR. SQLite
+stores attachment metadata and extracted `image_text`, not attachment binaries.
+Search includes subjects, senders, bodies, summaries, filenames and OCR text.
+Smart search uses excerpts, so a detail outside those excerpts can be missed.
 
-`start_service(config, ...)` is the single entry point that composes
-configuration, plugins, storage, LLMs, processors, sources, notifiers, events
-and logging. `run_service(...)` is the standalone convenience wrapper.
+Reanalysis preserves user feedback, manual urgency and local task state.
+Failure preserves the last valid analysis; retrying does not create duplicate
+mail-derived tasks.
 
-## Lifecycle
+## Tasks, reminders and replies
 
-`start_service` → load config → configure logging (queue + sinks + redaction)
-→ build plugin manager (bundled set + optional discovery) → build registry →
-instantiate storage/sources/LLM backends/processors/notifiers → start runtime
-(source tasks per account, pipeline workers, cleanup scheduler). `stop()`
-sets the stop event, cancels tasks gracefully, closes sources and storage.
+Mail-derived, custom and seminar tasks retain their own storage/deletion rules.
+Their shared effective view drives lists, search, reminders, digests and cleanup,
+so a deleted task cannot reappear in another view. Due dates and reminder
+windows use the configured timezone. Delivery receipts are saved after a
+notification succeeds; failed targets remain retryable.
 
-## See also
+Reply drafts retain their content across preparation and send failures. Sending
+requires a valid account/source and an explicit confirmation token. Per-draft
+locking prevents simultaneous or repeated confirmation from sending twice;
+only a successful send becomes sent.
 
-- `domain-and-mail.md` — the data model and urgency contract
-- `plugin-system.md` — hooks, registries, ownership
-- `pipeline.md` — ordering, retries, failure policy
-- `llm.md` — routing, fallback, secrets
-- reminders: runtime scheduler in `runtime.py` (`reminder_times`, persisted
-  fired state), config under `[general] reminder_*`, event
-  `mailflow.action.reminder`; marketplace: `plugin_market.py` + `plugin
-  repo/market/install` commands + TUI Market tab
-- `logging.md` — queue sinks and redaction
-- `storage-and-retention.md` — durability and the daily cleanup
-- `replies.md` — the confirmed reply state machine
-- `tui.md` — the Textual client
-- `bot-export.md` — shipping MailFlow as a chatbot-framework plugin
-- `../plugin-development/bot-exporter.md` — writing exporter plugins
+## Hosts, permissions and lifecycle
+
+[MailFlowService](../../packages/mailflow-core/src/mailflow/service.py) owns
+storage, runtime, gateways and bridges. Reload stops old components before
+replacing them. Shutdown cancels source tasks, workers and scheduled loops,
+stops owned gateways/bridges and closes storage. Hosts must await shutdown on
+the event loop that started the service.
+
+[Shared permissions](../../packages/mailflow-core/src/mailflow/permissions.py)
+carry sender, provider, instance and chat identity. Ordinary users may inspect
+mail, status and help. Mutating mail/tasks, sending replies, changing settings,
+plugins, updates and gateways requires administrator privileges. Every external
+transport supplies an explicit context; Basic Auth does not replace the shared
+checks.
+
+The remote adapter converts JSON dates, enums and nested records into the same
+models used by the TUI. Remote capabilities are explicit: unsupported local
+operations are hidden or return a translated error. Model text never directly
+executes a write; smart actions stage a plan for host confirmation.
+
+## Where to make changes
+
+Use [configuration](../configuration/overview.md) for settings and defaults,
+[embedding](../development/embedding.md) for host integration,
+[plugin development](../plugin-development/overview.md) for component contracts,
+and [development](../development/setup.md) for tests, checks and packaging.

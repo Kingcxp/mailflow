@@ -1,139 +1,93 @@
-# Embedding MailFlow
+# Embedding
 
-MailFlow is designed to be embedded: a chat-bot framework, a service daemon
-or any async application can host the whole mail pipeline with one call.
-
-## One method to start everything
+Use the same service entry point as the bundled hosts. Supply the bundled plugin
+manager when those components are needed, keep it on one event loop, and always
+await shutdown.
 
 ```python
-import asyncio, logging
+import asyncio
+
+from mailflow.commands import CommandRouter
+from mailflow.config import load_config
+from mailflow.permissions import PermissionContext
 from mailflow.service import start_service
 from mailflow_bundled import create_plugin_manager
 
 
-class MyLogHandler(logging.Handler):
-    def emit(self, record): ...  # forward records to your framework
-
-
 async def main() -> None:
+    path = "configs/local.toml"
+    config = load_config(path)
     service = await start_service(
-        config,  # MailFlowConfig or leave None for defaults
-        plugin_manager=create_plugin_manager(config),  # bundled set + discovery
-        extra_log_handlers=[MyLogHandler()],  # optional host log sink
+        config,
+        config_path=path,
+        plugin_manager=create_plugin_manager(config),
     )
-    # ... use the service ...
-    await service.stop()
+    try:
+        router = CommandRouter(service)
+        # Resolve identity and administrator status in the host.
+        context = PermissionContext(sender="reader", provider="my-host")
+        response = await router.execute("mail list", context=context)
+        print(response.text)
+    finally:
+        await service.stop()
+
+
+asyncio.run(main())
 ```
 
-`start_service` composes configuration, logging (queue sinks with secret
-redaction), plugin discovery, storage, LLM backends, processors, sources,
-notifiers, the event bus and the runtime. `run_service(...)` is a standalone
-wrapper around `asyncio.run` for non-embedding use.
+A supplied plugin manager owns discovery; `create_plugin_manager` registers the
+bundled set and discovers external entry points. Bare `mailflow-core` hosts can
+provide their own manager and components. Do not import TUI or CLI internals.
 
-## What a host gets
+## Service and permissions
 
-`MailFlowService` is the whole public surface (58 methods). The groups a host
-usually needs:
+[MailFlowService](../../packages/mailflow-core/src/mailflow/service.py) provides
+mail/history access, analysis, tasks, reply drafts, settings, plugins and runtime
+status. Use those methods rather than mutating storage or runtime internals.
+Persistent settings need `config_path`; remote operations must match the server's
+explicit supported methods.
 
-**Inspection**
+Every external request needs a
+[PermissionContext](../../packages/mailflow-core/src/mailflow/permissions.py)
+with sender, provider, instance and chat IDs where applicable. Resolve
+`is_admin` from the host's trusted configuration. Pass it to `CommandRouter`,
+or wrap direct service calls in `permission_scope(context)`. The default
+in-process context is trusted local administration and must not be inherited
+by an external request.
 
-- `snapshot()` — plugins (id/name/version/kinds/components), mail adapters,
-  accounts with status/errors, loaded LLMs with their backend plugin,
-  processor→LLM/fallback bindings, language, timezone, storage, version.
-- `list_mails(limit=None)` / `get_mail(id)` / `count_mails()` /
-  `list_actions()` / `list_trash()` — full records with analysis, action items
-  and the original body.
+Use `service.t(key, **params)` for user messages and translate exceptions through
+the shared error component. Return the shared structured command response so
+adapters can render equivalent results without rebuilding command logic.
 
-**Mail and action mutations**
+## Events and logging
 
-- `set_mail_urgency(id, urgency|None)` (None resets to the automatic value),
-  `delete_mail(id)` (to trash), `restore_mail(id)`, `run_cleanup()`.
-- `add_action(summary, due_at, action_type=, notes=)`, `delete_action(id)`.
-- `record_feedback(mail_id, reason)` / `get_feedback` / `feedback_guidelines`
-  — user notes roll into the guidelines injected into every LLM analysis.
+```python
+async def on_processed(event: str, **payload) -> None:
+    record = payload["record"]
+    print(record.mail.subject)
 
-**Mailbox history (browse and analyze existing mail)**
 
-- `history_accounts()` — account ids whose source implements the optional
-  `HistoryCapableSource` capability.
-- `fetch_history(account_id, limit=50, offset=0)` — already-received mail,
-  newest first. Nothing is stored or analyzed; raises `KeyError` for an
-  unknown account and `NotImplementedError` for a source without the
-  capability.
-- `is_mail_known(mail)` — whether that mail is already stored.
-- `process_mail(mail)` — run one mail through the pipeline now, exactly like
-  live mail (dedup, persistence retry, `mailflow.mail.processed`, notifier
-  thresholds). Returns the stored record, or `None` when it was a duplicate.
+unsubscribe = service.on("mailflow.mail.processed", on_processed)
+# Call unsubscribe() when the host no longer needs the subscription.
+```
 
-**Configuration and settings**
+Runtime events include `mailflow.mail.received`, `mailflow.mail.processed`,
+`mailflow.account.error`, `mailflow.cleanup.done` and `mailflow.action.reminder`.
+Service events include `mail.deleted`, `mail.urgency.changed`, `reply.created`,
+`reply.sent`, `language.changed` and `config.changed`. Handlers receive `event=`
+and payload keyword arguments. REST/WebSocket hosts convert these into the
+shared remote event frame rather than inventing another payload shape.
 
-- `settings_sections()` / `settings_option(key)` — the editor model from
-  `mailflow.settings` (sections per plugin, editor kind, default, current
-  value); see `docs/configuration/overview.md`.
-- `set_setting(key, value)` / `reset_setting(key)` — coerce, validate and
-  persist; raise `SettingsError` naming the offending option.
-- `add_config_entry(group, values)` / `update_config_entry(group, index,
-  values)` / `remove_config_entry(group, index)` / `move_config_entry(group,
-  index, offset)` for `accounts`/`llms`/`processors`/`notifiers`.
-- `list_config_options()` / `get_config_option(key)` / `set_config_value(key,
-  raw)` — the flat view used by the `config` command.
-- Persisting needs a config file: pass `config_path=` to `start_service`, or
-  every mutation raises `ValueError("no config file loaded")`.
+Pass host log handlers via `extra_log_handlers` when starting the service.
+Core does not reconfigure the root logger. Avoid logging request credentials,
+raw configuration or secret-bearing transport headers.
 
-**Plugins and updates**
+## Ownership
 
-- `plugin_status(id)`, `plugin_enable(id)`, `plugin_disable(id)` (applies on
-  next start), `plugin_uninstall(id)`, `plugin_repo_add/remove(name, url)`.
-- `check_updates()`, `apply_updates()`, `installed_plugin_versions()`.
-- `service.market` — the `PluginMarket` client (blocking; call it in a
-  thread/worker).
+The service owns runtime tasks, storage, gateways and bridges. Let its reload
+path replace components and stop the previous ones. Stop the service before
+closing the host event loop; do not start a second runtime over the same service
+or independently close resources it still owns.
 
-**Replies and i18n**
-
-- `create_reply(mail_id)` → `edit_draft` → `prepare_reply` (issues a
-  short-lived token) → `confirm_reply(draft_id, token)`; `cancel_reply`,
-  `get_draft`, `create_letter_draft(mail_id, "cn"|"en", ...)`.
-- `t(key, **params)`, `get_language()`, `set_language(code)` (persisted),
-  `available_languages()`.
-
-**Commands and events**
-
-- `service.commands.execute("mail list")` — the shared command router returns
-  a transport-neutral `CommandResponse` (plain text + style spans), so chat
-  platforms render the same management commands as the CLI. Top-level
-  commands: `help`, `mail`, `action`, `plugin`, `adapter`, `account`, `llm`,
-  `reply`, `lang`, `trash`, `runtime`, `config`, `feedback`, `update`.
-  Construct it once with `CommandRouter(service)` (it wires itself onto
-  `service.commands`).
-- `service.on(event, handler)` returns an unsubscribe callable. Handlers are
-  awaited concurrently; one failing handler is logged and never blocks the
-  others.
-
-| Event | Emitted by | Payload |
-| ----- | ---------- | ------- |
-| `mailflow.mail.received` | runtime | `mail` |
-| `mailflow.mail.processed` | runtime | `record` |
-| `mailflow.account.error` | runtime | `account_id`, `error` |
-| `mailflow.cleanup.done` | runtime | `moved`, `purged` |
-| `mailflow.action.reminder` | runtime | `item`, `record`, `kind`, `scheduled` |
-| `mailflow.action.digest` | runtime | `date`, `today_count`, `upcoming_count`, `items` |
-| `mailflow.runtime.stopping` | runtime | — |
-| `mailflow.update.checked` / `.applied` | service | version/report fields |
-| `mail.deleted` / `mail.urgency.changed` | service | `record_id` (+ `urgency`) |
-| `reply.created` / `reply.sent` | service | `draft_id`, `mail_id` |
-| `language.changed` | service | `language` |
-| `config.changed` | service | `key` |
-| `plugin.enabled` / `plugin.disabled` | service | `plugin_id` |
-
-Handlers receive the event name as `event=` plus the payload as keyword
-arguments: `async def handler(event: str, **payload) -> None`.
-
-## Host contract
-
-- Core never reconfigures the root logger and never calls `basicConfig()`;
-  your framework's logging is untouched. Add your handlers via
-  `extra_log_handlers`.
-- Keep your host on the same event loop: `start_service` is async and the
-  runtime's tasks belong to the loop that called it.
-- Stop politely with `await service.stop()` (graceful task cancellation,
-  source close, storage close).
+See [architecture](../architecture/overview.md) for data rules and
+[plugin development](../plugin-development/overview.md) for component interfaces.
