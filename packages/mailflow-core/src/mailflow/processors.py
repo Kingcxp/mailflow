@@ -166,7 +166,7 @@ class RulesProcessor:
         return ProcessorResult()
 
 
-SYSTEM_PROMPT = """You triage a university student's email into exactly four
+SYSTEM_PROMPT = """You triage the recipient's email into exactly four
 importance levels, judged by what the recipient must DO.
 
 - "urgent" (red #F56C6C): act at a stated date/time in the next few days — attend
@@ -589,7 +589,6 @@ class LLMImportanceProcessor:
             )
             raise
         action_items: list[ActionItem] = []
-        now = (context.now or datetime.now(tz=UTC)).astimezone(UTC)
         for position, item in enumerate(payload.action_items):
             if item.must_do is not True:
                 logger.info(
@@ -600,21 +599,6 @@ class LLMImportanceProcessor:
                 continue
             try:
                 due_at = parse_due_at(item.due_at, context.timezone)
-                if due_at <= now:
-                    # The mail dates this in the past. That happens for two
-                    # reasons, and both mean it must not become a schedule
-                    # entry: a historical mail whose deadline has long gone
-                    # (re-imported when the user re-fetched their mailbox), or
-                    # a relative date the model resolved wrongly. Dropping it
-                    # here is what keeps a re-imported September mailbox from
-                    # filling today's schedule with expired obligations.
-                    logger.info(
-                        "dropping past due_at %s from %r (mail age %s day(s))",
-                        due_at.isoformat(),
-                        mail.message_id,
-                        (now - _as_utc(mail.date)).days,
-                    )
-                    continue
                 due_end = parse_due_at(item.due_end, context.timezone) if item.due_end else None
                 if due_end is not None and due_end <= due_at:
                     logger.info(

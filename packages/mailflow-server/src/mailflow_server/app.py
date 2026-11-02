@@ -63,7 +63,7 @@ _LOG_BUFFER = 500
 
 class ActionCreate(BaseModel):
     summary: str
-    due_at: datetime
+    due_at: datetime | None = None
     action_type: str = "errand"
     due_end: datetime | None = None
     notes: str = ""
@@ -80,6 +80,11 @@ class ActionEdit(BaseModel):
     notes: str | None = None
     location: str | None = None
     url: str | None = None
+    clear_due: bool = False
+    completed: bool | None = None
+    reminder_enabled: bool | None = None
+    snoozed_until: datetime | None = None
+    clear_snooze: bool = False
 
 
 class _LogFeed(logging.Handler):

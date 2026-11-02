@@ -18,13 +18,15 @@ from datetime import time as dt_time
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from mailflow.action_store import ActionStore, action_has_ended
+from mailflow.action_store import ActionStore
 from mailflow.config import GeneralConfig, MailAccountConfig, MailFlowConfig, NotifierConfig
 from mailflow.contracts import MailSource, Notifier, StorageBackend
 from mailflow.domain import (
     ActionItem,
     MailMessage,
     MailRecord,
+    Urgency,
+    action_sort_time,
     action_time_window,
     actions_duplicate,
     dedupe_actions,
@@ -81,6 +83,8 @@ def reminder_times(
     (``days_before`` days before the due date at ``hour:minute``) and the
     day-of reminder (00:00 on the due date).
     """
+    if item.due_at is None or item.completed_at is not None or not item.reminder_enabled:
+        return []
     tz = ZoneInfo(timezone_name)
     due = to_utc(item.due_at).astimezone(tz)
     early_date = due.date() - timedelta(days=days_before)
@@ -131,10 +135,11 @@ class MailFlowRuntime:
         self._processing_generation = 0
         self._account_status: dict[str, str] = {}
         self._account_errors: dict[str, str | None] = {}
+        self._sync_info: dict[str, dict[str, Any]] = {}
         self._started_at: datetime | None = None
         self._closed = False
         self._record_locks = [asyncio.Lock() for _ in range(64)]
-        self._write_lock = asyncio.Lock()
+        self.write_lock = asyncio.Lock()
         self.action_store = ActionStore(storage)
         self._reminder_lock = asyncio.Lock()
         # account_id -> persisted UID watermark (read at start, written by
@@ -169,6 +174,19 @@ class MailFlowRuntime:
                         ) from None
                     if raw is not None:
                         self._stored_watermarks[account.account_id] = str(raw)
+                pending = (
+                    [
+                        r.mail
+                        for r in await self._storage.list_mails()
+                        if r.analysis_state in {"pending", "analysing"}
+                    ]
+                    if self._queue.empty() and not self._retry_mails
+                    else []
+                )
+                self._queue.resize(max(self._config.general.queue_size, len(pending)))
+                for mail in pending:
+                    self._queue.put_nowait(mail)
+                self._queue.resize(self._config.general.queue_size)
                 self._start_source_tasks()
                 self._start_processing_tasks()
                 self._running = True
@@ -417,9 +435,17 @@ class MailFlowRuntime:
                     "provider": mail.provider or account.provider,
                 }
             )
+            await self.receive_mail(mail)
             await self._queue.put(mail)
             await self._events.emit(f"{_EVENT_PREFIX}mail.received", mail=mail)
 
+        callback = getattr(source, "set_status_callback", None)
+        if callable(callback):
+            callback(
+                lambda ok, count=0, error="": self.source_status(
+                    account.account_id, ok, count, error
+                )
+            )
         try:
             self._account_status[account.account_id] = "running"
             await source.run(emit, stop_event)
@@ -481,6 +507,41 @@ class MailFlowRuntime:
                     # worker will finish it, including after stop/start.
                     self._retry_mails.appendleft(mail)
 
+    def sync_info(self, account_id: str) -> dict[str, Any]:
+        return dict(self._sync_info.get(account_id, {}))
+
+    def source_status(self, account_id: str, ok: bool, count: int = 0, error: str = "") -> None:
+        info = self._sync_info.setdefault(account_id, {})
+        self._account_status[account_id] = "running" if ok else "retrying"
+        self._account_errors[account_id] = None if ok else error
+        if ok:
+            info["last_sync_at"] = datetime.now(UTC)
+            info["new_count"] = info.get("new_count", 0) + count
+        task = asyncio.create_task(self._events.emit("account.sync.changed", account_id=account_id))
+        self._tasks.append(task)
+        task.add_done_callback(
+            lambda done: self._tasks.remove(done) if done in self._tasks else None
+        )
+
+    async def receive_mail(self, mail: MailMessage) -> MailRecord | None:
+        identity = mail.normalized_message_id()
+        async with self.write_lock:
+            if await self._storage.get_preference(f"mail.deleted.{identity}"):
+                return None
+            previous = await self.find_mail_record(mail)
+            if previous is not None:
+                return previous
+            record = MailRecord(
+                record_id=identity,
+                mail=mail,
+                received_at=mail.received_at,
+                analysis_state="pending",
+                ingestion=mail.ingestion,
+            )
+            await self._persist_with_retry(record)
+        await self._events.emit("mail.received.saved", record=record)
+        return record
+
     async def process_mail_now(
         self, mail: MailMessage, *, force: bool = False
     ) -> MailRecord | None:
@@ -494,6 +555,11 @@ class MailFlowRuntime:
         bypassed and the stored record is replaced with the fresh analysis.
         """
         if force:
+            mail = mail.model_copy(
+                update={
+                    "ingestion": "reanalysis" if await self.find_mail_record(mail) else "history"
+                }
+            )
             # _process_one emits mailflow.mail.processed on success; emitting
             # again here would double-notify every re-analysis.
             return await self._process_one(mail, _skip_dedup=True)
@@ -508,8 +574,26 @@ class MailFlowRuntime:
         # deliveries and explicit re-analysis of the same mail.
         async with self._record_locks[hash(identity) % len(self._record_locks)]:
             previous = await self.find_mail_record(mail)
-            if not _skip_dedup and previous is not None:
+            if await self._storage.get_preference(f"mail.deleted.{identity}") and not _skip_dedup:
                 return None
+            if (
+                not _skip_dedup
+                and previous is not None
+                and previous.analysis_state not in {"pending", "analysing"}
+            ):
+                return None
+            if previous is None:
+                previous = await self.receive_mail(mail)
+                if previous is None:
+                    return None
+            if _skip_dedup:
+                await self._storage.set_preference(f"mail.deleted.{identity}", "")
+            async with self.write_lock:
+                latest = await self._storage.get_mail(previous.record_id)
+                if latest is not None:
+                    previous = latest.model_copy(update={"analysis_state": "analysing"})
+                    await self._persist_with_retry(previous)
+            await self._events.emit("mail.analysis.started", record_id=previous.record_id)
             record_id = previous.record_id if previous is not None else identity
             if previous is not None and not mail.image_text.strip():
                 mail = mail.model_copy(update={"image_text": previous.mail.image_text})
@@ -535,10 +619,22 @@ class MailFlowRuntime:
             )
             if generation != self._processing_generation:
                 raise asyncio.CancelledError
+            if mail.ingestion == "history" and not mail.include_past_actions:
+                analysis = analysis.model_copy(
+                    update={
+                        "action_items": [
+                            a
+                            for a in analysis.action_items
+                            if a.due_at is None or a.due_at >= datetime.now(UTC)
+                        ]
+                    }
+                )
             failed = analysis.summary_is_fallback or any(note.status == "failed" for note in notes)
-            async with self._write_lock:
+            async with self.write_lock:
                 if generation != self._processing_generation:
                     raise asyncio.CancelledError
+                if await self._storage.get_preference(f"mail.deleted.{identity}"):
+                    return None
                 # A user can edit urgency while the model is working. Read the
                 # latest record at commit, preserving all local record fields.
                 previous = await self._storage.get_mail(record_id) or previous
@@ -575,9 +671,16 @@ class MailFlowRuntime:
                             **changes,
                         )
                     )
+                record = record.model_copy(
+                    update={
+                        "analysis_state": "failed" if failed else "ready",
+                        "ingestion": mail.ingestion,
+                    }
+                )
                 await self._persist_with_retry(record)
             await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
-            await self._notify(record)
+            if mail.notify_requested or (mail.ingestion == "live" and not _skip_dedup):
+                await self._notify(record)
             return record
 
     async def find_mail_record(self, mail: MailMessage) -> MailRecord | None:
@@ -623,7 +726,7 @@ class MailFlowRuntime:
                 [
                     record_id,
                     " ".join(item.summary.split()).casefold(),
-                    to_utc(item.due_at).isoformat(),
+                    action_sort_time(item).isoformat(),
                     to_utc(item.due_end).isoformat() if item.due_end else "",
                     item.action_type.casefold(),
                 ],
@@ -687,34 +790,39 @@ class MailFlowRuntime:
 
     # -- retention cleanup ----------------------------------------------------------
 
-    async def run_cleanup(self) -> None:
-        now = datetime.now(UTC)
-        retention_before = now - timedelta(days=self._config.general.mail_retention_days)
-        trash_before = now - timedelta(days=self._config.general.trash_retention_days)
-        async with self.action_store.lock:
-            protected = {
-                entry.record.record_id if entry.record is not None else entry.item.mail_id
-                for entry in await self.action_store.read(deduplicate=False)
-                if not action_has_ended(entry.item, now)
-            }
-            if not protected:
-                moved = await self._storage.cleanup_mail(retention_before)
-            else:
-                moved = 0
-                for record in await self._storage.list_mails():
-                    if (
-                        record.record_id not in protected
-                        and to_utc(record.mail.received_at) < retention_before
-                    ):
-                        await self._storage.delete_mail(record.record_id)
-                        moved += 1
-        purged = await self._storage.purge_trash(trash_before)
-        logger.info(
-            "cleanup ran: %d old mails moved to trash, %d trash records purged",
-            moved,
-            purged,
+    async def cleanup_candidates(self) -> list[MailRecord]:
+        days = self._config.general.mail_retention_days
+        if days <= 0:
+            return []
+        cutoff = datetime.now(UTC) - timedelta(days=days)
+        entries = await self.action_store.read(deduplicate=False)
+        protected = {
+            entry.record.record_id if entry.record else entry.item.mail_id
+            for entry in entries
+            if entry.item.completed_at is None
+        }
+        return [
+            record
+            for record in await self._storage.list_mails()
+            if record.mail.received_at < cutoff
+            and not record.starred
+            and record.manual_urgency is None
+            and record.effective_urgency not in {Urgency.IMPORTANT, Urgency.URGENT}
+            and record.analysis_state == "ready"
+            and record.record_id not in protected
+        ]
+
+    async def run_cleanup(self) -> tuple[int, int]:
+        moved = 0
+        async with self.action_store.lock, self.write_lock:
+            for record in await self.cleanup_candidates():
+                await self.action_store.trash_mail(record)
+                moved += 1
+        purged = await self._storage.purge_trash(
+            datetime.now(UTC) - timedelta(days=self._config.general.trash_retention_days)
         )
         await self._events.emit(f"{_EVENT_PREFIX}cleanup.done", moved=moved, purged=purged)
+        return moved, purged
 
     async def _cleanup_loop(self) -> None:
         stop_event = self._stop_event
@@ -773,7 +881,7 @@ class MailFlowRuntime:
         if not soon:
             return 0
         today_count = sum(
-            to_utc(item.due_at).astimezone(local_now.tzinfo).date() <= local_now.date()
+            action_sort_time(item).astimezone(local_now.tzinfo).date() <= local_now.date()
             for item in soon
         )
         delivered = await self._deliver_notification(
@@ -1003,11 +1111,13 @@ class MailFlowRuntime:
             to_utc(day_start).astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0)
         )
         horizon = to_utc(local_start + timedelta(days=max(0, days_before) + 1))
-        cutoff = to_utc(now if now is not None else day_start)
         return [
             entry.item
             for entry in await self.action_store.read()
-            if not action_has_ended(entry.item, cutoff) and to_utc(entry.item.due_at) < horizon
+            if entry.item.completed_at is None
+            and entry.item.due_at is not None
+            and entry.item.reminder_enabled
+            and action_sort_time(entry.item) < horizon
         ]
 
     async def _fire_reminder(
@@ -1018,7 +1128,12 @@ class MailFlowRuntime:
         config: GeneralConfig,
     ) -> int:
         """Emit a once-per-window reminder for one action item when due."""
-        if action_has_ended(item, now):
+        if (
+            item.completed_at is not None
+            or item.due_at is None
+            or not item.reminder_enabled
+            or (item.snoozed_until is not None and item.snoozed_until > now)
+        ):
             return 0
         fired = 0
         for when, kind in reminder_times(
@@ -1036,14 +1151,15 @@ class MailFlowRuntime:
                     " ".join(item.summary.split()).casefold(),
                     start.isoformat(),
                     end.isoformat(),
+                    item.snoozed_until.isoformat() if item.snoozed_until else "",
                 ],
                 ensure_ascii=False,
             )
             reminder_id = hashlib.sha256(identity.encode()).hexdigest()[:32]
             key = f"reminder.{reminder_id}.{kind}"
             legacy_key = f"reminder.{item.item_id}.{item.due_at.date().isoformat()}.{kind}"
-            if await self._storage.get_preference(key) or await self._storage.get_preference(
-                legacy_key
+            if await self._storage.get_preference(key) or (
+                item.snoozed_until is None and await self._storage.get_preference(legacy_key)
             ):
                 continue
             display_range = item.time_range_in(config.timezone)
@@ -1164,7 +1280,10 @@ class MailFlowRuntime:
                 today=sum(
                     1
                     for item in items
-                    if to_utc(item.due_at).astimezone(ZoneInfo(display_timezone)).date().isoformat()
+                    if action_sort_time(item)
+                    .astimezone(ZoneInfo(display_timezone))
+                    .date()
+                    .isoformat()
                     <= date_key
                 ),
                 total=len(items),

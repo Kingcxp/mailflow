@@ -49,6 +49,7 @@ from mailflow.domain import (
     AccountSnapshot,
     ActionItem,
     ActionOrigin,
+    BatchResult,
     ComponentKind,
     LLMSnapshot,
     MailMessage,
@@ -644,6 +645,7 @@ class MailFlowService:
                 enabled=account.enabled,
                 status=self.runtime.account_status(account.account_id),
                 error=self.runtime.account_error(account.account_id),
+                **self.runtime.sync_info(account.account_id),
             )
             for account in self.config.accounts
         ]
@@ -717,7 +719,7 @@ class MailFlowService:
     @staticmethod
     def _has_future_obligation(items: list[ActionItem], now: datetime) -> bool:
         """Any item still running or ahead counts, including a window's end."""
-        return any(not action_has_ended(item, now) for item in items)
+        return any(item.completed_at is None for item in items)
 
     async def _actions_by_mail(self) -> dict[str, list[ActionItem]]:
         """Schedule entries created from a mail, grouped by that mail id.
@@ -751,7 +753,7 @@ class MailFlowService:
         subject or never ran is never "expired" — nothing was extracted from
         it, so nothing can be known to have passed.
         """
-        if record.manual_urgency is not None:
+        if record.manual_urgency is not None or record.starred:
             return False
         if record.analysis is None or record.analysis_is_fallback:
             return False
@@ -808,9 +810,7 @@ class MailFlowService:
             if not self._is_expired(fresh, now, linked=linked.get(record_id, [])):
                 logger.info("kept %r: it stopped looking expired before deletion", record_id)
                 continue
-            await self.storage.delete_mail(record_id, refresh_deleted_at=True)
-            await self.events.emit("mail.deleted", record_id=record_id)
-            moved += 1
+            moved += (await self.batch_mail([record_id])).count
         if moved:
             logger.info("purged %d expired mail(s) to the trash", moved)
         return moved
@@ -870,12 +870,26 @@ class MailFlowService:
         return await source.fetch_history(limit=limit, offset=offset)
 
     @admin_operation
-    async def process_mail(self, mail: MailMessage, *, force: bool = False) -> MailRecord | None:
+    async def process_mail(
+        self,
+        mail: MailMessage,
+        *,
+        force: bool = False,
+        notify: bool = False,
+        include_past_actions: bool = False,
+    ) -> MailRecord | None:
         """Analyze and store one mail immediately (same path as live mail).
 
         Returns the stored record, or ``None`` when it was already processed.
         With ``force=True`` an existing record is replaced by the fresh run —
         used when the user explicitly picks history mails for re-analysis."""
+        mail = mail.model_copy(
+            update={
+                "ingestion": "history",
+                "notify_requested": notify,
+                "include_past_actions": include_past_actions,
+            }
+        )
         return await self.runtime.process_mail_now(mail, force=force)
 
     async def is_mail_known(self, mail: MailMessage) -> bool:
@@ -892,8 +906,12 @@ class MailFlowService:
     async def _set_dismissed_keys(self, keys: frozenset[str] | set[str]) -> None:
         await self.runtime.action_store.set_dismissed(keys)
 
-    async def list_actions(self) -> list[ActionItem]:
-        return [entry.item for entry in await self.runtime.action_store.read()]
+    async def list_actions(self, *, include_completed: bool = False) -> list[ActionItem]:
+        return [
+            entry.item
+            for entry in await self.runtime.action_store.read()
+            if include_completed or entry.item.completed_at is None
+        ]
 
     @admin_operation
     async def delete_action(self, item_id: str) -> bool:
@@ -936,19 +954,8 @@ class MailFlowService:
 
     @admin_operation
     async def purge_expired_actions(self) -> int:
-        """Retire visible entries a day after their full time window ended."""
-        cutoff = datetime.now(UTC) - _EXPIRED_ACTION_AGE
-        retired = 0
-        async with self.runtime.action_store.lock:
-            entries = await self.runtime.action_store.read(deduplicate=False)
-            for entry in entries:
-                if action_has_ended(entry.item, cutoff):
-                    removed = await self.runtime.action_store.remove(entry, [entry])
-                    retired += int(removed)
-        if retired:
-            logger.info("retired %d spent schedule entry(ies)", retired)
-            await self.events.emit("action.expired", count=retired)
-        return retired
+        """Unfinished and completed tasks are user records; passing time never deletes them."""
+        return 0
 
     async def list_actions_all(self) -> list[ActionItem]:
         """Visible entries before event deduplication, for edits and searches."""
@@ -958,13 +965,15 @@ class MailFlowService:
     async def add_action(
         self,
         summary: str,
-        due_at: datetime,
+        due_at: datetime | None = None,
         *,
         action_type: str = "errand",
         due_end: datetime | None = None,
         notes: str = "",
         location: str = "",
         url: str = "",
+        mail_id: str = "",
+        reply_task: bool = False,
     ) -> ActionItem:
         """Create a user-owned timed action and add it to the reminder schedule."""
         final_summary = summary.strip()
@@ -973,20 +982,21 @@ class MailFlowService:
             raise translated_error(ValueError, self.t, "action.missing_summary")
         if not final_type:
             raise translated_error(ValueError, self.t, "action.missing_type")
-        if due_at.tzinfo is None or due_at.utcoffset() is None:
+        if due_at is not None and (due_at.tzinfo is None or due_at.utcoffset() is None):
             raise translated_error(ValueError, self.t, "action.invalid_due_edit")
-        final_due = to_utc(due_at)
+        final_due = to_utc(due_at) if due_at is not None else None
         if due_end is not None:
             if due_end.tzinfo is None or due_end.utcoffset() is None:
                 raise translated_error(ValueError, self.t, "action.invalid_due_edit")
             final_end = to_utc(due_end)
-            if final_end <= final_due:
+            if final_due is None or final_end <= final_due:
                 raise translated_error(ValueError, self.t, "action.invalid_end")
         else:
             final_end = None
         item = ActionItem(
             item_id=uuid4().hex,
-            mail_id="",
+            mail_id=mail_id,
+            reply_task=reply_task,
             summary=final_summary,
             action_type=final_type,
             due_at=final_due,
@@ -1019,6 +1029,11 @@ class MailFlowService:
         action_type: str | None = None,
         due_end: datetime | None = None,
         clear_end: bool = False,
+        clear_due: bool = False,
+        completed: bool | None = None,
+        reminder_enabled: bool | None = None,
+        snoozed_until: datetime | None = None,
+        clear_snooze: bool = False,
         notes: str | None = None,
         location: str | None = None,
         url: str | None = None,
@@ -1042,14 +1057,25 @@ class MailFlowService:
                 raise translated_error(ValueError, self.t, "action.invalid_due_edit")
             if due_end is not None and (due_end.tzinfo is None or due_end.utcoffset() is None):
                 raise translated_error(ValueError, self.t, "action.invalid_due_edit")
-            final_due = item.due_at if due_at is None else to_utc(due_at)
+            final_due = None if clear_due else (item.due_at if due_at is None else to_utc(due_at))
             final_end = (
-                None if clear_end else (to_utc(due_end) if due_end is not None else item.due_end)
+                None
+                if clear_end or clear_due
+                else (to_utc(due_end) if due_end is not None else item.due_end)
             )
-            if final_end is not None and to_utc(final_end) <= final_due:
+            if final_end is not None and (final_due is None or to_utc(final_end) <= final_due):
                 raise translated_error(ValueError, self.t, "action.invalid_end")
             updated = item.model_copy(
                 update={
+                    "completed_at": item.completed_at
+                    if completed is None
+                    else (utcnow() if completed else None),
+                    "reminder_enabled": item.reminder_enabled
+                    if reminder_enabled is None
+                    else reminder_enabled,
+                    "snoozed_until": None
+                    if clear_snooze
+                    else (snoozed_until or item.snoozed_until),
                     "summary": final_summary,
                     "due_at": final_due,
                     "due_end": to_utc(final_end) if final_end is not None else None,
@@ -1070,6 +1096,9 @@ class MailFlowService:
                 )
             updated = updated.model_copy(
                 update={
+                    "source_subject": target.record.mail.subject
+                    if target.record is not None
+                    else item.source_subject,
                     "origin": ActionOrigin.CUSTOM,
                     "mail_id": target.record.record_id
                     if target.record is not None
@@ -1255,7 +1284,15 @@ class MailFlowService:
         return results
 
     async def list_trash(self) -> list[TrashRecord]:
-        return await self.storage.list_trash()
+        return [
+            item.model_copy(
+                update={
+                    "expires_at": item.deleted_at
+                    + timedelta(days=self.config.general.trash_retention_days)
+                }
+            )
+            for item in await self.storage.list_trash()
+        ]
 
     # -- mutations -------------------------------------------------------------------
 
@@ -1739,36 +1776,87 @@ Return every candidate in this batch."""
         return record
 
     @admin_operation
+    async def set_mail_state(
+        self,
+        record_ids: list[str],
+        *,
+        is_read: bool | None = None,
+        starred: bool | None = None,
+        archived: bool | None = None,
+    ) -> BatchResult:
+        result = BatchResult()
+        for record_id in dict.fromkeys(record_ids):
+            try:
+                async with self.runtime.write_lock:
+                    record = await self.storage.get_mail(record_id)
+                    if record is None:
+                        result.skipped.append(record_id)
+                        continue
+                    changes = {
+                        key: value
+                        for key, value in dict(
+                            is_read=is_read, starred=starred, archived=archived
+                        ).items()
+                        if value is not None
+                    }
+                    await self.storage.save_mail(record.model_copy(update=changes))
+                result.succeeded.append(record_id)
+                await self.events.emit("mail.state.changed", record_id=record_id)
+            except Exception as exc:
+                result.failed[record_id] = error_text(exc, self.t)
+        return result
+
+    @admin_operation
+    async def batch_mail(
+        self, record_ids: list[str], *, operation: str = "delete", delete_actions: bool = False
+    ) -> BatchResult:
+        """All hosts receive exact successful, skipped and failed objects."""
+        result = BatchResult()
+        for record_id in dict.fromkeys(record_ids):
+            try:
+                if operation == "restore":
+                    changed = await self.restore_mail(record_id)
+                elif operation == "purge":
+                    purge = getattr(self.storage, "purge_trash_records", None)
+                    if purge is None:
+                        raise translated_error(RuntimeError, self.t, "ux.unsupported")
+                    changed = await purge([record_id])
+                elif operation == "delete":
+                    async with self.runtime.action_store.lock, self.runtime.write_lock:
+                        record = await self.storage.get_mail(record_id)
+                        if record is None:
+                            result.skipped.append(record_id)
+                            continue
+                        await self.runtime.action_store.trash_mail(
+                            record, delete_actions=delete_actions
+                        )
+                        changed = record
+                    await self.events.emit("mail.deleted", record_id=record_id)
+                else:
+                    raise translated_error(ValueError, self.t, "ux.unsupported")
+                (result.succeeded if changed else result.skipped).append(record_id)
+            except Exception as exc:
+                result.failed[record_id] = error_text(exc, self.t)
+        return result
+
+    @admin_operation
     async def delete_mail(self, record_id: str) -> bool:
-        """Move a mail to trash (recoverable); returns False when unknown."""
-        record = await self.storage.get_mail(record_id)
-        if record is None:
-            return False
-        await self.storage.delete_mail(record_id)
-        await self.events.emit("mail.deleted", record_id=record_id)
-        return True
+        result = await self.batch_mail([record_id])
+        if result.failed:
+            raise RuntimeError(next(iter(result.failed.values())))
+        return bool(result.succeeded)
 
     @admin_operation
     async def delete_mails(self, record_ids: list[str]) -> int:
-        """Move several mails to the trash; returns how many actually moved.
-
-        Each id is re-read immediately before its own delete, so a record
-        removed by another action (or already gone) is skipped instead of
-        aborting the batch, and the count is what really happened rather than
-        what was requested. Deletion is the same recoverable trash move the
-        per-mail Delete uses.
-        """
-        moved = 0
-        for record_id in record_ids:
-            if await self.delete_mail(record_id):
-                moved += 1
-        if moved:
-            logger.info("moved %d mail(s) to the trash", moved)
-        return moved
+        return (await self.batch_mail(record_ids)).count
 
     @admin_operation
     async def restore_mail(self, record_id: str) -> MailRecord | None:
-        record = await self.storage.restore_from_trash(record_id)
+        async with self.runtime.write_lock:
+            record = await self.storage.restore_from_trash(record_id)
+            if record is not None:
+                for identity in {record_id, record.mail.normalized_message_id()}:
+                    await self.storage.set_preference(f"mail.deleted.{identity}", "")
         if record is not None:
             await self.events.emit("mail.restored", record_id=record_id)
         return record
@@ -1843,13 +1931,7 @@ Return every candidate in this batch."""
 
     @admin_operation
     async def run_cleanup(self) -> tuple[int, int]:
-        moved = await self.storage.cleanup_mail(
-            utcnow() - timedelta(days=self.config.general.mail_retention_days)
-        )
-        purged = await self.storage.purge_trash(
-            utcnow() - timedelta(days=self.config.general.trash_retention_days)
-        )
-        return moved, purged
+        return await self.runtime.run_cleanup()
 
     # -- language -------------------------------------------------------------------------
 

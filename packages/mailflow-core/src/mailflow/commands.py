@@ -275,7 +275,9 @@ class CommandRouter:
     def _localize(self, value: datetime) -> datetime:
         return value.astimezone(ZoneInfo(self.service.config.general.timezone))
 
-    def _fmt_time(self, value: datetime) -> str:
+    def _fmt_time(self, value: datetime | None) -> str:
+        if value is None:
+            return self._t("ux.no_due")
         return self._localize(value).strftime("%Y-%m-%d %H:%M")
 
     def _urgency_span(self, urgency: Urgency) -> list[StyleSpan]:

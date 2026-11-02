@@ -31,6 +31,7 @@ from mailflow.domain import (
     PendingOperation,
     SmartActionResult,
     SmartSearchResult,
+    action_sort_time,
     to_utc,
 )
 from mailflow.prompts import prompt_context
@@ -526,7 +527,7 @@ class ToolRegistry:
                 (item.summary, item.notes, item.location, item.url, item.action_type)
             ).casefold()
         ]
-        items.sort(key=lambda item: (to_utc(item.due_at), item.item_id))
+        items.sort(key=lambda item: (action_sort_time(item), item.item_id))
         if not items:
             return "no matching tasks", None
         offset = _page_number(arguments, "offset", 0)
@@ -535,7 +536,7 @@ class ToolRegistry:
         lines = [f"{len(items)} task(s); offset={offset}; showing {len(page)}:"]
         for item in page:
             lines.append(
-                f"- id={item.item_id} at={to_utc(item.due_at).isoformat()} "
+                f"- id={item.item_id} at={item.due_at.isoformat() if item.due_at else 'none'} "
                 f"type={item.action_type} summary={item.summary}"
                 + (f" due_end={to_utc(item.due_end).isoformat()}" if item.due_end else "")
                 + (f" notes={_snippet(item.notes)}" if item.notes else "")
@@ -664,7 +665,7 @@ class ToolRegistry:
         if clear_end:
             new_end = None
             changes["clear_end"] = True
-        if new_end is not None and to_utc(new_end) <= to_utc(new_start):
+        if new_end is not None and (new_start is None or to_utc(new_end) <= to_utc(new_start)):
             raise ToolError("`due_end` must be after `due_at`")
         if not changes:
             raise ToolError("give at least one field to change")

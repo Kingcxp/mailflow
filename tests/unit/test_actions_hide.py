@@ -1,6 +1,5 @@
 """Dismissal semantics: deleting a mail-derived todo hides it permanently,
-even across re-analysis; custom todos are deleted for real. Spent schedule
-entries are retired automatically a day after they ended."""
+even across re-analysis; overdue tasks remain until the user completes or deletes them."""
 
 from __future__ import annotations
 
@@ -15,6 +14,9 @@ from mailflow.config import MailFlowConfig
 from mailflow.domain import (
     ActionItem,
     ActionOrigin,
+    MailAddress,
+    MailMessage,
+    MailRecord,
     action_time_window,
     actions_duplicate,
     dedupe_actions,
@@ -112,7 +114,7 @@ async def test_bulk_delete_reports_what_really_moved(service: MailFlowService) -
     must not be reported as deleted, and must not abort the rest."""
     store = cast(Any, service.storage)
 
-    async def delete_mail(record_id: str) -> None:
+    async def delete_mail(record_id: str, **kwargs: Any) -> None:
         store.mails.pop(record_id, None)
 
     async def get_mail(record_id: str) -> Any:
@@ -120,145 +122,37 @@ async def test_bulk_delete_reports_what_really_moved(service: MailFlowService) -
 
     store.delete_mail = delete_mail
     store.get_mail = get_mail
-    store.mails["m1"] = object()
-    store.mails["m2"] = object()
+    for record_id in ("m1", "m2"):
+        store.mails[record_id] = MailRecord(
+            record_id=record_id,
+            received_at=_DUE,
+            mail=MailMessage(
+                message_id=record_id,
+                account_id="a",
+                subject="mail",
+                sender=MailAddress(address="sender@example.com"),
+                date=_DUE,
+                received_at=_DUE,
+            ),
+        )
 
     # m-missing is gone; m1 and m2 must still be removed
     assert await service.delete_mails(["m1", "m-missing", "m2"]) == 2
     assert store.mails == {}
 
 
-async def test_spent_entries_are_retired_only_after_a_day(service: MailFlowService) -> None:
-    """The sweep is a day behind the due time, so an entry the user is
-    looking at (or one whose reminder just fired) is never taken away."""
-    store = cast(Any, service.storage)
-    now = datetime.now(UTC)
-    record = cast(
-        Any,
-        type(
-            "R",
-            (),
-            {
-                "action_items": [
-                    ActionItem(
-                        item_id="just-passed",
-                        mail_id="m1",
-                        summary="刚刚过去",
-                        action_type="errand",
-                        due_at=now - timedelta(hours=2),
-                    ),
-                    ActionItem(
-                        item_id="long-gone",
-                        mail_id="m2",
-                        summary="上周的",
-                        action_type="errand",
-                        due_at=now - timedelta(days=3),
-                    ),
-                    ActionItem(
-                        item_id="upcoming",
-                        mail_id="m3",
-                        summary="还没到",
-                        action_type="errand",
-                        due_at=now + timedelta(days=1),
-                    ),
-                ],
-            },
-        ),
-    )
-    store.mails["m1"] = record
-
-    assert await service.purge_expired_actions() == 1
-    remaining = {item.item_id for item in await service.list_actions()}
-    assert remaining == {"just-passed", "upcoming"}
-
-
-async def test_a_running_window_is_kept_until_it_closes(service: MailFlowService) -> None:
-    """An event with an end time is over only when the window closed —
-    deleting a running meeting drops the reminder the user is relying on."""
-    store = cast(Any, service.storage)
-    now = datetime.now(UTC)
-    record = cast(
-        Any,
-        type(
-            "R",
-            (),
-            {
-                "action_items": [
-                    ActionItem(
-                        item_id="running",
-                        mail_id="m1",
-                        summary="进行中的会议",
-                        action_type="meeting",
-                        due_at=now - timedelta(hours=6),
-                        due_end=now + timedelta(hours=1),
-                    )
-                ],
-            },
-        ),
-    )
-    store.mails["m1"] = record
-
+async def test_overdue_and_undated_tasks_survive_and_completion_can_be_reopened(
+    service: MailFlowService,
+) -> None:
+    overdue = await service.add_action("Past deadline", datetime.now(UTC) - timedelta(days=3))
+    undated = await service.add_action("No deadline")
     assert await service.purge_expired_actions() == 0
-    assert [item.item_id for item in await service.list_actions()] == ["running"]
-
-
-async def test_a_swept_mail_entry_stays_hidden_across_reanalysis(
-    service: MailFlowService,
-) -> None:
-    """A swept mail-derived entry is dismissed by its natural key, so the next
-    analysis of the same mail cannot resurrect it."""
-    store = cast(Any, service.storage)
-    old = ActionItem(
-        item_id="old-a",
-        mail_id="m1",
-        summary="过期的",
-        action_type="errand",
-        due_at=datetime.now(UTC) - timedelta(days=2),
-    )
-    store.mails["m1"] = cast(Any, type("R", (), {"action_items": [old]}))
-    assert await service.purge_expired_actions() == 1
-    assert await service.list_actions() == []
-
-    # re-analysis produces the same entry under a fresh id
-    replacement = old.model_copy(update={"item_id": "old-b"})
-    store.mails["m1"] = cast(Any, type("R", (), {"action_items": [replacement]}))
-    assert await service.list_actions() == []
-
-
-async def test_spent_custom_and_meeting_entries_are_deleted_for_real(
-    service: MailFlowService,
-) -> None:
-    """User todos and imported meetings are not mail-owned: the sweep removes
-    them from storage instead of only hiding them."""
-    store = cast(Any, service.storage)
-    now = datetime.now(UTC)
-    spent = ActionItem(
-        item_id="todo-old",
-        mail_id="",
-        summary="过期的待办",
-        action_type="errand",
-        due_at=now - timedelta(days=2),
-    )
-    spent_meeting = ActionItem(
-        item_id="meeting-old",
-        mail_id="m1",
-        summary="上周的项目会议",
-        action_type="meeting",
-        due_at=now - timedelta(days=4),
-        origin=ActionOrigin.CUSTOM,
-    )
-    kept = ActionItem(
-        item_id="todo-new",
-        mail_id="",
-        summary="下周的待办",
-        action_type="errand",
-        due_at=now + timedelta(days=7),
-    )
-    for item in (spent, spent_meeting, kept):
-        store.custom[item.item_id] = item
-
-    assert await service.purge_expired_actions() == 2
-    assert set(store.custom) == {"todo-new"}
+    assert {i.item_id for i in await service.list_actions()} == {overdue.item_id, undated.item_id}
+    await service.edit_action(overdue.item_id, completed=True)
+    assert [i.item_id for i in await service.list_actions()] == [undated.item_id]
+    assert len(await service.list_actions(include_completed=True)) == 2
+    await service.edit_action(overdue.item_id, completed=False)
+    assert len(await service.list_actions()) == 2
 
 
 async def test_custom_todo_delete_is_real(service: MailFlowService) -> None:

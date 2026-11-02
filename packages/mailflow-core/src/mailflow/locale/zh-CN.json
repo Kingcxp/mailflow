@@ -1164,6 +1164,15 @@
     "smart": {
       "no_llm": "尚未配置模型，请先在“大模型”页面添加。",
       "model_failed": "模型请求失败，已找到的结果仍会保留，请重试。"
+    },
+    "ux": {
+      "unsupported": "当前连接或存储不支持此操作。",
+      "no_due": "无截止时间",
+      "saved": "已保存并生效。",
+      "restart": "已保存，重启后生效。",
+      "completed": "已完成",
+      "reopened": "已重新打开",
+      "local_trash": "移入 MailFlow 回收站（不改变原邮箱）。"
     }
   }
 }

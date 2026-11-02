@@ -142,7 +142,7 @@ class FakeStorage:
         return None
 
     async def delete_mail(self, record_id: str, *, refresh_deleted_at: bool = False) -> None:
-        pass
+        self.saved = [r for r in self.saved if r.record_id != record_id]
 
     async def list_trash(self) -> list[TrashRecord]:
         return []

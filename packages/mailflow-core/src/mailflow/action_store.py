@@ -9,7 +9,15 @@ from datetime import datetime
 from typing import Any, cast
 
 from mailflow.contracts import StorageBackend
-from mailflow.domain import ActionItem, MailRecord, action_time_window, actions_duplicate, to_utc
+from mailflow.domain import (
+    ActionItem,
+    ActionOrigin,
+    MailRecord,
+    action_sort_time,
+    action_time_window,
+    actions_duplicate,
+    to_utc,
+)
 
 
 def action_key(item: ActionItem) -> str:
@@ -28,11 +36,11 @@ def action_key(item: ActionItem) -> str:
 
 
 def _legacy_key(item: ActionItem) -> str:
-    return f"{item.mail_id}|{to_utc(item.due_at).isoformat()}|{item.action_type}"
+    return f"{item.mail_id}|{action_sort_time(item).isoformat()}|{item.action_type}"
 
 
 def action_has_ended(item: ActionItem, now: datetime) -> bool:
-    return action_time_window(item)[1] <= to_utc(now)
+    return item.due_at is not None and action_time_window(item)[1] <= to_utc(now)
 
 
 @dataclass
@@ -75,16 +83,18 @@ class ActionStore:
         dismissed = await self.dismissed()
         if records is None:
             records = await self.storage.list_mails()
+        custom = await self.storage.list_custom_actions()
+        overridden = {item.item_id for item in custom}
         entries = [
             ScheduledAction(item, record)
             for record in records
             for item in record.action_items
-            if action_key(item) not in dismissed and _legacy_key(item) not in dismissed
+            if item.item_id not in overridden
+            and action_key(item) not in dismissed
+            and _legacy_key(item) not in dismissed
         ]
-        entries.extend(
-            ScheduledAction(item, custom=True) for item in await self.storage.list_custom_actions()
-        )
-        entries.sort(key=lambda entry: to_utc(entry.item.due_at))
+        entries.extend(ScheduledAction(item, custom=True) for item in custom)
+        entries.sort(key=lambda entry: action_sort_time(entry.item))
         if not deduplicate:
             return entries
         kept: list[ScheduledAction] = []
@@ -129,3 +139,26 @@ class ActionStore:
         }
         await self.set_dismissed(await self.dismissed() | keys)
         return bool(keys)
+
+    async def trash_mail(self, record: MailRecord, *, delete_actions: bool = False) -> None:
+        """Caller holds schedule and mail-write locks; keep task history and source context."""
+        entries = await self.read(deduplicate=False)
+        for entry in entries:
+            linked = entry.record.record_id if entry.record else entry.item.mail_id
+            if linked != record.record_id:
+                continue
+            if delete_actions:
+                await self.remove(entry, entries)
+            elif not entry.custom:
+                await self.storage.save_custom_action(
+                    entry.item.model_copy(
+                        update={
+                            "mail_id": record.record_id,
+                            "origin": ActionOrigin.CUSTOM,
+                            "source_subject": record.mail.subject,
+                        }
+                    )
+                )
+        await self.storage.delete_mail(record.record_id, refresh_deleted_at=True)
+        for identity in {record.record_id, record.mail.normalized_message_id()}:
+            await self.storage.set_preference(f"mail.deleted.{identity}", "true")

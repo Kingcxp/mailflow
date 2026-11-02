@@ -1164,6 +1164,15 @@
     "smart": {
       "no_llm": "No model is configured. Add one on the LLMs page.",
       "model_failed": "The model request failed. Results already found are retained; try again."
+    },
+    "ux": {
+      "unsupported": "This operation is not supported by this connection or storage.",
+      "no_due": "No deadline",
+      "saved": "Saved and active.",
+      "restart": "Saved; restart to apply.",
+      "completed": "Completed",
+      "reopened": "Reopened",
+      "local_trash": "Move to MailFlow trash (the original mailbox is unchanged)."
     }
   }
 }

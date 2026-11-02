@@ -241,6 +241,26 @@ class SQLiteStorage:
             conn.execute("DELETE FROM mails WHERE record_id = ?", (record_id,))
             conn.commit()
 
+    async def purge_trash_records(self, record_ids: list[str]) -> int:
+        async with self._lock:
+            conn = self._check_conn()
+            count = 0
+            for record_id in dict.fromkeys(record_ids):
+                count += conn.execute(
+                    "DELETE FROM trash_records WHERE record_id = ?", (record_id,)
+                ).rowcount
+            conn.commit()
+            return count
+
+    async def list_all_drafts(self) -> list[ReplyDraft]:
+        async with self._lock:
+            rows = self._check_conn().execute("SELECT draft_json FROM drafts").fetchall()
+        return sorted(
+            (ReplyDraft.model_validate_json(row[0]) for row in rows),
+            key=lambda draft: draft.updated_at,
+            reverse=True,
+        )
+
     async def cleanup_mail(self, before: datetime) -> int:
         """Move active mail received before ``before`` into the trash."""
         cutoff = before.timestamp()
@@ -285,6 +305,10 @@ class SQLiteStorage:
                     processor_notes=record.processor_notes,
                     deleted_at=deleted_at,
                     expires_at=deleted_at,
+                    is_read=record.is_read,
+                    starred=record.starred,
+                    archived=record.archived,
+                    analysis_state=record.analysis_state,
                 )
             )
         return trash

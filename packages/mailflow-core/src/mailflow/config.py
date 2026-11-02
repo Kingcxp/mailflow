@@ -104,9 +104,9 @@ class GeneralConfig(BaseModel):
         default="UTC", description="IANA timezone used for display, cleanup and reminders"
     )
     mail_retention_days: int = Field(
-        default=30,
+        default=0,
         ge=0,
-        description="Mails older than this many days are moved to trash by the daily cleanup",
+        description="Keep mail indefinitely when 0; otherwise clean unprotected mail older than this many days",
     )
     trash_retention_days: int = Field(
         default=7,

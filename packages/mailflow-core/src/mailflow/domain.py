@@ -173,6 +173,9 @@ class MailMessage(BaseModel):
     # otherwise unparseable transport message. The pipeline records it as a
     # visible failed source note while preserving the message record.
     parse_error: str = ""
+    ingestion: str = "live"
+    notify_requested: bool = False
+    include_past_actions: bool = False
 
     def normalized_message_id(self) -> str:
         """Stable within an account/source; IMAP UID resets keep RFC identity."""
@@ -230,16 +233,23 @@ class ActionItem(BaseModel):
     mail_id: str
     summary: str
     action_type: str  # built-in category or user-defined non-empty label
-    due_at: datetime
+    due_at: datetime | None = None
     due_end: datetime | None = None
     notes: str = ""
     location: str = ""
     url: str = ""
     origin: ActionOrigin = ActionOrigin.ANALYSIS
+    completed_at: datetime | None = None
+    reminder_enabled: bool = True
+    snoozed_until: datetime | None = None
+    source_subject: str = ""
+    reply_task: bool = False
 
     def time_range_in(self, timezone_name: str) -> str:
         """Format the stored instant in a configured display timezone."""
         zone = ZoneInfo(timezone_name)
+        if self.due_at is None:
+            return ""
 
         fmt = "%Y-%m-%d %H:%M"
         start, end = action_time_window(self)
@@ -256,9 +266,13 @@ class ActionItem(BaseModel):
 
 def action_time_window(item: ActionItem) -> tuple[datetime, datetime]:
     """Return an action's UTC point/window, treating invalid ends as points."""
-    start = to_utc(item.due_at)
+    start = action_sort_time(item)
     end = to_utc(item.due_end) if item.due_end is not None else start
     return (start, end) if end > start else (start, start)
+
+
+def action_sort_time(item: ActionItem) -> datetime:
+    return to_utc(item.due_at) if item.due_at is not None else datetime.max.replace(tzinfo=UTC)
 
 
 def actions_duplicate(left: ActionItem, right: ActionItem) -> bool:
@@ -290,7 +304,7 @@ def dedupe_actions(items: Iterable[ActionItem]) -> list[ActionItem]:
     Sorting is stable, so equal start times keep input order. Empty summaries
     are not identities and therefore never collapse.
     """
-    ordered = sorted(items, key=lambda item: to_utc(item.due_at))
+    ordered = sorted(items, key=action_sort_time)
     kept: list[ActionItem] = []
     by_summary: dict[str, list[ActionItem]] = {}
     for item in ordered:
@@ -338,6 +352,12 @@ class MailRecord(BaseModel):
     analysis: MailAnalysis | None = None
     processor_notes: list[ProcessorNote] = Field(default_factory=lambda: [])
     received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    is_read: bool = False
+    starred: bool = False
+    archived: bool = False
+    analysis_state: str = "ready"  # pending | analysing | ready | failed
+    ingestion: str = "live"  # live | history | reanalysis
 
     @property
     def effective_urgency(self) -> Urgency:
@@ -449,6 +469,10 @@ class TrashRecord(BaseModel):
     manual_urgency: Urgency | None
     analysis: MailAnalysis | None
     processor_notes: list[ProcessorNote] = Field(default_factory=lambda: [])
+    is_read: bool = False
+    starred: bool = False
+    archived: bool = False
+    analysis_state: str = "ready"
     deleted_at: datetime
     expires_at: datetime  # the deletion timestamp the backend stored
 
@@ -461,6 +485,10 @@ class TrashRecord(BaseModel):
             analysis=self.analysis,
             processor_notes=self.processor_notes,
             received_at=self.mail.received_at,
+            is_read=self.is_read,
+            starred=self.starred,
+            archived=self.archived,
+            analysis_state=self.analysis_state,
         )
 
 
@@ -543,6 +571,19 @@ class AccountSnapshot(BaseModel):
     enabled: bool
     status: str = "stopped"  # starting | running | stopped | error
     error: str | None = None
+    last_sync_at: datetime | None = None
+    new_count: int = 0
+    pending_count: int = 0
+
+
+class BatchResult(BaseModel):
+    succeeded: list[str] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+    failed: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def count(self) -> int:
+        return len(self.succeeded)
 
 
 class LLMSnapshot(BaseModel):

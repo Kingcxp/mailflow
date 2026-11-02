@@ -1086,7 +1086,7 @@ class MailPane(Vertical):
                     operation.arguments = {
                         "item_id": item.item_id,
                         "summary": item.summary,
-                        "due_at": item.due_at.isoformat(),
+                        "due_at": item.due_at.isoformat() if item.due_at else None,
                         "due_end": item.due_end.isoformat() if item.due_end else None,
                         "action_type": item.action_type,
                         "notes": item.notes,
@@ -2488,7 +2488,9 @@ class ActionsPane(Vertical):
             items = [
                 item
                 for item in items
-                if to_utc(item.due_at) < upper and (to_utc(item.due_end or item.due_at) >= lower)
+                if item.due_at is not None
+                and to_utc(item.due_at) < upper
+                and (to_utc(item.due_end or item.due_at) >= lower)
             ]
         if matcher.query:
             items = [

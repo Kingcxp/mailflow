@@ -353,6 +353,7 @@ class IMAPSource:
         self._settings = _settings_for(account)
         self._interval = max(0.01, float(account.options.get("interval_seconds", 300)))
         self._limit = max(1, int(account.options.get("limit", 20)))
+        self._status_callback: Any = None
         self._last_uid: int | None = None
         self._uidvalidity = ""
         self._checkpoint_scope = ""
@@ -372,6 +373,9 @@ class IMAPSource:
                 ]
             ).encode()
         ).hexdigest()[:24]
+
+    def set_status_callback(self, callback: Any) -> None:
+        self._status_callback = callback
 
     def set_watermark_store(self, load: Any, save: Any) -> None:
         """Restore a scoped UID/UIDVALIDITY checkpoint; accept old numeric UIDs."""
@@ -468,6 +472,20 @@ class IMAPSource:
                 baseline = 0
             elif self._last_uid is not None:
                 baseline = self._last_uid
+            elif self._account.options.get("initial_sync") == "all":
+                baseline = 0
+            elif self._account.options.get("initial_sync") == "recent":
+                from datetime import timedelta
+
+                since = (
+                    datetime.now(UTC)
+                    - timedelta(days=int(self._account.options.get("initial_days", 30)))
+                ).strftime("%d-%b-%Y")
+                status, recent = client.uid("search", cast(Any, None), "SINCE", since)
+                if status != "OK":
+                    raise RuntimeError("IMAP history search failed")
+                recent_uids = [int(uid) for uid in (recent[0] or b"").split() if uid.isdigit()]
+                baseline = min(recent_uids) - 1 if recent_uids else max(uids, default=0)
             elif self._analyze_backlog:
                 baseline = uids[-self._limit] - 1 if len(uids) >= self._limit else 0
             else:
@@ -529,9 +547,13 @@ class IMAPSource:
         while not stop_event.is_set():
             try:
                 await self._poll_once(emit)
+                if self._status_callback is not None:
+                    self._status_callback(True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if self._status_callback is not None:
+                    self._status_callback(False, 0, type(exc).__name__)
                 logger.warning("IMAP account %r poll failed: %s", self._account.account_id, exc)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop_event.wait(), timeout=self._interval)

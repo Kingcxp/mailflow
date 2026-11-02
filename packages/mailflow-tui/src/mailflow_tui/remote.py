@@ -367,7 +367,9 @@ class RemoteServiceAdapter:
         data = await self.client.restore_mail(record_id)
         return MailRecord.model_validate(data) if data is not None else None
 
-    async def add_action(self, summary: str, due_at: datetime, **values: Any) -> ActionItem:
+    async def add_action(
+        self, summary: str, due_at: datetime | None = None, **values: Any
+    ) -> ActionItem:
         return ActionItem.model_validate(
             await self.client.add_action(
                 {

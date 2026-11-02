@@ -97,12 +97,13 @@ class TestRuntime:
 
     async def test_run_cleanup_cutoffs(self) -> None:
         runtime, storage, _ = build_runtime({}, mail_retention_days=30, trash_retention_days=7)
-        await runtime.run_cleanup()
-        assert storage.cleaned_before is not None
+        old = MailRecord(record_id="old", mail=make_mail(), received_at=make_mail().received_at)
+        starred = old.model_copy(update={"record_id": "starred", "starred": True})
+        storage.saved = [old, starred]
+        assert await runtime.run_cleanup() == (1, 0)
+        assert [r.record_id for r in storage.saved] == ["starred"]
         assert storage.purged_before is not None
-        expected_retention = datetime.now(UTC) - timedelta(days=30)
         expected_trash = datetime.now(UTC) - timedelta(days=7)
-        assert abs((storage.cleaned_before - expected_retention).total_seconds()) < 60
         assert abs((storage.purged_before - expected_trash).total_seconds()) < 60
 
     async def test_disabled_account_not_started(self) -> None:
@@ -149,7 +150,11 @@ class TestRuntime:
             account_configs=[MailAccountConfig(account_id="acct-1", provider="fake")],
         )
         await runtime.start()
-        await asyncio.sleep(1.2)  # 2 retries with backoff
+        await asyncio.wait_for(runtime._queue.join(), timeout=4)  # pyright: ignore[reportPrivateUsage]
+        for _ in range(50):
+            if storage.saved and storage.saved[-1].analysis_state == "ready":
+                break
+            await asyncio.sleep(0.05)
         await runtime.stop()
         assert len(storage.saved) == 1  # recovered after transient failures
 
