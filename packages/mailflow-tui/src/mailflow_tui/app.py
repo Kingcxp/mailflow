@@ -873,6 +873,7 @@ class MailPane(Vertical):
 
     async def on_mount(self) -> None:
         self._urgency_suppress = False
+        self._sync_selection_controls()
         # never block startup on storage reads + row rendering: the pane
         # paints empty and fills in as the exclusive worker delivers
         self.run_worker(
@@ -880,6 +881,7 @@ class MailPane(Vertical):
         )
 
     async def on_unmount(self) -> None:
+        self._stop_reparse()
         await self._cancel_smart_action()
 
     def _mail_table(self) -> SelectionTable | None:
@@ -1405,11 +1407,12 @@ class MailPane(Vertical):
         if event.table.id == "mail-table":
             self._sync_selection_controls()
 
-    def _sync_selection_controls(self) -> None:
+    def _sync_selection_controls(self, *, reparse_idle: bool = False) -> None:
         table = self._mail_table()
         if table is None:
             return
         count = len(table.checked_keys)
+        has_selected = any(r.record_id == self._selected_id for r in self._records)
         trash = self.query_one_optional("#btn-trash", Button)
         if trash is not None:
             trash.label = (
@@ -1417,23 +1420,33 @@ class MailPane(Vertical):
                 if count
                 else self._service.t("tui.btn_trash")
             )
-            trash.disabled = self._trash_busy or not (count or self._selected_id)
+            trash.disabled = self._trash_busy or not (count or has_selected)
             trash.tooltip = self._service.t("tui.selection_help")
         purge = self.query_one_optional("#btn-purge-expired", Button)
         if purge is not None:
-            purge.disabled = self._trash_busy
+            purge.disabled = self._trash_busy or not bool(self._mail_cache)
         for ident in ("#btn-reply", "#btn-ask-correct"):
             button = self.query_one_optional(ident, Button)
             if button is not None:
                 button.tooltip = self._service.t("tui.selection_current_help")
+                button.disabled = self._trash_busy or not has_selected
         table.disabled = self._trash_busy
         reparse = self.query_one_optional("#btn-reparse", Button)
-        if reparse is not None and not self._reparse_active():
+        if reparse is not None and (reparse_idle or not self._reparse_active()):
+            reparse.disabled = self._trash_busy or not (count or has_selected)
             reparse.label = (
                 self._service.t("tui.btn_reparse_selected", count=count)
                 if count
                 else self._service.t("tui.btn_reparse")
             )
+        if reparse_idle or not self._reparse_active():
+            for ident in ("#btn-reparse-all", "#btn-reparse-failed"):
+                button = self.query_one_optional(ident, Button)
+                if button is not None:
+                    button.disabled = self._trash_busy or not bool(self._mail_cache)
+        urgency = self._urgency_select()
+        if urgency is not None:
+            urgency.disabled = not has_selected or self._trash_busy
         if count:
             hidden = count - len(table.checked_keys & set(table.visible_keys()))
             self._set_static(
@@ -1525,6 +1538,8 @@ class MailPane(Vertical):
             record.is_read = True
         await self._show_selected(cached=True)
 
+        self._sync_selection_controls()
+
     async def on_data_table_row_highlighted(self, event: TableRowEvent) -> None:
         """Cursor movement (arrow keys) highlights rows without selecting;
         the detail pane must follow the highlight so what the user looks at
@@ -1541,6 +1556,7 @@ class MailPane(Vertical):
         if record is not None:
             self._sync_urgency_select(record)
         await self._show_selected(cached=True)
+        self._sync_selection_controls()
 
     def _smart_button(self) -> Button | None:
         return self.query_one_optional("#smart-action", Button)
@@ -2313,6 +2329,8 @@ class MailPane(Vertical):
                     button.label = self._service.t(
                         "tui.btn_reparse_selected", count=len(table.checked_keys)
                     )
+        if running_button is None:
+            self._sync_selection_controls(reparse_idle=True)
 
     def _start_reparse(self, button_id: str, action: Any) -> None:
         """Run one re-analysis and always restore the buttons afterwards.
@@ -2919,6 +2937,7 @@ class ActionsPane(Vertical):
         edit = self.query_one_optional("#actions-edit", Button)
         if edit is not None:
             edit.tooltip = self._service.t("tui.selection_current_help")
+            edit.disabled = self._delete_busy or self._selected_item() is None
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             message = self._action_status

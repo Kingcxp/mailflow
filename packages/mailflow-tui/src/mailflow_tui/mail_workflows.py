@@ -374,8 +374,12 @@ class TrashScreen(WorkflowScreen):
             yield SelectionTable(t=self.t, id="trash-table")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("ux.restore"), id="trash-restore", variant="primary")
-                yield Button(self.t("ux.permanent_delete"), id="trash-purge", variant="error")
+                yield Button(
+                    self.t("ux.restore"), id="trash-restore", variant="primary", disabled=True
+                )
+                yield Button(
+                    self.t("ux.permanent_delete"), id="trash-purge", variant="error", disabled=True
+                )
                 yield Button(self.t("tui.btn_refresh"), id="trash-refresh")
                 yield Button(self.t("tui.btn_back"), id="trash-close")
 
@@ -414,18 +418,44 @@ class TrashScreen(WorkflowScreen):
                 key=row.record_id,
             )
         view.restore(table)
+        self._sync_controls()
+
+    def _sync_controls(self) -> None:
+        table = self.query_one("#trash-table", SelectionTable)
+        available = bool(table.checked_keys or table.row_count)
+        for ident in ("trash-restore", "trash-purge", "trash-refresh", "trash-close"):
+            self.query_one(f"#{ident}", Button).disabled = self.busy or (
+                ident in {"trash-restore", "trash-purge"} and not available
+            )
+        table.disabled = self.busy
+        self.query_one("#trash-search", Input).disabled = self.busy
+
+    def on_selection_table_selection_changed(self, event: SelectionTable.SelectionChanged) -> None:
+        self._sync_controls()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "trash-search":
             self.render_rows()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.disabled:
+            return
         if event.button.id == "trash-close" and not self.busy:
             self.dismiss(True)
         elif not self.busy:
+            self.busy = True
+            self._sync_controls()
             self.run_worker(
-                self._operate(event.button.id or ""), exclusive=True, exit_on_error=False
+                self._run_operation(event.button.id or ""), exclusive=True, exit_on_error=False
             )
+
+    async def _run_operation(self, ident: str) -> None:
+        try:
+            await self._operate(ident)
+        finally:
+            self.busy = False
+            if self.is_mounted:
+                self._sync_controls()
 
     async def _operate(self, ident: str) -> None:
         if ident == "trash-refresh":
@@ -437,7 +467,6 @@ class TrashScreen(WorkflowScreen):
             ids = [str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)]
         if not ids:
             return
-        self.busy = True
         try:
             operation = "restore" if ident == "trash-restore" else "purge"
             if operation == "purge" and not await self.ask(
@@ -458,8 +487,6 @@ class TrashScreen(WorkflowScreen):
             await self.refresh_rows()
         except Exception as exc:
             self.status(error_text(exc, self.service.t))
-        finally:
-            self.busy = False
 
 
 class DraftsScreen(WorkflowScreen):
@@ -624,7 +651,12 @@ class QueryTasksScreen(WorkflowScreen):
         with Vertical():
             yield Static(self.t("ux.query_tasks"))
             yield DataTable(id="query-tasks-table")
-            yield Button(self.t("tui.btn_edit"), id="query-task-open", variant="primary")
+            yield Button(
+                self.t("tui.btn_edit"),
+                id="query-task-open",
+                variant="primary",
+                disabled=not self.items,
+            )
             yield Button(self.t("tui.btn_back"), id="query-task-close")
 
     def on_mount(self) -> None:
@@ -654,6 +686,7 @@ class DeliveriesScreen(WorkflowScreen):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__(service)
         self.rows: list[dict[str, Any]] = []
+        self._retrying = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -661,7 +694,7 @@ class DeliveriesScreen(WorkflowScreen):
             yield SelectionTable(t=self.t, id="delivery-table")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("ux.retry_delivery"), id="delivery-retry")
+                yield Button(self.t("ux.retry_delivery"), id="delivery-retry", disabled=True)
                 yield Button(self.t("tui.btn_refresh"), id="delivery-refresh")
                 yield Button(self.t("tui.btn_back"), id="delivery-close")
 
@@ -691,9 +724,17 @@ class DeliveriesScreen(WorkflowScreen):
                 self.status(self.t("ux.no_failed_deliveries"))
         except Exception as exc:
             self.status(error_text(exc, self.service.t))
+        finally:
+            self._sync_controls()
+
+    def _sync_controls(self) -> None:
+        self.query_one("#delivery-retry", Button).disabled = self._retrying or not self.rows
+        self.query_one("#delivery-refresh", Button).disabled = self._retrying
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
+        if event.button.disabled:
+            return
         if event.button.id == "delivery-close":
             self.dismiss(None)
         else:
@@ -707,8 +748,8 @@ class DeliveriesScreen(WorkflowScreen):
             return
         table = self.query_one("#delivery-table", SelectionTable)
         ids = sorted(table.checked_keys) or [str(row["delivery_id"]) for row in self.rows]
-        button = self.query_one("#delivery-retry", Button)
-        button.disabled = True
+        self._retrying = True
+        self._sync_controls()
         self.status(self.t("ux.retrying_delivery"))
         try:
             count = await self.service.retry_deliveries(ids)
@@ -717,8 +758,9 @@ class DeliveriesScreen(WorkflowScreen):
         except Exception as exc:
             self.status(error_text(exc, self.service.t))
         finally:
+            self._retrying = False
             if self.is_mounted:
-                button.disabled = False
+                self._sync_controls()
 
 
 class DataManagementScreen(WorkflowScreen):

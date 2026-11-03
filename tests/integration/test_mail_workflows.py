@@ -262,6 +262,9 @@ async def test_reader_reaches_end_and_trash_restore_changes_mailbox(
         restored = await service.storage.get_mail("long")
         assert restored is not None and restored.mail.body_text.endswith("END OF ORIGINAL")
         assert not await service.list_trash()
+        await pilot.pause()
+        assert trash.query_one("#trash-restore", Button).disabled
+        assert trash.query_one("#trash-purge", Button).disabled
 
 
 async def test_backup_restores_configuration_mail_and_tasks_without_accepting_invalid_data(
@@ -432,8 +435,96 @@ async def test_history_analysis_updates_mail_before_batch_finishes_and_can_stop(
         second = await service.get_mail(mails[1].normalized_message_id())
         assert first is not None and first.analysis is not None
         assert first.analysis.summary == "Completed result"
-        assert second is not None and second.analysis_state == "pending"
+        assert second is not None and second.analysis_state == "cancelled"
         assert len(history.checked_keys) == 2
+
+
+async def test_history_controls_follow_selection_loading_and_failure(
+    service: MailFlowService,
+) -> None:
+    import queue
+
+    from mailflow.config import MailAccountConfig
+    from mailflow_testkit.fakes import FakeMailSource
+    from mailflow_tui.app import MailFlowApp
+    from mailflow_tui.settings import AccountsPane
+    from mailflow_tui.widgets import SelectionTable
+    from textual.widgets import DataTable, Input, TabbedContent
+
+    from mailflow_test_support.ui import until
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls: list[int] = []
+    fail = True
+    mails = [make_record(str(index)).mail for index in range(3)]
+
+    class Source(FakeMailSource):
+        async def fetch_history(self, limit: int = 50, offset: int = 0) -> Any:
+            calls.append(offset)
+            entered.set()
+            await release.wait()
+            if fail:
+                raise TimeoutError("connection timed out")
+            return mails[offset : offset + limit]
+
+    service.config.plugins.repositories = []
+    app = MailFlowApp(service, queue.Queue())
+    async with app.run_test(size=(145, 48)) as pilot:
+        app.query_one(TabbedContent).active = "tab-mailboxes"
+        await pilot.pause()
+        pane = app.query_one(AccountsPane)
+        for ident in (
+            "account-edit",
+            "account-delete",
+            "account-history",
+            "history-more",
+            "history-analyze",
+            "history-select-all",
+            "btn-reply",
+            "btn-reparse",
+            "btn-trash",
+            "actions-edit",
+            "llm-edit",
+            "llm-delete",
+            "llm-up",
+            "llm-down",
+        ):
+            assert app.query_one(f"#{ident}", Button).disabled
+        service.config.accounts = [
+            MailAccountConfig(account_id=ident, provider="fake") for ident in ("acct-1", "acct-2")
+        ]
+        service.sources.update(
+            {ident: cast(MailSource, Source(mails)) for ident in ("acct-1", "acct-2")}
+        )
+        await pane.reload()
+        app.query_one("#history-count", Input).value = "2"
+        await pilot.pause()
+        load = app.query_one("#account-history", Button)
+        more = app.query_one("#history-more", Button)
+        assert not load.disabled and more.disabled
+        load.press()
+        await until(pilot, entered.is_set)
+        assert load.disabled and more.disabled
+        more.press()
+        await pilot.pause()
+        assert calls == [0]
+        release.set()
+        await until(pilot, lambda: not load.disabled)
+        assert more.disabled
+        fail = False
+        load.press()
+        history = app.query_one("#history-table", SelectionTable)
+        await until(pilot, lambda: history.row_count == 2)
+        assert not more.disabled
+        history.focus()
+        await pilot.press("ctrl+a")
+        assert not app.query_one("#history-analyze", Button).disabled
+        accounts = cast(DataTable[Any], app.query_one("#accounts-table", DataTable))
+        accounts.focus()
+        await pilot.press("down")
+        await until(pilot, lambda: history.row_count == 0)
+        assert more.disabled and app.query_one("#history-analyze", Button).disabled
+        assert not history.checked_keys
 
 
 async def test_open_mailbox_refreshes_after_another_connection_clears_records(

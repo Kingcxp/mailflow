@@ -990,10 +990,10 @@ async def test_llm_tab_orders_the_fallback_chain(tmp_path: Path) -> None:
             assert [str(table.get_row_at(i)[1]) for i in range(2)] == ["llm1", "llm2"]
 
             # moving the second entry up makes it the default; the chain follows
-            from mailflow_tui.settings import LLMPane
-
-            pane = app.query_one(LLMPane)
-            pane._selected = 1  # pyright: ignore[reportPrivateUsage]
+            assert app.query_one("#llm-up", Button).disabled
+            table.move_cursor(row=1)
+            await pilot.pause()
+            assert app.query_one("#llm-down", Button).disabled
             app.query_one("#llm-up", Button).press()
             await pilot.pause(0.4)
             assert [llm.llm_id for llm in service.config.llms] == ["llm2", "llm1"]
@@ -1057,6 +1057,7 @@ async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
             # analyzing an already-known mail is a no-op, never a duplicate
             known_id = str(next(iter(history.rows)).value)
             pane._picked = {known_id}  # pyright: ignore[reportPrivateUsage]
+            pane._render_history()  # pyright: ignore[reportPrivateUsage]
             app.query_one("#history-analyze", Button).press()
             await pilot.pause(0.5)
             assert await service.count_mails() == 3
@@ -1072,6 +1073,7 @@ async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
             )
             pane._history = [*pane._history, unseen]  # pyright: ignore[reportPrivateUsage]
             pane._picked = {unseen.normalized_message_id()}  # pyright: ignore[reportPrivateUsage]
+            pane._render_history()  # pyright: ignore[reportPrivateUsage]
             app.query_one("#history-analyze", Button).press()
             await pilot.pause(0.6)
             assert await service.count_mails() == 4
@@ -1636,13 +1638,12 @@ async def test_llm_move_up_follows_the_entry_and_repeats(tmp_path: Path) -> None
             assert [llm.llm_id for llm in service.config.llms] == ["llm-2", "llm-0", "llm-1"]
             assert pane._selected == 0  # pyright: ignore[reportPrivateUsage]
 
-            # at the top the move is a no-op with an explanation, not a jump
+            # At the first row, moving up is unavailable.
+            assert app.query_one("#llm-up", Button).disabled
             app.query_one("#llm-up", Button).press()
             await pilot.pause(0.3)
             assert [llm.llm_id for llm in service.config.llms] == ["llm-2", "llm-0", "llm-1"]
             assert pane._selected == 0  # pyright: ignore[reportPrivateUsage]
-            status = str(pane.query_one("#llms-status", Static).render())
-            assert "default" in status.lower() or "首选" in status
             app.exit()
             await pilot.pause()
     finally:
