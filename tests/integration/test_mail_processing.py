@@ -251,7 +251,7 @@ async def test_cancelled_analysis_can_be_retried_without_duplicate_actions() -> 
     with pytest.raises(asyncio.CancelledError):
         await pending
     assert storage.saved[-1].mail.subject == mail.subject
-    assert storage.saved[-1].analysis_state == "analysing"
+    assert storage.saved[-1].analysis_state == "pending"
     release.set()
     record = await runtime.process_mail_now(mail)
     assert record is not None and len(record.action_items) == 1

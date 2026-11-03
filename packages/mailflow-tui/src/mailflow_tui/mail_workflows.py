@@ -17,7 +17,7 @@ from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Select, Static, TextArea
+from textual.widgets import Button, Checkbox, DataTable, Input, Select, Static, TextArea
 
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.view_state import TableView
@@ -30,7 +30,7 @@ class WorkflowScreen(ModalScreen[Any]):
     WorkflowScreen { align: center middle; }
     WorkflowScreen > Vertical { width: 85%; height: 85%; background: $surface; border: round $accent; padding: 1 2; }
     WorkflowScreen ScrollableContainer { height: 1fr; }
-    WorkflowScreen SelectionTable { height: 1fr; }
+    WorkflowScreen DataTable { height: 1fr; }
     WorkflowScreen TextArea { height: 1fr; }
     WorkflowScreen Horizontal { height: auto; }
     WorkflowScreen Button { margin: 0 1 0 0; }
@@ -371,7 +371,7 @@ class TrashScreen(WorkflowScreen):
         with Vertical():
             yield Static(self.t("ux.local_trash"))
             yield Input(placeholder=self.t("tui.mail_search_placeholder"), id="trash-search")
-            yield SelectionTable(id="trash-table")
+            yield SelectionTable(t=self.t, id="trash-table")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
                 yield Button(self.t("ux.restore"), id="trash-restore", variant="primary")
@@ -480,7 +480,7 @@ class DraftsScreen(WorkflowScreen):
                 id="draft-filter",
                 allow_blank=False,
             )
-            yield SelectionTable(id="draft-table")
+            yield DataTable(id="draft-table")
             yield TextArea(read_only=True, id="draft-body")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
@@ -493,7 +493,7 @@ class DraftsScreen(WorkflowScreen):
                 yield Button(self.t("tui.btn_back"), id="draft-close")
 
     async def on_mount(self) -> None:
-        table = self.query_one("#draft-table", SelectionTable)
+        table = cast(DataTable[Any], self.query_one("#draft-table", DataTable))
         for key in ("subject", "account", "state", "updated"):
             table.add_column(self.t("ux." + key))
         table.cursor_type = "row"
@@ -507,7 +507,7 @@ class DraftsScreen(WorkflowScreen):
             self.status(error_text(exc, self.service.t))
 
     def render_rows(self) -> None:
-        table = self.query_one("#draft-table", SelectionTable)
+        table = cast(DataTable[Any], self.query_one("#draft-table", DataTable))
         view = TableView.capture(table)
         table.clear()
         mode = str(cast(Select[str], self.query_one("#draft-filter", Select)).value)
@@ -554,7 +554,7 @@ class DraftsScreen(WorkflowScreen):
         if event.button.id == "draft-close":
             self.dismiss(None)
         elif event.button.id == "draft-continue":
-            table = self.query_one("#draft-table", SelectionTable)
+            table = cast(DataTable[Any], self.query_one("#draft-table", DataTable))
             if table.row_count:
                 row = self.rows.get(
                     str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
@@ -623,12 +623,12 @@ class QueryTasksScreen(WorkflowScreen):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.t("ux.query_tasks"))
-            yield SelectionTable(id="query-tasks-table")
+            yield DataTable(id="query-tasks-table")
             yield Button(self.t("tui.btn_edit"), id="query-task-open", variant="primary")
             yield Button(self.t("tui.btn_back"), id="query-task-close")
 
     def on_mount(self) -> None:
-        table = self.query_one("#query-tasks-table", SelectionTable)
+        table = cast(DataTable[Any], self.query_one("#query-tasks-table", DataTable))
         table.cursor_type = "row"
         for key in ("subject", "due", "source"):
             table.add_column(self.t("ux." + key))
@@ -641,7 +641,7 @@ class QueryTasksScreen(WorkflowScreen):
             )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        table = self.query_one("#query-tasks-table", SelectionTable)
+        table = cast(DataTable[Any], self.query_one("#query-tasks-table", DataTable))
         item = (
             self.items.get(str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value))
             if table.row_count
@@ -658,7 +658,7 @@ class DeliveriesScreen(WorkflowScreen):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.t("ux.failed_deliveries"))
-            yield SelectionTable(id="delivery-table")
+            yield SelectionTable(t=self.t, id="delivery-table")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
                 yield Button(self.t("ux.retry_delivery"), id="delivery-retry")
@@ -667,6 +667,7 @@ class DeliveriesScreen(WorkflowScreen):
 
     async def on_mount(self) -> None:
         table = self.query_one("#delivery-table", SelectionTable)
+        table.add_column("[ ]", key="selected", width=3)
         for key in ("kind", "channel", "updated", "source"):
             table.add_column(self.t("ux." + key))
         await self.reload_rows()
@@ -675,9 +676,11 @@ class DeliveriesScreen(WorkflowScreen):
         try:
             self.rows = await self.service.failed_deliveries()
             table = self.query_one("#delivery-table", SelectionTable)
+            table.retain_checks({str(row["delivery_id"]) for row in self.rows})
             table.clear()
             for row in self.rows:
                 table.add_row(
+                    table.check_label(str(row["delivery_id"])),
                     self.t("ux.delivery_" + str(row.get("kind", "text"))),
                     str(row.get("channel", "")),
                     str(row.get("at", "")),

@@ -105,7 +105,11 @@ def command(
             )
         router = CommandRouter(service)
         try:
-            with console.status(service.t("cli.executing")):
+            progress_key = {
+                "clean records": "cli.clearing_records",
+                "clean trash CONFIRM": "cli.clearing_trash",
+            }.get(" ".join(command_text.split()), "cli.executing")
+            with console.status(service.t(progress_key)):
                 response = await router.execute(command_text)
             _render_response(response)
             if not response.ok:

@@ -72,7 +72,7 @@ from mailflow_tui.labels import (
 )
 from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.view_state import TableView
-from mailflow_tui.widgets import SafeSelect, SearchToggle
+from mailflow_tui.widgets import SafeSelect, SearchToggle, SecretRow, SelectionTable
 
 _SECTION_LABELS = {
     "general": "tui.settings_section_general",
@@ -754,7 +754,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 as_editor_text(spec.editor, current), id=widget_id, classes="field-multiline"
             )
         elif spec.secret:
-            with Horizontal(classes="secret-row"):
+            with SecretRow(classes="secret-row"):
                 yield Input(
                     value="" if current is None else str(current),
                     id=widget_id,
@@ -827,7 +827,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             elif extra.secret:
                 # mounted via mount_all (outside compose), so children are
                 # attached explicitly instead of with-block composition
-                row = Horizontal(classes="secret-row")
+                row = SecretRow(classes="secret-row")
                 row.compose_add_child(
                     Input(
                         value=self._extra_value(extra),
@@ -2122,6 +2122,7 @@ class AccountsPane(Vertical):
         self._picked: set[str] = set()
         self._known: set[str] = set()
         self._history_account = ""
+        self._analysis_worker: Any = None
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -2137,7 +2138,7 @@ class AccountsPane(Vertical):
             yield Button(self._t("tui.history_load"), id="account-history", variant="primary")
         yield Static(self._t("tui.history_title"), id="history-title")
         yield Static(self._t("tui.history_select_hint"), id="history-help")
-        yield DataTable(id="history-table")
+        yield SelectionTable(t=self._t, id="history-table")
         with Horizontal(id="history-actions"):
             yield Button(self._t("tui.history_analyze"), id="history-analyze", variant="success")
             yield Button(
@@ -2177,6 +2178,8 @@ class AccountsPane(Vertical):
         }.items():
             self.query_one(f"#{ident}", Static).update(self._t(key))
         await self.reload()
+        if self._analysis_worker is not None and not self._analysis_worker.is_finished:
+            self.query_one("#history-analyze", Button).label = self._t("tui.reparse_stop")
 
     # -- helpers -----------------------------------------------------------
 
@@ -2209,10 +2212,10 @@ class AccountsPane(Vertical):
         table = self._history_table()
         if table is None or getattr(self, "_history_columns_done", False):
             return
-        for key in ("pick", "subject", "sender", "date", "state"):
+        for key in ("selected", "subject", "sender", "date", "state"):
             with contextlib.suppress(Exception):
                 table.remove_column(key)
-        table.add_column(self._t("tui.history_column_selected"), key="pick")
+        table.add_column("[ ]", key="selected", width=3)
         table.add_column(self._t("tui.column_subject"), key="subject")
         table.add_column(self._t("tui.column_sender"), key="sender")
         table.add_column(self._t("tui.column_date"), key="date")
@@ -2251,6 +2254,8 @@ class AccountsPane(Vertical):
         view = TableView.capture(table)
         table.clear()
         self._ensure_history_columns()
+        if isinstance(table, SelectionTable):
+            table.set_checks(set(self._picked))
         # The IMAP page arrives in UID order, which is NOT the Date-header
         # order (moved/late-delivered mail breaks it); the user reads this
         # table as a timeline, so sort by the displayed date instead.
@@ -2269,9 +2274,7 @@ class AccountsPane(Vertical):
                 else self._t("tui.history_marked_new")
             )
             table.add_row(
-                self._t("tui.history_picked")
-                if record_id in self._picked
-                else self._t("tui.history_unpicked"),
+                table.check_label(record_id) if isinstance(table, SelectionTable) else "",
                 subject,
                 sender,
                 date_text,
@@ -2282,6 +2285,10 @@ class AccountsPane(Vertical):
 
     # -- events ------------------------------------------------------------
 
+    def on_selection_table_selection_changed(self, event: SelectionTable.SelectionChanged) -> None:
+        if event.table.id == "history-table":
+            self._picked = set(event.table.checked_keys)
+
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if _table_id(event) == "accounts-table" and event.row_key.value is not None:
             self._selected = int(str(event.row_key.value))
@@ -2291,12 +2298,9 @@ class AccountsPane(Vertical):
                     self._open_form(index)
             return
         if _table_id(event) == "history-table":
-            record_id = str(event.row_key.value)
-            if record_id in self._picked:
-                self._picked.discard(record_id)
-            else:
-                self._picked.add(record_id)
-            self._render_history()
+            table = self._history_table()
+            if isinstance(table, SelectionTable):
+                table.action_toggle_check()
 
     async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if _table_id(event) == "accounts-table" and event.row_key.value is not None:
@@ -2311,14 +2315,13 @@ class AccountsPane(Vertical):
             await self._select_all_history()
             return
         if button_id == "history-analyze":
-            # a batch is minutes of LLM work: an exclusive worker prevents a
-            # second click from starting a parallel duplicate batch
-            self.run_worker(
-                self._analyze_selected(),
-                exclusive=True,
-                group="history-analyze",
-                exit_on_error=False,
-            )
+            if self._analysis_worker is not None and not self._analysis_worker.is_finished:
+                self._analysis_worker.cancel()
+                self._set_status(self._t("tui.reparse_stopping"))
+            else:
+                self._analysis_worker = self.run_worker(
+                    self._analyze_selected(), group="history-analyze", exit_on_error=False
+                )
             return
         if button_id == "history-more":
             # network I/O must never run on the UI handler: an exclusive
@@ -2491,45 +2494,54 @@ class AccountsPane(Vertical):
         if not chosen:
             self._set_status(f"[yellow]{self._t('tui.history_none_selected')}[/yellow]")
             return
-        # user explicitly picked these mails: always re-run the pipeline and
-        # replace the stored analysis, bypassing the dedup shortcut
-        status_node = self.query_one_optional("#accounts-status", Static)
+        button = self.query_one("#history-analyze", Button)
+        button.label = self._t("tui.reparse_stop")
+        button.variant = "error"
         processed = 0
         failed: list[str] = []
-
-        async def _run_one(position: int, mail: Any) -> None:
-            nonlocal processed
-            subject_short = escape(mail.subject[:36])
-            if status_node is not None:
-                status_node.update(
-                    f"[cyan]{self._t('tui.history_progress', position=position, total=len(chosen))} "
-                    f"{subject_short}[/cyan]"
+        cancelled = False
+        refresh = getattr(self.app, "schedule_reload", lambda: None)
+        try:
+            for position, mail in enumerate(chosen, start=1):
+                subject = escape(mail.subject[:36])
+                self._set_status(
+                    self._t("tui.history_progress", position=position, total=len(chosen))
+                    + " "
+                    + subject
                 )
-            try:
-                await self._service.process_mail(mail, force=True)
-            except Exception as exc:
-                # one bad mail must not abort the batch: keep it picked so
-                # the user can retry after fixing the cause
-                failed.append(f"{mail.subject[:40]}: {error_detail(self._service, exc)}")
-                return
-            message_id = mail.normalized_message_id()
-            self._known.add(message_id)
-            self._picked.discard(message_id)
-            processed += 1
-
-        for position, mail in enumerate(chosen, start=1):
-            await _run_one(position, mail)
-
-        self._render_history()
-        if failed:
-            detail = "; ".join(failed[:3])
-            more = f" (+{len(failed) - 3})" if len(failed) > 3 else ""
+                try:
+                    record = await self._service.process_mail(mail, force=True)
+                    if record is None or record.analysis_state == "failed":
+                        failed.append(mail.subject[:40])
+                        continue
+                except Exception as exc:
+                    failed.append(f"{mail.subject[:40]}: {error_detail(self._service, exc)}")
+                    continue
+                message_id = mail.normalized_message_id()
+                self._known.add(message_id)
+                self._picked.discard(message_id)
+                processed += 1
+                self._render_history()
+                # Refresh the actual mail view even while the history batch
+                # remains open. Completed results are usable immediately.
+                refresh()
+        except asyncio.CancelledError:
+            cancelled = True
+        finally:
+            button.label = self._t("tui.history_analyze")
+            button.variant = "success"
+            self._render_history()
+            refresh()
+        if cancelled:
+            self._set_status(self._t("tui.reparse_stopped", count=processed, total=len(chosen)))
+        elif failed:
             self._set_status(
-                f"[red]{self._t('tui.history_failed', count=len(failed))}: "
-                f"{escape(detail)}{more}[/red]"
+                self._t("tui.history_failed", count=len(failed))
+                + ": "
+                + escape("; ".join(failed[:3]))
             )
         else:
-            self._set_status(f"[green]{self._t('tui.history_reanalyzed', count=processed)}[/green]")
+            self._set_status(self._t("tui.history_reanalyzed", count=processed))
 
 
 __all__ = [

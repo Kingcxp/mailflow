@@ -13,6 +13,7 @@ from mailflow.config import LLMConfig, MailFlowConfig, NotifierConfig, StorageCo
 from mailflow.contracts import (
     LLMCompletion,
     LLMRouter,
+    MailSource,
     ProcessingContext,
     ProcessorResult,
     ToolCall,
@@ -43,7 +44,8 @@ async def service(tmp_path: Path) -> Any:
     config = MailFlowConfig()
     config.general.daily_digest = False
     config.server.username, config.server.password = "admin", "test-secret"
-    storage = SQLiteStorage(StorageConfig(path=str(tmp_path / "mail.db")))
+    config.storage = StorageConfig(path=str(tmp_path / "mail.db"))
+    storage = SQLiteStorage(config.storage)
     await storage.initialize()
     instance = MailFlowService(
         config=config,
@@ -324,3 +326,139 @@ def test_remembered_remote_password_uses_vault_and_migrates_old_session(
     assert remote.load_session()["saved_password"] == "private"
     remote.clear_password()
     assert not vault and "saved_password" not in remote.load_session()
+
+
+async def test_clear_during_analysis_covers_future_mail_and_prevents_resurrection(
+    service: MailFlowService,
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Processor:
+        processor_id = "blocked"
+
+        async def process(self, mail: Any, context: ProcessingContext) -> ProcessorResult:
+            entered.set()
+            await release.wait()
+            return ProcessorResult(analysis=MailAnalysis(summary="Finished", urgency=Urgency.INFO))
+
+    await service.runtime.reconfigure(
+        config=service.config,
+        sources={},
+        notifiers=[],
+        notifier_configs=[],
+        pipeline=PipelineEngine([ProcessorBinding("blocked", "fake", Processor())]),
+    )
+    mail = make_record().mail.model_copy(
+        update={"received_at": datetime.now(UTC) + timedelta(days=30)}
+    )
+    task = asyncio.create_task(service.process_mail(mail))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert await service.clear_all_records() == (1, 0)
+        assert await service.purge_trash_now() == 1
+    finally:
+        release.set()
+        await task
+    assert not await service.list_mails() and not await service.list_trash()
+    assert await service.runtime.receive_mail(mail) is None
+    assert not await service.list_actions_all()
+
+
+async def test_history_analysis_updates_mail_before_batch_finishes_and_can_stop(
+    service: MailFlowService,
+) -> None:
+    import queue
+
+    from mailflow.config import MailAccountConfig
+    from mailflow_testkit.fakes import FakeMailSource
+    from mailflow_tui.app import MailFlowApp
+    from mailflow_tui.widgets import SelectionTable
+    from textual.widgets import Static, TabbedContent
+
+    from mailflow_test_support.ui import until
+
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    class Processor:
+        processor_id = "history"
+
+        async def process(self, mail: Any, context: ProcessingContext) -> ProcessorResult:
+            if mail.subject == "History 1":
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+            return ProcessorResult(
+                analysis=MailAnalysis(summary="Completed result", urgency=Urgency.INFO)
+            )
+
+    service.config.plugins.repositories = []
+    service.config.accounts = [MailAccountConfig(account_id="acct-1", provider="fake")]
+    mails = [make_record(str(i), subject=f"History {i}").mail for i in range(3)]
+    for i, mail in enumerate(mails):
+        mail.date = mail.received_at = datetime.now(UTC) - timedelta(days=i)
+    service.sources["acct-1"] = cast(MailSource, FakeMailSource(mails))
+    await service.runtime.reconfigure(
+        config=service.config,
+        sources={},
+        notifiers=[],
+        notifier_configs=[],
+        pipeline=PipelineEngine([ProcessorBinding("history", "fake", Processor())]),
+    )
+    app = MailFlowApp(service, queue.Queue())
+    async with app.run_test(size=(145, 48)) as pilot:
+        app.query_one(TabbedContent).active = "tab-mailboxes"
+        await pilot.pause()
+        app.query_one("#account-history", Button).press()
+        history = app.query_one("#history-table", SelectionTable)
+        await until(pilot, lambda: history.row_count == 3)
+        history.focus()
+        await pilot.press("ctrl+a")
+        analyze = app.query_one("#history-analyze", Button)
+        analyze.press()
+        await until(pilot, started.is_set)
+        first_id = mails[0].normalized_message_id()
+        mail_table = app.query_one("#mail-table", SelectionTable)
+        await until(pilot, lambda: first_id in {str(k.value) for k in mail_table.rows})
+        assert "Completed result" in str(app.query_one("#mail-summary", Static).render())
+        analyze.press()
+        await until(pilot, cancelled.is_set)
+        await until(pilot, lambda: str(analyze.label) == service.t("tui.history_analyze"))
+        records = await service.list_mails()
+        assert len(records) == 2
+        first = await service.get_mail(first_id)
+        second = await service.get_mail(mails[1].normalized_message_id())
+        assert first is not None and first.analysis is not None
+        assert first.analysis.summary == "Completed result"
+        assert second is not None and second.analysis_state == "pending"
+        assert len(history.checked_keys) == 2
+
+
+async def test_open_mailbox_refreshes_after_another_connection_clears_records(
+    service: MailFlowService,
+) -> None:
+    import queue
+
+    from mailflow_tui.app import MailFlowApp
+    from mailflow_tui.widgets import SelectionTable
+
+    from mailflow_test_support.ui import until
+
+    service.config.plugins.repositories = []
+    await service.storage.save_mail(make_record("external-clear"))
+    await service.start()
+    other = SQLiteStorage(service.config.storage)
+    await other.initialize()
+    try:
+        app = MailFlowApp(service, queue.Queue())
+        async with app.run_test(size=(145, 48)) as pilot:
+            table = app.query_one("#mail-table", SelectionTable)
+            await until(pilot, lambda: table.row_count == 1)
+            await other.cleanup_mail(datetime.max.replace(tzinfo=UTC))
+            await other.purge_trash(datetime.max.replace(tzinfo=UTC))
+            await until(pilot, lambda: table.row_count == 0)
+            assert not await service.list_mails() and not await service.list_trash()
+    finally:
+        await other.close()

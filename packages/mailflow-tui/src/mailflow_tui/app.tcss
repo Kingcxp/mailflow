@@ -111,6 +111,18 @@ SearchToggle.-active {
     text-style: italic;
 }
 
+#mail-processing-controls {
+    height: auto;
+    padding: 0 1;
+    align-vertical: middle;
+}
+
+#mail-processing-status {
+    width: 1fr;
+    height: auto;
+    color: $text-muted;
+}
+
 #mail-search-row Checkbox,
 #actions-search-row Checkbox,
 #market-search-row Checkbox,
@@ -1187,12 +1199,13 @@ ListEditScreen, EntryFormScreen {
 
 
 .secret-row {
-    height: auto;
-    align-vertical: middle;
+    height: 3;
+    align: right middle;
 }
 
 .secret-row Input {
-    width: 1fr;
+    width: 100%;
+    padding-right: 8;
 }
 
 .eye-btn {
@@ -1219,7 +1232,9 @@ ListEditScreen, EntryFormScreen {
 }
 
 .secret-row .eye-btn {
-    height: 3;
+    position: absolute;
+    height: 1;
+    margin-right: 1;
     content-align: center middle;
 }
 

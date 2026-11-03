@@ -435,6 +435,7 @@ class MailFlowService:
         self._stop_task: asyncio.Task[Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
         self._expiry_task: asyncio.Task[Any] | None = None
+        self._storage_watch_task: asyncio.Task[Any] | None = None
         self.bot_server: Any | None = None
         self.commands: Any | None = None  # CommandRouter wired by mailflow.commands
         self._reply_locks = _DraftLocks()
@@ -477,6 +478,12 @@ class MailFlowService:
                 self._expiry_task = asyncio.create_task(
                     self._schedule_expiry_loop(), name="schedule-expiry"
                 )
+                revision = getattr(self.storage, "data_version", None)
+                if callable(revision):
+                    baseline = await cast(Callable[[], Awaitable[int]], revision)()
+                    self._storage_watch_task = asyncio.create_task(
+                        self._watch_storage(baseline), name="storage-changes"
+                    )
                 self._started = True
                 self._needs_rebuild = False
             except BaseException:
@@ -498,10 +505,15 @@ class MailFlowService:
         self._needs_rebuild = True
         was_active = self._started or self._update_task is not None or self._expiry_task is not None
         self._stopped_event.set()
-        tasks = [task for task in (self._update_task, self._expiry_task) if task is not None]
+        tasks = [
+            task
+            for task in (self._update_task, self._expiry_task, self._storage_watch_task)
+            if task is not None
+        ]
         await cancel_tasks(tasks)
         self._update_task = None
         self._expiry_task = None
+        self._storage_watch_task = None
         # app shutdown: kill the children but KEEP the persisted running
         # status so the next boot's autostart resumes them.
         closed = await self._stop_component(
@@ -542,6 +554,19 @@ class MailFlowService:
         except Exception as exc:
             logger.warning("%s stop failed: %s", label, exc)
             return False
+
+    async def _watch_storage(self, previous: int) -> None:
+        revision = cast(Callable[[], Awaitable[int]], getattr(self.storage, "data_version", None))
+        while not self._stopped_event.is_set():
+            await asyncio.sleep(1)
+            try:
+                current = await revision()
+                if current != previous:
+                    previous = current
+                    await self.runtime.refresh_pending()
+                    await self.events.emit("mail.external.changed")
+            except Exception:
+                logger.exception("cannot check external storage changes")
 
     async def _rebuild_notifiers(self) -> None:
         """Hot-swap only the notifier components (targets changed). Keeps
@@ -643,6 +668,10 @@ class MailFlowService:
         """Wait until all queued mails have been processed."""
         return await self.runtime.wait_idle(timeout_seconds=timeout_seconds)
 
+    @admin_operation
+    async def set_analysis_paused(self, paused: bool) -> None:
+        await self.runtime.set_analysis_paused(paused)
+
     def on(self, event: str, handler: Callable[..., Awaitable[None]]) -> Callable[[], None]:
         return self.events.subscribe(event, handler)
 
@@ -672,6 +701,7 @@ class MailFlowService:
                     "message"
                 ]
         return RuntimeSnapshot(
+            analysis_paused=self.runtime.analysis_paused,
             version=__version__,
             language=self.i18n.language,
             timezone=self.config.general.timezone,
@@ -2194,18 +2224,23 @@ Return every candidate in this batch."""
                 if await self.storage.delete_custom_action(item.item_id):
                     actions += 1
             await self._set_dismissed_keys(frozenset())
-            # Preserve receive checkpoints and deletion markers even after trash
-            # is purged. An in-flight analysis or the next poll must not bring
-            # cleared mail back; explicitly restoring/reanalysing still can.
-            for record in await self.storage.list_mails():
-                for identity in {record.record_id, record.mail.normalized_message_id()}:
-                    await self.storage.set_preference(f"mail.deleted.{identity}", "1")
-            moved = await self.storage.cleanup_mail(datetime.max.replace(tzinfo=UTC))
+            moved = await self._clear_mail_records()
         logger.info(
             "cleared %d mail(s) to the trash, removed %d schedule entry(ies)", moved, actions
         )
         await self.events.emit("mailflow.records.cleared", mails=moved, actions=actions)
         return moved, actions
+
+    async def _clear_mail_records(self) -> int:
+        # Called under the action/write locks. Preserve receive checkpoints and
+        # deletion markers after purging; only explicit restore/reanalysis may
+        # bring a cleared record back.
+        for record in await self.storage.list_mails():
+            for identity in {record.record_id, record.mail.normalized_message_id()}:
+                await self.storage.set_preference(f"mail.deleted.{identity}", "1")
+        moved = await self.storage.cleanup_mail(datetime.max.replace(tzinfo=UTC))
+        await self.runtime.refresh_pending()
+        return moved
 
     @admin_operation
     async def purge_trash_now(self) -> int:
@@ -2224,7 +2259,8 @@ Return every candidate in this batch."""
     @admin_operation
     async def run_cleanup_wide(self) -> tuple[int, int]:
         """Move every active mail to trash and purge the trash permanently."""
-        moved, _ = await self.clear_all_records()
+        async with self.runtime.action_store.lock, self.runtime.write_lock:
+            moved = await self._clear_mail_records()
         purged = await self.purge_trash_now()
         return moved, purged
 

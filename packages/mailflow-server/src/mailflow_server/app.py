@@ -445,6 +445,11 @@ def create_app(service: MailFlowService) -> FastAPI:
     async def query_mails(body: MailQuery, _: None = Depends(guard)) -> Any:
         return _jsonable(await service.query_mails(body))
 
+    @app.post("/analysis/pause")
+    async def pause_analysis(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        await service.set_analysis_paused(bool(body.get("paused", True)))
+        return _jsonable(service.snapshot())
+
     @app.post("/mails/batch")
     async def batch_mail(body: dict[str, Any], _: None = Depends(guard)) -> Any:
         return _jsonable(

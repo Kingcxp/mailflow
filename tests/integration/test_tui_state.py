@@ -514,3 +514,33 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         await settle(pilot)
         assert isinstance(app.screen, ReplyModal)
         assert app.screen.query_one("#reply-body", TextArea).text == "I will attend."
+
+
+async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any) -> None:
+    service, view, app, _emit, _failures = host
+    for index in range(3):
+        await service.storage.save_mail(make_record(f"select-{index}", subject=f"Select {index}"))
+    async with app.run_test(size=(145, 48)) as pilot:
+        await settle(pilot)
+        table = app.query_one("#mail-table", SelectionTable)
+        table.focus()
+        await pilot.press("space", "down", "down", "f3")
+        assert len(table.checked_keys) == 3
+        await pilot.press("escape", "f2")
+        await pilot.click(table, offset=(25, 2))
+        assert len(table.checked_keys) == 1
+        await pilot.click(table, offset=(25, 3))
+        assert len(table.checked_keys) == 2
+        await pilot.press("ctrl+a")
+        assert len(table.checked_keys) == 3
+        await pilot.press("escape", "f2")
+        assert not table.checked_keys
+        await view.set_analysis_paused(True)
+        app.schedule_reload()
+        await settle(pilot)
+        button = app.query_one("#analysis-toggle", Button)
+        assert button.display and view.snapshot().analysis_paused
+        button.press()
+        await settle(pilot)
+        assert not service.snapshot().analysis_paused
+        assert not view.snapshot().analysis_paused

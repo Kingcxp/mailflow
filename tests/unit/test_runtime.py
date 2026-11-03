@@ -907,6 +907,12 @@ async def test_reload_preserves_queued_and_inflight_mail_when_queue_shrinks() ->
     )
     await runtime.start()
     await asyncio.wait_for(entered.wait(), timeout=1)
+    await runtime.set_analysis_paused(True)
+    assert runtime.analysis_paused
+    assert all(record.analysis_state == "pending" for record in storage.saved)
+    entered.clear()
+    await runtime.set_analysis_paused(False)
+    await asyncio.wait_for(entered.wait(), timeout=1)
     old_tasks = list(runtime._tasks)  # pyright: ignore[reportPrivateUsage]
     changed = config.model_copy(deep=True)
     changed.general.workers = 3
@@ -924,6 +930,7 @@ async def test_reload_preserves_queued_and_inflight_mail_when_queue_shrinks() ->
             ),
             timeout=3,
         )
+        assert not runtime.analysis_paused
         assert await runtime.wait_idle()
         assert len(storage.saved) == len(mails)
         assert runtime._queue.maxsize == 1  # pyright: ignore[reportPrivateUsage]

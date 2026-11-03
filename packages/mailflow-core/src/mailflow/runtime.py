@@ -146,6 +146,7 @@ class MailFlowRuntime:
         # another source/worker set.
         self._lifecycle_lock = asyncio.Lock()
         self._running = False
+        self._analysis_paused = False
         self._source_generation = 0
         self._processing_generation = 0
         self._account_status: dict[str, str] = {}
@@ -178,6 +179,9 @@ class MailFlowRuntime:
                 self._closed = False
             self._started_at = datetime.now()
             try:
+                self._analysis_paused = (
+                    await self._storage.get_preference("mail.analysis.paused") == "1"
+                )
                 # preload persisted IMAP watermarks so source factories can resume
                 # polling where the previous run left off
                 for account in self._account_configs:
@@ -260,11 +264,37 @@ class MailFlowRuntime:
             )
 
     def _start_processing_tasks(self) -> None:
-        for index in range(self._config.general.workers):
-            self._tasks.append(asyncio.create_task(self._worker(index), name=f"worker-{index}"))
+        self._start_workers()
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="cleanup"))
         self._tasks.append(asyncio.create_task(self._reminder_loop(), name="reminders"))
-        self._schedule_warmup()
+        if not self._analysis_paused:
+            self._schedule_warmup()
+
+    def _start_workers(self) -> None:
+        if not self._analysis_paused:
+            for index in range(self._config.general.workers):
+                self._tasks.append(asyncio.create_task(self._worker(index), name=f"worker-{index}"))
+
+    @property
+    def analysis_paused(self) -> bool:
+        return self._analysis_paused
+
+    async def set_analysis_paused(self, paused: bool) -> None:
+        async with self._lifecycle_lock:
+            await self._storage.set_preference("mail.analysis.paused", "1" if paused else "")
+            if paused != self._analysis_paused:
+                self._analysis_paused = paused
+                if paused:
+                    self._processing_generation += 1
+                    await self._stop_named_tasks(
+                        lambda task: (
+                            task.get_name().startswith("worker-") or task.get_name() == "llm-warmup"
+                        ),
+                        timeout_seconds=2.0,
+                    )
+                elif self._running:
+                    self._start_workers()
+        await self._events.emit("mail.analysis.paused", paused=paused)
 
     def _schedule_warmup(self) -> None:
         """Load the analysis model in the background.
@@ -294,10 +324,11 @@ class MailFlowRuntime:
             await self._stop_named_tasks(
                 lambda task: task.get_name().startswith("source-"), timeout_seconds=1.0
             )
-            try:
-                await bounded(self._queue.join(), timeout_seconds=3.0, label="mail queue drain")
-            except TimeoutError:
-                logger.warning("mail queue did not drain before shutdown; retained for restart")
+            if not self._analysis_paused:
+                try:
+                    await bounded(self._queue.join(), timeout_seconds=3.0, label="mail queue drain")
+                except TimeoutError:
+                    logger.warning("mail queue did not drain before shutdown; retained for restart")
             self._processing_generation += 1
             await cancel_tasks(self._tasks)
             self._tasks = []
@@ -554,6 +585,11 @@ class MailFlowRuntime:
             ),
         }
 
+    async def refresh_pending(self) -> None:
+        for identity in list(self._pending_mail_accounts):
+            if await self._storage.get_preference(f"mail.deleted.{identity}"):
+                self._pending_mail_accounts.pop(identity, None)
+
     def source_status(self, account_id: str, ok: bool, count: int = 0, error: str = "") -> None:
         info = self._sync_info.setdefault(account_id, {})
         self._account_status[account_id] = "running" if ok else "retrying"
@@ -652,90 +688,115 @@ class MailFlowRuntime:
                 if latest is not None:
                     previous = latest.model_copy(update={"analysis_state": "analysing"})
                     await self._persist_with_retry(previous)
-            await self._events.emit("mail.analysis.started", record_id=previous.record_id)
-            record_id = previous.record_id
-            if not mail.image_text.strip():
-                mail = mail.model_copy(update={"image_text": previous.mail.image_text})
-            from mailflow.ocr import apply_image_text
+            try:
+                await self._events.emit("mail.analysis.started", record_id=previous.record_id)
+                record_id = previous.record_id
+                if not mail.image_text.strip():
+                    mail = mail.model_copy(update={"image_text": previous.mail.image_text})
+                from mailflow.ocr import apply_image_text
 
-            account = self._config.account(mail.account_id)
-            enabled = (
-                bool(account.options.get("ocr_images", self._config.general.ocr_images))
-                if account
-                else self._config.general.ocr_images
-            )
-            mail = await asyncio.to_thread(apply_image_text, mail, enabled=enabled)
-            guidelines = await self._storage.get_preference("feedback.guidelines") or ""
-            local_feedback = await self._storage.get_preference(f"feedback.{record_id}") or ""
-            analysis, notes, _, _ = await self._pipeline.process(
-                mail,
-                mail.account_id,
-                timezone=self._config.general.timezone,
-                feedback_guidelines="\n".join(
-                    part for part in (guidelines, local_feedback) if part
-                ),
-                user_profile=(await self._storage.get_preference("feedback.profile") or ""),
-            )
-            if generation != self._processing_generation:
-                raise asyncio.CancelledError
-            if mail.ingestion == "history" and not mail.include_past_actions:
-                analysis = analysis.model_copy(
-                    update={
-                        "action_items": [
-                            a
-                            for a in analysis.action_items
-                            if a.due_at is None
-                            or to_utc(a.due_end or a.due_at) >= datetime.now(UTC)
-                        ]
-                    }
+                account = self._config.account(mail.account_id)
+                enabled = (
+                    bool(account.options.get("ocr_images", self._config.general.ocr_images))
+                    if account
+                    else self._config.general.ocr_images
                 )
-            failed = any(note.status == "failed" for note in notes)
-            async with self.write_lock:
+                mail = await asyncio.to_thread(apply_image_text, mail, enabled=enabled)
+                guidelines = await self._storage.get_preference("feedback.guidelines") or ""
+                local_feedback = await self._storage.get_preference(f"feedback.{record_id}") or ""
+                analysis, notes, _, _ = await self._pipeline.process(
+                    mail,
+                    mail.account_id,
+                    timezone=self._config.general.timezone,
+                    feedback_guidelines="\n".join(
+                        part for part in (guidelines, local_feedback) if part
+                    ),
+                    user_profile=(await self._storage.get_preference("feedback.profile") or ""),
+                )
                 if generation != self._processing_generation:
                     raise asyncio.CancelledError
-                if await self._storage.get_preference(f"mail.deleted.{identity}"):
-                    return None
-                # A user can edit urgency while the model is working. Read the
-                # latest record at commit, preserving all local record fields.
-                previous = await self._storage.get_mail(record_id) or previous
-                if (
-                    (failed or analysis.summary_is_fallback)
-                    and previous.analysis is not None
-                    and not previous.analysis_is_fallback
-                ):
-                    record = previous.model_copy(
+                if mail.ingestion == "history" and not mail.include_past_actions:
+                    analysis = analysis.model_copy(
                         update={
-                            "processor_notes": [*previous.processor_notes, *notes][-_NOTES_KEPT:],
+                            "action_items": [
+                                a
+                                for a in analysis.action_items
+                                if a.due_at is None
+                                or to_utc(a.due_end or a.due_at) >= datetime.now(UTC)
+                            ]
                         }
                     )
-                    logger.warning("re-analysis of %r failed; kept previous analysis", record_id)
-                else:
-                    actions = await self._stable_actions(record_id, analysis.action_items, previous)
-                    analysis = analysis.model_copy(update={"action_items": actions})
-                    persisted_mail = mail.model_copy(deep=True)
-                    for attachment in persisted_mail.attachments:
-                        attachment.data = None
-                    changes: dict[str, Any] = {
-                        "mail": persisted_mail,
-                        "auto_urgency": analysis.urgency,
-                        "analysis": analysis,
-                        "processor_notes": notes,
-                        "archived": previous.archived
-                        or (previous.analysis is None and analysis.archive_requested),
-                    }
-                    record = previous.model_copy(update=changes)
-                record = record.model_copy(
-                    update={
-                        "analysis_state": "failed" if failed else "ready",
-                        "ingestion": mail.ingestion,
-                    }
-                )
-                await self._persist_with_retry(record)
-            await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
-            self._pending_mail_accounts.pop(mail.normalized_message_id(), None)
-            if mail.notify_requested or (mail.ingestion == "live" and not _skip_dedup):
-                await self._notify(record, resend=mail.notify_requested)
-            return record
+                failed = any(note.status == "failed" for note in notes)
+                async with self.write_lock:
+                    if generation != self._processing_generation:
+                        raise asyncio.CancelledError
+                    if await self._storage.get_preference(f"mail.deleted.{identity}"):
+                        return None
+                    # A user can edit urgency while the model is working. Read the
+                    # latest record at commit, preserving all local record fields.
+                    previous = await self._storage.get_mail(record_id) or previous
+                    if (
+                        (failed or analysis.summary_is_fallback)
+                        and previous.analysis is not None
+                        and not previous.analysis_is_fallback
+                    ):
+                        record = previous.model_copy(
+                            update={
+                                "processor_notes": [*previous.processor_notes, *notes][
+                                    -_NOTES_KEPT:
+                                ],
+                            }
+                        )
+                        logger.warning(
+                            "re-analysis of %r failed; kept previous analysis", record_id
+                        )
+                    else:
+                        actions = await self._stable_actions(
+                            record_id, analysis.action_items, previous
+                        )
+                        analysis = analysis.model_copy(update={"action_items": actions})
+                        persisted_mail = mail.model_copy(deep=True)
+                        for attachment in persisted_mail.attachments:
+                            attachment.data = None
+                        changes: dict[str, Any] = {
+                            "mail": persisted_mail,
+                            "auto_urgency": analysis.urgency,
+                            "analysis": analysis,
+                            "processor_notes": notes,
+                            "archived": previous.archived
+                            or (previous.analysis is None and analysis.archive_requested),
+                        }
+                        record = previous.model_copy(update=changes)
+                    record = record.model_copy(
+                        update={
+                            "analysis_state": "failed" if failed else "ready",
+                            "ingestion": mail.ingestion,
+                        }
+                    )
+                    await self._persist_with_retry(record)
+                self._pending_mail_accounts.pop(mail.normalized_message_id(), None)
+                await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
+                if mail.notify_requested or (mail.ingestion == "live" and not _skip_dedup):
+                    await self._notify(record, resend=mail.notify_requested)
+                return record
+            except asyncio.CancelledError:
+                # Cancellation keeps the original mail and the last good analysis.
+                # Pending queue work may resume later; it must not look active now.
+                async with self.write_lock:
+                    current = await self._storage.get_mail(previous.record_id)
+                    if current is not None and current.analysis_state == "analysing":
+                        state = (
+                            "failed"
+                            if any(n.status == "failed" for n in current.processor_notes)
+                            else "ready"
+                            if current.analysis is not None
+                            else "pending"
+                        )
+                        await self._storage.save_mail(
+                            current.model_copy(update={"analysis_state": state})
+                        )
+                await self._events.emit("mail.analysis.cancelled", record_id=previous.record_id)
+                raise
 
     async def find_mail_record(self, mail: MailMessage) -> MailRecord | None:
         """Resolve both scoped identities and records kept from older versions."""

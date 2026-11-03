@@ -378,6 +378,11 @@ class SQLiteStorage:
             reverse=True,
         )
 
+    async def data_version(self) -> int:
+        """Changes made by other connections, including one-shot CLI commands."""
+        async with self._lock:
+            return int(self._check_conn().execute("PRAGMA data_version").fetchone()[0])
+
     async def cleanup_mail(self, before: datetime) -> int:
         """Move active mail received before ``before`` into the trash."""
         cutoff = before.timestamp()

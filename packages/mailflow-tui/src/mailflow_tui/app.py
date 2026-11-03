@@ -804,8 +804,11 @@ class MailPane(Vertical):
             yield Button(self._service.t("tui.smart_action"), id="smart-action", variant="primary")
         yield RichLog(id="smart-action-progress", max_lines=200, wrap=True)
         yield Static("", id="mail-empty-hint")
+        with Horizontal(id="mail-processing-controls"):
+            yield Static("", id="mail-processing-status")
+            yield Button(self._service.t("tui.analysis_pause"), id="analysis-toggle")
         with Horizontal():
-            yield SelectionTable(id="mail-table")
+            yield SelectionTable(t=self._service.t, id="mail-table")
             with ScrollableContainer(id="mail-detail"):
                 for ident in (
                     "mail-analysis-status",
@@ -1039,6 +1042,41 @@ class MailPane(Vertical):
             self._sync_urgency_select(selected)
         await self._show_selected(cached=True)
         self._sync_selection_controls()
+        self.sync_analysis_controls()
+
+    def sync_analysis_controls(self) -> None:
+        snapshot = self._service.snapshot()
+        pending = max(
+            sum(account.pending_count for account in snapshot.accounts),
+            sum(r.analysis_state in {"pending", "analysing"} for r in self._mail_cache or []),
+        )
+        paused = snapshot.analysis_paused
+        status = self.query_one_optional("#mail-processing-status", Static)
+        if status is not None:
+            status.update(
+                self._service.t(
+                    "tui.analysis_queue_paused" if paused else "tui.analysis_queue", count=pending
+                )
+            )
+        button = self.query_one_optional("#analysis-toggle", Button)
+        if button is not None:
+            button.label = self._service.t(
+                "tui.analysis_resume" if paused else "tui.analysis_pause"
+            )
+        controls = self.query_one_optional("#mail-processing-controls", Horizontal)
+        if controls is not None:
+            controls.display = bool(pending or paused)
+
+    async def _toggle_analysis(self) -> None:
+        button = self.query_one("#analysis-toggle", Button)
+        button.disabled = True
+        try:
+            await self._service.set_analysis_paused(not self._service.snapshot().analysis_paused)
+            await self.refresh_mail()
+        except Exception as exc:
+            self._set_operation_status(escape(error_text(exc, self._service.t)))
+        finally:
+            button.disabled = False
 
     def _mail_cells(self, record: MailRecord) -> tuple[Any, ...]:
         urgency = record.effective_urgency
@@ -1049,6 +1087,13 @@ class MailPane(Vertical):
             RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
             RichText(
                 ("★ " if record.starred else "")
+                + (
+                    "↻ "
+                    if record.analysis_state == "analysing"
+                    else "… "
+                    if record.analysis_state == "pending"
+                    else ""
+                )
                 + ("● " if not record.is_read else "")
                 + (record.mail.subject or self._service.t("tui.mail_no_subject"))
             ),
@@ -1395,6 +1440,9 @@ class MailPane(Vertical):
                 "#mail-empty-hint",
                 self._service.t("tui.selection_count", count=count, hidden=hidden),
             )
+            self._selection_hint_visible = True
+        elif table.selection_mode:
+            self._set_static("#mail-empty-hint", self._service.t("tui.selection_help"))
             self._selection_hint_visible = True
         elif self._selection_hint_visible:
             self._set_static("#mail-empty-hint", "")
@@ -1904,6 +1952,9 @@ class MailPane(Vertical):
 
     async def _handle_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
+        if button_id == "analysis-toggle":
+            self.run_worker(self._toggle_analysis(), group="analysis-control", exit_on_error=False)
+            return
         if button_id == "smart-action":
             # The search itself awaits network I/O. Keep the message handler
             # free so a second press can cancel it and progress updates can be
@@ -2635,7 +2686,7 @@ class ActionsPane(Vertical):
                 id="actions-type-filter",
                 allow_blank=False,
             )
-        yield SelectionTable(id="actions-table")
+        yield SelectionTable(t=self._service.t, id="actions-table")
         with Horizontal(id="actions-buttons"):
             yield Button(
                 self._service.t("tui.btn_add_todo"),
@@ -4773,6 +4824,8 @@ class MailFlowApp(App[None]):
         # panes that survive remounting still need their statics retranslated
         for pane in self.query(LogsPane):
             pane.relabel()
+        for table in self.query(SelectionTable):
+            table.relabel()
         await pilot_pause_if_possible(self)
 
     async def _on_mail_processed(self, event: str, **payload: Any) -> None:
@@ -4790,19 +4843,21 @@ class MailFlowApp(App[None]):
     def _schedule_reload(self) -> None:
         # a bulk re-analysis emits one event per mail: coalesce the burst
         # into a single refresh instead of queueing a full reload per mail
+        self._reload_requested = True
         if getattr(self, "_reload_scheduled", False):
             return
         self._reload_scheduled = True
 
-        def _run() -> None:
-            self._reload_scheduled = False
-            self.run_worker(cast(Any, self._reload_guarded))
-
-        self.call_after_refresh(_run)
+        self.run_worker(cast(Any, self._reload_guarded))
 
     async def _reload_guarded(self) -> None:
-        async with self._refresh_lock:
-            await self._reload_all()
+        try:
+            while self._reload_requested:
+                self._reload_requested = False
+                async with self._refresh_lock:
+                    await self._reload_all()
+        finally:
+            self._reload_scheduled = False
 
     async def _reload_all(self) -> None:
         for pane_type in (MailPane, ActionsPane, RuntimePane):
@@ -4816,6 +4871,10 @@ class MailFlowApp(App[None]):
                 await pane.refresh_actions()
             else:
                 await pane.refresh_runtime()  # type: ignore[attr-defined]
+        # The remote runtime pane updates the shared snapshot; reflect its
+        # latest queue/paused state in the mail controls in this same refresh.
+        for mail_pane in self.query(MailPane):
+            mail_pane.sync_analysis_controls()
 
     def _drain_logs(self) -> None:
         log_query = self.query(LogsPane)

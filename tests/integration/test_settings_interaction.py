@@ -672,3 +672,38 @@ async def test_mapping_editor_keeps_edits_after_save_failure() -> None:
         form.query_one("#list-edit-save", Button).press()
         await settle(pilot)
         assert results == ["access_token = draft-secret"]
+
+
+@pytest.mark.parametrize("width", [85, 130])
+async def test_password_fields_align_and_visibility_toggle_keeps_input(width: int) -> None:
+    import mailflow_tui.app as ui
+
+    service = commands_service()
+    registrar = PluginRegistrar(service.registry, service.config, "fake")
+    registrar.add_source("fake", unused_provider)
+    registrar.add_form_fields(
+        ComponentKind.MAIL_SOURCE,
+        "fake",
+        (FormField("login"), FormField("password", secret=True)),
+    )
+
+    class FormApp(App[None]):
+        CSS_PATH = Path(ui.__file__).with_name("app.tcss")
+
+    app = FormApp()
+    form = EntryFormScreen(service, "accounts", values={"account_id": "test", "provider": "fake"})
+    async with app.run_test(size=(width, 48)) as pilot:
+        app.push_screen(form)
+        await settle(pilot)
+        login = form.query_one("#extra-login", Input)
+        password = form.query_one("#extra-password", Input)
+        eye = form.query_one("#extra-password-eye", Button)
+        password.scroll_visible(animate=False)
+        await pilot.pause()
+        assert (password.region.x, password.region.width) == (login.region.x, login.region.width)
+        assert password.region.x < eye.region.x < eye.region.right < password.region.right
+        password.value = "keep-this-secret"
+        await pilot.click(eye)
+        assert not password.password and password.value == "keep-this-secret"
+        await pilot.click(eye)
+        assert password.password and password.value == "keep-this-secret"

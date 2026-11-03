@@ -17,11 +17,14 @@ harmless because the widget's display is irrelevant once removed.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, ClassVar, cast
 
+from mailflow.i18n import I18n
 from rich.text import Text
 from textual import events
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.css.query import QueryError
 from textual.message import Message
 from textual.widgets import Button, DataTable, Select
@@ -72,7 +75,22 @@ class SafeSelect(Select[object]):  # pyright: ignore[reportUnsafeMultipleInherit
         self.post_message(changed)
 
 
-__all__ = ["SafeSelect", "SearchToggle", "SelectionTable"]
+__all__ = ["SafeSelect", "SearchToggle", "SecretRow", "SelectionTable"]
+
+
+class SecretRow(Horizontal):
+    """Place the visibility control inside a full-width password input."""
+
+    def on_mount(self) -> None:
+        self._place_toggle()
+
+    def on_resize(self) -> None:
+        self._place_toggle()
+
+    def _place_toggle(self) -> None:
+        for button in self.query(Button):
+            button.active_effect_duration = 0
+            button.styles.offset = (max(0, self.size.width - 7), 1)
 
 
 class SelectionTable(DataTable[Any]):
@@ -84,6 +102,8 @@ class SelectionTable(DataTable[Any]):
         Binding("escape", "clear_checks", show=False),
         Binding("shift+up", "extend_selection(-1)", show=False),
         Binding("shift+down", "extend_selection(1)", show=False),
+        Binding("f2", "selection_mode", show=False),
+        Binding("f3", "select_range", show=False),
     ]
 
     class SelectionChanged(Message):
@@ -91,10 +111,34 @@ class SelectionTable(DataTable[Any]):
             super().__init__()
             self.table = table
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, t: Callable[..., str] | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self._t = t or I18n().t
         self.checked_keys: set[str] = set()
         self._anchor: str | None = None
+        self.selection_mode = False
+
+    def on_mount(self) -> None:
+        self.relabel()
+
+    def on_focus(self) -> None:
+        self.relabel()
+
+    def relabel(self) -> None:
+        self._bindings.bind("f2", "selection_mode", self._t("tui.selection_mode"))
+        self._bindings.bind("f3", "select_range", self._t("tui.selection_range"))
+        self._bindings.bind("space", "toggle_check", self._t("tui.selection_toggle"))
+        self._bindings.bind("ctrl+a", "toggle_all", self._t("tui.selection_all"))
+        self.tooltip = self._t("tui.selection_help")
+
+    def action_selection_mode(self) -> None:
+        self.selection_mode = not self.selection_mode
+        self.post_message(self.SelectionChanged(self))
+
+    def action_select_range(self) -> None:
+        key = self._key_at(self.cursor_row)
+        if key is not None:
+            self._check_range(key)
 
     def check_label(self, key: str) -> Text:
         return Text("[x]" if key in self.checked_keys else "[ ]", style="bold cyan")
@@ -159,7 +203,7 @@ class SelectionTable(DataTable[Any]):
             return
         if row == -1 and column == 0:
             self.action_toggle_all()
-        elif row >= 0 and (column == 0 or event.ctrl or event.shift):
+        elif row >= 0 and (column == 0 or event.ctrl or event.shift or self.selection_mode):
             key = self._key_at(row)
             if key is None:
                 return

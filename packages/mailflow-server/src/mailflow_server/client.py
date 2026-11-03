@@ -353,6 +353,10 @@ class RemoteClient:
         )
         return result
 
+    async def set_analysis_paused(self, paused: bool) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request("POST", "/analysis/pause", {"paused": paused})
+        return result
+
     async def fetch_attachment(self, record_id: str, index: int) -> bytes:
         import base64
 

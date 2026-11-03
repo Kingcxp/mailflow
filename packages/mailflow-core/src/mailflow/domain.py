@@ -619,6 +619,7 @@ class RuntimeSnapshot(BaseModel):
     llms: list[LLMSnapshot] = Field(default_factory=lambda: [])
     processors: list[ProcessorBindingSnapshot] = Field(default_factory=lambda: [])
     storage: str | None = None
+    analysis_paused: bool = False
 
     def plugin(self, plugin_id: str) -> PluginSnapshot | None:
         return next((p for p in self.plugins if p.plugin_id == plugin_id), None)
