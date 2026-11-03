@@ -467,7 +467,7 @@ async def validate(
         "endpoint": "https://example.test",
         "feeds": ["https://example.test/a/feed.xml", "https://example.test/b/feed.xml"],
         "interval_seconds": 0.01,
-        "analyze_backlog": True,
+        "initial_sync": "all",
         "stream": False,
         "from_addr": "sender@example.test",
         "to": ["receiver@example.test"],
