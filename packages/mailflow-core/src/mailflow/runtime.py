@@ -631,6 +631,9 @@ class MailFlowRuntime:
         # Fixed stripes keep memory bounded while serializing concurrent
         # deliveries and explicit re-analysis of the same mail.
         async with self._record_locks[hash(identity) % len(self._record_locks)]:
+            if _skip_dedup:
+                async with self.write_lock:
+                    await self._storage.set_preference(f"mail.deleted.{identity}", "")
             previous = await self.find_mail_record(mail)
             if await self._storage.get_preference(f"mail.deleted.{identity}") and not _skip_dedup:
                 return None
@@ -644,8 +647,6 @@ class MailFlowRuntime:
                 previous = await self.receive_mail(mail)
                 if previous is None:
                     return None
-            if _skip_dedup:
-                await self._storage.set_preference(f"mail.deleted.{identity}", "")
             async with self.write_lock:
                 latest = await self._storage.get_mail(previous.record_id)
                 if latest is not None:

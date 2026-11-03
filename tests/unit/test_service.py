@@ -628,7 +628,8 @@ class TestClearAllRecords:
         assert await storage.get_preference("actions.dismissed") == "[]"
         assert await service.clear_all_records() == (0, 0)
         assert len(await service.list_trash()) == 2
-        restored = await service.process_mail(record.mail)
+        assert await service.process_mail(record.mail) is None
+        restored = await service.process_mail(record.mail, force=True)
         assert restored is not None
         assert await service.storage.get_mail(restored.record_id) is not None
         assert await service.purge_trash_now() == 2

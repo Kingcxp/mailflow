@@ -77,6 +77,7 @@
       "shell_prompt": "mailflow> ",
       "shell_welcome": "MailFlow 命令行。输入 'help' 查看命令，'exit' 退出。",
       "snapshot_title": "MailFlow 快照",
+      "executing": "正在处理本地数据…",
       "started": "MailFlow 已启动。按 Ctrl+C 停止。",
       "stopped": "MailFlow 已停止。"
     },

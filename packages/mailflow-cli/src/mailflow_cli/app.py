@@ -93,17 +93,20 @@ def command(
     async def _run() -> None:
         config = _load_config(config_path)
         manager = create_plugin_manager(config)
-        service = await start_service(
-            config,
-            plugin_manager=manager,
-            discover_plugins=False,
-            enable_logging=False,
-            config_path=config_path,
-        )
+        t = I18n(config.general.language or config.i18n.language).t
+        with console.status(t("cli.executing")):
+            service = await start_service(
+                config,
+                plugin_manager=manager,
+                discover_plugins=False,
+                enable_logging=False,
+                config_path=config_path,
+                background=False,
+            )
         router = CommandRouter(service)
         try:
-            await service.wait_idle(timeout_seconds=20)  # let queued mail finish processing first
-            response = await router.execute(command_text)
+            with console.status(service.t("cli.executing")):
+                response = await router.execute(command_text)
             _render_response(response)
             if not response.ok:
                 # finally below still stops the service; a failed business
@@ -131,6 +134,7 @@ def shell(
             config_path=config_path,
             plugin_manager=manager,
             discover_plugins=False,
+            background=False,
         )
         router = CommandRouter(service)
         try:
@@ -183,10 +187,13 @@ def snapshot(
     async def _run() -> None:
         manager = create_plugin_manager(config)
         service = await start_service(
-            config, plugin_manager=manager, discover_plugins=False, enable_logging=False
+            config,
+            plugin_manager=manager,
+            discover_plugins=False,
+            enable_logging=False,
+            background=False,
         )
         try:
-            await service.wait_idle(timeout_seconds=20)
             snapshot_data = service.snapshot()
             if json_output:
                 print(

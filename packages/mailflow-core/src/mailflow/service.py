@@ -426,6 +426,7 @@ class MailFlowService:
 
         self.subscriptions = Subscriptions(storage)
         self._started = False
+        self._runtime_owned = False
         self._resources_closed = False
         self._needs_rebuild = False
         self._lifecycle_lock = asyncio.Lock()
@@ -460,6 +461,7 @@ class MailFlowService:
                     # start. Rebuild their objects before starting again.
                     await self._reload_runtime_unlocked(restart_sources=True)
                 await self._load_persisted_language()
+                self._runtime_owned = True
                 await self.runtime.start()
                 # bot_server must exist BEFORE gateways resume: the supervisor's
                 # first healthy poll runs ensure_bridge with the persisted options,
@@ -515,10 +517,13 @@ class MailFlowService:
             if bot_closed:
                 self.bot_server = None
             closed = bot_closed and closed
-        closed = (
-            await self._stop_component(self.runtime.stop(), timeout_seconds=10.0, label="runtime")
-            and closed
-        )
+        if self._runtime_owned:
+            runtime_closed = await self._stop_component(
+                self.runtime.stop(), timeout_seconds=10.0, label="runtime"
+            )
+            if runtime_closed:
+                self._runtime_owned = False
+            closed = runtime_closed and closed
         closed = (
             await self._stop_component(self.storage.close(), timeout_seconds=3.0, label="storage")
             and closed
@@ -2183,17 +2188,19 @@ Return every candidate in this batch."""
         too — keeping them would leave the mailbox permanently hiding entries
         for mails nobody can see any more.
         """
-        actions = 0
-        for item in await self.storage.list_custom_actions():
-            if await self.storage.delete_custom_action(item.item_id):
-                actions += 1
-
-        # Dismissals refer to mail that is leaving the active mailbox.
-        await self._set_dismissed_keys(frozenset())
-
-        # a horizon past every stored mail moves them all; the trash itself is
-        # left alone (purging it is the separate, explicit step)
-        moved = await self.storage.cleanup_mail(utcnow() + timedelta(days=1))
+        async with self.runtime.action_store.lock, self.runtime.write_lock:
+            actions = 0
+            for item in await self.storage.list_custom_actions():
+                if await self.storage.delete_custom_action(item.item_id):
+                    actions += 1
+            await self._set_dismissed_keys(frozenset())
+            # Preserve receive checkpoints and deletion markers even after trash
+            # is purged. An in-flight analysis or the next poll must not bring
+            # cleared mail back; explicitly restoring/reanalysing still can.
+            for record in await self.storage.list_mails():
+                for identity in {record.record_id, record.mail.normalized_message_id()}:
+                    await self.storage.set_preference(f"mail.deleted.{identity}", "1")
+            moved = await self.storage.cleanup_mail(datetime.max.replace(tzinfo=UTC))
         logger.info(
             "cleared %d mail(s) to the trash, removed %d schedule entry(ies)", moved, actions
         )
@@ -2208,7 +2215,8 @@ Return every candidate in this batch."""
         collection path: until this runs, cleared mail is recoverable with
         :meth:`restore_mail`.
         """
-        purged = await self.storage.purge_trash(utcnow() + timedelta(days=36500))
+        async with self.runtime.write_lock:
+            purged = await self.storage.purge_trash(datetime.max.replace(tzinfo=UTC))
         logger.info("purged %d mail(s) from the trash", purged)
         await self.events.emit("mailflow.trash.purged", count=purged)
         return purged
@@ -2216,12 +2224,8 @@ Return every candidate in this batch."""
     @admin_operation
     async def run_cleanup_wide(self) -> tuple[int, int]:
         """Move every active mail to trash and purge the trash permanently."""
-        from mailflow.domain import utcnow
-
-        horizon_active = utcnow() + timedelta(days=1)
-        horizon_trash = utcnow() + timedelta(days=36500)
-        moved = await self.storage.cleanup_mail(horizon_active)
-        purged = await self.storage.purge_trash(horizon_trash)
+        moved, _ = await self.clear_all_records()
+        purged = await self.purge_trash_now()
         return moved, purged
 
     @admin_operation
@@ -3823,11 +3827,14 @@ async def start_service(
     output: TextIO | None = None,
     extra_log_handlers: Sequence[logging.Handler] | None = None,
     enable_logging: bool = True,
+    background: bool = True,
 ) -> MailFlowService:
-    """Start the complete service; the single entry point for every host.
+    """Open the service, optionally starting its background tasks.
 
     ``output`` redirects the rich console stream; ``extra_log_handlers`` lets
     a host (e.g. a TUI or bot framework) inject its own log sinks.
+    Single commands use ``background=False``: storage and shared operations
+    are available without polling mail, warming models or resuming gateways.
     """
     if config is None:
         config = load_config(config_path) if config_path else MailFlowConfig()
@@ -3915,7 +3922,8 @@ async def start_service(
             service.config.timeouts_migrated = False
             write_config(service.config, service.config_path)
             service.config.timeouts_migrated = True
-        await service.start()
+        if background:
+            await service.start()
         return service
     except BaseException:
         if service is not None:

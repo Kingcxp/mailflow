@@ -55,6 +55,37 @@ def cli_config(tmp_path: Path) -> Path:
     )
     path = tmp_path / "mailflow.toml"
     write_config(config, path)
+    # Receiving belongs to a running host. Single CLI operations must only
+    # inspect/change this persisted mailbox, never ingest the source again.
+    seed = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "utf8",
+            "-B",
+            "-c",
+            "import asyncio,sys; from mailflow.config import load_config; "
+            "from mailflow.service import start_service; "
+            "from mailflow_bundled import create_plugin_manager\n"
+            "async def seed():\n"
+            " config=load_config(sys.argv[1])\n"
+            " service=await start_service(config, plugin_manager=create_plugin_manager(config), "
+            "discover_plugins=False, enable_logging=False)\n"
+            " try:\n"
+            "  async with asyncio.timeout(5):\n"
+            "   while await service.count_mails() < 2: await asyncio.sleep(0.01)\n"
+            "  await service.wait_idle()\n"
+            " finally: await service.stop()\n"
+            "asyncio.run(seed())",
+            str(path),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+    )
+    assert seed.returncode == 0, seed.stdout + seed.stderr
     return path
 
 
@@ -149,3 +180,16 @@ def test_cli_business_failure_exits_nonzero_without_changing_data(cli_config: Pa
     assert "missing-framework" in rejected.stdout
     assert "nonebot" in rejected.stdout and "astrbot" in rejected.stdout
     assert not output.exists()
+
+
+def test_clean_commands_do_not_receive_mail_again_or_wait_for_runtime(cli_config: Path) -> None:
+    import time
+
+    started = time.monotonic()
+    run_cli(cli_config, "command", "clean records")
+    run_cli(cli_config, "command", "clean trash CONFIRM")
+    assert time.monotonic() - started < 10
+    assert "CLI account" not in run_cli(cli_config, "command", "mail list").stdout
+    assert "CLI account" not in run_cli(cli_config, "command", "trash list").stdout
+    snapshot = json.loads(run_cli(cli_config, "snapshot", "--json").stdout)
+    assert all(account["status"] == "stopped" for account in snapshot["accounts"])
