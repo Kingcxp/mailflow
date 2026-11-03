@@ -152,7 +152,7 @@ class TestIMAPMailSource:
                 "username": "me@qq.com",
                 "password": "secret",
                 "limit": 5,
-                "analyze_backlog": True,
+                "initial_sync": "all",
             },
         )
         source = IMAPSource(account)
@@ -208,7 +208,7 @@ class TestIMAPMailSource:
                 "username": "u",
                 "password": "p",
                 "limit": 5,
-                "analyze_backlog": True,
+                "initial_sync": "all",
             },
         )
         source = IMAPSource(account)
@@ -255,7 +255,7 @@ class TestIMAPMailSource:
                 "username": "u",
                 "password": "p",
                 "limit": 2,
-                "analyze_backlog": True,
+                "initial_sync": "all",
             },
         )
         source = IMAPSource(account)
@@ -265,11 +265,10 @@ class TestIMAPMailSource:
             "msg 3",
             "msg 2",
         ]
-        # browsing left the poll watermark untouched: the live stream still
-        # delivers the most recent ``limit`` mails on its first poll
+        # Browsing left the import watermark untouched: import starts at UID 1.
         assert [m.subject for m in await poll_imap(source)] == [  # pyright: ignore[reportPrivateUsage]
-            "msg 4",
-            "msg 5",
+            "msg 1",
+            "msg 2",
         ]
 
 

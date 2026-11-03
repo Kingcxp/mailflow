@@ -514,12 +514,24 @@ class MailFlowService:
         self._update_task = None
         self._expiry_task = None
         self._storage_watch_task = None
+        # User-triggered analysis is temporary too, even in a host that never
+        # started background receiving. Cancel it before slow gateway teardown.
+        closed = await self._stop_component(
+            self.runtime.stop() if self._runtime_owned else self.runtime.cancel_analysis(),
+            timeout_seconds=10.0,
+            label="runtime" if self._runtime_owned else "analysis",
+        )
+        if closed:
+            self._runtime_owned = False
         # app shutdown: kill the children but KEEP the persisted running
         # status so the next boot's autostart resumes them.
-        closed = await self._stop_component(
-            self.gateways.stop(persist_running=persist_running),
-            timeout_seconds=15.0,
-            label="gateways",
+        closed = (
+            await self._stop_component(
+                self.gateways.stop(persist_running=persist_running),
+                timeout_seconds=15.0,
+                label="gateways",
+            )
+            and closed
         )
         bot_server = self.bot_server
         if bot_server is not None:
@@ -529,13 +541,6 @@ class MailFlowService:
             if bot_closed:
                 self.bot_server = None
             closed = bot_closed and closed
-        if self._runtime_owned:
-            runtime_closed = await self._stop_component(
-                self.runtime.stop(), timeout_seconds=10.0, label="runtime"
-            )
-            if runtime_closed:
-                self._runtime_owned = False
-            closed = runtime_closed and closed
         closed = (
             await self._stop_component(self.storage.close(), timeout_seconds=3.0, label="storage")
             and closed

@@ -58,7 +58,7 @@ def mail_status(service: Any, record: MailRecord) -> str:
     )
     status = (
         service.t("ux.analysis_" + record.analysis_state)
-        if record.analysis_state in {"pending", "analysing"}
+        if record.analysis_state in {"pending", "analysing", "unanalysed", "cancelled"}
         else analysis_status(service, record)
     )
     return str(source + ("\n" + status if status else ""))

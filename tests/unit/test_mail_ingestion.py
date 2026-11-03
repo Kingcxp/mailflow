@@ -53,7 +53,7 @@ def source_for(monkeypatch: pytest.MonkeyPatch, mailbox: Mailbox, **options: Any
         MailAccountConfig(
             account_id="account",
             provider="imap",
-            options={"preset": "gmail", "analyze_backlog": True, **options},
+            options={"preset": "gmail", "initial_sync": "all", **options},
         )
     )
 
@@ -110,10 +110,59 @@ async def test_failed_queue_handoff_is_not_acknowledged(
     assert received == ["mail 1", "mail 2", "mail 3"]
 
 
+async def test_startup_mail_is_saved_without_analysis_but_later_arrivals_are_analyzed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mailbox = Mailbox()
+    source = source_for(
+        monkeypatch, mailbox, initial_sync="new", analyze_backlog=True, interval_seconds=0.01
+    )
+    runtime, storage, _ = build_runtime({"account": source}, accounts=[source._account])
+    # A previous UID checkpoint must still synchronize mail received offline,
+    # including old legacy backlog, without starting analysis on app launch.
+    await storage.set_preference("imap.watermark.account", "1")
+
+    synced, analyzed = asyncio.Event(), asyncio.Event()
+
+    async def changed(event: str, **payload: Any) -> None:
+        if event == "account.sync.changed":
+            synced.set()
+        elif event == "mailflow.mail.processed":
+            analyzed.set()
+
+    runtime._events.subscribe_all(changed)  # pyright: ignore[reportPrivateUsage]
+
+    await runtime.start()
+    try:
+        await asyncio.wait_for(synced.wait(), timeout=2)
+        assert len(storage.saved) == 2
+        assert all(
+            record.analysis is None and record.analysis_state == "unanalysed"
+            for record in storage.saved
+        )
+        assert (
+            json.loads((await storage.get_preference("imap.watermark.account")) or "{}")["uid"] == 3
+        )
+        mailbox.uids.append(4)
+        await asyncio.wait_for(analyzed.wait(), timeout=2)
+        assert len(storage.saved) == 3
+        assert await runtime.wait_idle()
+        current = next(record for record in storage.saved if record.mail.subject == "mail 4")
+        assert current.analysis is not None and current.analysis_state == "ready"
+        assert current.ingestion == "live"
+        assert [
+            record.analysis_state for record in storage.saved if record.mail.subject != "mail 4"
+        ] == ["unanalysed", "unanalysed"]
+    finally:
+        await runtime.stop()
+
+
 async def test_full_runtime_queue_cancellation_keeps_the_pending_mail_retryable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = source_for(monkeypatch, Mailbox())
+    mailbox = Mailbox()
+    mailbox.uids = []
+    source = source_for(monkeypatch, mailbox)
     runtime, storage, _ = build_runtime({})
     blocked = asyncio.Event()
 
@@ -125,6 +174,8 @@ async def test_full_runtime_queue_cancellation_keeps_the_pending_mail_retryable(
 
     monkeypatch.setattr(runtime, "_queue", Queue(maxsize=1))
     runtime._inject_watermark_store(source, "account")  # pyright: ignore[reportPrivateUsage]
+    await source._poll_once(runtime.receive_mail)
+    mailbox.uids = [1, 2, 3]
     pending = asyncio.create_task(
         runtime._run_source(source._account, source, runtime._source_generation)  # pyright: ignore[reportPrivateUsage]
     )
@@ -154,7 +205,7 @@ async def test_empty_baseline_uid_reset_and_history_are_independent(
 ) -> None:
     mailbox = Mailbox()
     mailbox.uids = []
-    source = source_for(monkeypatch, mailbox, analyze_backlog=False)
+    source = source_for(monkeypatch, mailbox, initial_sync="new")
     received: list[str] = []
 
     async def accept(mail: Any) -> None:

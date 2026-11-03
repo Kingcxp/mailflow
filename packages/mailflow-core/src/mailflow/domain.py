@@ -359,7 +359,7 @@ class MailRecord(BaseModel):
     is_read: bool = False
     starred: bool = False
     archived: bool = False
-    analysis_state: str = "ready"  # pending | analysing | ready | failed
+    analysis_state: str = "ready"  # unanalysed | pending | analysing | ready | failed | cancelled
     ingestion: str = "live"  # live | history | reanalysis
 
     @property

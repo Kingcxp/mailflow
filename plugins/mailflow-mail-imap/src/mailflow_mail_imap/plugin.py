@@ -363,7 +363,7 @@ class IMAPSource:
         self._checkpoint_scope = ""
         self._watermark_save: Any = None
         self._history_until = 0
-        self._analyze_backlog = bool(account.options.get("analyze_backlog", False))
+        self._session_history_until: int | None = None
         self._ocr_images = bool(account.options.get("ocr_images", False))
         self._username = str(account.options.get("username") or account.email)
         self._password = str(account.options.get("password") or "")
@@ -492,18 +492,18 @@ class IMAPSource:
                     raise RuntimeError("IMAP history search failed")
                 recent_uids = [int(uid) for uid in (recent[0] or b"").split() if uid.isdigit()]
                 baseline = min(recent_uids) - 1 if recent_uids else max(uids, default=0)
-            elif self._analyze_backlog:
-                baseline = uids[-self._limit] - 1 if len(uids) >= self._limit else 0
             else:
                 # Deliberately excluded setup backlog; even an empty mailbox
                 # needs baseline 0 so its very first new message is ingested.
                 baseline = max(uids, default=0)
-            history_until = max(uids, default=0) if changed else self._history_until
-            if self._last_uid is None and (
-                self._analyze_backlog
-                or self._account.options.get("initial_sync") in {"all", "recent"}
-            ):
-                history_until = max(uids, default=0)
+            # Startup synchronizes original mail, never resurrects an analysis
+            # batch. Only UIDs arriving after this session's first poll are live.
+            # The legacy analyze_backlog option no longer starts implicit work.
+            history_until = (
+                max(uids, default=0)
+                if changed or self._session_history_until is None
+                else self._session_history_until
+            )
             messages: list[tuple[int, MailMessage]] = []
             fetch_error = ""
             for uid in [uid for uid in uids if uid > baseline][: self._limit]:
@@ -546,6 +546,7 @@ class IMAPSource:
         batch = await asyncio.to_thread(self._fetch_once)
         self._last_poll_error = batch.error
         self._history_until = batch.history_until
+        self._session_history_until = batch.history_until
         if (
             self._last_uid != batch.baseline
             or self._uidvalidity != batch.uidvalidity
@@ -698,7 +699,7 @@ class IMAPSource:
                 client.close()
 
     async def close(self) -> None:
-        pass
+        self._session_history_until = None
 
 
 def account_form(preset: str = "qq") -> tuple[FormField, ...]:

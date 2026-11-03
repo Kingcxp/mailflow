@@ -907,12 +907,6 @@ async def test_reload_preserves_queued_and_inflight_mail_when_queue_shrinks() ->
     )
     await runtime.start()
     await asyncio.wait_for(entered.wait(), timeout=1)
-    await runtime.set_analysis_paused(True)
-    assert runtime.analysis_paused
-    assert all(record.analysis_state == "pending" for record in storage.saved)
-    entered.clear()
-    await runtime.set_analysis_paused(False)
-    await asyncio.wait_for(entered.wait(), timeout=1)
     old_tasks = list(runtime._tasks)  # pyright: ignore[reportPrivateUsage]
     changed = config.model_copy(deep=True)
     changed.general.workers = 3
@@ -933,11 +927,99 @@ async def test_reload_preserves_queued_and_inflight_mail_when_queue_shrinks() ->
         assert not runtime.analysis_paused
         assert await runtime.wait_idle()
         assert len(storage.saved) == len(mails)
+        assert all(record.analysis_state == "ready" for record in storage.saved)
         assert runtime._queue.maxsize == 1  # pyright: ignore[reportPrivateUsage]
         names = [task.get_name() for task in runtime._tasks]  # pyright: ignore[reportPrivateUsage]
         assert len([name for name in names if name.startswith("worker-")]) == 3
         assert names.count("reminders") == names.count("cleanup") == 1
         assert all(task.done() for task in old_tasks)
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+async def test_analysis_is_cancelled_and_never_resumed_on_start(shutdown: bool) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    entered, manual_entered = asyncio.Event(), asyncio.Event()
+    calls: list[str] = []
+
+    class BlockedProcessor(StaticProcessor):
+        async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
+            calls.append(mail.subject)
+            entered.set()
+            if mail.subject == "manual":
+                manual_entered.set()
+            await asyncio.Event().wait()
+            return await super().process(mail, context)
+
+    mails = [make_mail(subject=str(index)) for index in range(3)]
+    runtime, storage, _ = build_runtime(
+        {"acct-1": EmittingSource(mails)},
+        accounts=[MailAccountConfig(account_id="acct-1", provider="fake")],
+        workers=1,
+    )
+    warmup = AsyncMock()
+    runtime._pipeline = PipelineEngine(  # pyright: ignore[reportPrivateUsage]
+        [
+            ProcessorBinding(
+                "blocked",
+                "fake",
+                BlockedProcessor(MailAnalysis(summary="done", urgency=Urgency.INFO)),
+            )
+        ],
+        router=SimpleNamespace(warmup=warmup),  # type: ignore[arg-type]
+    )
+    crashed = make_mail(subject="unfinished from an earlier session")
+    manual_mail = make_mail(subject="manual")
+    await storage.save_mail(
+        MailRecord(
+            record_id=manual_mail.normalized_message_id(),
+            mail=manual_mail,
+            analysis=MailAnalysis(summary="last good result", urgency=Urgency.INFO),
+            manual_urgency=Urgency.IMPORTANT,
+        )
+    )
+    await storage.save_mail(
+        MailRecord(
+            record_id=crashed.normalized_message_id(), mail=crashed, analysis_state="pending"
+        )
+    )
+    await runtime.start()
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    manual = asyncio.create_task(runtime.process_mail_now(manual_mail, force=True))
+    await asyncio.wait_for(manual_entered.wait(), timeout=1)
+    if shutdown:
+        await asyncio.wait_for(runtime.stop(), timeout=1)
+    else:
+        await asyncio.wait_for(runtime.set_analysis_paused(True), timeout=1)
+    with pytest.raises(asyncio.CancelledError):
+        await manual
+    preserved = await storage.get_mail(manual_mail.normalized_message_id())
+    assert preserved is not None and preserved.analysis_state == "ready"
+    assert preserved.summary == "last good result" and preserved.manual_urgency == Urgency.IMPORTANT
+    assert all(
+        record.analysis_state == "cancelled"
+        for record in storage.saved
+        if record.record_id != preserved.record_id
+    )
+    assert runtime.sync_info("acct-1")["pending_count"] == 0
+    assert await runtime.wait_idle()
+    warmup.assert_not_awaited()
+    # Enabling automatic analysis only affects future arrivals; nothing resumes.
+    if not shutdown:
+        await runtime.set_analysis_paused(False)
+        await runtime.stop()
+    calls_before = list(calls)
+    await runtime.start()
+    try:
+        assert await runtime.wait_idle()
+        assert calls == calls_before
+        assert not runtime.analysis_paused
+        runtime._pipeline = PipelineEngine([])  # pyright: ignore[reportPrivateUsage]
+        record = await runtime.process_mail_now(mails[0], force=True)
+        assert record is not None and record.analysis_state == "ready"
     finally:
         await runtime.stop()
 
