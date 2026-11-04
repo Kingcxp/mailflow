@@ -25,6 +25,7 @@ from mailflow.i18n import I18n
 from mailflow.plugins import PluginManager
 from mailflow.service import start_service
 from mailflow_bundled import create_plugin_manager
+from mailflow_tui.cli import app as tui_app
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
@@ -34,6 +35,7 @@ app = typer.Typer(
     help="MailFlow: unified multi-account mail inbox with LLM analysis.",
     no_args_is_help=True,
 )
+app.add_typer(tui_app, name="tui")
 
 console = Console()
 
@@ -358,23 +360,14 @@ def serve(
     asyncio.run(_run())
 
 
-@app.command()
-def tui(
-    config_path: str | None = typer.Option(None, "--config", "-c"),
-    local: bool = typer.Option(
-        False, "--local", help="Start the local admin REST+WS server alongside the TUI"
-    ),
-    remote: str | None = typer.Option(
-        None, "--remote", help="Connect to a running 'mailflow serve' URL instead"
-    ),
-) -> None:
-    """Launch the Textual terminal UI (local service, embedded server, or remote)."""
-    from mailflow_tui.runner import run_tui
-
-    run_tui(config_path, local=local, remote_url=remote)
-
-
 def main() -> None:
+    import sys
+
+    if len(sys.argv) == 3 and sys.argv[1] == "--_mailflow-tui-host":
+        from mailflow_tui.sessions import host_main
+
+        host_main(sys.argv[2])
+        return
     app()
 
 

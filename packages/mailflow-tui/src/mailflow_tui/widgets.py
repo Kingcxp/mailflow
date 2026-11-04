@@ -232,6 +232,7 @@ class ShortcutHelp(ModalScreen[None]):
             yield Static(self._t("tui.help_shortcuts"), id="shortcut-title", markup=False)
             with ScrollableContainer():
                 yield Static(table)
+                yield Static(self._t("sessions.help"), markup=False)
                 yield Static(self._t("tui.help_terminal_clipboard"), markup=False)
             yield Button(self._t("tui.btn_close"), id="shortcut-close", variant="primary")
 

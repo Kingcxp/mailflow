@@ -1358,6 +1358,36 @@
       "plain_search": "返回普通搜索",
       "retry_changes": "检查并重试失败的修改",
       "undo_delete": "撤销上一次移入回收站"
+    },
+    "sessions": {
+      "detach": "转入后台",
+      "quit": "退出并停止",
+      "help": "本地实例：F8 返回终端，MailFlow 继续运行；Ctrl+Q 退出并停止。使用 mailflow tui list 查看实例，mailflow tui attach 名称 重新连接。",
+      "starting": "正在启动 TUI 实例……",
+      "started": "实例 {name} 已在后台运行。连接命令：mailflow tui attach {name}",
+      "detached": "已与 {name} 分离，MailFlow 继续运行。重新连接：mailflow tui attach {name}",
+      "stopped": "实例 {name} 已停止。",
+      "disconnected": "与实例 {name} 的终端连接已断开。请使用 mailflow tui list 确认状态后重新连接。",
+      "empty": "没有运行中的 TUI 实例。",
+      "header_name": "实例",
+      "header_state": "状态",
+      "header_pid": "进程",
+      "header_config": "配置文件",
+      "state_starting": "启动中",
+      "state_attached": "已连接终端",
+      "state_detached": "后台运行",
+      "state_stopping": "停止中",
+      "state_unavailable": "暂无响应",
+      "choose": "有多个实例正在运行，请先用 mailflow tui list 查看，再指定实例名称或编号。",
+      "not_found": "没有找到运行中的实例 {name}，请使用 mailflow tui list 查看。",
+      "in_use": "实例 {name} 或其邮件数据库正在使用中。请连接已有实例，或使用独立的名称、配置和数据库。",
+      "start_failed": "实例 {name} 启动失败，详情见：{log}",
+      "unavailable": "暂时无法连接实例 {name}，请使用 mailflow tui list 检查状态。",
+      "attached": "实例 {name} 已连接其他终端，请先分离，或使用 attach --takeover 接管。",
+      "auth_failed": "本地实例的连接凭据已失效，请使用 mailflow tui list 检查实例。",
+      "terminal_required": "连接 TUI 需要交互式终端。仅后台启动请使用 mailflow tui --background。",
+      "remote_options": "--background 和 --name 用于本地实例；连接远程服务请使用 --remote。",
+      "stop_timeout": "实例仍在停止，请使用 mailflow tui list 检查状态。"
     }
   }
 }

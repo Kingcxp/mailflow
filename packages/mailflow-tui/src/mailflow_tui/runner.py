@@ -2,7 +2,7 @@
 log handler, run the Textual app on the same event loop, stop the service.
 
 Three launch shapes:
-- default          — local service, no admin server
+- default          — persistent local TUI, detachable from its terminal
 - ``--local``      — local service plus the embedded admin REST+WS server
                      (credentials auto-provisioned) so other frontends can
                      attach; the TUI itself stays logged in automatically
@@ -19,12 +19,15 @@ import logging
 import queue as queue_module
 import secrets
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from mailflow.commands import CommandRouter
 from mailflow.config import MailFlowConfig, load_config
 from mailflow.service import start_service
 from mailflow_bundled import create_plugin_manager
+
+if TYPE_CHECKING:
+    from mailflow_tui.sessions import SessionHost
 
 logger = logging.getLogger("mailflow.tui")
 
@@ -110,7 +113,9 @@ def ensure_default_config(config_path: str | None) -> str | None:
     return config_path
 
 
-async def _run_local(config_path: str | None, *, with_server: bool) -> None:
+async def run_local_host(
+    config_path: str | None, *, with_server: bool, session: SessionHost | None = None
+) -> None:
     config_path = ensure_default_config(config_path)
     config = tui_logging_config(load_config(config_path) if config_path else MailFlowConfig())
     manager = create_plugin_manager(config)
@@ -130,7 +135,7 @@ async def _run_local(config_path: str | None, *, with_server: bool) -> None:
             server, server_task = await _start_embedded_server(service, config, log_queue)
         from mailflow_tui.app import MailFlowApp
 
-        app = MailFlowApp(service, log_queue, splash=True)
+        app = MailFlowApp(service, log_queue, splash=session is None, session=session)
         try:
             await app.run_async()
         finally:
@@ -239,20 +244,45 @@ def cast_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     return snapshot
 
 
-def run_tui(config_path: str | None, *, local: bool = False, remote_url: str | None = None) -> None:
+def run_tui(
+    config_path: str | None,
+    *,
+    local: bool = False,
+    remote_url: str | None = None,
+    background: bool = False,
+    name: str | None = None,
+) -> None:
     """Entry point used by the CLI and the console script."""
 
     async def _run() -> None:
         if remote_url:
+            if background or name:
+                from mailflow_tui.sessions import SessionError
+
+                raise SessionError("sessions.remote_options")
             await _run_remote_with_override(remote_url)
             return
-        await _run_local(config_path, with_server=local)
+        from mailflow.i18n import I18n
+        from rich.console import Console
 
-    # SIGTERM (docker stop, systemd, kill) / SIGHUP (ssh drop, terminal
-    # close) must unwind through the normal path: asyncio.run cancels the
-    # main task, _run_local's finally then stops the service and kills the
-    # NapCat/QQ process tree. Without this the children survive the TUI
-    # and hold the ports until the next boot fails on them.
+        from mailflow_tui.session_terminal import has_terminal
+        from mailflow_tui.sessions import SessionError, attach_instance, start_instance
+
+        if not background and not has_terminal():
+            raise SessionError("sessions.terminal_required")
+        config = load_config(config_path) if config_path else MailFlowConfig()
+        console = Console()
+        with console.status(I18n(config.general.language).t("sessions.starting")):
+            info = await start_instance(config_path, name=name, local=local)
+        t = I18n(info.language).t
+        if background:
+            console.print(t("sessions.started", name=info.name), markup=False)
+        else:
+            reason = await attach_instance(info)
+            console.print(t("sessions." + reason, name=info.name), markup=False)
+
+    # A closed terminal disconnects only this frontend. The independent
+    # local host owns mail, reminders and gateway processes until explicitly stopped.
     loop = asyncio.new_event_loop()
 
     def _cancel_all(signum: int, _frame: Any) -> None:
@@ -261,17 +291,19 @@ def run_tui(config_path: str | None, *, local: bool = False, remote_url: str | N
 
     import signal as signal_mod
 
-    try:
-        signal_mod.signal(signal_mod.SIGTERM, _cancel_all)
-        if hasattr(signal_mod, "SIGHUP"):
-            # POSIX only; windows stubs lack the attribute entirely
-            signal_mod.signal(signal_mod.SIGHUP, _cancel_all)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue]
-    except (ValueError, OSError):
-        pass  # not the main thread / unsupported platform
+    previous: dict[int, Any] = {}
+    for sig in (signal_mod.SIGTERM, getattr(signal_mod, "SIGHUP", None)):
+        if sig is not None:
+            with contextlib.suppress(ValueError, OSError):
+                previous[sig] = signal_mod.signal(sig, _cancel_all)
     try:
         loop.run_until_complete(_run())
     finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
         loop.close()
+        for sig, handler in previous.items():
+            signal_mod.signal(sig, handler)
 
 
 async def _run_remote_with_override(remote_url: str) -> None:
@@ -286,9 +318,9 @@ async def _run_remote_with_override(remote_url: str) -> None:
 
 
 def run_tui_cli() -> None:
-    import typer
+    from mailflow_tui.cli import app
 
-    typer.run(run_tui)
+    app()
 
 
 __all__ = ["run_tui", "tui_logging_config"]

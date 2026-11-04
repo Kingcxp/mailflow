@@ -1,9 +1,10 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help sync test test-unit test-integration test-e2e validate-plugins coverage lint format format-check mypy pyright typecheck check run tui build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot clean clean-records clean-trash clean-gateways clean-config
+.PHONY: help sync test test-unit test-integration test-e2e validate-plugins coverage lint format format-check mypy pyright typecheck check run tui tui-background tui-list tui-attach tui-detach tui-stop build exe-standalone exe-onefile bot-plugin bot-plugin-nonebot bot-plugin-astrbot clean clean-records clean-trash clean-gateways clean-config
 
 ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PY ?= uv run --directory "$(ROOT)" --frozen --all-packages --group dev
+SESSION ?=
 
 ### Setup
 
@@ -55,8 +56,23 @@ check: test validate-plugins ## Full quality gate: tests and plugins, then lint,
 run: ## Start the service in the foreground (configs/development.toml)
 	$(PY) mailflow run -c configs/development.toml
 
-tui: ## Launch the Textual terminal UI (configs/development.toml)
-	$(PY) mailflow tui -c configs/development.toml
+tui: ## Launch or reconnect to the TUI (optional SESSION=<name>; F8 detaches)
+	$(PY) mailflow tui -c configs/development.toml $(if $(SESSION),--name "$(SESSION)")
+
+tui-background: ## Start a TUI in the background (optional SESSION=<name>)
+	$(PY) mailflow tui -c configs/development.toml --background $(if $(SESSION),--name "$(SESSION)")
+
+tui-list: ## List running TUI instances
+	$(PY) mailflow tui list
+
+tui-attach: ## Reconnect to a TUI (SESSION=<name> when multiple instances exist)
+	$(PY) mailflow tui attach $(if $(SESSION),"$(SESSION)")
+
+tui-detach: ## Detach a terminal while keeping its TUI running (optional SESSION=<name>)
+	$(PY) mailflow tui detach $(if $(SESSION),"$(SESSION)")
+
+tui-stop: ## Stop a TUI and release its resources (optional SESSION=<name>)
+	$(PY) mailflow tui stop $(if $(SESSION),"$(SESSION)")
 
 ### Package
 

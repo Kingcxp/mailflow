@@ -85,7 +85,7 @@ def test_hosts_discover_external_plugins(
                 pass
 
         monkeypatch.setattr("mailflow_tui.app.MailFlowApp", HeadlessApp)
-        asyncio.run(runner._run_local(str(path), with_server=False))  # pyright: ignore[reportPrivateUsage]
+        asyncio.run(runner.run_local_host(str(path), with_server=False))
         assert seen == [True]
     elif host == "server":
 

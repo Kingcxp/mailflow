@@ -535,6 +535,7 @@ dependencies = [
     { name = "mailflow-bundled" },
     { name = "mailflow-core" },
     { name = "mailflow-server" },
+    { name = "mailflow-tui" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -544,6 +545,7 @@ requires-dist = [
     { name = "mailflow-bundled", editable = "packages/mailflow-bundled" },
     { name = "mailflow-core", editable = "packages/mailflow-core" },
     { name = "mailflow-server", editable = "packages/mailflow-server" },
+    { name = "mailflow-tui", editable = "packages/mailflow-tui" },
     { name = "rich", specifier = ">=13.7" },
     { name = "typer", specifier = ">=0.12" },
 ]
@@ -809,6 +811,7 @@ dependencies = [
     { name = "mailflow-server" },
     { name = "rich" },
     { name = "textual" },
+    { name = "typer" },
 ]
 
 [package.metadata]
@@ -819,6 +822,7 @@ requires-dist = [
     { name = "mailflow-server", editable = "packages/mailflow-server" },
     { name = "rich", specifier = ">=13.7" },
     { name = "textual", specifier = ">=0.80" },
+    { name = "typer", specifier = ">=0.12" },
 ]
 
 [[package]]

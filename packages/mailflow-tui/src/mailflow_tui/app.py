@@ -13,7 +13,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
 from mailflow.domain import (
@@ -89,6 +89,9 @@ from mailflow_tui.widgets import (
     ShortcutHelp,
     TextArea,
 )
+
+if TYPE_CHECKING:
+    from mailflow_tui.sessions import SessionHost
 
 logger = logging.getLogger("mailflow.tui")
 
@@ -4575,12 +4578,16 @@ class MailFlowApp(App[None]):
         *,
         remote: bool = False,
         splash: bool = False,
+        session: SessionHost | None = None,
     ) -> None:
         super().__init__()
         self._service = service
         self._log_queue = log_queue
         self._remote = remote
         self._splash = splash
+        self._session = session
+        if session is not None:
+            session.bind(self)
         self._log_timer: Any = None
         # shared plugin-entry cache: the single source of truth for the
         # detail dialog. MarketPane writes its fetched entries here, and
@@ -4594,7 +4601,15 @@ class MailFlowApp(App[None]):
         """Bind visible footer text from the active language pack."""
         self._bindings = BindingsMap()
         self._bindings.bind("f1", "shortcut_help", self._service.t("tui.help_shortcuts"))
-        self._bindings.bind("ctrl+q", "quit", self._service.t("tui.btn_quit"))
+        if self._session is not None:
+            self._bindings.bind(
+                "f8", "detach_session", self._service.t("sessions.detach"), priority=True
+            )
+        self._bindings.bind(
+            "ctrl+q",
+            "quit",
+            self._service.t("sessions.quit" if self._session is not None else "tui.btn_quit"),
+        )
         for key, tab_id in (
             ("ctrl+1", "tab-mail"),
             ("ctrl+2", "tab-actions"),
@@ -4620,6 +4635,10 @@ class MailFlowApp(App[None]):
     def action_shortcut_help(self) -> None:
         if not isinstance(self.screen, ShortcutHelp):
             self.push_screen(ShortcutHelp(self._service.t))  # pyright: ignore[reportUnknownMemberType]
+
+    def action_detach_session(self) -> None:
+        if self._session is not None:
+            self._session.detach()
 
     def set_plugin_entries(self, entries: list[tuple[Repository, MarketPlugin]]) -> None:
         """Record the market entries (called by MarketPane after a fetch)."""
@@ -4705,6 +4724,8 @@ class MailFlowApp(App[None]):
             from mailflow_tui.splash import SplashScreen
 
             self.push_screen(SplashScreen(self._service.t, self._version_string()))  # pyright: ignore[reportUnknownMemberType]
+        if self._session is not None:
+            self.call_after_refresh(self._session.mark_ready)
 
     def _version_string(self) -> str:
         """Both local and remote services expose the same snapshot type."""
@@ -4712,7 +4733,8 @@ class MailFlowApp(App[None]):
 
     def _sync_connection_status(self) -> None:
         status = remote_connection_status(self._service)
-        self.sub_title = self._version_string() + (f" | {status}" if status else "")
+        name = f" | {self._session.info.name}" if self._session is not None else ""
+        self.sub_title = self._version_string() + name + (f" | {status}" if status else "")
         for pane in self.query(RuntimePane):
             pane.update_connection_status()
 

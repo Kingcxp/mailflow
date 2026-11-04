@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +65,7 @@ class TestRunTuiWiring:
             type("_M", (), {"MailFlowApp": StubApp}),
         )
 
-        runner_module.run_tui(str(config_file))
+        asyncio.run(runner_module.run_local_host(str(config_file), with_server=False))
         assert captured["config_path"] == str(config_file)
 
 

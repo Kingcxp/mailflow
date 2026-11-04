@@ -1358,6 +1358,36 @@
       "plain_search": "Return to ordinary search",
       "retry_changes": "Review and retry failed changes",
       "undo_delete": "Undo the last move to trash"
+    },
+    "sessions": {
+      "detach": "Detach",
+      "quit": "Exit and stop",
+      "help": "Local instances: F8 returns to the shell while MailFlow keeps running. Ctrl+Q exits and stops it. Use mailflow tui list and mailflow tui attach NAME to reconnect.",
+      "starting": "Starting the TUI instance…",
+      "started": "Instance {name} is running in the background. Connect with: mailflow tui attach {name}",
+      "detached": "Detached from {name}; MailFlow is still running. Reconnect with: mailflow tui attach {name}",
+      "stopped": "Instance {name} has stopped.",
+      "disconnected": "Terminal disconnected from {name}. Use mailflow tui list to check the instance before reconnecting.",
+      "empty": "No running TUI instances.",
+      "header_name": "Instance",
+      "header_state": "State",
+      "header_pid": "Process",
+      "header_config": "Configuration",
+      "state_starting": "Starting",
+      "state_attached": "Attached",
+      "state_detached": "Background",
+      "state_stopping": "Stopping",
+      "state_unavailable": "Not responding",
+      "choose": "Several instances are running. Use mailflow tui list, then specify an instance name or ID.",
+      "not_found": "No running instance matches {name}. Use mailflow tui list to see available instances.",
+      "in_use": "Instance {name} or its mailbox data is already in use. Attach to that instance, or use a separate name, configuration and database.",
+      "start_failed": "Could not start instance {name}. Details are in: {log}",
+      "unavailable": "Cannot connect to instance {name}. Use mailflow tui list to check its state.",
+      "attached": "Instance {name} already has a terminal. Detach it first, or attach with --takeover.",
+      "auth_failed": "The local instance credential is no longer valid. Use mailflow tui list to check the instance.",
+      "terminal_required": "Attach requires an interactive terminal. To start without one, use mailflow tui --background.",
+      "remote_options": "--background and --name apply to local instances. Use --remote to connect to a remote service.",
+      "stop_timeout": "The instance is still stopping. Use mailflow tui list to check its state."
     }
   }
 }
