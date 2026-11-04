@@ -19,6 +19,7 @@ from typing import Any
 from mailflow.config import MailFlowConfig, NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
 from mailflow.forms import FormField
+from mailflow.notifications import DeliveryError, format_mail
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -84,21 +85,17 @@ class TelegramNotifier:
         self._targets = targets_of(config)
 
     async def notify(self, record: MailRecord) -> None:
-        if not self._token or not self._targets:
-            logger.warning(
-                "telegram notifier skipped: set bot_token and chat_id in "
-                "[notifiers.options] (record %s)",
-                record.record_id,
-            )
-            return
-        urgency = record.effective_urgency
-        text = f"[{urgency.value}] {record.mail.subject}\n{record.summary}"
-        await self._send_all(text)
+        await self.push_text(format_mail(record))
+
+    async def notify_to_target(
+        self, target: str, record: MailRecord, *, text: str | None = None
+    ) -> None:
+        await self.push_to_target(target, text if text is not None else format_mail(record))
 
     async def push_text(self, text: str) -> None:
         """Return only after every configured destination accepted the push."""
         if not self._token or not self._targets:
-            raise ValueError("telegram notifier requires bot_token and targets")
+            raise DeliveryError("configuration")
         failure: Exception | None = None
         for target in self._targets:
             try:
@@ -112,19 +109,11 @@ class TelegramNotifier:
     async def push_to_target(self, target: str, text: str) -> None:
         """Push one message to a single chat (per-chat hourly briefing)."""
         if not self._token:
-            raise ValueError("telegram notifier requires bot_token")
+            raise DeliveryError("configuration")
         chat_id = target.partition(":")[2].strip() or target.strip()
         if not chat_id:
-            raise ValueError("telegram notifier requires a target")
+            raise DeliveryError("configuration")
         await asyncio.to_thread(send_text, self._token, chat_id, text)
-
-    async def _send_all(self, text: str) -> None:
-        for target in self._targets:
-            try:
-                await asyncio.to_thread(send_text, self._token, _bare_id(target), text)
-            except Exception as exc:
-                # one unreachable chat must not abort delivery to the rest
-                logger.warning("telegram delivery to %s failed: %s", _bare_id(target), exc)
 
 
 class NotifyPlugin:

@@ -6,8 +6,7 @@ Component id ``onebot``. Options:
 - ``access_token`` — shared secret sent as ``Authorization: Bearer …``
 - ``targets``    — list of ``user:<qq>`` / ``group:<group_id>`` entries
 
-Missing configuration skips delivery gracefully (the same contract as
-the other notifiers); transport failures are logged, never raised.
+Delivery failures propagate to the runtime for visible, targeted retries.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from typing import Any
 import httpx
 from mailflow.config import NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
+from mailflow.notifications import DeliveryError, check_result, format_mail
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -51,7 +51,7 @@ class OneBotNotifier:
     async def push_text(self, text: str) -> None:
         """Return only after every configured destination accepted the push."""
         if not self._url or not self._targets:
-            raise ValueError("onebot notifier requires http_url and targets")
+            raise DeliveryError("configuration")
         failure: Exception | None = None
         for kind, identifier in self._targets:
             try:
@@ -66,7 +66,7 @@ class OneBotNotifier:
         """Push one plain-text message to a single ``user:<id>`` or
         ``group:<id>`` target (per-chat hourly-summary delivery)."""
         if not self._url:
-            raise ValueError("onebot notifier requires http_url")
+            raise DeliveryError("configuration")
         kind, _, identifier = target.partition(":")
         kind = kind.strip().lower()
         identifier = identifier.strip() or target.strip()
@@ -86,38 +86,15 @@ class OneBotNotifier:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(endpoint, json=payload, headers=headers)
             resp.raise_for_status()
-            result = resp.json()
-            if result.get("status") == "failed" or result.get("retcode", 0) != 0:
-                raise RuntimeError(f"onebot delivery rejected: {result.get('retcode', 'failed')}")
+            check_result(resp.json())
 
     async def notify(self, record: MailRecord) -> None:
-        if not self._url or not self._targets:
-            logger.warning(
-                "onebot notifier: http_url/targets not configured; skipping (record %s)",
-                record.record_id,
-            )
-            return
-        text = format_message(record)
-        headers = {"Content-Type": "application/json"}
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            for kind, identifier in self._targets:
-                endpoint = (
-                    f"{self._url}/send_private_msg"
-                    if kind == "user"
-                    else f"{self._url}/send_group_msg"
-                )
-                payload = (
-                    {"user_id": int(identifier), "message": text}
-                    if kind == "user"
-                    else {"group_id": int(identifier), "message": text}
-                )
-                try:
-                    response = await client.post(endpoint, json=payload, headers=headers)
-                    response.raise_for_status()
-                except Exception as exc:
-                    logger.warning("onebot delivery to %s:%s failed: %s", kind, identifier, exc)
+        await self.push_text(format_mail(record))
+
+    async def notify_to_target(
+        self, target: str, record: MailRecord, *, text: str | None = None
+    ) -> None:
+        await self.push_to_target(target, text if text is not None else format_mail(record))
 
 
 def format_message(record: MailRecord) -> str:

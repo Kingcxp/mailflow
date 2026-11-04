@@ -36,6 +36,9 @@ def error_info(error: BaseException, translate: Callable[..., str]) -> dict[str,
 
 def error_code(error: BaseException) -> str:
     """Classify an unlabelled provider failure without importing provider libraries."""
+    portable = getattr(error, "code", "")
+    if isinstance(portable, str) and portable.startswith("delivery."):
+        return portable
     if isinstance(error, NotImplementedError):
         code = "common.unsupported"
     elif isinstance(error, TimeoutError) or "Timeout" in type(error).__name__:

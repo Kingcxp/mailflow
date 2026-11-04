@@ -283,6 +283,13 @@ async def check_component(
         await call("process", record.mail, ProcessingContext(account_id="validation"))
     elif kind is ComponentKind.NOTIFIER:
         await call("notify", record)
+        if hasattr(instance, "notify_to_target"):
+            target = (
+                "contact:validation"
+                if getattr(instance, "backend_id", "") == "openwechat"
+                else "user:123"
+            )
+            await call("notify_to_target", target, record, text="validation")
         if hasattr(instance, "push_text"):
             await call("push_text", "validation")
     elif kind is ComponentKind.MAIL_SOURCE:
@@ -462,6 +469,8 @@ async def validate(
         "auth_key": "validation",
         "bot_token": "validation",
         "chat_id": "validation",
+        "topic": "validation",
+        "send_key": "validation",
         "url": "https://example.test",
         "webhook_url": "https://example.test",
         "endpoint": "https://example.test",

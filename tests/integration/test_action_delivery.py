@@ -156,13 +156,16 @@ async def test_partial_target_failure_does_not_resend_successful_chat() -> None:
         ("wechatpadpro", "WechatPadProNotifier", "base_url"),
     ],
 )
+@pytest.mark.parametrize("status", [503, 200])
 async def test_rejected_gateway_push_raises_for_scheduler_retry(
-    provider: str, klass: str, setting: str, monkeypatch: pytest.MonkeyPatch
+    provider: str, klass: str, setting: str, status: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = importlib.import_module(f"mailflow_notify_{provider}.plugin")
     notifier_class = getattr(module, klass)
     client_class = httpx.AsyncClient
-    transport = httpx.MockTransport(lambda request: httpx.Response(503))
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(status, json={"retcode": 1, "Code": 1, "ok": False})
+    )
 
     def fake_client(**kwargs: Any) -> httpx.AsyncClient:
         return client_class(transport=transport, **kwargs)
@@ -175,8 +178,50 @@ async def test_rejected_gateway_push_raises_for_scheduler_retry(
             options={setting: "http://fake", "auth_key": "fake", "targets": ["group:1"]},
         )
     )
-    with pytest.raises(httpx.HTTPStatusError):
+    from mailflow.notifications import DeliveryError
+
+    with pytest.raises(httpx.HTTPStatusError if status == 503 else DeliveryError):
         await notifier.push_to_target("group:1", "Reminder")
+    with pytest.raises(httpx.HTTPStatusError if status == 503 else DeliveryError):
+        await notifier.notify(make_record())
+
+
+async def test_mail_target_failure_is_visible_and_retry_does_not_repeat_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mailflow_test_support.runtime import build_runtime, make_mail
+
+    class Channel:
+        minimum = Urgency.INFO
+
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+            self.fail = True
+
+        async def notify_to_target(
+            self, target: str, record: Any, *, text: str | None = None
+        ) -> None:
+            if target == "group:2" and self.fail:
+                raise ConnectionError("offline")
+            self.sent.append(target)
+
+    original_sleep = asyncio.sleep
+
+    async def no_delay(*args: Any) -> None:
+        await original_sleep(0)
+
+    monkeypatch.setattr("mailflow.runtime.asyncio.sleep", no_delay)
+    channel = Channel()
+    runtime, _, _ = build_runtime({}, notifiers=cast(Any, [channel]))
+    runtime._notifier_configs[0].options["targets"] = ["group:1", "group:2"]  # pyright: ignore[reportPrivateUsage]
+    await runtime.process_mail_now(make_mail())
+    failures = await runtime.failed_deliveries()
+    assert channel.sent == ["group:1"]
+    assert len(failures) == 1 and failures[0]["target"] == "group:2"
+    assert failures[0]["error_code"] == "errors.connection"
+    channel.fail = False
+    assert await runtime.retry_deliveries([failures[0]["delivery_id"]]) == 1
+    assert channel.sent == ["group:1", "group:2"]
 
 
 async def test_custom_storage_owns_deletion_even_with_legacy_analysis_origin() -> None:

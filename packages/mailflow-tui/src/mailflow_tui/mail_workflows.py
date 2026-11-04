@@ -704,7 +704,7 @@ class DeliveriesScreen(WorkflowScreen):
     async def on_mount(self) -> None:
         table = self.query_one("#delivery-table", SelectionTable)
         table.add_column("[ ]", key="selected", width=3)
-        for key in ("kind", "channel", "updated", "source"):
+        for key in ("kind", "channel", "target", "reason", "updated", "source"):
             table.add_column(self.t("ux." + key))
         await self.reload_rows()
 
@@ -719,6 +719,8 @@ class DeliveriesScreen(WorkflowScreen):
                     table.check_label(str(row["delivery_id"])),
                     self.t("ux.delivery_" + str(row.get("kind", "text"))),
                     str(row.get("channel", "")),
+                    str(row.get("target", "")),
+                    self.t(str(row.get("error_code") or "errors.operation")),
                     str(row.get("at", "")),
                     str(row.get("record_id") or row.get("item_id") or ""),
                     key=str(row["delivery_id"]),

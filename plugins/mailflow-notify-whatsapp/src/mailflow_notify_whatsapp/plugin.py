@@ -13,8 +13,7 @@ Options:
 - ``targets``     — list of ``group:<jid>`` / ``user:<jid>`` entries
 - ``admins``      — WhatsApp numbers allowed to run chat commands
 
-Missing configuration skips delivery gracefully (the same contract as the
-other notifiers); transport failures are logged, never raised.
+Delivery failures propagate to the runtime for visible, targeted retries.
 """
 
 from __future__ import annotations
@@ -25,6 +24,7 @@ from typing import Any
 import httpx
 from mailflow.config import MailFlowConfig, NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
+from mailflow.notifications import DeliveryError, check_result, format_mail
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -76,27 +76,17 @@ class WhatsappNotifier:
         }
 
     async def notify(self, record: MailRecord) -> None:
-        if not self._url or not self._targets:
-            logger.warning(
-                "whatsapp notifier: gateway_url/targets not configured; skipping (record %s)",
-                record.record_id,
-            )
-            return
-        text = format_message(record)
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            for kind, name in self._targets:
-                try:
-                    response = await client.post(
-                        f"{self._url}/send", json=self._payload(kind, name, text)
-                    )
-                    response.raise_for_status()
-                except Exception as exc:
-                    logger.warning("whatsapp delivery to %s:%s failed: %s", kind, name, exc)
+        await self.push_text(format_mail(record))
+
+    async def notify_to_target(
+        self, target: str, record: MailRecord, *, text: str | None = None
+    ) -> None:
+        await self.push_to_target(target, text if text is not None else format_mail(record))
 
     async def push_text(self, text: str) -> None:
         """Return only after every configured destination accepted the push."""
         if not self._url or not self._targets:
-            raise ValueError("whatsapp notifier requires gateway_url and targets")
+            raise DeliveryError("configuration")
         failure: Exception | None = None
         for kind, name in self._targets:
             try:
@@ -111,7 +101,7 @@ class WhatsappNotifier:
         """Push one plain-text message to a single ``user:<jid>`` or
         ``group:<jid>`` target (per-chat hourly-summary delivery)."""
         if not self._url:
-            raise ValueError("whatsapp notifier requires gateway_url")
+            raise DeliveryError("configuration")
         kind, _, name = target.partition(":")
         kind = kind.strip().lower()
         name = name.strip() or target.strip()
@@ -120,6 +110,7 @@ class WhatsappNotifier:
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(f"{self._url}/send", json=self._payload(kind, name, text))
             response.raise_for_status()
+            check_result(response.json())
 
 
 class WhatsappPlugin:

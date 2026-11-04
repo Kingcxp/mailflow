@@ -14,6 +14,7 @@ it after an app restart when the instance is already marked running.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, cast
 from urllib.parse import urlencode
@@ -22,6 +23,7 @@ from urllib.request import Request, urlopen
 import httpx
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
 from mailflow.lifecycle import cancel_tasks
+from mailflow.notifications import check_result
 
 logger = logging.getLogger("mailflow.gateway.telegram")
 
@@ -340,7 +342,12 @@ def send_text(token: str, chat_id: str, text: str) -> None:
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
     with urlopen(request, timeout=15) as response:
-        response.read()
+        result = as_object(json.loads(response.read()))
+        if result.get("ok") is not True:
+            from mailflow.notifications import DeliveryError
+
+            raise DeliveryError("rejected")
+        check_result(result)
 
 
 __all__ = [

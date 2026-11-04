@@ -29,6 +29,7 @@ from typing import Any, cast
 import httpx
 from mailflow.config import NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
+from mailflow.notifications import DeliveryError, check_result, format_mail
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -71,7 +72,9 @@ class WechatPadProNotifier:
             params={"key": self._admin_key},
             json={"Count": 1, "Days": 3650},
         )
+        response.raise_for_status()
         raw: Any = response.json()
+        check_result(cast_dict(raw))
         payload: dict[str, Any] = dict(cast_dict(raw))
         data: Any = payload.get("data")
         if isinstance(data, list) and data and isinstance(data[0], dict):
@@ -87,31 +90,10 @@ class WechatPadProNotifier:
             )
         return self._auth_key
 
-    async def _send(self, client: httpx.AsyncClient, to_wxid: str, text: str) -> None:
-        key = await self._key(client)
-        if not key:
-            return
-        response = await client.post(
-            f"{self._url}/Msg/SendTxt",
-            params={"key": key},
-            json={"Wxid": "", "ToWxid": to_wxid, "Content": text, "Type": 0},
-        )
-        try:
-            payload: Any = response.json()
-        except Exception:
-            payload = {}
-        if response.status_code >= 400 or payload.get("Code") not in (0, "0", None):
-            logger.warning(
-                "wechatpadpro notifier: send to %s rejected: HTTP %d %s",
-                to_wxid,
-                response.status_code,
-                str(payload)[:120],
-            )
-
     async def push_text(self, text: str) -> None:
         """Return only after every configured destination accepted the push."""
         if not self._url or not self._targets:
-            raise ValueError("wechatpadpro notifier requires base_url and targets")
+            raise DeliveryError("configuration")
         failure: Exception | None = None
         for kind, identifier in self._targets:
             try:
@@ -126,53 +108,30 @@ class WechatPadProNotifier:
         """Push one plain-text message to a single ``user:<wxid>`` or
         ``group:<chatroom>`` target (per-chat hourly-summary delivery)."""
         if not self._url:
-            raise ValueError("wechatpadpro notifier requires base_url")
+            raise DeliveryError("configuration")
         _kind, _, wxid = target.partition(":")
         wxid = wxid.strip() or target.strip()
         if not wxid:
-            raise ValueError("wechatpadpro notifier requires a target")
+            raise DeliveryError("configuration")
         async with httpx.AsyncClient(timeout=20.0) as client:
             key = await self._key(client)
             if not key:
-                raise ValueError("wechatpadpro notifier has no active login key")
+                raise DeliveryError("configuration")
             response = await client.post(
                 f"{self._url}/Msg/SendTxt",
                 params={"key": key},
                 json={"Wxid": "", "ToWxid": wxid, "Content": text, "Type": 0},
             )
             response.raise_for_status()
-            result = response.json()
-            if result.get("Success") is False or result.get("Code", 0) not in (0, "0"):
-                raise RuntimeError(
-                    f"wechatpadpro delivery rejected: {result.get('Code', 'failed')}"
-                )
+            check_result(response.json())
 
     async def notify(self, record: MailRecord) -> None:
-        if not self._url or not self._targets:
-            logger.warning(
-                "wechatpadpro notifier: base_url/targets not configured; skipping (record %s)",
-                record.record_id,
-            )
-            return
-        sender = record.mail.sender.display or record.mail.sender.address
-        lines = [
-            f"[MailFlow] {record.effective_urgency.value.upper()} — {record.mail.subject}",
-            f"From: {sender}",
-        ]
-        if record.summary:
-            lines.append(record.summary[:500])
-        attachments = [a.filename for a in record.mail.attachments if a.filename]
-        if attachments:
-            shown = ", ".join(attachments[:4])
-            more = f" (+{len(attachments) - 4})" if len(attachments) > 4 else ""
-            lines.append(f"Attachments: {shown}{more}")
-        text = "\n".join(lines)
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            for _kind, wxid in self._targets:
-                try:
-                    await self._send(client, wxid, text)
-                except Exception as exc:
-                    logger.warning("wechatpadpro delivery to %s failed: %s", wxid, exc)
+        await self.push_text(format_mail(record))
+
+    async def notify_to_target(
+        self, target: str, record: MailRecord, *, text: str | None = None
+    ) -> None:
+        await self.push_to_target(target, text if text is not None else format_mail(record))
 
 
 def format_message(record: MailRecord) -> str:  # kept for parity with other notifiers

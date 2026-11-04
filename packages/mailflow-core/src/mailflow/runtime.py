@@ -35,10 +35,11 @@ from mailflow.domain import (
     dedupe_actions,
     to_utc,
 )
-from mailflow.errors import error_text
+from mailflow.errors import error_code, error_text
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.lifecycle import bounded, cancel_tasks
+from mailflow.notifications import format_mail, targets_of
 from mailflow.pipeline import PipelineEngine
 from mailflow.prompts import prompt_context
 
@@ -167,6 +168,7 @@ class MailFlowRuntime:
         self.deliveries = DeliveryFailures(storage)
         self.action_store = ActionStore(storage)
         self._reminder_lock = asyncio.Lock()
+        self._notifier_lock = asyncio.Lock()
         # account_id -> persisted UID watermark (read at start, written by
         # the injected store); lets IMAP polling resume across restarts.
         self._stored_watermarks: dict[str, str] = {}
@@ -996,57 +998,100 @@ class MailFlowRuntime:
                 await asyncio.sleep(0.5 * (attempt + 1))
 
     async def _notify(
-        self, record: MailRecord, *, only: str = "", receipt_key: str = "", resend: bool = False
+        self,
+        record: MailRecord,
+        *,
+        only: str = "",
+        receipt_key: str = "",
+        resend: bool = False,
+        only_delivery: str = "",
+    ) -> None:
+        async with self._notifier_lock:
+            await self._notify_unlocked(
+                record,
+                only=only,
+                receipt_key=receipt_key,
+                resend=resend,
+                only_delivery=only_delivery,
+            )
+
+    async def _notify_unlocked(
+        self,
+        record: MailRecord,
+        *,
+        only: str = "",
+        receipt_key: str = "",
+        resend: bool = False,
+        only_delivery: str = "",
     ) -> None:
         if not self._config.general.mail_notifications:
             return
-        for notifier, notifier_config in zip(self._notifiers, self._notifier_configs, strict=True):
-            if only and notifier_config.notifier_id != only:
+        for notifier, config in zip(self._notifiers, self._notifier_configs, strict=True):
+            if only and config.notifier_id != only:
                 continue
-            if not notifier_config.options.get("mail_notifications", True):
+            if not config.options.get("mail_notifications", True):
                 continue
-            if record.effective_urgency.rank < notifier_config.minimum_urgency.rank:
+            if record.effective_urgency.rank < config.minimum_urgency.rank:
                 continue
-            receipt = (
-                receipt_key or f"mail.delivery.{record.record_id}.{notifier_config.notifier_id}"
-            )
+            key = receipt_key or f"mail.delivery.{record.record_id}.{config.notifier_id}"
             if resend:
-                receipt += "." + str(datetime.now(UTC).timestamp())
-            if await self._storage.get_preference(receipt):
+                key += "." + str(datetime.now(UTC).timestamp())
+            if await self._storage.get_preference(key):
                 continue
-            # a notification that silently disappears defeats the whole
-            # point of the urgency contract: retry transient failures
-            last_exc: Exception | None = None
-            for attempt in range(3):
-                try:
-                    await notifier.notify(record)
-                    last_exc = None
-                    break
-                except Exception as exc:
-                    last_exc = exc
-                    if attempt < 2:
-                        await asyncio.sleep(2.0 * (attempt + 1))
-            if last_exc is not None:
-                logger.warning(
-                    "notifier %r failed for %r after 3 attempts: %s",
-                    getattr(notifier, "backend_id", type(notifier).__name__),
-                    record.record_id,
-                    last_exc,
-                )
-
-            if last_exc is None:
-                await self._storage.set_preference(receipt, "delivered")
-                await self.deliveries.update(receipt, None)
-            else:
-                await self.deliveries.update(
-                    receipt,
-                    {
-                        "kind": "mail",
-                        "record_id": record.record_id,
-                        "channel": notifier_config.notifier_id,
-                    },
-                )
-                await self._events.emit("notification.failed", record_id=record.record_id)
+            targeted = getattr(notifier, "notify_to_target", None)
+            targets = targets_of(config)
+            complete = True
+            for target in targets if targets and callable(targeted) else [None]:
+                identity = hashlib.sha256(
+                    f"{config.notifier_id}|{target or ''}".encode()
+                ).hexdigest()[:24]
+                receipt = f"{key}.delivered.{identity}" if target is not None else key
+                if only_delivery and receipt != only_delivery:
+                    continue
+                if await self._storage.get_preference(receipt):
+                    continue
+                last_exc: Exception | None = None
+                for attempt in range(3):
+                    try:
+                        if target is None:
+                            await notifier.notify(record)
+                        else:
+                            await targeted(
+                                target,
+                                record,
+                                text=format_mail(record, self._i18n.t if self._i18n else None),
+                            )
+                        last_exc = None
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        if attempt < 2:
+                            await asyncio.sleep(2.0 * (attempt + 1))
+                if last_exc is None:
+                    await self._storage.set_preference(receipt, "delivered")
+                    await self.deliveries.update(receipt, None)
+                else:
+                    complete = False
+                    logger.warning(
+                        "notifier %r failed for %r (%s)",
+                        config.notifier_id,
+                        record.record_id,
+                        type(last_exc).__name__,
+                    )
+                    await self.deliveries.update(
+                        receipt,
+                        {
+                            "kind": "mail",
+                            "record_id": record.record_id,
+                            "channel": config.notifier_id,
+                            "key": key,
+                            "target": target or "",
+                            "error_code": error_code(last_exc),
+                        },
+                    )
+                    await self._events.emit("notification.failed", record_id=record.record_id)
+            if complete and not only_delivery:
+                await self._storage.set_preference(key, "delivered")
 
     async def failed_deliveries(self) -> list[dict[str, Any]]:
         rows = await self.deliveries.read()
@@ -1099,7 +1144,10 @@ class MailFlowRuntime:
                 record = await self._storage.get_mail(row.get("record_id", ""))
                 if record is not None:
                     await self._notify(
-                        record, only=str(row.get("channel", "")), receipt_key=receipt
+                        record,
+                        only=str(row.get("channel", "")),
+                        receipt_key=str(row.get("key") or receipt),
+                        only_delivery=receipt,
                     )
             elif row and row.get("kind") == "hourly":
                 briefing = await self._storage.get_preference(f"{row['key']}.briefing")
@@ -1112,8 +1160,52 @@ class MailFlowRuntime:
                         await self._push_hourly_targeted(
                             notifier, config, briefing, row["key"], only=receipt
                         )
-        if any(rows.get(receipt, {}).get("kind") == "text" for receipt in delivery_ids):
-            await self.run_reminder_tick()
+        async with self._reminder_lock, self._notifier_lock, self.action_store.lock:
+            for receipt in delivery_ids:
+                row = rows.get(receipt, {})
+                if row.get("kind") != "text":
+                    continue
+                notifier = next(
+                    (
+                        n
+                        for n, c in zip(self._notifiers, self._notifier_configs, strict=True)
+                        if c.notifier_id == row.get("channel")
+                        and c.options.get(str(row.get("option", "task_reminders")), True)
+                    ),
+                    None,
+                )
+                if notifier is None or not row.get("text"):
+                    continue
+                option = str(row.get("option", "task_reminders"))
+                if not getattr(self._config.general, option, False):
+                    continue
+                text = str(row["text"])
+                if row.get("item_ids"):
+                    now = datetime.now(UTC)
+                    items = [
+                        item
+                        for item in await self._approaching_actions(
+                            now, self._config.general.reminder_days_before, now=now
+                        )
+                        if item.item_id in row["item_ids"]
+                    ]
+                    if not items:
+                        await self.deliveries.update(receipt, None)
+                        continue
+                    text = self._format_digest(
+                        now.astimezone(ZoneInfo(self._config.general.timezone)).date().isoformat(),
+                        items,
+                    )
+                try:
+                    if row.get("target"):
+                        await cast(Any, notifier).push_to_target(row["target"], text)
+                    else:
+                        await cast(Any, notifier).push_text(text)
+                except Exception as exc:
+                    await self.deliveries.update(receipt, {**row, "error_code": error_code(exc)})
+                else:
+                    await self._storage.set_preference(receipt, "delivered")
+                    await self.deliveries.update(receipt, None)
         remaining = await self.deliveries.read()
         return sum(receipt in rows and receipt not in remaining for receipt in delivery_ids)
 
@@ -1329,10 +1421,7 @@ class MailFlowRuntime:
         (``hourly_summary.chat.<provider>.<instance>.<chat_id>`` = off);
         targets never toggled default to on. Uses push-targeted sends when
         the notifier supports them, else the plain chat push."""
-        raw_targets: Any = notifier_config.options.get("targets") or []
-        targets = list(
-            dict.fromkeys(str(t) for t in cast("list[Any]", raw_targets) if str(t).strip())
-        )
+        targets = targets_of(notifier_config)
         send_targeted = getattr(notifier, "push_to_target", None)
         complete = True
         for target in targets if targets and send_targeted is not None else [None]:
@@ -1367,6 +1456,8 @@ class MailFlowRuntime:
                     receipt,
                     {
                         "kind": "hourly",
+                        "target": target or "",
+                        "error_code": error_code(exc),
                         "channel": notifier_config.notifier_id,
                         "key": key,
                     },
@@ -1569,6 +1660,12 @@ class MailFlowRuntime:
         return fired
 
     async def _deliver_notification(self, key: str, text: str, event: str, **payload: Any) -> bool:
+        async with self._notifier_lock:
+            return await self._deliver_notification_unlocked(key, text, event, **payload)
+
+    async def _deliver_notification_unlocked(
+        self, key: str, text: str, event: str, **payload: Any
+    ) -> bool:
         """Persist successful destinations individually, then the completed delivery.
 
         The scheduler holds its lock across this call. A partial failure only
@@ -1590,16 +1687,7 @@ class MailFlowRuntime:
             if config is not None and not config.options.get(channel_kind, True):
                 continue
             targeted = getattr(notifier, "push_to_target", None)
-            targets: list[str] = []
-            if config is not None:
-                targets = list(
-                    dict.fromkeys(
-                        str(t).strip() for t in config.options.get("targets", []) if str(t).strip()
-                    )
-                )
-                chat_id = str(config.options.get("chat_id") or "").strip()
-                if chat_id and chat_id not in {t.partition(":")[2] or t for t in targets}:
-                    targets.append(chat_id)
+            targets = targets_of(config) if config is not None else []
             for target in targets if targets and callable(targeted) else [None]:
                 destinations += 1
                 identity = hashlib.sha256(f"{notifier_id}|{target or ''}".encode()).hexdigest()[:24]
@@ -1618,6 +1706,10 @@ class MailFlowRuntime:
                         receipt,
                         {
                             "kind": "text",
+                            "target": target or "",
+                            "text": text,
+                            "option": channel_kind,
+                            "error_code": error_code(exc),
                             "channel": notifier_id,
                             "item_id": item.item_id if isinstance(item, ActionItem) else "",
                             "item_ids": [
@@ -1701,14 +1793,14 @@ class MailFlowRuntime:
         self, notifiers: list[Notifier], notifier_configs: list[NotifierConfig]
     ) -> None:
         """Replace notifier users before releasing the old notifier objects."""
-        await self.reconfigure(
-            config=self._config,
-            sources=self._sources,
-            pipeline=self._pipeline,
-            notifiers=notifiers,
-            notifier_configs=notifier_configs,
-            restart_sources=False,
-        )
+        async with self._notifier_lock:
+            previous = self._notifiers
+            self._notifiers = list(notifiers)
+            self._notifier_configs = list(notifier_configs)
+            for notifier in previous:
+                close = getattr(notifier, "close", None)
+                if callable(close) and notifier not in notifiers:
+                    await bounded(close(), timeout_seconds=3.0, label="notifier close")
 
     # -- status -----------------------------------------------------------------------
 

@@ -23,6 +23,7 @@ from mailflow.contracts import (
     Notifier,
     ReplyPreflightSource,
     StorageBackend,
+    TargetedNotifier,
     TextNotifier,
 )
 from mailflow.domain import ComponentKind
@@ -86,6 +87,10 @@ def validate_component(kind: ComponentKind, component: Any) -> None:
         _check_method(component, "check_reply_ready", ReplyPreflightSource.check_reply_ready)
     if kind is ComponentKind.NOTIFIER and hasattr(component, "push_text"):
         _check_method(component, "push_text", TextNotifier.push_text)
+    if kind is ComponentKind.NOTIFIER:
+        for name in ("notify_to_target", "push_to_target"):
+            if hasattr(component, name):
+                _check_method(component, name, getattr(TargetedNotifier, name))
 
 
 def checked_factory(kind: ComponentKind, factory: Any, plugin_id: str, component_id: str) -> Any:
@@ -150,6 +155,8 @@ def validate_result(kind: ComponentKind, method: str, result: Any) -> None:
         protocol = ReplyPreflightSource
     if kind is ComponentKind.NOTIFIER and method == "push_text":
         protocol = TextNotifier
+    if kind is ComponentKind.NOTIFIER and method in {"notify_to_target", "push_to_target"}:
+        protocol = TargetedNotifier
     contract = getattr(protocol, method)
     annotation = get_type_hints(contract)["return"]
     if not _matches(result, annotation):

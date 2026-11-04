@@ -1357,7 +1357,9 @@
       "sync_retry": "Cannot sync this account. Retrying; check the connection and account settings.",
       "plain_search": "Return to ordinary search",
       "retry_changes": "Review and retry failed changes",
-      "undo_delete": "Undo the last move to trash"
+      "undo_delete": "Undo the last move to trash",
+      "target": "Recipient",
+      "reason": "Reason"
     },
     "sessions": {
       "detach": "Detach",
@@ -1388,6 +1390,14 @@
       "terminal_required": "Attach requires an interactive terminal. To start without one, use mailflow tui --background.",
       "remote_options": "--background and --name apply to local instances. Use --remote to connect to a remote service.",
       "stop_timeout": "The instance is still stopping. Use mailflow tui list to check its state."
+    },
+    "delivery": {
+      "configuration": "Delivery settings are incomplete. Check credentials and recipients.",
+      "rejected": "The platform rejected this message. Check login, permissions and recipient settings.",
+      "mail_title": "[MailFlow] {urgency} — {subject}",
+      "sender": "From: {sender}",
+      "mail_ref": "Mail ID: {id}",
+      "attachments": "Attachments: {names}"
     }
   }
 }

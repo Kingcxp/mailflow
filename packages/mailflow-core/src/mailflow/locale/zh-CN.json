@@ -1357,7 +1357,9 @@
       "sync_retry": "此账户暂时无法同步，正在重试。请检查网络及账户设置。",
       "plain_search": "返回普通搜索",
       "retry_changes": "检查并重试失败的修改",
-      "undo_delete": "撤销上一次移入回收站"
+      "undo_delete": "撤销上一次移入回收站",
+      "target": "接收目标",
+      "reason": "失败原因"
     },
     "sessions": {
       "detach": "转入后台",
@@ -1388,6 +1390,14 @@
       "terminal_required": "连接 TUI 需要交互式终端。仅后台启动请使用 mailflow tui --background。",
       "remote_options": "--background 和 --name 用于本地实例；连接远程服务请使用 --remote。",
       "stop_timeout": "实例仍在停止，请使用 mailflow tui list 检查状态。"
+    },
+    "delivery": {
+      "configuration": "发送配置不完整，请检查凭据和接收目标。",
+      "rejected": "平台拒绝了这条消息，请检查登录、权限和接收目标。",
+      "mail_title": "[MailFlow] {urgency} — {subject}",
+      "sender": "发件人：{sender}",
+      "mail_ref": "邮件编号：{id}",
+      "attachments": "附件：{names}"
     }
   }
 }

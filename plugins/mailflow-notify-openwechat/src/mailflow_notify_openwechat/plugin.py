@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 from mailflow.config import MailFlowConfig, NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
+from mailflow.notifications import DeliveryError, check_result, format_mail
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -33,6 +34,7 @@ class OpenWechatNotifier:
             text = str(entry).strip()
             kind, _, name = text.partition(":")
             kind = kind.strip().lower()
+            kind = {"user": "contact", "group": "room"}.get(kind, kind)
             if kind in ("contact", "room") and name.strip():
                 self._targets.append((kind, name.strip()))
 
@@ -40,9 +42,10 @@ class OpenWechatNotifier:
         """Push one plain-text message to a single ``contact:<name>`` or
         ``room:<name>`` target (per-chat hourly-summary delivery)."""
         if not self._url:
-            raise ValueError("openwechat notifier requires gateway_url")
+            raise DeliveryError("configuration")
         kind, _, name = target.partition(":")
         kind = kind.strip().lower()
+        kind = {"user": "contact", "group": "room"}.get(kind, kind)
         name = name.strip() or target.strip()
         if kind not in ("contact", "room"):
             kind, name = "contact", target.strip()
@@ -53,40 +56,20 @@ class OpenWechatNotifier:
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(f"{self._url}/send", json=payload)
             response.raise_for_status()
+            check_result(response.json())
 
     async def notify(self, record: MailRecord) -> None:
-        if not self._url or not self._targets:
-            logger.warning("openwechat notifier: gateway_url/targets not configured; skipping")
-            return
-        sender = record.mail.sender.display or record.mail.sender.address
-        lines = [
-            f"[MailFlow] {record.effective_urgency.value.upper()} — {record.mail.subject}",
-            f"From: {sender}",
-        ]
-        if record.summary:
-            lines.append(record.summary[:500])
-        attachments = [a.filename for a in record.mail.attachments if a.filename]
-        if attachments:
-            shown = ", ".join(attachments[:4])
-            more = f" (+{len(attachments) - 4})" if len(attachments) > 4 else ""
-            lines.append(f"Attachments: {shown}{more}")
-        text = "\n".join(lines)
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            for kind, name in self._targets:
-                payload = {
-                    "to": {"type": "room" if kind == "room" else "contact", "name": name},
-                    "text": text,
-                }
-                try:
-                    response = await client.post(f"{self._url}/send", json=payload)
-                    response.raise_for_status()
-                except Exception as exc:
-                    logger.warning("openwechat delivery to %s:%s failed: %s", kind, name, exc)
+        await self.push_text(format_mail(record))
+
+    async def notify_to_target(
+        self, target: str, record: MailRecord, *, text: str | None = None
+    ) -> None:
+        await self.push_to_target(target, text if text is not None else format_mail(record))
 
     async def push_text(self, text: str) -> None:
         """Return only after every configured destination accepted the push."""
         if not self._url or not self._targets:
-            raise ValueError("openwechat notifier requires gateway_url and targets")
+            raise DeliveryError("configuration")
         failure: Exception | None = None
         for kind, name in self._targets:
             try:

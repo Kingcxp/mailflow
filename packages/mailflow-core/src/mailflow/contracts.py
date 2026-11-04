@@ -231,6 +231,16 @@ class TextNotifier(Protocol):
     async def push_text(self, text: str) -> None: ...
 
 
+class TargetedNotifier(Protocol):
+    """Optional per-destination delivery. Return only on acceptance; raise on failure."""
+
+    async def notify_to_target(
+        self, target: str, record: MailRecord, *, text: str | None = None
+    ) -> None: ...
+
+    async def push_to_target(self, target: str, text: str) -> None: ...
+
+
 class BotExporter(Protocol):
     """Write a framework plugin using the supplied export context."""
 
