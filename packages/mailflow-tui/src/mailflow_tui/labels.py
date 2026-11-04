@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from mailflow.config import is_secret_key
 from mailflow.domain import MailRecord, Urgency
+from rich.text import Text
 
 _URGENCY_LABEL_KEYS: dict[str, str] = {
     "ad": "tui.urgency_opt_ad",
@@ -52,7 +53,7 @@ def relabel_buttons(owner: Any, labels: Mapping[str, str]) -> None:
             button.label = owner._service.t(key)
 
 
-def mail_status(service: Any, record: MailRecord) -> str:
+def mail_status(service: Any, record: MailRecord) -> Text:
     source = service.t(
         "ux.mail_source", account=record.mail.account_id, sender=record.mail.sender.display
     )
@@ -61,7 +62,17 @@ def mail_status(service: Any, record: MailRecord) -> str:
         if record.analysis_state in {"pending", "analysing", "unanalysed", "cancelled"}
         else analysis_status(service, record)
     )
-    return str(source + ("\n" + status if status else ""))
+    text = Text(source, style="cyan")
+    if status:
+        color = (
+            "red"
+            if any(note.status == "failed" for note in record.processor_notes)
+            else "yellow"
+            if record.analysis_is_fallback
+            else "dim"
+        )
+        text.append("\n" + status, style=color)
+    return text
 
 
 def analysis_status(service: Any, record: MailRecord) -> str:

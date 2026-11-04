@@ -703,7 +703,8 @@ class ActionModal(ModalScreen[Any]):
         lines: RichText = RichText()
         status = mail_status(self._service, record)
         if status:
-            lines.append(status + "\n", style="red")
+            lines.append(status)
+            lines.append("\n")
         lines.append(f"{self._service.t('tui.column_subject')}: ", style="bold")
         lines.append(f"{mail.subject}\n")
         lines.append(f"{self._service.t('tui.column_sender')}: ", style="bold")
@@ -1837,10 +1838,7 @@ class MailPane(Vertical):
         self._detail_record_id = selected_id
         service = self._service
         status = mail_status(service, record)
-        self._set_static_text(
-            "#mail-analysis-status",
-            RichText(status, style="red") if status else RichText(""),
-        )
+        self._set_static_text("#mail-analysis-status", status)
         self._set_static("#mail-operation-status", self._operation_status)
         # The stored summary and reason are the mail's content: they stay
         # visible even when the pipeline had to fall back, because hiding them

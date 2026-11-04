@@ -106,7 +106,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         )
         status = mail_status(self._service, record)
         self.query_one("#ask-correct-analysis-status", Static).update(  # pyright: ignore[reportUnknownMemberType]
-            RichText(status, style="red") if status else RichText("")
+            status
         )
         summary = (record.summary or "").strip()
         if not summary:
