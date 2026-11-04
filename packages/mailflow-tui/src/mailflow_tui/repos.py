@@ -9,9 +9,10 @@ from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Input, Static
+from textual.widgets import Button, DataTable, Static
 
 from mailflow_tui.labels import error_message
+from mailflow_tui.widgets import Input
 
 
 class ReposScreen(ModalScreen[bool | None]):

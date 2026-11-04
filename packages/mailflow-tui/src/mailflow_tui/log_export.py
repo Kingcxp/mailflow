@@ -16,9 +16,10 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, DirectoryTree, Input, Static
+from textual.widgets import Button, DirectoryTree, Static
 
 from mailflow_tui.labels import error_detail
+from mailflow_tui.widgets import Input
 
 
 class LogExportScreen(ModalScreen[str | None]):

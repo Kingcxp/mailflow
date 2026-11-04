@@ -20,6 +20,7 @@ from textual.widgets import (
     Button,
     DataTable,
     Input,
+    RichLog,
     Select,
     Static,
     TabbedContent,
@@ -40,7 +41,9 @@ from mailflow_test_support.ui import until
 
 
 @pytest.mark.asyncio
-async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Path) -> None:
+async def test_smart_action_keeps_real_progress_and_relevance_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The progress line names the running tool, and the ranking the model
     asked for survives to the table (best match first)."""
     import asyncio
@@ -135,6 +138,8 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
             assert router.started.is_set(), "smart action did not reach the ranking turn"
             await asyncio.sleep(0.2)
             hint = app.query_one("#mail-empty-hint", Static)
+            progress = app.query_one("#smart-action-progress", RichLog)
+            assert progress.display and progress.lines
             # The inner scan reports the actual candidate count while it runs.
             assert "0/3" in str(hint.render())
             # Editing a new request keeps the active run; cancellation is explicit.
@@ -150,6 +155,7 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
             assert not pane._smart_action_running  # pyright: ignore[reportPrivateUsage]
             assert search.value == "lecture"
             assert router.cancelled.is_set()
+            assert not progress.display and not progress.lines
             router.release.set()
 
             search.value = "the student ID invitation"
@@ -168,6 +174,23 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(tmp_path: Pa
                 table.get_cell(next(iter(table.rows)), "subject")
             )
             assert pane._smart_action_result is not None  # pyright: ignore[reportPrivateUsage]
+            assert not progress.display and not progress.lines
+            await pane.refresh_mail()
+            assert not progress.display and not progress.lines
+            assert "Answered." in str(hint.render())
+
+            smart_action = service.smart_action
+
+            async def fail_query(*args: Any, **kwargs: Any) -> Any:
+                kwargs["progress"]("plan", 0, 1, "Working")
+                raise OSError("private network details")
+
+            monkeypatch.setattr(service, "smart_action", fail_query)
+            button.press()
+            await until(pilot, lambda: "red" in str(hint.render()))
+            assert not progress.display and not progress.lines
+            assert "private network details" not in str(hint.render())
+            monkeypatch.setattr(service, "smart_action", smart_action)
             router.held = False
             router.started.clear()
             router.release.clear()

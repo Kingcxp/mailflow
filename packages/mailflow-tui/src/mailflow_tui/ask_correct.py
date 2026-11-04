@@ -23,10 +23,11 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Footer, Input, Markdown, Static
+from textual.widgets import Button, Checkbox, Footer, Markdown, Static
 
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.labels import mail_status, urgency_label
+from mailflow_tui.widgets import Input
 
 if TYPE_CHECKING:
     from mailflow_tui.app import MailFlowApp

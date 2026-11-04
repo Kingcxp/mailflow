@@ -17,11 +17,11 @@ from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, DataTable, Input, Select, Static, TextArea
+from textual.widgets import Button, Checkbox, DataTable, Select, Static
 
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.view_state import TableView
-from mailflow_tui.widgets import SafeSelect, SelectionTable
+from mailflow_tui.widgets import Input, SafeSelect, SelectionTable, TextArea
 
 
 class WorkflowScreen(ModalScreen[Any]):

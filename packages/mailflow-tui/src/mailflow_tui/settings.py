@@ -50,7 +50,6 @@ from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     DataTable,
-    Input,
     Label,
     ListItem,
     ListView,
@@ -58,7 +57,6 @@ from textual.widgets import (
     Select,
     Static,
     Switch,
-    TextArea,
 )
 from textual.worker import WorkerCancelled
 
@@ -72,7 +70,14 @@ from mailflow_tui.labels import (
 )
 from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.view_state import TableView
-from mailflow_tui.widgets import SafeSelect, SearchToggle, SecretRow, SelectionTable
+from mailflow_tui.widgets import (
+    Input,
+    SafeSelect,
+    SearchToggle,
+    SecretRow,
+    SelectionTable,
+    TextArea,
+)
 
 _SECTION_LABELS = {
     "general": "tui.settings_section_general",

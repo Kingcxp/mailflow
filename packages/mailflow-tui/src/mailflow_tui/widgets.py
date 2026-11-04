@@ -17,18 +17,25 @@ harmless because the widget's display is irrelevant once removed.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 from typing import Any, ClassVar, cast
 
 from mailflow.i18n import I18n
+from rich.table import Table
 from rich.text import Text
 from textual import events
+from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.css.query import QueryError
 from textual.message import Message
-from textual.widgets import Button, DataTable, Select
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Select, Static
+from textual.widgets import Input as TextualInput
+from textual.widgets import TextArea as TextualTextArea
 from textual.widgets._select import SelectCurrent, SelectOverlay
+from textual.widgets.input import Selection
 
 
 def _label_ready(select: Select[object]) -> bool:
@@ -75,7 +82,162 @@ class SafeSelect(Select[object]):  # pyright: ignore[reportUnsafeMultipleInherit
         self.post_message(changed)
 
 
-__all__ = ["SafeSelect", "SearchToggle", "SecretRow", "SelectionTable"]
+__all__ = [
+    "Input",
+    "SafeSelect",
+    "SearchToggle",
+    "SecretRow",
+    "SelectionTable",
+    "ShortcutHelp",
+    "TextArea",
+]
+
+
+class Input(TextualInput):
+    """Desktop editing keys and local undo, shared by every single-line field."""
+
+    BINDINGS: ClassVar[list[Any]] = [
+        Binding("ctrl+a,f7", "select_all", show=False),
+        Binding("ctrl+z", "undo", show=False),
+        Binding("ctrl+y,ctrl+shift+z", "redo", show=False),
+        Binding("ctrl+insert", "copy", show=False),
+        Binding("shift+insert", "paste", show=False),
+        Binding("shift+delete", "cut", show=False),
+        Binding("ctrl+backspace", "delete_left_word", show=False),
+        Binding("ctrl+delete", "delete_right_word", show=False),
+    ]
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._undo: deque[tuple[str, Selection]] = deque(maxlen=100)
+        self._redo: deque[tuple[str, Selection]] = deque(maxlen=100)
+        self._editing = False
+        super().__init__(*args, **kwargs)
+
+    def _watch_value(self, value: str) -> None:
+        if not self._editing:
+            # Loading another account/provider must not undo into the previous field value.
+            self._undo.clear()
+            self._redo.clear()
+        super()._watch_value(value)
+
+    def replace(self, text: str, start: int, end: int) -> None:
+        previous = (self.value, self.selection)
+        self._editing = True
+        try:
+            super().replace(text, start, end)
+        finally:
+            self._editing = False
+        if self.value != previous[0]:
+            self._undo.append(previous)
+            self._redo.clear()
+
+    def _restore_edit(
+        self,
+        source: deque[tuple[str, Selection]],
+        target: deque[tuple[str, Selection]],
+    ) -> None:
+        if not source:
+            return
+        target.append((self.value, self.selection))
+        value, selection = source.pop()
+        self._editing = True
+        try:
+            self.value = value
+            self.selection = selection
+        finally:
+            self._editing = False
+
+    def action_undo(self) -> None:
+        self._restore_edit(self._undo, self._redo)
+
+    def action_redo(self) -> None:
+        self._restore_edit(self._redo, self._undo)
+
+    def action_copy(self) -> None:
+        # Consume the key even without a selection; it must not reach App's quit action.
+        if self.selected_text and not self.password:
+            self.app.copy_to_clipboard(self.selected_text)  # pyright: ignore[reportUnknownMemberType]
+
+    def action_cut(self) -> None:
+        if self.selected_text and not self.password:
+            self.app.copy_to_clipboard(self.selected_text)  # pyright: ignore[reportUnknownMemberType]
+            self.delete_selection()
+
+    def action_paste(self) -> None:
+        if self.app.clipboard:  # pyright: ignore[reportUnknownMemberType]
+            super().action_paste()
+
+
+class TextArea(TextualTextArea):
+    """Use the same editing shortcuts for replies, profiles and multiline settings."""
+
+    BINDINGS: ClassVar[list[Any]] = [
+        Binding("ctrl+a", "select_all", show=False),
+        Binding("ctrl+shift+z", "redo", show=False),
+        Binding("ctrl+insert", "copy", show=False),
+        Binding("shift+insert", "paste", show=False),
+        Binding("shift+delete", "cut", show=False),
+    ]
+
+    def action_copy(self) -> None:
+        if self.selected_text:
+            self.app.copy_to_clipboard(self.selected_text)  # pyright: ignore[reportUnknownMemberType]
+
+    def action_paste(self) -> None:
+        if self.app.clipboard:  # pyright: ignore[reportUnknownMemberType]
+            super().action_paste()
+
+
+class ShortcutHelp(ModalScreen[None]):
+    """A scrollable help sheet that also works without mouse hover or modifiers."""
+
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape,f1", "dismiss", show=False)]
+    DEFAULT_CSS = """
+    ShortcutHelp { align: center middle; }
+    ShortcutHelp > Vertical {
+        width: 76; max-width: 95%; height: 85%;
+        border: round $primary; padding: 1 2; background: $surface;
+    }
+    ShortcutHelp ScrollableContainer { height: 1fr; }
+    ShortcutHelp #shortcut-title { text-style: bold; margin-bottom: 1; }
+    ShortcutHelp Button { width: 100%; margin-top: 1; }
+    """
+
+    def __init__(self, t: Callable[..., str]) -> None:
+        super().__init__()
+        self._t = t
+
+    def compose(self) -> ComposeResult:
+        table = Table.grid(padding=(0, 2), expand=True)
+        table.add_column(width=22, style="bold cyan")
+        table.add_column(ratio=1)
+        for key, description in (
+            ("Tab / Shift+Tab", "help_focus"),
+            ("Enter / Space", "help_activate"),
+            ("Ctrl+A / F7", "help_edit_select"),
+            ("Ctrl+C / Ctrl+Insert", "help_edit_copy"),
+            ("Ctrl+V / Shift+Insert", "help_edit_paste"),
+            ("Ctrl+X / Shift+Delete", "help_edit_cut"),
+            ("Ctrl+Z / Ctrl+Y", "help_edit_history"),
+            ("↑ / ↓ / PageUp / PageDown", "help_rows"),
+            ("Space", "selection_toggle"),
+            ("F2", "help_selection_mode"),
+            ("F3", "help_selection_range"),
+            ("Ctrl+A / F4", "help_selection_all"),
+            ("Esc", "help_selection_clear"),
+            ("Ctrl+Z", "help_mail_undo"),
+        ):
+            table.add_row(key, self._t(f"tui.{description}"))
+        with Vertical():
+            yield Static(self._t("tui.help_shortcuts"), id="shortcut-title", markup=False)
+            with ScrollableContainer():
+                yield Static(table)
+                yield Static(self._t("tui.help_terminal_clipboard"), markup=False)
+            yield Button(self._t("tui.btn_close"), id="shortcut-close", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss()
 
 
 class SecretRow(Horizontal):
@@ -98,7 +260,7 @@ class SelectionTable(DataTable[Any]):
 
     BINDINGS: ClassVar[list[Any]] = [
         Binding("space", "toggle_check", show=False),
-        Binding("ctrl+a", "toggle_all", show=False),
+        Binding("ctrl+a,f4", "toggle_all", show=False),
         Binding("escape", "clear_checks", show=False),
         Binding("shift+up", "extend_selection(-1)", show=False),
         Binding("shift+down", "extend_selection(1)", show=False),
@@ -127,8 +289,6 @@ class SelectionTable(DataTable[Any]):
     def relabel(self) -> None:
         self._bindings.bind("f2", "selection_mode", self._t("tui.selection_mode"))
         self._bindings.bind("f3", "select_range", self._t("tui.selection_range"))
-        self._bindings.bind("space", "toggle_check", self._t("tui.selection_toggle"))
-        self._bindings.bind("ctrl+a", "toggle_all", self._t("tui.selection_all"))
         self.tooltip = self._t("tui.selection_help")
 
     def action_selection_mode(self) -> None:

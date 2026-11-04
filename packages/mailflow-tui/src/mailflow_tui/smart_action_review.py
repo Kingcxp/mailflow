@@ -11,7 +11,9 @@ from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Static, TextArea
+from textual.widgets import Button, Checkbox, Static
+
+from mailflow_tui.widgets import Input, TextArea
 
 
 class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):

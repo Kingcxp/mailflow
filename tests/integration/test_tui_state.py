@@ -33,7 +33,10 @@ from mailflow_tui.app import (
 )
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.remote import RemoteServiceAdapter
-from mailflow_tui.widgets import SelectionTable
+from mailflow_tui.widgets import Input as EditingInput
+from mailflow_tui.widgets import SelectionTable, ShortcutHelp
+from mailflow_tui.widgets import TextArea as EditingTextArea
+from textual.app import App, ComposeResult
 from textual.containers import ScrollableContainer
 from textual.coordinate import Coordinate
 from textual.widgets import Button, DataTable, Input, Select, Static, TabbedContent, TextArea
@@ -97,6 +100,60 @@ async def settle(pilot: Any) -> None:
     await pilot.pause()
     await pilot.app.workers.wait_for_complete()
     await pilot.pause()
+
+
+@pytest.mark.parametrize("multiline", [False, True], ids=["input", "editor"])
+async def test_text_editing_shortcuts_copy_cut_paste_undo_and_redo(multiline: bool) -> None:
+    class EditorApp(App[None]):
+        def compose(self) -> ComposeResult:
+            yield (
+                EditingTextArea("Original", id="field")
+                if multiline
+                else EditingInput("Original", id="field")
+            )
+            yield EditingInput("password", password=True, id="secret")
+
+    app = EditorApp()
+    async with app.run_test() as pilot:
+        field = app.query_one("#field", EditingTextArea if multiline else EditingInput)
+
+        def value() -> str:
+            return field.text if isinstance(field, EditingTextArea) else field.value
+
+        field.focus()
+        await pilot.press("ctrl+a", "ctrl+c")
+        assert app.clipboard == "Original"
+        await pilot.press("ctrl+x")
+        assert value() == ""
+        await pilot.press("ctrl+z")
+        assert value() == "Original"
+        await pilot.press("ctrl+y")
+        assert value() == ""
+        await pilot.press("ctrl+v")
+        assert value() == "Original"
+
+        app.copy_to_clipboard("Replacement")
+        await pilot.press("ctrl+a", "ctrl+v")
+        assert value() == "Replacement"
+        await pilot.press("ctrl+z")
+        assert value() == "Original"
+        await pilot.press("ctrl+y", "f7", "ctrl+insert")
+        assert app.clipboard == "Replacement"
+        await pilot.press("shift+delete")
+        assert value() == ""
+        await pilot.press("shift+insert")
+        assert value() == "Replacement"
+
+        # An empty session clipboard must not erase selected text, or Ctrl+C quit the app.
+        app.copy_to_clipboard("")
+        await pilot.press("ctrl+a", "ctrl+v")
+        assert value() == "Replacement"
+        await pilot.press("end", "ctrl+c")
+        assert app.is_running
+        secret = app.query_one("#secret", EditingInput)
+        secret.focus()
+        await pilot.press("ctrl+a", "ctrl+c", "ctrl+x")
+        assert app.clipboard == "" and secret.value == "password"
 
 
 async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
@@ -168,6 +225,11 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         assert await service.count_mails() == 1
         await app.query_one(MailPane).refresh_mail()
         assert "Ctrl+Z" in text(app, "#mail-operation-status")
+        search = app.query_one("#mail-search", Input)
+        search.focus()
+        await pilot.press("ctrl+a", "x", "ctrl+z")
+        assert search.value == ""
+        assert await service.storage.get_mail("old-2") is None
         table.focus()
         await pilot.press("ctrl+z")
         await settle(pilot)
@@ -520,10 +582,16 @@ async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any)
     service, view, app, _emit, _failures = host
     for index in range(3):
         await service.storage.save_mail(make_record(f"select-{index}", subject=f"Select {index}"))
-    async with app.run_test(size=(145, 48)) as pilot:
+    async with app.run_test(size=(80, 24)) as pilot:
         await settle(pilot)
         table = app.query_one("#mail-table", SelectionTable)
         table.focus()
+        await pilot.press("f1")
+        assert isinstance(app.screen, ShortcutHelp)
+        await pilot.press("pagedown")
+        app.screen.query_one("#shortcut-close", Button).press()
+        await pilot.pause()
+        assert table.has_focus
         await pilot.press("space", "down", "down", "f3")
         assert len(table.checked_keys) == 3
         await pilot.press("escape", "f2")
@@ -531,7 +599,7 @@ async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any)
         assert len(table.checked_keys) == 1
         await pilot.click(table, offset=(25, 3))
         assert len(table.checked_keys) == 2
-        await pilot.press("ctrl+a")
+        await pilot.press("f4")
         assert len(table.checked_keys) == 3
         await pilot.press("escape", "f2")
         assert not table.checked_keys

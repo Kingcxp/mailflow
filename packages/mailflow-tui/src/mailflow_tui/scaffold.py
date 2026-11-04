@@ -12,10 +12,10 @@ from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, DirectoryTree, Input, Select, Static
+from textual.widgets import Button, Checkbox, DirectoryTree, Select, Static
 
 from mailflow_tui.labels import error_message
-from mailflow_tui.widgets import SafeSelect
+from mailflow_tui.widgets import Input, SafeSelect
 
 
 class PluginScaffoldScreen(ModalScreen[Path | None]):

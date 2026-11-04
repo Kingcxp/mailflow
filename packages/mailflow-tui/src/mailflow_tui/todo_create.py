@@ -12,9 +12,10 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Static
+from textual.widgets import Button, Checkbox, Static
 
 from mailflow_tui.labels import error_detail
+from mailflow_tui.widgets import Input
 
 
 class TodoCreateModal(ModalScreen[bool]):

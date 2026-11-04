@@ -44,7 +44,6 @@ from textual.widgets import (
     DataTable,
     Footer,
     Header,
-    Input,
     Label,
     Markdown,
     RichLog,
@@ -52,7 +51,6 @@ from textual.widgets import (
     Static,
     TabbedContent,
     TabPane,
-    TextArea,
 )
 
 from mailflow_tui.confirm import ConfirmModal
@@ -83,7 +81,14 @@ from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 from mailflow_tui.view_state import TableRowEvent, TableView
-from mailflow_tui.widgets import SafeSelect, SearchToggle, SelectionTable
+from mailflow_tui.widgets import (
+    Input,
+    SafeSelect,
+    SearchToggle,
+    SelectionTable,
+    ShortcutHelp,
+    TextArea,
+)
 
 logger = logging.getLogger("mailflow.tui")
 
@@ -756,7 +761,6 @@ class MailPane(Vertical):
         self._refresh_lock = asyncio.Lock()
         self._mail_filter_generation = 0
         self._mail_matcher = SearchMatcher("")
-        self._smart_progress_started = False
         # smart search: while active, the table shows ONLY the LLM-picked
         # results; cancel restores the previous view. The snapshot is the
         # full record list taken when the search started.
@@ -848,7 +852,12 @@ class MailPane(Vertical):
                                 "btn-purge-expired",
                             }:
                                 continue
-                            yield Button(self._service.t(key), id=ident, variant=variant)
+                            yield Button(
+                                self._service.t(key),
+                                id=ident,
+                                variant=variant,
+                                tooltip=self._service.t(key),
+                            )
 
     @staticmethod
     def _button_rows() -> tuple[tuple[tuple[str, str, Any], ...], ...]:
@@ -1116,13 +1125,6 @@ class MailPane(Vertical):
             hints.append(self._service.t("ux.query_tasks_hint", count=len(result.actions)))
         if result.records:
             hints.append(self._service.t("tui.smart_action_found", count=len(result.records)))
-        if result.tool_steps:
-            hints.append(
-                self._service.t(
-                    "tui.smart_action_steps",
-                    count=len(result.tool_steps),
-                )
-            )
         if result.final_text:
             hints.append(result.final_text)
         if result.failure_reasons and not result.failed_mails:
@@ -1135,11 +1137,6 @@ class MailPane(Vertical):
                     failed=result.failed_mails,
                     reasons="; ".join(result.failure_reasons) or "?",
                 )
-            )
-        progress_log = self.query_one_optional("#smart-action-progress", RichLog)
-        if progress_log is not None:
-            progress_log.write(
-                "; ".join(hints) if hints else self._service.t("tui.smart_action_done")
             )
         status_hint = f"[yellow]{escape('; '.join(hints))}[/yellow]" if hints else ""
         await self._render_records(
@@ -1196,9 +1193,8 @@ class MailPane(Vertical):
         reviewed = await self._ask_screen(SmartActionReviewModal(self._service, operations))
         if reviewed is None:
             result.pending.clear()
-            progress_log = self.query_one_optional("#smart-action-progress", RichLog)
-            if progress_log is not None:
-                progress_log.write(self._service.t("tui.smart_changes_cancelled"))
+            self._pending_status_hint = self._service.t("tui.smart_changes_cancelled")
+            await self.refresh_mail()
             return
         await self._apply_pending_unlocked(result, cast(list[PendingOperation], reviewed))
 
@@ -1211,7 +1207,7 @@ class MailPane(Vertical):
         applied = failed = deleted = 0
         selected = list(operations if operations is not None else result.pending)
         result.pending.clear()
-        progress_log = self.query_one_optional("#smart-action-progress", RichLog)
+        errors: list[str] = []
         if result.plan_id:
             outcome = await self._service.apply_smart_plan(result.plan_id, selected)
             applied = int(outcome["applied"])
@@ -1220,9 +1216,7 @@ class MailPane(Vertical):
             self._undo_trash_ids = list(outcome["deleted"]) or self._undo_trash_ids
             result.pending = list(outcome["failed"])
             self._smart_retry = result if failed else None
-            if progress_log is not None:
-                for detail in outcome["errors"]:
-                    progress_log.write(str(detail))
+            errors.extend(str(detail) for detail in outcome["errors"])
         else:
             for operation in selected:
                 try:
@@ -1233,15 +1227,14 @@ class MailPane(Vertical):
                 except Exception as exc:
                     failed += 1
                     logger.warning("staged %r failed (%s)", operation.tool, type(exc).__name__)
-                    if progress_log is not None:
-                        progress_log.write(error_text(exc, self._service.t))
+                    errors.append(error_text(exc, self._service.t))
         result.deleted = deleted
         self._smart_action_result = result
         self._smart_review_result = result
         key = "tui.agent_applied" if not failed else "tui.agent_applied_partial"
         self._pending_status_hint = self._service.t(key, applied=applied, failed=failed)
-        if progress_log is not None:
-            progress_log.write(self._pending_status_hint)
+        if errors:
+            self._pending_status_hint += "; " + "; ".join(errors)
         await self.refresh_mail()
         cast(MailFlowApp, self.app).schedule_reload()  # pyright: ignore[reportUnknownMemberType]
 
@@ -1421,7 +1414,7 @@ class MailPane(Vertical):
                 else self._service.t("tui.btn_trash")
             )
             trash.disabled = self._trash_busy or not (count or has_selected)
-            trash.tooltip = self._service.t("tui.selection_help")
+            trash.tooltip = self._service.t("tui.selection_delete_help")
         purge = self.query_one_optional("#btn-purge-expired", Button)
         if purge is not None:
             purge.disabled = self._trash_busy or not bool(self._mail_cache)
@@ -1455,7 +1448,7 @@ class MailPane(Vertical):
             )
             self._selection_hint_visible = True
         elif table.selection_mode:
-            self._set_static("#mail-empty-hint", self._service.t("tui.selection_help"))
+            self._set_static("#mail-empty-hint", self._service.t("tui.selection_mode_active"))
             self._selection_hint_visible = True
         elif self._selection_hint_visible:
             self._set_static("#mail-empty-hint", "")
@@ -1518,9 +1511,9 @@ class MailPane(Vertical):
 
     def on_search_toggle_toggled(self, event: SearchToggle.Toggled) -> None:
         if event.toggle.id in {"mail-search-regex", "mail-search-case"}:
-            progress = self.query_one_optional("#smart-action-progress", RichLog)
-            if progress is not None:
-                progress.clear()
+            if self._smart_action_running:
+                return
+            self._clear_smart_progress()
             self._clear_smart_action_result()
             self._schedule_mail_filter()
 
@@ -1621,7 +1614,7 @@ class MailPane(Vertical):
         progress_log = self.query_one_optional("#smart-action-progress", RichLog)
         if progress_log is not None:
             progress_log.clear()
-        self._smart_progress_started = False
+            progress_log.display = True
         table = self._mail_table()
         SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         spinner_state: dict[str, Any] = {
@@ -1653,7 +1646,6 @@ class MailPane(Vertical):
         ) -> None:
             if not self._smart_action_running or self._smart_action_task is not task:
                 return
-            self._smart_progress_started = True
             detail_key = ""
             detail_params: dict[str, Any] = {}
             if isinstance(detail, tuple):
@@ -1707,6 +1699,9 @@ class MailPane(Vertical):
         try:
             result = await task
         except asyncio.CancelledError:
+            if self._smart_action_task is task:
+                await self._cancel_smart_action()
+                await self.refresh_mail()
             return  # the cancellation path above restored the ordinary view
         except Exception as exc:
             if self._smart_action_task is not task:
@@ -1714,6 +1709,7 @@ class MailPane(Vertical):
             self._smart_action_task = None
             self._smart_action_running = False
             await self._stop_smart_spinner()
+            self._clear_smart_progress()
             self._clear_smart_action_result()
             self._set_smart_label("tui.smart_action")
             await self.refresh_mail()
@@ -1726,6 +1722,7 @@ class MailPane(Vertical):
         self._smart_action_task = None
         self._smart_action_running = False
         await self._stop_smart_spinner()
+        self._clear_smart_progress()
         self._set_smart_label("tui.smart_action")
         self._smart_action_result = result
         async with self._refresh_lock:
@@ -1740,11 +1737,15 @@ class MailPane(Vertical):
             task.cancel()
         self.workers.cancel_group(self, "smart-preview")  # pyright: ignore[reportUnknownMemberType]
         await self._stop_smart_spinner()
+        self._clear_smart_progress()
+        self._clear_smart_action_result()
+        self._set_smart_label("tui.smart_action")
+
+    def _clear_smart_progress(self) -> None:
         progress = self.query_one_optional("#smart-action-progress", RichLog)
         if progress is not None:
             progress.clear()
-        self._clear_smart_action_result()
-        self._set_smart_label("tui.smart_action")
+            progress.display = False
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         try:
@@ -4594,6 +4595,7 @@ class MailFlowApp(App[None]):
     def _reset_shortcuts(self, *, refresh: bool = False) -> None:
         """Bind visible footer text from the active language pack."""
         self._bindings = BindingsMap()
+        self._bindings.bind("f1", "shortcut_help", self._service.t("tui.help_shortcuts"))
         self._bindings.bind("ctrl+q", "quit", self._service.t("tui.btn_quit"))
         for key, tab_id in (
             ("ctrl+1", "tab-mail"),
@@ -4616,6 +4618,10 @@ class MailFlowApp(App[None]):
             self._bindings.bind(key, f"goto_tab('{tab_id}')", show=False)
         if refresh:
             self.refresh_bindings()
+
+    def action_shortcut_help(self) -> None:
+        if not isinstance(self.screen, ShortcutHelp):
+            self.push_screen(ShortcutHelp(self._service.t))  # pyright: ignore[reportUnknownMemberType]
 
     def set_plugin_entries(self, entries: list[tuple[Repository, MarketPlugin]]) -> None:
         """Record the market entries (called by MarketPane after a fetch)."""

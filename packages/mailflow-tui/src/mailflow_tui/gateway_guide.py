@@ -24,13 +24,13 @@ from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
     Button,
-    Input,
     ProgressBar,
     RichLog,
     Static,
 )
 
 from mailflow_tui.labels import error_detail, redact_operation_logs, secret_values
+from mailflow_tui.widgets import Input
 
 _LEVEL_COLORS = {
     "DEBUG": "dim",

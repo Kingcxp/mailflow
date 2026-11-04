@@ -16,9 +16,10 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, Static, TextArea
+from textual.widgets import Button, Static
 
 from mailflow_tui.labels import error_detail
+from mailflow_tui.widgets import TextArea
 
 
 class UserProfileModal(ModalScreen[bool]):

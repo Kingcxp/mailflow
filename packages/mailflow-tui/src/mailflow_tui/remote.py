@@ -40,17 +40,12 @@ from mailflow_server.client import RemoteClient, RemoteUnsupported
 from textual.containers import Horizontal, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import (
-    Button,
-    Input,
-    Label,
-    Static,
-    Switch,
-)
+from textual.widgets import Button, Label, Static, Switch
 from textual.worker import WorkerCancelled
 
 from mailflow_tui import credentials
 from mailflow_tui.labels import error_detail, redact_operation_logs
+from mailflow_tui.widgets import Input
 
 _SESSION_FILE = Path.home() / ".mailflow" / "tui-session.json"
 

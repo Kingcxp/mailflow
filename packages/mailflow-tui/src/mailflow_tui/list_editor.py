@@ -19,7 +19,9 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.strip import Strip
 from textual.widget import Widget
-from textual.widgets import Button, Input
+from textual.widgets import Button
+
+from mailflow_tui.widgets import Input
 
 
 class CenteredInput(Input):
