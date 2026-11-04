@@ -241,3 +241,79 @@ async def test_daily_digest_uses_local_dates_and_retries_failed_delivery() -> No
     assert len(notifier.sent) == 1
     assert "ongoing" in notifier.sent[0] and "today" in notifier.sent[0]
     assert "tomorrow" not in notifier.sent[0]
+
+
+@pytest.mark.parametrize("state", ["overdue", "snoozed", "completed", "disabled"])
+async def test_ineligible_tasks_stay_visible_without_reminders_or_digest(state: str) -> None:
+    storage = MemoryStorage()
+    item = await schedule(storage)
+    now = datetime.now(UTC)
+    item.due_at = now.replace(hour=23, minute=59, second=59)
+    if state == "overdue":
+        item.due_at = now - timedelta(days=30)
+    elif state == "snoozed":
+        item.snoozed_until = now + timedelta(hours=1)
+    elif state == "completed":
+        item.completed_at = now
+    else:
+        item.reminder_enabled = False
+    await storage.set_preference(f"digest.{now.date().isoformat()}", "")
+    notifier = FakeNotifier()
+    service = make_service(storage, notifier)
+    assert await service.runtime.run_reminder_tick() == 0
+    assert notifier.sent == []
+    assert len(await service.list_actions_all()) == 1
+
+
+async def test_quiet_import_and_reanalysis_keep_reminder_history_and_local_state() -> None:
+    from mailflow_test_support.runtime import build_runtime, make_mail
+
+    class Recorder:
+        minimum = Urgency.INFO
+
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def notify(self, record: Any) -> None:
+            self.sent.append("mail")
+
+        async def push_text(self, text: str) -> None:
+            self.sent.append(text)
+
+    now = datetime.now(UTC)
+    action = ActionItem(
+        item_id="model",
+        mail_id="",
+        summary="Submit report",
+        action_type="task",
+        due_at=now.replace(hour=23, minute=59, second=59),
+    )
+    analysis = MailAnalysis(summary="mail", urgency=Urgency.INFO, action_items=[action])
+    notifier = Recorder()
+    runtime, _, _ = build_runtime(
+        {},
+        analysis=analysis,
+        notifiers=cast(Any, [notifier]),
+        reminder_hour=0,
+        daily_digest=False,
+    )
+    mail = make_mail()
+    original = await runtime.process_mail_now(mail)
+    assert original is not None
+    assert await runtime.run_reminder_tick() == 1
+    assert len(notifier.sent) == 2
+    original.action_items[0].reminder_enabled = False
+    original.action_items[0].completed_at = now
+    analysis.action_items[0].summary = "Submit report."
+    repeated = await runtime.process_mail_now(mail, force=True)
+    assert repeated is not None
+    assert repeated.action_items[0].item_id == original.action_items[0].item_id
+    assert repeated.action_items[0].completed_at == now
+    assert not repeated.action_items[0].reminder_enabled
+    assert await runtime.run_reminder_tick() == 0
+    assert len(notifier.sent) == 2
+    history = make_mail().model_copy(update={"ingestion": "history"})
+    analysis.action_items[0].summary = "Another task"
+    await runtime.process_mail_now(history)
+    assert await runtime.run_reminder_tick() == 0
+    assert len(notifier.sent) == 2

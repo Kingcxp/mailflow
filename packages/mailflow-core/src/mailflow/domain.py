@@ -242,6 +242,9 @@ class ActionItem(BaseModel):
     completed_at: datetime | None = None
     reminder_enabled: bool = True
     snoozed_until: datetime | None = None
+    # Preserve delivery identity across reanalysis; old JSON remains readable.
+    reminder_key: str = ""
+    reminder_after: datetime | None = None
     source_subject: str = ""
     reply_task: bool = False
 

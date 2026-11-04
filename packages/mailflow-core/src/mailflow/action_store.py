@@ -55,6 +55,12 @@ class ActionStore:
         self.storage = storage
         self.lock = asyncio.Lock()
 
+    @staticmethod
+    def is_dismissed(item: ActionItem, keys: frozenset[str] | set[str]) -> bool:
+        return any(
+            key in keys for key in (f"id|{item.item_id}", action_key(item), _legacy_key(item))
+        )
+
     async def dismissed(self) -> frozenset[str]:
         raw = await self.storage.get_preference("actions.dismissed")
         try:
@@ -89,9 +95,7 @@ class ActionStore:
             ScheduledAction(item, record)
             for record in records
             for item in record.action_items
-            if item.item_id not in overridden
-            and action_key(item) not in dismissed
-            and _legacy_key(item) not in dismissed
+            if item.item_id not in overridden and not self.is_dismissed(item, dismissed)
         ]
         entries.extend(ScheduledAction(item, custom=True) for item in custom)
         entries.sort(key=lambda entry: action_sort_time(entry.item))
@@ -137,6 +141,11 @@ class ActionStore:
                 or actions_duplicate(entry.item, target.item)
             )
         }
+        keys.update(
+            f"id|{entry.item.item_id}"
+            for entry in entries
+            if not entry.custom and action_key(entry.item) in keys
+        )
         await self.set_dismissed(await self.dismissed() | keys)
         return bool(keys)
 

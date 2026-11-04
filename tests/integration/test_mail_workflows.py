@@ -209,7 +209,8 @@ async def test_task_notification_failure_retries_without_repeating_success(
         ],
     )
     now = datetime.now(UTC)
-    task = await service.add_action("Due task", now - timedelta(minutes=1))
+    service.config.general.reminder_hour = 0
+    task = await service.add_action("Due task", now + timedelta(days=2))
     await service.runtime.run_reminder_tick()
     failed = await service.failed_deliveries()
     assert failed and good.messages and not flaky.messages
@@ -223,7 +224,9 @@ async def test_task_notification_failure_retries_without_repeating_success(
     await service.runtime.run_reminder_tick()
     assert len(flaky.messages) == before
     flaky.failing = True
-    reopened = await service.edit_action(task.item_id, completed=False, summary="Rescheduled task")
+    reopened = await service.edit_action(
+        task.item_id, completed=False, summary="Rescheduled task", due_at=now + timedelta(days=1)
+    )
     await service.runtime.run_reminder_tick()
     assert await service.failed_deliveries()
     await service.edit_action(

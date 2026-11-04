@@ -1191,6 +1191,7 @@ class MailFlowService:
                 raise translated_error(ValueError, self.t, "action.invalid_end")
             updated = item.model_copy(
                 update={
+                    "reminder_key": item.reminder_key,
                     "completed_at": item.completed_at
                     if completed is None
                     else (utcnow() if completed else None),
@@ -1209,6 +1210,13 @@ class MailFlowService:
                     "location": item.location if location is None else location.strip(),
                     "url": item.url if url is None else url.strip(),
                 }
+            )
+            from mailflow.runtime import reminder_identity
+
+            updated.reminder_key = (
+                reminder_identity(item)
+                if final_due == item.due_at and final_end == item.due_end
+                else reminder_identity(updated.model_copy(update={"reminder_key": ""}))
             )
             duplicate = await self._find_duplicate_action(updated, exclude_item_id=item.item_id)
             if duplicate is not None:

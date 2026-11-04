@@ -10,11 +10,13 @@ import asyncio
 import hashlib
 import json
 import logging
+import unicodedata
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
+from difflib import SequenceMatcher
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -94,7 +96,9 @@ def reminder_times(
     return [(early, "early"), (midnight, "day_of")]
 
 
-def _reminder_identity(item: ActionItem) -> str:
+def reminder_identity(item: ActionItem) -> str:
+    if item.reminder_key:
+        return item.reminder_key
     start, end = action_time_window(item)
     identity = json.dumps(
         [
@@ -823,7 +827,12 @@ class MailFlowRuntime:
                     )
                     logger.warning("re-analysis of %r failed; kept previous analysis", record_id)
                 else:
-                    actions = await self._stable_actions(record_id, analysis.action_items, previous)
+                    actions = await self._stable_actions(
+                        record_id,
+                        analysis.action_items,
+                        previous,
+                        quiet=mail.ingestion != "live" and not mail.notify_requested,
+                    )
                     analysis = analysis.model_copy(update={"action_items": actions})
                     persisted_mail = mail.model_copy(deep=True)
                     for attachment in persisted_mail.attachments:
@@ -877,6 +886,8 @@ class MailFlowRuntime:
         record_id: str,
         actions: list[ActionItem],
         previous: MailRecord | None,
+        *,
+        quiet: bool = False,
     ) -> list[ActionItem]:
         others = [
             entry.item
@@ -884,11 +895,43 @@ class MailFlowRuntime:
             if entry.record is None or entry.record.record_id != record_id
         ]
         prior = previous.action_items if previous is not None else []
+        used: set[str] = set()
+        dismissed = await self.action_store.dismissed()
+        migrated = set(dismissed)
+
+        def summary_key(value: str) -> str:
+            return "".join(
+                char
+                for char in value.casefold()
+                if not unicodedata.category(char).startswith(("P", "Z"))
+            )
+
         retained: list[ActionItem] = []
         for item in dedupe_actions(actions):
             if any(actions_duplicate(item, other) for other in others):
                 continue
-            old = next((old for old in prior if actions_duplicate(old, item)), None)
+            candidates = [old for old in prior if old.item_id not in used]
+            old = next(
+                (
+                    old
+                    for old in candidates
+                    if summary_key(old.summary) == summary_key(item.summary)
+                ),
+                None,
+            )
+            if old is None:
+                similar = [
+                    old
+                    for old in candidates
+                    if old.action_type == item.action_type
+                    and action_time_window(old) == action_time_window(item)
+                    and SequenceMatcher(
+                        None, summary_key(old.summary), summary_key(item.summary)
+                    ).ratio()
+                    >= 0.85
+                ]
+                if len(similar) == 1:
+                    old = similar[0]
             identity = json.dumps(
                 [
                     record_id,
@@ -904,7 +947,28 @@ class MailFlowRuntime:
                 if old is not None
                 else hashlib.sha256(identity.encode()).hexdigest()[:32]
             )
-            retained.append(item.model_copy(update={"item_id": item_id, "mail_id": record_id}))
+            changes: dict[str, Any] = {"item_id": item_id, "mail_id": record_id}
+            if old is not None:
+                used.add(old.item_id)
+                changes.update(
+                    completed_at=old.completed_at,
+                    reminder_enabled=old.reminder_enabled,
+                    snoozed_until=old.snoozed_until,
+                    reminder_after=old.reminder_after,
+                    reminder_key=reminder_identity(old)
+                    if action_time_window(old) == action_time_window(item)
+                    else "",
+                    reply_task=old.reply_task,
+                )
+                if self.action_store.is_dismissed(old, dismissed):
+                    migrated.add(f"id|{old.item_id}")
+            elif quiet:
+                changes["reminder_after"] = datetime.now(UTC)
+            updated = item.model_copy(update=changes)
+            updated.reminder_key = reminder_identity(updated)
+            retained.append(updated)
+        if migrated != set(dismissed):
+            await self.action_store.set_dismissed(migrated)
         return retained
 
     async def _persist_with_retry(self, record: MailRecord, attempts: int = 3) -> None:
@@ -989,7 +1053,13 @@ class MailFlowRuntime:
         open_items = {
             entry.item.item_id: entry.item
             for entry in await self.action_store.read()
-            if entry.item.completed_at is None and entry.item.reminder_enabled
+            if entry.item.completed_at is None
+            and entry.item.reminder_enabled
+            and (
+                entry.item.snoozed_until is None
+                or to_utc(entry.item.snoozed_until) <= datetime.now(UTC)
+            )
+            and action_time_window(entry.item)[1] > datetime.now(UTC)
         }
         active: list[dict[str, Any]] = []
         today = datetime.now(UTC).astimezone(ZoneInfo(self._config.general.timezone)).date()
@@ -1000,7 +1070,7 @@ class MailFlowRuntime:
                 and row.get("key", "").startswith("reminder.")
                 and (
                     item.due_at is None
-                    or not row["key"].startswith(f"reminder.{_reminder_identity(item)}.")
+                    or not row["key"].startswith(f"reminder.{reminder_identity(item)}.")
                 )
             )
             if (
@@ -1401,6 +1471,15 @@ class MailFlowRuntime:
             if entry.item.completed_at is None
             and entry.item.due_at is not None
             and entry.item.reminder_enabled
+            and action_time_window(entry.item)[1] > to_utc(now or day_start)
+            and (
+                entry.item.snoozed_until is None
+                or to_utc(entry.item.snoozed_until) <= to_utc(now or day_start)
+            )
+            and (
+                entry.item.reminder_after is None
+                or to_utc(entry.item.reminder_after) < to_utc(local_start)
+            )
             and action_sort_time(entry.item) < horizon
         ]
 
@@ -1417,19 +1496,29 @@ class MailFlowRuntime:
             or item.due_at is None
             or not item.reminder_enabled
             or (item.snoozed_until is not None and item.snoozed_until > now)
+            or action_time_window(item)[1] <= to_utc(now)
         ):
             return 0
-        fired = 0
-        for when, kind in reminder_times(
+        windows = reminder_times(
             item,
             config.timezone,
             config.reminder_days_before,
             config.reminder_hour,
             config.reminder_minute,
-        ):
-            if when > now:
-                continue
-            reminder_id = _reminder_identity(item)
+        )
+        if item.snoozed_until is not None:
+            windows = [(to_utc(item.snoozed_until), "snooze." + item.snoozed_until.isoformat())]
+        eligible = sorted(
+            (when, kind)
+            for when, kind in windows
+            if when <= now and (item.reminder_after is None or when > to_utc(item.reminder_after))
+        )
+        if not eligible:
+            return 0
+        # One catch-up at most. Earlier missed windows are covered by the latest.
+        fired = 0
+        for when, kind in eligible[-1:]:
+            reminder_id = reminder_identity(item)
             key = f"reminder.{reminder_id}.{kind}"
             legacy_key = f"reminder.{item.item_id}.{item.due_at.date().isoformat()}.{kind}"
             if await self._storage.get_preference(key) or (
@@ -1449,6 +1538,8 @@ class MailFlowRuntime:
             )
             if not delivered:
                 continue
+            for _, covered in eligible[:-1]:
+                await self._storage.set_preference(f"reminder.{reminder_id}.{covered}", "covered")
             source = record.record_id if record is not None else "user"
             if item.notes:
                 message = self._rt(
