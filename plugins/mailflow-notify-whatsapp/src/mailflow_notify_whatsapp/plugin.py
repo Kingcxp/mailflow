@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 from mailflow.config import MailFlowConfig, NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
-from mailflow.notifications import DeliveryError, check_result, format_mail
+from mailflow.notifications import DeliveryError, check_result, format_mail, targets_of
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -55,7 +55,7 @@ class WhatsappNotifier:
 
     def __init__(self, config: NotifierConfig) -> None:
         self._url = str(config.options.get("gateway_url", "")).rstrip("/")
-        raw_targets: list[Any] = list(config.options.get("targets") or [])
+        raw_targets: list[Any] = targets_of(config)
         self._targets: list[tuple[str, str]] = []
         for entry in raw_targets:
             text = str(entry).strip()

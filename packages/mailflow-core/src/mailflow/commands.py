@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import io
+import json
 import logging
 import re
 import shlex
@@ -398,12 +400,30 @@ class CommandRouter:
 
         return query.casefold() in searchable_record_text(record).casefold()
 
+    def _selection_key(self, kind: str) -> str:
+        context = current_context()
+        identity = json.dumps(
+            [context.provider, context.instance_id, context.chat_id, context.sender]
+        )
+        return f"command.selection.{kind}." + hashlib.sha256(identity.encode()).hexdigest()[:24]
+
+    async def _remember_selection(self, kind: str, ids: list[str]) -> None:
+        await self.service.storage.set_preference(self._selection_key(kind), json.dumps(ids))
+
+    async def _selected_id(self, kind: str, index: int) -> str | None:
+        raw = await self.service.storage.get_preference(self._selection_key(kind))
+        if raw is None:
+            return None
+        ids: list[str] = json.loads(raw)
+        return ids[index] if 0 <= index < len(ids) else ""
+
     async def _mail_list(self, *, page: int = 1, query: str = "") -> CommandResponse:
         records = await self.service.list_mails()
         if query:
             # search the body too — users remember phrases from the mail
             # text, not just the subject line
             records = [record for record in records if self._matches_query(record, query)]
+        await self._remember_selection("mail", [record.record_id for record in records])
         page_records, pages, page = _paginate(records, page)
         spans: list[StyleSpan] = [
             StyleSpan(
@@ -422,7 +442,7 @@ class CommandRouter:
             number = start_index + offset
             spans.append(StyleSpan(text="\n\n", style=""))  # blank line between mails
             spans.extend(self._urgency_span(record.effective_urgency))
-            spans.append(StyleSpan(text=f" #{number} "))
+            spans.append(StyleSpan(text=f" #{number} [{record.record_id}] "))
             # the LLM summary IS the overview; the raw subject usually a
             # long unwieldy marketing line
             headline = " ".join((record.summary or record.mail.subject or "(no subject)").split())
@@ -471,14 +491,7 @@ class CommandRouter:
             if result.failed_mails:
                 return self._err(self._t("mail.search_incomplete", failed=result.failed_mails))
             return self._ok(self._t("mail.search_none"))
-        numbered_records = await self.service.list_mails()
-        numbers = {
-            record.record_id: position
-            for position, record in enumerate(
-                sorted(numbered_records, key=lambda record: record.mail.received_at, reverse=True),
-                start=1,
-            )
-        }
+        await self._remember_selection("mail", [record.record_id for record in matched])
         spans: list[StyleSpan] = [
             StyleSpan(
                 text=self._t("mail.search_title", count=len(matched)),
@@ -487,10 +500,10 @@ class CommandRouter:
         ]
         for offset, record in enumerate(matched[:_PAGE_SIZE], start=1):
             headline = (record.summary or record.mail.subject or "(no subject)").splitlines()
-            number = numbers.get(record.record_id, offset)
+            number = offset
             spans.append(StyleSpan(text="\n\n", style=""))
             spans.extend(self._urgency_span(record.effective_urgency))
-            spans.append(StyleSpan(text=f" #{number} "))
+            spans.append(StyleSpan(text=f" #{number} [{record.record_id}] "))
             spans.append(StyleSpan(text=headline[0][:120]))
             spans.append(
                 StyleSpan(
@@ -524,9 +537,15 @@ class CommandRouter:
         if not token:
             return None
         records = await self.service.list_mails()
+        exact = next((record for record in records if record.record_id == mail_id), None)
+        if exact is not None:
+            return exact
         if token.isdigit():
             # 1-based, newest-first — the same order `mail list` prints
             index = int(token) - 1
+            selected = await self._selected_id("mail", index)
+            if selected is not None:
+                return next((record for record in records if record.record_id == selected), None)
             ordered = sorted(records, key=lambda r: r.mail.received_at, reverse=True)
             if 0 <= index < len(ordered):
                 return ordered[index]
@@ -772,6 +791,7 @@ class CommandRouter:
                 for item in await self.service.list_actions(include_completed=True)
                 if flags["state"] == "all" or item.completed_at is not None
             ]
+        await self._remember_selection("action", [item.item_id for item in items])
         page_items, pages, page = _paginate(items, page)
         spans: list[StyleSpan] = [
             StyleSpan(
@@ -787,7 +807,7 @@ class CommandRouter:
             due = self._fmt_time(item.due_at)
             spans.append(
                 StyleSpan(
-                    text=f"\n#{start_index + offset} {due} [{item.action_type}] {item.summary}"
+                    text=f"\n#{start_index + offset} [{item.item_id}] {due} [{item.action_type}] {item.summary}"
                 )
             )
             detail = f"id={item.item_id} · " + (
@@ -856,15 +876,18 @@ class CommandRouter:
         due_raw: str | None = None
         action_type: str | None = None
         notes: str | None = None
+        reminder: bool | None = None
+        snooze: datetime | None = None
+        clear_snooze = False
         index = 1
         while index < len(args):
             arg = args[index]
-            if arg not in ("--summary", "--due", "--type", "--notes"):
+            if arg not in ("--summary", "--due", "--type", "--notes", "--reminder", "--snooze"):
                 return self._err(self._t("action.edit_usage"))
             if index + 1 >= len(args):
                 return self._err(self._t("action.edit_usage"))
             value = args[index + 1]
-            if arg == "--due":
+            if arg in {"--due", "--snooze"}:
                 if (
                     index + 2 < len(args)
                     and self._looks_like_date(value)
@@ -872,7 +895,18 @@ class CommandRouter:
                 ):
                     value = f"{value} {args[index + 2]}"
                     index += 1
-                due_raw = value
+                if arg == "--due":
+                    due_raw = value
+                elif value == "none":
+                    clear_snooze = True
+                else:
+                    snooze = self._parse_local_time(value)
+                    if snooze is None:
+                        return self._err(self._t("action.invalid_due", value=value))
+            elif arg == "--reminder":
+                if value not in {"on", "off"}:
+                    return self._err(self._t("action.edit_usage"))
+                reminder = value == "on"
             elif arg == "--summary":
                 summary = value
             elif arg == "--type":
@@ -880,10 +914,13 @@ class CommandRouter:
             else:
                 notes = value
             index += 2
-        if summary is None and due_raw is None and action_type is None and notes is None:
+        if (
+            all(value is None for value in (summary, due_raw, action_type, notes, reminder, snooze))
+            and not clear_snooze
+        ):
             return self._err(self._t("action.edit_usage"))
-        due = None if due_raw is None else self._parse_local_time(due_raw)
-        if due_raw is not None and due is None:
+        due = None if due_raw in {None, "none"} else self._parse_local_time(due_raw)
+        if due_raw not in {None, "none"} and due is None:
             return self._err(self._t("action.invalid_due", value=due_raw))
         try:
             updated = await self.service.edit_action(
@@ -892,6 +929,10 @@ class CommandRouter:
                 due_at=due,
                 action_type=action_type,
                 notes=notes,
+                clear_due=due_raw == "none",
+                reminder_enabled=reminder,
+                snoozed_until=snooze,
+                clear_snooze=clear_snooze,
             )
         except ValueError as exc:
             return self._err(error_text(exc, self._t))
@@ -945,16 +986,18 @@ class CommandRouter:
         clean = item_id.strip().lstrip("#")
         if not clean:
             return None
-        items = [
-            item
-            for item in await self.service.list_actions(include_completed=True)
-            if (item.completed_at is not None) == (state == "completed")
-        ]
+        items = await self.service.list_actions(include_completed=True)
         for item in items:
             if item.item_id == item_id:
                 return item
         if clean.isdigit() and len(clean) <= 3:
             index = int(clean) - 1
+            selected = await self._selected_id("action", index)
+            if selected is not None:
+                return next((item for item in items if item.item_id == selected), None)
+            items = [
+                item for item in items if (item.completed_at is not None) == (state == "completed")
+            ]
             if 0 <= index < len(items):
                 return items[index]
         matches = [item for item in items if item.item_id.startswith(item_id)]

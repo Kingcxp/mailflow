@@ -29,7 +29,7 @@ from typing import Any, cast
 import httpx
 from mailflow.config import NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
-from mailflow.notifications import DeliveryError, check_result, format_mail
+from mailflow.notifications import DeliveryError, check_result, format_mail, targets_of
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -47,7 +47,7 @@ class WechatPadProNotifier:
         self._admin_key = str(config.options.get("admin_key", ""))
         if not self._auth_key and config.options.get("gateway") == "wechatpadpro":
             self._auth_key = managed_notifier_auth_key(config.notifier_id)
-        raw_targets: list[Any] = list(config.options.get("targets") or [])
+        raw_targets: list[Any] = targets_of(config)
         self._targets: list[tuple[str, str]] = []
         for entry in raw_targets:
             text = str(entry).strip()

@@ -444,6 +444,7 @@ class MailFlowService:
         ] = {}
         self._smart_plan_lock = asyncio.Lock()
         self._reply_create_lock = asyncio.Lock()
+        self._subscription_lock = asyncio.Lock()
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -3133,25 +3134,21 @@ Return every candidate in this batch."""
                 return self.t("chat.namespace_hint", prefix=prefix, command=stripped)
             return None
         line = text[len(prefix) :].strip()
-        if line.startswith("mailflow"):
+        namespace, _, args = line.partition(" ")
+        if namespace.split("@", 1)[0].casefold() == "mailflow":
             identity = context or self.permission_context(
                 sender=sender, provider=provider, instance_id=instance_id, chat_id=chat_id
             )
             with permission_scope(identity):
                 return await self._mailflow_command(
-                    line[len("mailflow") :].strip(),
+                    args.strip(),
                     sender=identity.sender,
                     chat_id=identity.chat_id,
                     chat_type=chat_type,
                     provider=identity.provider,
                     instance_id=identity.instance_id,
                 )
-        if not line:
-            return None
-        # a bare legacy command (e.g. "/help"): teach the namespace instead
-        # of executing — other bots in the same chat may own these words
-        head = line.split()[0]
-        return self.t("chat.namespace_hint", prefix=prefix, command=head)
+        return None
 
     # commands that need the chat context (subscriptions) or special
     # rendering (help/example); everything else delegates to CommandRouter
@@ -3218,45 +3215,76 @@ Return every candidate in this batch."""
             return self._chat_help(prefix)
         if sub == "example":
             return await self._chat_example(provider, instance_id)
-        if sub == "subscribe":
-            ok = await self.subscriptions.add(provider, instance_id, chat_id)
-            await self._sync_subscription_targets(
-                provider, chat_id, instance_id=instance_id, chat_type=chat_type, subscribe=True
-            )
-            # rebuild ONLY the notifier components: a full reload_runtime()
-            # would also replace GatewayManager — orphaning the running
-            # gateway processes, their bridges and supervisors, after which
-            # every further chat command went unanswered (the reported
-            # 'subscribe works but then nothing responds').
-            await self._rebuild_notifiers()
-            return self.t("chat.subscribed") if ok else self.t("chat.already_subscribed")
-        if sub == "unsubscribe":
-            ok = await self.subscriptions.remove(provider, instance_id, chat_id)
-            await self._sync_subscription_targets(
-                provider, chat_id, instance_id=instance_id, chat_type=chat_type, subscribe=False
-            )
-            await self._rebuild_notifiers()
-            return self.t("chat.unsubscribed") if ok else self.t("chat.not_subscribed")
+        if sub in {"subscribe", "unsubscribe", "hourly"}:
+            notifier = self._chat_notifier(provider, instance_id)
+            if notifier is None or not notifier.enabled:
+                return self.t("chat.channel_unavailable")
+            if sub in {"subscribe", "unsubscribe"}:
+                async with self._subscription_lock:
+                    subscribe = sub == "subscribe"
+                    await self._sync_subscription_targets(
+                        provider,
+                        chat_id,
+                        instance_id=instance_id,
+                        chat_type=chat_type,
+                        subscribe=subscribe,
+                    )
+                    operation = self.subscriptions.add if subscribe else self.subscriptions.remove
+                    ok = await operation(provider, instance_id, chat_id)
+                    await self._rebuild_notifiers()
+                    fixed = bool(notifier.options.get("chat_id")) or bool(
+                        notifier.options.get("targets")
+                    )
+                    message = self.t("chat.subscribed" if subscribe else "chat.unsubscribed")
+                    if not subscribe and fixed:
+                        message += "\n" + self.t("chat.fixed_suspended")
+                    if subscribe and not ok:
+                        message = self.t("chat.already_subscribed")
+                    return message
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            if arg not in {"", "on", "off"}:
+                return self.t("chat.hourly_usage")
+            from mailflow.notifications import target_id, targets_of
+
+            normalized = normalize_provider(provider)
+            pref_key = f"hourly_summary.chat.{normalized}.{notifier.notifier_id}.{chat_id}"
+            if arg:
+                await self.storage.set_preference(pref_key, arg)
+            reason = ""
+            if not self.config.general.hourly_summary:
+                reason = self.t("chat.hourly_global_off")
+            elif not notifier.options.get("hourly_summary", False):
+                reason = self.t("chat.hourly_channel_off")
+            elif not any(target_id(target) == chat_id for target in targets_of(notifier)):
+                reason = self.t("chat.hourly_no_target")
+            elif not self.config.llms:
+                reason = self.t("mail.search_no_llm")
+            elif await self.storage.get_preference(pref_key) == "off":
+                reason = self.t("chat.hourly_status_off")
+            if reason:
+                return self.t("chat.hourly_effective_off", reason=reason)
+            return self.t("chat.hourly_on" if arg == "on" else "chat.hourly_status_on")
         if sub == "status":
             subs = await self.subscriptions.subscribers(provider, instance_id)
-            return self.t("chat.status", gateway=instance_id, chats=len(subs))
-        if sub == "hourly":
-            # hourly LLM mail briefing: on/off per chat, or a status read.
-            # Admin-gated like subscribe: it changes what the bot pushes.
-            if not chat_id:
-                return self.t("chat.needs_context")
-            arg = parts[1].lower() if len(parts) > 1 else ""
-            if arg not in ("on", "off", ""):
-                return self.t("chat.hourly_usage")
-            notifier_provider = "onebot" if provider == "napcat" else provider
-            pref_key = f"hourly_summary.chat.{notifier_provider}.{instance_id}.{chat_id}"
-            if arg == "":
-                enabled = bool(await self.storage.get_preference(pref_key))
-                return (
-                    self.t("chat.hourly_status_on") if enabled else self.t("chat.hourly_status_off")
+            notifier = self._chat_notifier(provider, instance_id)
+            if notifier is None or not notifier.enabled:
+                state = self.t("chat.channel_unavailable")
+            else:
+                instances = await self.gateways.instances()
+                gateway = next(
+                    (value for value in instances if value.instance_id == notifier.notifier_id),
+                    None,
                 )
-            await self.storage.set_preference(pref_key, "on" if arg == "on" else "off")
-            return self.t("chat.hourly_on") if arg == "on" else self.t("chat.hourly_off")
+                state = (
+                    self.t("chat.connection_unverified")
+                    if gateway is None
+                    else self.t("tui.gateway_status_" + gateway.status)
+                )
+                if gateway is not None and gateway.error:
+                    state = self.t("chat.connection_error")
+            return self.t(
+                "chat.status_detail", gateway=instance_id or provider, state=state, chats=len(subs)
+            )
         if self.commands is None:
             return self.t("chat.router_missing")
         response = await self.commands.execute(args)
@@ -3270,66 +3298,9 @@ Return every candidate in this batch."""
         bubbles wrap long prose badly, so every command is a usage line
         plus one short explanation."""
         p = f"{prefix}mailflow"
-        d = self.t("chat.arg_draft")
-        item = self.t("chat.arg_item")
-        reason = self.t("chat.arg_reason")
-        sections: list[str] = [
-            self.t(
-                "chat.manual_intro",
-                prefix=prefix,
-                cmd_help=f"{p} help",
-                cmd_status=f"{p} status",
-                cmd_example=f"{p} example",
-            ),
-            self.t(
-                "chat.manual_mail",
-                prefix=prefix,
-                cmd_list=f"{p} mail list",
-                cmd_show=f"{p} mail show <#>",
-                cmd_urgency=f"{p} mail urgency <#> <ad|info|important|urgent|auto>",
-                cmd_delete=f"{p} mail delete <#>",
-                cmd_feedback=f"{p} feedback <#> <{reason}>",
-                ex_show=f"{p} mail show #1",
-                ex_urgency=f"{p} mail urgency #1 urgent",
-                ex_feedback=f"{p} feedback #1 …",
-            ),
-            self.t(
-                "chat.manual_reply",
-                prefix=prefix,
-                cmd_create=f"{p} reply create <#>",
-                cmd_prepare=f"{p} reply prepare <{d}>",
-                cmd_confirm=f"{p} reply confirm <{d}> <token>",
-                cmd_cancel=f"{p} reply cancel <{d}>",
-                ex_flow=(
-                    f"{p} reply create #1\n"
-                    f"{p} reply prepare d4e5f6\n"
-                    f"{p} reply confirm d4e5f6 123456"
-                ),
-            ),
-            self.t(
-                "chat.manual_action",
-                prefix=prefix,
-                cmd_add=f'{p} action add <{self.t("chat.arg_summary")}> --due "{self.t("chat.arg_due")}" [--type …] [--notes …]',
-                cmd_list=f"{p} action list",
-                cmd_done=f"{p} action delete <{item}>",
-                ex_add=f'{p} action add … --due "2026-09-12 23:59"',
-            ),
-            self.t(
-                "chat.manual_bot",
-                prefix=prefix,
-                cmd_sub=f"{p} subscribe",
-                cmd_unsub=f"{p} unsubscribe",
-                cmd_status=f"{p} status",
-                cmd_example=f"{p} example",
-            ),
-            self.t(
-                "chat.manual_system",
-                prefix=prefix,
-                cmd_lang=f"{p} lang set zh-CN",
-                cmd_runtime=f"{p} runtime status",
-                cmd_trash=f"{p} trash list",
-            ),
-        ]
+        sections = [self.t("chat.help_read", p=p)]
+        if current_context().is_admin:
+            sections.append(self.t("chat.help_admin", p=p))
         return sections
 
     async def _chat_example(self, provider: str, instance_id: str) -> str | list[str]:
@@ -3373,6 +3344,23 @@ Return every candidate in this batch."""
             ]
         return sections
 
+    def _chat_notifier(self, provider: str, instance_id: str) -> NotifierConfig | None:
+        candidates = [
+            notifier
+            for notifier in self.config.notifiers
+            if notifier.provider == normalize_provider(provider)
+            and (
+                not instance_id
+                or instance_id
+                in {
+                    notifier.notifier_id,
+                    str(notifier.options.get("bot_id") or ""),
+                    str(notifier.options.get("uin") or ""),
+                }
+            )
+        ]
+        return candidates[0] if len(candidates) == 1 else None
+
     async def _sync_subscription_targets(
         self,
         provider: str,
@@ -3382,42 +3370,41 @@ Return every candidate in this batch."""
         chat_type: str = "private",
         subscribe: bool,
     ) -> None:
-        """Add/remove ``chat_id`` from every notifier's targets for this
-        provider so the runtime delivers to subscribed chats, and persist
-        the change so delivery survives a restart."""
-        provider = normalize_provider(provider)
-        # OneBot targets must be ``user:<id>`` / ``group:<id>``; a bare id
-        # is malformed and silently dropped by the notifier
+        from mailflow.notifications import target_id
+
+        notifier = self._chat_notifier(provider, instance_id)
+        if notifier is None:
+            raise translated_error(ValueError, self.t, "chat.channel_unavailable")
         kind = "group" if chat_type == "group" else "user"
-        prefixed = f"{kind}:{chat_id}"
-        for index, notifier in enumerate(self.config.notifiers):
-            if notifier.provider != provider or (
-                instance_id
-                and instance_id
-                not in {
-                    notifier.notifier_id,
-                    str(notifier.options.get("bot_id") or ""),
-                    str(notifier.options.get("uin") or ""),
-                }
-            ):
-                continue
-            raw_targets: list[Any] = list(notifier.options.get("targets") or [])
-            targets = [str(t) for t in raw_targets]
-            changed = False
-            if subscribe and prefixed not in targets:
-                targets.append(prefixed)
-                changed = True
-            elif not subscribe and prefixed in targets:
-                targets.remove(prefixed)
-                changed = True
-            if changed:
-                updated = notifier.model_copy(
-                    update={"options": {**notifier.options, "targets": targets}}
-                )
-                self.config.notifiers[index] = updated
-        config_path = getattr(self, "config_path", None)
-        if config_path:
-            write_config(self.config, config_path)
+        if notifier.provider == "openwechat":
+            kind = "room" if chat_type == "group" else "contact"
+        target = f"{kind}:{chat_id}"
+
+        def same(value: Any) -> bool:
+            return target_id(str(value)) == chat_id
+
+        options = dict(notifier.options)
+        subscribed = [
+            str(value) for value in options.get("subscription_targets", []) if not same(value)
+        ]
+        excluded = [str(value) for value in options.get("excluded_targets", []) if not same(value)]
+        if subscribe:
+            subscribed.append(target)
+        else:
+            # Fixed destinations remain in configuration, with an explicit chat opt-out.
+            excluded.append(target)
+        options.update(subscription_targets=subscribed, excluded_targets=excluded)
+        updated = self.config.model_copy(deep=True)
+        index = next(
+            i
+            for i, value in enumerate(updated.notifiers)
+            if value.notifier_id == notifier.notifier_id
+        )
+        updated.notifiers[index] = notifier.model_copy(update={"options": options})
+        if self.config_path:
+            write_config(updated, self.config_path)
+        self.config = updated
+        self.runtime.update_config(updated)
 
     def permission_context(
         self, *, sender: str, provider: str, instance_id: str = "", chat_id: str = ""
@@ -3447,9 +3434,20 @@ Return every candidate in this batch."""
             sender
             and provider
             and notifier
-            and sender in _flatten_admins(notifier.options.get("admins") or [])
+            and any(
+                self._admin_id(sender, normalized_provider)
+                == self._admin_id(admin, normalized_provider)
+                for admin in _flatten_admins(notifier.options.get("admins") or [])
+            )
         )
         return PermissionContext(sender, provider, instance_id, chat_id, is_admin)
+
+    @staticmethod
+    def _admin_id(value: str, provider: str) -> str:
+        if provider == "whatsapp" and ("@" not in value or value.endswith("@s.whatsapp.net")):
+            number = value.split("@", 1)[0].split(":", 1)[0]
+            return "".join(char for char in number if char.isdigit())
+        return value.strip()
 
     def _is_admin(self, sender: str, provider: str, instance_id: str = "") -> bool:
         return self.permission_context(

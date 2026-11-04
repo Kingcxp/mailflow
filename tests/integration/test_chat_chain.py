@@ -138,6 +138,13 @@ async def test_full_chat_command_chain_replies() -> None:
 
     # 2) real service with "#" prefix; bot_server binds and runs
     service = _service()
+    from mailflow.config import NotifierConfig
+
+    service.config.notifiers = [
+        NotifierConfig(
+            notifier_id="napcat-test", provider="onebot", options={"admins": ["404291187"]}
+        )
+    ]
     service.bot_server = None  # type: ignore[attr-defined]
     from mailflow.bot_server import BotServer
 

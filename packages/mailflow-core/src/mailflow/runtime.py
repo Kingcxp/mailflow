@@ -1789,6 +1789,9 @@ class MailFlowRuntime:
         except Exception:
             return ""
 
+    def update_config(self, config: MailFlowConfig) -> None:
+        self._config = config
+
     async def reconfigure_notifiers(
         self, notifiers: list[Notifier], notifier_configs: list[NotifierConfig]
     ) -> None:

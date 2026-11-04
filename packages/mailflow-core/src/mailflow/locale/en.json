@@ -1149,7 +1149,18 @@
       "arg_reason": "reason",
       "arg_token": "token",
       "arg_summary": "summary",
-      "arg_due": "due"
+      "arg_due": "due",
+      "channel_unavailable": "This chat has no enabled notification channel. Check the channel instance and configuration.",
+      "fixed_suspended": "Fixed recipient settings are retained. Automatic pushes to this chat are paused until you subscribe again.",
+      "connection_unverified": "Connection not verified; check login and command reception in notification settings",
+      "connection_error": "Connection error; check notification settings",
+      "status_detail": "Channel {gateway}: {state}. Subscribed chats: {chats}.",
+      "hourly_global_off": "the global hourly summary switch is off",
+      "hourly_channel_off": "hourly summaries are disabled for this channel",
+      "hourly_no_target": "this chat is not a delivery target; subscribe first",
+      "hourly_effective_off": "Hourly summaries are OFF: {reason}.",
+      "help_read": "MailFlow — view mail and tasks\n{p} mail list [query]\n{p} mail show <ID|#>\n{p} mail search <need>\n{p} action list [--state open|completed|all]\n{p} action show <ID|#>\n{p} status · {p} hourly\nUse the ID from a notification or list. Numbers refer to your last result in this chat.",
+      "help_admin": "Manage mail and tasks\n{p} mail delete <ID|#> · mail urgency <ID|#> <level|auto>\n{p} action add <summary> [--due \"YYYY-MM-DD HH:MM\"]\n{p} action edit <ID|#> --summary <text> [--due <time|none>] [--reminder on|off] [--snooze <time|none>]\n{p} action complete <ID|#> · action reopen <ID|#> · action delete <ID|#>\n{p} reply create <mail ID|#> → reply show <draft> → reply edit <draft> <body> → reply prepare <draft> → reply confirm <draft> <token>\n{p} subscribe · {p} unsubscribe · {p} hourly on|off\n{p} help for details; {p} cancel stops a pending lookup."
     },
     "urgency": {
       "info": "INFO",

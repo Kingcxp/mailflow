@@ -1149,7 +1149,18 @@
       "arg_reason": "原因",
       "arg_token": "token",
       "arg_summary": "事项内容",
-      "arg_due": "YYYY-MM-DD HH:MM"
+      "arg_due": "YYYY-MM-DD HH:MM",
+      "channel_unavailable": "当前聊天没有对应的已启用通知渠道，请检查渠道实例和配置。",
+      "fixed_suspended": "固定接收目标配置已保留；该聊天的自动推送已暂停，重新订阅后恢复。",
+      "connection_unverified": "连接尚未确认，请在通知设置中检查登录和命令接收状态",
+      "connection_error": "连接异常，请在通知设置中查看原因",
+      "status_detail": "渠道 {gateway}：{state}。已订阅聊天：{chats} 个。",
+      "hourly_global_off": "全局每小时摘要尚未开启",
+      "hourly_channel_off": "该渠道尚未开启每小时摘要",
+      "hourly_no_target": "当前聊天不是推送目标，请先订阅",
+      "hourly_effective_off": "每小时摘要未生效：{reason}。",
+      "help_read": "MailFlow · 查看邮件与待办\n{p} mail list [关键词]\n{p} mail show <编号|#序号>\n{p} mail search <查找需求>\n{p} action list [--state open|completed|all]\n{p} action show <编号|#序号>\n{p} status · {p} hourly\n可使用通知或列表中的固定编号；序号对应你在当前聊天最近一次查询的结果。",
+      "help_admin": "管理邮件与待办\n{p} mail delete <编号|#序号> · mail urgency <编号|#序号> <级别|auto>\n{p} action add <内容> [--due \"年-月-日 时:分\"]\n{p} action edit <编号|#序号> --summary <内容> [--due <时间|none>] [--reminder on|off] [--snooze <时间|none>]\n{p} action complete <编号|#序号> · action reopen <编号|#序号> · action delete <编号|#序号>\n{p} reply create <邮件编号|#序号> → reply show <草稿> → reply edit <草稿> <正文> → reply prepare <草稿> → reply confirm <草稿> <token>\n{p} subscribe · {p} unsubscribe · {p} hourly on|off\n{p} help 查看详细用法；{p} cancel 终止正在执行的查询。"
     },
     "urgency": {
       "info": "INFO",

@@ -27,7 +27,11 @@ def target_id(target: str) -> str:
 def targets_of(config: NotifierConfig) -> list[str]:
     targets: list[str] = []
     seen: set[str] = set()
-    raw = [*config.options.get("targets", []), config.options.get("chat_id", "")]
+    raw = [
+        *config.options.get("targets", []),
+        *config.options.get("subscription_targets", []),
+        config.options.get("chat_id", ""),
+    ]
     if config.provider == "smtp":
         raw.extend(config.options.get("to", []))
     for value in raw:
@@ -37,6 +41,16 @@ def targets_of(config: NotifierConfig) -> list[str]:
         if config.provider == "onebot":
             identity = target
         if target and identity not in seen:
+            excluded = [str(value) for value in config.options.get("excluded_targets", [])]
+            if any(
+                (
+                    value == target
+                    if config.provider == "onebot"
+                    else target_id(value) == target_id(target)
+                )
+                for value in excluded
+            ):
+                continue
             targets.append(target)
             seen.add(identity)
     return targets

@@ -707,7 +707,10 @@ async def test_chat_help_is_sectioned() -> None:
     service = commands_service(cfg)
     service.config = cfg
     service.i18n = I18n()
-    chunks = await service.command_dispatch("/mailflow help")
+    chunks = await service.command_dispatch(
+        "/mailflow help",
+        context=__import__("mailflow.permissions", fromlist=["LOCAL_CONTEXT"]).LOCAL_CONTEXT,
+    )
     assert isinstance(chunks, list) and chunks
     for chunk in chunks:
         assert "\n" in chunk  # every section has body beyond the title
@@ -746,7 +749,9 @@ async def test_command_dispatch_prefix_filtering() -> None:
     # bare commands no longer execute: everything lives in the mailflow
     # namespace, the reply teaches the corrected form instead
     bare = await service.command_dispatch("/mail list")
-    assert bare is not None and "mailflow help" in bare
+    assert bare is None
+    assert await service.command_dispatch("/weather Shanghai") is None
+    assert await service.command_dispatch("/mailflower help") is None
     hinted = await service.command_dispatch("mailflow unsubscribe")
     assert hinted is not None and "mailflow help" in hinted
     assert await service.command_dispatch("hello") is None
@@ -809,7 +814,12 @@ async def test_mailflow_hourly_toggle() -> None:
         NotifierConfig(
             notifier_id="napcat-1",
             provider="onebot",
-            options={"admins": ["10001"], "targets": ["group:888"], "http_url": "http://x"},
+            options={
+                "admins": ["10001"],
+                "targets": ["group:888"],
+                "http_url": "http://x",
+                "hourly_summary": True,
+            },
         )
     ]
     service = commands_service(cfg)
@@ -862,14 +872,19 @@ async def test_mailflow_hourly_toggle() -> None:
         )
         return str(result)
 
-    assert "OFF" in await call("/mailflow hourly") or "已关闭" in await call("/mailflow hourly")
+    assert "OFF" in await call("/mailflow hourly") or "未生效" in await call("/mailflow hourly")
+    cfg.general.hourly_summary = True
+    from mailflow.config import LLMConfig
+
+    cfg.llms = [LLMConfig(llm_id="test")]
+    await call("/mailflow hourly off")
     assert "enabled" in await call("/mailflow hourly on") or "已开启" in await call(
         "/mailflow hourly on"
     )
     assert await call("/mailflow hourly on")  # twice: idempotent
     assert "ON" in await call("/mailflow hourly") or "已开启" in await call("/mailflow hourly")
     assert store["hourly_summary.chat.onebot.napcat-1.888"] == "on"
-    assert "disabled" in await call("/mailflow hourly off") or "已关闭" in await call(
+    assert "OFF" in await call("/mailflow hourly off") or "已关闭" in await call(
         "/mailflow hourly off"
     )
     assert store["hourly_summary.chat.onebot.napcat-1.888"] == "off"
@@ -949,18 +964,21 @@ async def test_mailflow_subscribe_requires_admin() -> None:
     assert service.subscriptions.added == [  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
         ("napcat", "napcat-1", "group-1")
     ]
-    onebot = next(n for n in cfg.notifiers if n.notifier_id == "napcat-1")
     # OneBot targets must be prefixed (user: / group:); a bare id is
     # malformed and silently dropped by the notifier
-    assert "group:group-1" in onebot.options["targets"]
+    from mailflow.notifications import targets_of
+
+    assert "group:group-1" in targets_of(service.config.notifiers[0])
 
     # help: section-grouped chunks, every section carries mailflow commands
-    help_chunks = await service.command_dispatch("/mailflow help", sender="10001")
+    help_chunks = await service.command_dispatch(
+        "/mailflow help", sender="10001", provider="napcat", instance_id="napcat-1"
+    )
     assert isinstance(help_chunks, list) and help_chunks
     joined = "\n".join(help_chunks)
     assert "mailflow subscribe" in joined
     assert "mailflow mail list" in joined
-    assert "mailflow reply confirm" in joined
+    assert "reply confirm" in joined
 
 
 @pytest.mark.asyncio
@@ -1013,5 +1031,70 @@ async def test_mailflow_unsubscribe_removes_target() -> None:
         instance_id="napcat-1",
     )
     assert reply is not None and "cancelled" in reply
-    onebot = next(n for n in cfg.notifiers if n.notifier_id == "napcat-1")
-    assert "group:group-1" not in onebot.options["targets"]
+    from mailflow.notifications import targets_of
+
+    assert "group:group-1" not in targets_of(service.config.notifiers[0])
+
+
+async def test_filtered_mail_numbers_survive_new_arrivals_and_other_users() -> None:
+    from datetime import UTC, datetime
+
+    from mailflow.permissions import PermissionContext, permission_scope
+
+    service = commands_service()
+    commands = CommandRouter(service)
+    await service.storage.save_mail(make_record("m1", subject="Target"))
+    user = PermissionContext("alice", "telegram", "bot", "chat", True)
+    other = PermissionContext("bob", "telegram", "bot", "chat", True)
+    with permission_scope(user):
+        listing = await commands.execute("mail list Bring")
+        assert "#1" in listing.text and "m1" in listing.text
+    new = make_record("new")
+    new.mail.received_at = datetime.now(UTC)
+    await service.storage.save_mail(new)
+    with permission_scope(other):
+        await commands.execute("mail list")
+    with permission_scope(user):
+        shown = await commands.execute("mail show #1")
+        assert "Bring your student ID" in shown.text
+        assert (await commands.execute("mail delete #1")).ok
+    assert await service.storage.get_mail("m1") is None
+    assert await service.storage.get_mail("new") is not None
+
+
+@pytest.mark.parametrize("provider,chat_id", [("telegram", "42"), ("openwechat", "@@group")])
+async def test_unsubscribe_disables_equivalent_fixed_and_subscribed_targets(
+    provider: str, chat_id: str
+) -> None:
+    from mailflow.config import NotifierConfig
+    from mailflow.notifications import targets_of
+    from mailflow.permissions import LOCAL_CONTEXT
+
+    config = MailFlowConfig(
+        notifiers=[
+            NotifierConfig(
+                notifier_id="bot",
+                provider=provider,
+                options={"targets": [f"group:{chat_id}"], "chat_id": chat_id},
+            )
+        ]
+    )
+    service = commands_service(config)
+    identity = {
+        "provider": provider,
+        "instance_id": "bot",
+        "chat_id": chat_id,
+        "chat_type": "group",
+        "context": LOCAL_CONTEXT,
+    }
+    # Use the actual platform identity, with a granted role, throughout dispatch.
+    from mailflow.permissions import PermissionContext
+
+    identity["context"] = PermissionContext("admin", provider, "bot", chat_id, True)
+    await service.command_dispatch("/mailflow subscribe", **identity)
+    assert len(targets_of(service.config.notifiers[0])) == 1
+    await service.command_dispatch("/mailflow unsubscribe", **identity)
+    assert targets_of(service.config.notifiers[0]) == []
+    assert service.config.notifiers[0].options["chat_id"] == chat_id
+    await service.command_dispatch("/mailflow subscribe", **identity)
+    assert len(targets_of(service.config.notifiers[0])) == 1

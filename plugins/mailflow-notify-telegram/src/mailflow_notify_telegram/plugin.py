@@ -20,6 +20,7 @@ from mailflow.config import MailFlowConfig, NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
 from mailflow.forms import FormField
 from mailflow.notifications import DeliveryError, format_mail
+from mailflow.notifications import targets_of as shared_targets
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -62,18 +63,7 @@ def _bare_id(entry: str) -> str:
 
 
 def targets_of(config: NotifierConfig) -> list[str]:
-    """Delivery targets, with ``chat_id`` folded in as the single-destination
-    form of the same setting.
-
-    Deduplication is on the bare chat id: a chat listed as ``user:42`` in
-    targets must not also receive the alert through ``chat_id = 42``.
-    """
-    raw: list[Any] = list(config.options.get("targets") or [])
-    targets = [str(entry).strip() for entry in raw if str(entry).strip()]
-    chat_id = str(config.options.get("chat_id") or "").strip()
-    if chat_id and chat_id not in {_bare_id(entry) for entry in targets}:
-        targets.append(chat_id)
-    return targets
+    return shared_targets(config)
 
 
 class TelegramNotifier:
