@@ -1174,8 +1174,11 @@ class MailFlowRuntime:
                             notifier, config, briefing, row["key"], only=receipt
                         )
         async with self._reminder_lock, self._notifier_lock, self.action_store.lock:
+            # Mail retries above may wait on a network request. Recheck task and
+            # subscription state after taking the same lock as edits/deletions.
+            current = {row["delivery_id"]: row for row in await self.failed_deliveries()}
             for receipt in delivery_ids:
-                row = rows.get(receipt, {})
+                row = current.get(receipt, {})
                 if row.get("kind") != "text":
                     continue
                 text_notifier = next(
@@ -1225,8 +1228,11 @@ class MailFlowRuntime:
                             json.dumps([reminder_identity(item) for item in items]),
                         )
                     await self.deliveries.update(receipt, None)
-        remaining = await self.deliveries.read()
-        return sum(receipt in rows and receipt not in remaining for receipt in delivery_ids)
+        delivered = 0
+        for receipt in set(delivery_ids):
+            if receipt in rows and await self._storage.get_preference(receipt) == "delivered":
+                delivered += 1
+        return delivered
 
     # -- retention cleanup ----------------------------------------------------------
 

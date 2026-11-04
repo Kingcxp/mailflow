@@ -410,6 +410,48 @@ async def test_unsubscribed_recipient_cannot_be_retried_from_failures() -> None:
     failures = await service.failed_deliveries()
     assert len(failures) == 1
     channel.options["excluded_targets"] = ["group:42"]
-    await service.retry_deliveries([failures[0]["delivery_id"]])
+    assert await service.retry_deliveries([failures[0]["delivery_id"]]) == 0
     assert notifier.sent == []
     assert await service.failed_deliveries() == []
+
+
+async def test_retry_rechecks_task_completed_while_another_delivery_is_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started, release = asyncio.Event(), asyncio.Event()
+
+    class Channel(FakeNotifier):
+        retrying = False
+
+        async def notify(self, record: Any) -> None:
+            if not self.retrying:
+                raise ConnectionError("offline")
+            started.set()
+            await release.wait()
+
+    original_sleep = asyncio.sleep
+
+    async def no_delay(*args: Any) -> None:
+        await original_sleep(0)
+
+    monkeypatch.setattr("mailflow.runtime.asyncio.sleep", no_delay)
+    storage = MemoryStorage()
+    item = await schedule(storage)
+    channel = Channel(failures=1)
+    service = make_service(storage, channel)
+    await service.runtime._notify(storage.mails["m1"])  # pyright: ignore[reportPrivateUsage]
+    assert await service.runtime.run_reminder_tick() == 0
+    failures = await service.failed_deliveries()
+    assert len(failures) == 2
+    channel.retrying = True
+    retry = asyncio.create_task(service.retry_deliveries([row["delivery_id"] for row in failures]))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        await service.edit_action(item.item_id, completed=True)
+        release.set()
+        assert await retry == 1  # Only the mail was delivered.
+        assert channel.sent == []
+        assert await service.failed_deliveries() == []
+    finally:
+        release.set()
+        await retry
