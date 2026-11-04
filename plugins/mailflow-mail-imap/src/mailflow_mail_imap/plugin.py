@@ -474,13 +474,21 @@ class IMAPSource:
                 (self._checkpoint_scope and self._checkpoint_scope != self._scope)
                 or (self._uidvalidity and validity and validity != self._uidvalidity)
             )
+            initial_sync = self._account.options.get("initial_sync", "new")
+            import_history = initial_sync in {"all", "recent"}
             if changed:
-                baseline = 0
+                baseline = 0 if import_history else max(uids, default=0)
+            elif self._session_history_until is None and not import_history:
+                # A receive checkpoint is not permission to import old mail.
+                # Start new-only sessions at the current mailbox head, even
+                # when a legacy cursor is months behind. Browsing history is
+                # explicit and never changes this live receive position.
+                baseline = max(self._last_uid or 0, max(uids, default=0))
             elif self._last_uid is not None:
                 baseline = self._last_uid
-            elif self._account.options.get("initial_sync") == "all":
+            elif initial_sync == "all":
                 baseline = 0
-            elif self._account.options.get("initial_sync") == "recent":
+            elif initial_sync == "recent":
                 from datetime import timedelta
 
                 since = (
@@ -496,9 +504,8 @@ class IMAPSource:
                 # Deliberately excluded setup backlog; even an empty mailbox
                 # needs baseline 0 so its very first new message is ingested.
                 baseline = max(uids, default=0)
-            # Startup synchronizes original mail, never resurrects an analysis
-            # batch. Only UIDs arriving after this session's first poll are live.
-            # The legacy analyze_backlog option no longer starts implicit work.
+            # Explicit imports stay separate from new arrivals. The legacy
+            # analyze_backlog option never starts an implicit history batch.
             history_until = (
                 max(uids, default=0)
                 if changed or self._session_history_until is None
@@ -546,13 +553,13 @@ class IMAPSource:
         batch = await asyncio.to_thread(self._fetch_once)
         self._last_poll_error = batch.error
         self._history_until = batch.history_until
-        self._session_history_until = batch.history_until
         if (
             self._last_uid != batch.baseline
             or self._uidvalidity != batch.uidvalidity
             or self._checkpoint_scope != self._scope
         ):
             await self._commit(batch.baseline, batch.uidvalidity)
+        self._session_history_until = batch.history_until
         for uid, mail in batch.messages:
             await emit(mail)
             await self._commit(uid, batch.uidvalidity)

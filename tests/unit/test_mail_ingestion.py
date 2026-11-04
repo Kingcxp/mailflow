@@ -22,6 +22,7 @@ class Mailbox:
         self.fail_uid = 0
         self.closed = 0
         self.raw: bytes | None = None
+        self.fetched: list[int] = []
 
     def login(self, *args: Any) -> None:
         pass
@@ -37,6 +38,7 @@ class Mailbox:
         if command == "search":
             return "OK", [" ".join(map(str, self.uids)).encode()]
         uid = int(args[0])
+        self.fetched.append(uid)
         assert "PEEK" in args[1]
         if uid == self.fail_uid:
             raise ConnectionError("connection interrupted")
@@ -110,17 +112,28 @@ async def test_failed_queue_handoff_is_not_acknowledged(
     assert received == ["mail 1", "mail 2", "mail 3"]
 
 
-async def test_startup_mail_is_saved_without_analysis_but_later_arrivals_are_analyzed(
+@pytest.mark.parametrize("sync_options", [{}, {"analyze_backlog": True}, {"initial_sync": "new"}])
+async def test_startup_skips_old_checkpoints_but_receives_new_arrivals(
     monkeypatch: pytest.MonkeyPatch,
+    sync_options: dict[str, Any],
 ) -> None:
     mailbox = Mailbox()
-    source = source_for(
-        monkeypatch, mailbox, initial_sync="new", analyze_backlog=True, interval_seconds=0.01
+    monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", Mock(return_value=mailbox))
+    account = MailAccountConfig(
+        account_id="account",
+        provider="imap",
+        options={"preset": "gmail", "interval_seconds": 0.01, **sync_options},
     )
-    runtime, storage, _ = build_runtime({"account": source}, accounts=[source._account])
-    # A previous UID checkpoint must still synchronize mail received offline,
-    # including old legacy backlog, without starting analysis on app launch.
-    await storage.set_preference("imap.watermark.account", "1")
+    source = IMAPSource(account)
+    runtime, storage, _ = build_runtime({"account": source}, accounts=[account])
+    # This is the user's old backlog checkpoint. Startup must not fetch the
+    # next historical page, even after mail records have been cleared.
+    await storage.set_preference(
+        "imap.watermark.account",
+        json.dumps(
+            {"uid": 1, "uidvalidity": mailbox.validity, "scope": source._scope, "history_until": 3}  # pyright: ignore[reportPrivateUsage]
+        ),
+    )
 
     synced, analyzed = asyncio.Event(), asyncio.Event()
 
@@ -135,24 +148,24 @@ async def test_startup_mail_is_saved_without_analysis_but_later_arrivals_are_ana
     await runtime.start()
     try:
         await asyncio.wait_for(synced.wait(), timeout=2)
-        assert len(storage.saved) == 2
-        assert all(
-            record.analysis is None and record.analysis_state == "unanalysed"
-            for record in storage.saved
-        )
+        assert not storage.saved and not mailbox.fetched
         assert (
             json.loads((await storage.get_preference("imap.watermark.account")) or "{}")["uid"] == 3
         )
+        # A real restart with the persisted checkpoint must also stay empty.
+        await runtime.stop()
+        synced.clear()
+        await runtime.start()
+        await asyncio.wait_for(synced.wait(), timeout=2)
+        assert not storage.saved and not mailbox.fetched
         mailbox.uids.append(4)
         await asyncio.wait_for(analyzed.wait(), timeout=2)
-        assert len(storage.saved) == 3
+        assert len(storage.saved) == 1
         assert await runtime.wait_idle()
         current = next(record for record in storage.saved if record.mail.subject == "mail 4")
         assert current.analysis is not None and current.analysis_state == "ready"
         assert current.ingestion == "live"
-        assert [
-            record.analysis_state for record in storage.saved if record.mail.subject != "mail 4"
-        ] == ["unanalysed", "unanalysed"]
+        assert mailbox.fetched == [4]
     finally:
         await runtime.stop()
 
@@ -219,8 +232,11 @@ async def test_empty_baseline_uid_reset_and_history_are_independent(
     mailbox.validity = "11"
     mailbox.uids = [1]
     await source._poll_once(accept)
-    assert received == ["mail 1", "mail 2", "mail 1"]
-    assert source._last_uid == 1
+    assert received == ["mail 1", "mail 2"]
+    mailbox.uids.append(2)
+    await source._poll_once(accept)
+    assert received == ["mail 1", "mail 2", "mail 2"]
+    assert source._last_uid == 2
 
 
 async def test_uid_reset_without_message_id_or_date_does_not_duplicate_mail(
