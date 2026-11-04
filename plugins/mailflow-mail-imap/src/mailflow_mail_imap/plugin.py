@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import html as html_lib
 import imaplib
 import inspect
 import json
@@ -39,6 +38,7 @@ from mailflow.domain import (
     MailMessage,
 )
 from mailflow.forms import FormField
+from mailflow.mail_body import html_to_text
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 from mailflow.replies import ReplySourceError
@@ -156,21 +156,8 @@ def _extract_body(
     if not body_text and body_html:
         # HTML-only mails (most notification mail) must still yield a
         # readable plain body for display, analysis and keyword scanning
-        body_text = _html_to_text(body_html)
+        body_text = html_to_text(body_html)
     return body_text, body_html, attachments
-
-
-def _html_to_text(html: str) -> str:
-    """Minimal HTML → text: drop script/style blocks and tags, unescape
-    entities, collapse the whitespace the tag removal leaves behind."""
-    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)
-    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
-    text = re.sub(r"(?i)</p>", "\n\n", text)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = html_lib.unescape(text)
-    text = re.sub(r"[ \t\r\f\v]+", " ", text)
-    text = re.sub(r"\n\s+\n", "\n\n", text)
-    return text.strip()
 
 
 def _unparseable_mail(raw: bytes, account_id: str, provider: str, error: Exception) -> MailMessage:

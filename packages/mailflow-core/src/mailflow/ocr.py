@@ -24,10 +24,10 @@ from __future__ import annotations
 import importlib
 import logging
 import re
-from html import unescape
 from typing import Any, cast
 
 from mailflow.domain import MAX_ATTACHMENT_BYTES, MailMessage, MailRecord
+from mailflow.mail_body import html_to_text, mail_body_text
 
 logger = logging.getLogger("mailflow.ocr")
 
@@ -112,13 +112,12 @@ def searchable_forms(text: str) -> list[str]:
 
 def searchable_mail_text(mail: MailMessage) -> str:
     """The same source/attachment/image text in every search surface."""
-    html_text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", mail.body_html)
-    html_text = unescape(re.sub(r"<[^>]+>", " ", html_text))
+    html_text = html_to_text(mail.body_html)
     text = "\n".join(
         [
             mail.subject,
             mail.sender.display,
-            mail.body_text,
+            mail_body_text(mail),
             " ".join(html_text.split()),
             " ".join(attachment.filename for attachment in mail.attachments),
             mail.image_text,

@@ -34,6 +34,7 @@ from mailflow.domain import (
     Urgency,
     parse_urgency,
 )
+from mailflow.mail_body import mail_body_text
 
 logger = logging.getLogger("mailflow.processor")
 
@@ -64,12 +65,7 @@ def _plain_body(mail: MailMessage) -> str:
     analyser and the literal search need. It is labelled so the model treats it
     as derived content rather than as prose the sender wrote.
     """
-    if mail.body_text:
-        body = mail.body_text
-    elif mail.body_html:
-        body = re.sub(r"<[^>]+>", " ", mail.body_html)
-    else:
-        body = ""
+    body = mail_body_text(mail)
     if mail.image_text.strip():
         labelled = f"[text read from images attached to this mail]\n{mail.image_text.strip()}"
         return f"{body}\n\n{labelled}" if body else labelled

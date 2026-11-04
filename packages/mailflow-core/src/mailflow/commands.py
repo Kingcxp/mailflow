@@ -33,6 +33,7 @@ from mailflow.domain import (
 )
 from mailflow.errors import error_text
 from mailflow.letters import LETTER_LANGUAGES, html_to_text, markup_to_html
+from mailflow.mail_body import mail_body_text
 from mailflow.permissions import (
     PermissionContext,
     authorize_command,
@@ -624,7 +625,7 @@ class CommandRouter:
                     style=_STYLE_ACCENT,
                 )
             )
-        body = mail.body_text.strip() or "(no text body)"
+        body = mail_body_text(mail) or self._t("tui.mail_no_body")
         spans.append(StyleSpan(text=f"\n\n{self._t('mail.field_body')}:\n{body}"))
         if mail.image_text.strip():
             spans.append(

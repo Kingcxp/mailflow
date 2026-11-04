@@ -22,13 +22,14 @@ import html as _html
 import re
 from datetime import date
 
+from mailflow.mail_body import html_to_text
+
 _ALREADY_HTML = re.compile(
     r"</?(?:p|div|br|b|i|u|strong|em|table|ul|ol|li|blockquote)\b", re.IGNORECASE
 )
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _ITALIC = re.compile(r"\*([^*\n]+)\*")
 _ALIGN = re.compile(r"<(right|center)>(.*?)</\1>", re.IGNORECASE | re.DOTALL)
-_TAG = re.compile(r"<[^>]+>")
 
 _EN_MONTHS = (
     "January",
@@ -94,14 +95,6 @@ def markup_to_html(text: str) -> str:
         return text
     paragraphs = re.split(r"\n\s*\n", text.strip("\n"))
     return "\n".join(_paragraph(p) for p in paragraphs if p.strip())
-
-
-def html_to_text(html_text: str) -> str:
-    """Strip an HTML fragment to plain text (breaks and paragraphs kept)."""
-    text = html_text.replace("<br/>", "\n").replace("<br>", "\n")
-    text = re.sub(r"</(p|div)>", "\n\n", text, flags=re.IGNORECASE)
-    text = _TAG.sub("", text)
-    return _html.unescape(text).strip("\n")
 
 
 def build_letter(

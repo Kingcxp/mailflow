@@ -17,6 +17,7 @@ import logging
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mailflow.domain import MailRecord
+from mailflow.mail_body import mail_body_text
 from mailflow.service import MailFlowService
 from rich.text import Text as RichText
 from textual.app import ComposeResult
@@ -126,7 +127,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         self.query_one("#ask-correct-reason", Static).update(  # pyright: ignore[reportUnknownMemberType]
             reason_line
         )
-        body = record.mail.body_text or record.mail.body_html or ""
+        body = mail_body_text(record.mail)
         body_line = RichText(f"{self._t('tui.detail_body')}: ", style="dim bold")
         body_line.append(body[:4000])
         if record.mail.image_text:

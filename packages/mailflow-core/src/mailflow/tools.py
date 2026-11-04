@@ -34,6 +34,7 @@ from mailflow.domain import (
     action_sort_time,
     to_utc,
 )
+from mailflow.mail_body import mail_body_text
 from mailflow.mail_query import MailQuery
 from mailflow.prompts import prompt_context
 
@@ -844,7 +845,7 @@ def _mail_line(record: MailRecord) -> str:
     return (
         f"- id={record.record_id} date={mail.received_at.date().isoformat()} "
         f"from={mail.sender.address} subject={mail.subject!r} "
-        f"summary={_snippet(record.summary or '')} body={_snippet(mail.body_text or '')}"
+        f"summary={_snippet(record.summary or '')} body={_snippet(mail_body_text(mail))}"
     )
 
 

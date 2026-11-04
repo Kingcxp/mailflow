@@ -438,13 +438,16 @@ class TestIMAPHtmlOnlyBody:
             "\r\n"
             "<html><head><style>p{color:red}</style></head><body>"
             "<p>中转站文件到期提醒</p>"
-            "<a href='x'>点击查看</a>"
+            "<BR class='break'>第二行</p><ol><li>第一项</li><li>第二项</li></ol>"
+            "<a href='https://example.com/details'>点击查看</a>"
             "<script>alert(1)</script>"
             "</body></html>"
         ).encode()
         mail = parse_mime(raw, "acct-1")
         assert "中转站文件到期提醒" in mail.body_text
         assert "点击查看" in mail.body_text
+        assert "\n第二行\n\n1. 第一项\n2. 第二项" in mail.body_text
+        assert "https://example.com/details" in mail.body_text
         assert "alert" not in mail.body_text
         assert "color:red" not in mail.body_text
         assert mail.body_html.startswith("<html>")

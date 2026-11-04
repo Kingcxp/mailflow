@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
-from mailflow.domain import ActionItem, MailRecord, ReplyDraft, TrashRecord
+from mailflow.domain import ActionItem, MailRecord, ReplyDraft, TrashRecord, looks_binary
 from mailflow.errors import error_text
+from mailflow.mail_body import mail_body_text
 from mailflow.mail_query import MailQuery
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
@@ -228,10 +229,12 @@ class MailFilter(WorkflowScreen):
 class MailReader(WorkflowScreen):
     def __init__(self, service: MailFlowService, record: MailRecord) -> None:
         super().__init__(service)
-        from mailflow.processors import _plain_body  # pyright: ignore[reportPrivateUsage]
-
         self.record = record
-        self.body = _plain_body(record.mail)
+        self.body = mail_body_text(record.mail)
+        if not self.body and looks_binary(record.mail.body_text):
+            self.body = self.t("tui.detail_binary_body")
+        if record.mail.image_text.strip():
+            self.body += f"\n\n{self.t('mail.field_image_text')}:\n{record.mail.image_text}"
         self.body_offset = 0
 
     def compose(self) -> ComposeResult:

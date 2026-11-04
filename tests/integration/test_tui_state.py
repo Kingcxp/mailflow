@@ -32,6 +32,7 @@ from mailflow_tui.app import (
     RuntimePane,
 )
 from mailflow_tui.confirm import ConfirmModal
+from mailflow_tui.mail_workflows import MailReader
 from mailflow_tui.remote import RemoteServiceAdapter
 from mailflow_tui.widgets import Input as EditingInput
 from mailflow_tui.widgets import SelectionTable, ShortcutHelp
@@ -100,6 +101,51 @@ async def settle(pilot: Any) -> None:
     await pilot.pause()
     await pilot.app.workers.wait_for_complete()
     await pilot.pause()
+
+
+async def test_stored_html_is_readable_in_mail_reader_and_related_task(host: Any) -> None:
+    service, view, app, _emit, _failures = host
+    source = (
+        "<p>First paragraph<BR class='break'>Second line</p>"
+        "<div>Next block</div><ul><li>First item</li><li>Second item</li></ul>"
+        "<p><a href='https://example.com/details'>Read details</a></p>"
+        "<style>secret-style</style><div hidden>secret-preview</div>"
+    )
+    task = ActionItem(
+        item_id="html-task", mail_id="html", summary="Follow up", action_type="errand"
+    )
+    record = make_record("html", action=task)
+    record.mail.body_text = source
+    record.mail.body_html = source
+    await service.storage.save_mail(record)
+    async with app.run_test(size=(140, 45)) as pilot:
+        await settle(pilot)
+        body = text(app, "#mail-body")
+        assert "First paragraph\nSecond line\n\nNext block\n• First item\n• Second item" in body
+        assert "https://example.com/details" in body
+        assert "<p>" not in body and "secret-" not in body
+        search = app.query_one("#mail-search", Input)
+        search.value = "example.com/details"
+        await settle(pilot)
+        assert keys(app.query_one("#mail-table", DataTable)) == ["html"]
+        loaded = await view.get_mail("html")
+        assert loaded is not None
+        reader = MailReader(view, loaded)
+        app.push_screen(reader)
+        await pilot.pause()
+        full = reader.query_one("#reader-body", TextArea).text
+        assert "First paragraph\nSecond line" in full and "• First item\n• Second item" in full
+        assert "<p>" not in full and "secret-" not in full
+        reader.query_one("#reader-close", Button).press()
+        await pilot.pause()
+        app.push_screen(ActionModal(view, task))
+        await pilot.pause()
+        detail = str(app.screen.query_one("#action-mail-detail", Static).render())
+        assert "First paragraph\nSecond line" in detail and "<p>" not in detail
+    stored = await service.get_mail("html")
+    assert (
+        stored is not None and stored.mail.body_text == source and stored.mail.body_html == source
+    )
 
 
 @pytest.mark.parametrize("multiline", [False, True], ids=["input", "editor"])
