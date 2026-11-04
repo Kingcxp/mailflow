@@ -247,8 +247,9 @@ class TestReminderScheduler:
         runtime, events = await self._runtime_with_item(item)
         reminders: list[dict[str, Any]] = []
 
-        async def capture(event: str, **payload: Any) -> None:
+        async def capture(event: str, **payload: Any) -> bool:
             reminders.append(payload)
+            return True
 
         events.subscribe("mailflow.action.reminder", capture)
         fired = await runtime.run_reminder_tick()
@@ -274,8 +275,9 @@ class TestReminderScheduler:
         runtime, events = await self._runtime_with_item(item)
         reminders: list[dict[str, Any]] = []
 
-        async def capture(event: str, **payload: Any) -> None:
+        async def capture(event: str, **payload: Any) -> bool:
             reminders.append(payload)
+            return True
 
         events.subscribe("mailflow.action.reminder", capture)
         fired = await runtime.run_reminder_tick()
@@ -342,8 +344,9 @@ class TestCustomActionReminders:
         )
         reminders: list[dict[str, Any]] = []
 
-        async def capture(event: str, **payload: Any) -> None:
+        async def capture(event: str, **payload: Any) -> bool:
             reminders.append(payload)
+            return True
 
         events.subscribe("mailflow.action.reminder", capture)
         fired = await runtime.run_reminder_tick()
@@ -477,8 +480,9 @@ class TestDailyDigest:
         )
         digests: list[dict[str, Any]] = []
 
-        async def capture(event: str, **payload: Any) -> None:
+        async def capture(event: str, **payload: Any) -> bool:
             digests.append(payload)
+            return True
 
         events.subscribe("mailflow.action.digest", capture)
         assert await runtime._fire_daily_digest(now.replace(hour=7), config.general) == 0  # pyright: ignore[reportPrivateUsage]

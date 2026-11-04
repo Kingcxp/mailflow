@@ -50,14 +50,13 @@ with the bot and stops on shutdown. Configure it by editing
 
 Chat commands are prefixed with ``mailflow`` (``mailflow mail list``,
 ``mailflow help``) or ``/mailflow`` (``/mailflow help``) so they never
-collide with other plugins\' commands. Long replies and the daily digest
+collide with other plugins\' commands. Long command replies
 are split into separate messages.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from typing import Any
 
 from nonebot import get_driver, on_message
@@ -85,7 +84,6 @@ async def _start_mailflow() -> None:
         config, plugin_manager=create_plugin_manager(config), discover_plugins=False
     )
     _router = CommandRouter(_service)
-    _service.on("mailflow.action.digest", _send_digest)
 
 
 @driver.on_shutdown
@@ -107,7 +105,7 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
     text = str(event.get_plaintext() or "").strip()
     if _router is None:
         return
-    if text.startswith("/mailflow"):
+    if text.partition(" ")[0] == "/mailflow":
         line = text[len("/mailflow"):].strip()
     elif text.startswith("mailflow "):
         line = text[len("mailflow "):].strip()
@@ -115,36 +113,21 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
         return
     sender = str(event.get_user_id())
     group_id = str(getattr(event, "group_id", "") or "")
-    reply = await _service.command_dispatch(
+    async for reply in _service.chat_command_stream(
         _service.command_prefix() + "mailflow " + line,
         sender=sender,
         provider=bot.adapter.get_name(),
         instance_id=str(bot.self_id),
         chat_id=group_id or sender,
         chat_type="group" if group_id else "private",
-    )
-    pages = _service.chat_reply_chunks(reply)
-    for page in pages if isinstance(pages, list) else [pages]:
-        await _mailflow_matcher.send(page)
+        request_id=str(getattr(event, "message_id", "") or ""),
+    ):
+        pages = _service.chat_reply_chunks(reply)
+        for page in pages if isinstance(pages, list) else [pages]:
+            if page:
+                await _mailflow_matcher.send(page)
 
 
-async def _send_digest(event: str, **payload: Any) -> None:
-    """Forward the daily digest as paginated chat messages."""
-    items = payload.get("items") or []
-    lines = [
-        f"{i.due_at.astimezone(ZoneInfo(_service.config.general.timezone)):%m-%d %H:%M}"
-        f" ({i.action_type}) {i.summary}"
-        for i in items
-    ]
-    if not lines:
-        return
-    for page in range(0, len(lines), _PAGE_ROWS):
-        block = lines[page : page + _PAGE_ROWS]
-        await _mailflow_matcher.send(
-            "\\n".join(block)
-            + f"\\n— {payload.get('today_count', 0)} due today, "
-            + f"{payload.get('upcoming_count', 0)} approaching —"
-        )
 '''
 
 _README = """# {name}

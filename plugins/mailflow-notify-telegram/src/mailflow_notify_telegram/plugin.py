@@ -5,9 +5,8 @@ Telegram needs no local bot process — the Bot API is the gateway — so the
 provisioner's job is to validate the bot token and run the in-process
 long-poll bridge that lets chats drive MailFlow commands (see ``gateway.py``).
 
-Requires ``bot_token`` and ``chat_id`` in the notifier options. When either is
-missing the notifier logs a hint and skips — the pipeline must never fail
-because a channel is not configured.
+Requires ``bot_token`` and a configured or subscribed recipient. Delivery
+errors are reported to the runtime; mail processing remains independent.
 """
 
 from __future__ import annotations
@@ -19,8 +18,7 @@ from typing import Any
 from mailflow.config import MailFlowConfig, NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
 from mailflow.forms import FormField
-from mailflow.notifications import DeliveryError, format_mail
-from mailflow.notifications import targets_of as shared_targets
+from mailflow.notifications import DeliveryError, format_mail, targets_of
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -56,16 +54,6 @@ _TELEGRAM_FIELDS: tuple[FormField, ...] = (
         description_key="tui.extras_admins",
     ),
 )
-
-
-def _bare_id(entry: str) -> str:
-    """The chat id inside a ``user:<id>`` / ``chat:<id>`` target (or as-is)."""
-    _, _, tail = entry.partition(":")
-    return (tail or entry).strip()
-
-
-def targets_of(config: NotifierConfig) -> list[str]:
-    return shared_targets(config)
 
 
 class TelegramNotifier:

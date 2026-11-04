@@ -25,9 +25,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,12 +43,23 @@ type state struct {
 	status   string // pending | scanning | logged_in | error
 	errMsg   string
 	started  time.Time
-	qrAsked  bool
 }
 
 var st = &state{status: "pending", started: time.Now()}
 
-var httpClient = &http.Client{Timeout: 15 * time.Second}
+var httpClient = &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 10 * time.Second}}
+
+func commandFailed(msg *openwechat.Message, text string) {
+	words := strings.Fields(strings.TrimLeft(text, "/#! "))
+	if len(words) == 0 || !strings.EqualFold(words[0], "mailflow") {
+		return
+	}
+	if message := os.Getenv("MAILFLOW_COMMAND_ERROR"); message != "" {
+		if _, err := msg.ReplyText(message); err != nil {
+			log.Printf("[openwechat-bridge] error reply failed: %v", err)
+		}
+	}
+}
 
 // dispatchChatCommand forwards a text message to the MailFlow bot endpoint
 // and sends the reply back to the originating chat.
@@ -68,6 +81,8 @@ func dispatchChatCommand(msg *openwechat.Message, text string) {
 	}
 	payload, err := json.Marshal(map[string]any{
 		"text":        text,
+		"stream":      true,
+		"request_id":  fmt.Sprint(msg.MsgId),
 		"sender":      sender,
 		"chat_id":     chatID,
 		"chat_type":   chatType,
@@ -81,18 +96,45 @@ func dispatchChatCommand(msg *openwechat.Message, text string) {
 	resp, err := httpClient.Post(botURL, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		log.Printf("[openwechat-bridge] bot dispatch failed: %v", err)
+		commandFailed(msg, text)
 		return
 	}
 	defer resp.Body.Close()
-	var result struct {
-		Reply string `json:"reply"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("[openwechat-bridge] bot HTTP %d", resp.StatusCode)
+		commandFailed(msg, text)
 		return
 	}
-	if result.Reply != "" {
-		if _, err := msg.ReplyText(result.Reply); err != nil {
-			log.Printf("[openwechat-bridge] reply failed: %v", err)
+	decoder := json.NewDecoder(resp.Body)
+	for {
+		var result struct {
+			Reply json.RawMessage `json:"reply"`
+		}
+		if err := decoder.Decode(&result); err != nil {
+			if err != io.EOF {
+				log.Printf("[openwechat-bridge] command stream failed: %v", err)
+				commandFailed(msg, text)
+			}
+			return
+		}
+		var pages []string
+		var single string
+		if err := json.Unmarshal(result.Reply, &single); err == nil {
+			if single != "" {
+				pages = []string{single}
+			}
+		} else if err := json.Unmarshal(result.Reply, &pages); err != nil {
+			log.Printf("[openwechat-bridge] invalid command reply")
+			return
+		}
+		for _, page := range pages {
+			if page == "" {
+				continue
+			}
+			if _, err := msg.ReplyText(page); err != nil {
+				log.Printf("[openwechat-bridge] reply failed: %v", err)
+				return
+			}
 		}
 	}
 }
@@ -125,21 +167,11 @@ func main() {
 		if !msg.IsText() {
 			return
 		}
-		dispatchChatCommand(msg, msg.Content)
+		go dispatchChatCommand(msg, msg.Content)
 	}
 
 	go func() {
-		// wait until the TUI has asked for the QR at least once, so the
-		// login flow starts when the user is ready to scan
-		for {
-			st.mu.RLock()
-			asked := st.qrAsked
-			st.mu.RUnlock()
-			if asked {
-				break
-			}
-			time.Sleep(300 * time.Millisecond)
-		}
+		// Resume saved login immediately; QR display is independent of login.
 		storage := openwechat.NewFileHotReloadStorage("openwechat-session.json")
 		defer storage.Close()
 		// Session file exists -> PushLogin (hot login, no re-scan).
@@ -215,20 +247,21 @@ func main() {
 		}
 		st.mu.Lock()
 		st.status = "logged_in"
-		st.errMsg = "logged in as " + name
+		st.errMsg = ""
 		st.mu.Unlock()
+		log.Printf("logged in as %s", name)
 	}()
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		s := snapshot()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"logged_in": snapshot().status == "logged_in",
-			"status":    snapshot().status,
-			"error":     snapshot().errMsg,
+			"logged_in": s.status == "logged_in" && bot.Alive(),
+			"status":    s.status,
+			"error":     s.errMsg,
 		})
 	})
 	http.HandleFunc("/qr", func(w http.ResponseWriter, r *http.Request) {
 		st.mu.Lock()
-		st.qrAsked = true
 		s := state{status: st.status, lastQR: st.lastQR, errMsg: st.errMsg, started: st.started}
 		st.mu.Unlock()
 		switch s.status {
@@ -248,7 +281,7 @@ func main() {
 	})
 	http.HandleFunc("/send", func(w http.ResponseWriter, r *http.Request) {
 		s := snapshot()
-		if s.status != "logged_in" {
+		if s.status != "logged_in" || !bot.Alive() {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "not logged in"})
 			return
 		}
@@ -277,7 +310,7 @@ func main() {
 			groups, _ := self.Groups()
 			var target *openwechat.Group
 			for _, g := range groups {
-				if g.NickName == body.To.Name {
+				if g.UserName == body.To.Name || (!strings.HasPrefix(body.To.Name, "@") && g.NickName == body.To.Name) {
 					target = g
 					break
 				}
@@ -291,7 +324,7 @@ func main() {
 			contacts, _ := self.Friends()
 			var target *openwechat.Friend
 			for _, c := range contacts {
-				if c.NickName == body.To.Name {
+				if c.UserName == body.To.Name || (!strings.HasPrefix(body.To.Name, "@") && c.NickName == body.To.Name) {
 					target = c
 					break
 				}

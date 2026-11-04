@@ -704,3 +704,52 @@ async def test_password_fields_align_and_visibility_toggle_keeps_input(width: in
         assert not password.password and password.value == "keep-this-secret"
         await pilot.click(eye)
         assert password.password and password.value == "keep-this-secret"
+
+
+async def test_notification_saves_keep_active_analysis_and_other_channels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mailflow.config import load_config
+    from mailflow_testkit.fakes import make_mail
+
+    service = commands_service(config_path=str(tmp_path / "config.toml"))
+    service.config.notifiers = [NotifierConfig(notifier_id="one", provider="fake")]
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    from mailflow.contracts import ProcessingContext, ProcessorResult
+    from mailflow.domain import MailAnalysis, MailMessage, Urgency
+    from mailflow.pipeline import PipelineEngine, ProcessorBinding
+
+    class Processor:
+        processor_id = "fake"
+
+        async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
+            entered.set()
+            await release.wait()
+            return ProcessorResult(
+                analysis=MailAnalysis(summary="analysis finished", urgency=Urgency.INFO)
+            )
+
+    pipeline = PipelineEngine([ProcessorBinding("fake", "fake", Processor())])
+    monkeypatch.setattr(service.runtime, "_pipeline", pipeline)
+    unrelated_reload = AsyncMock(
+        side_effect=AssertionError("notification settings restarted runtime")
+    )
+    monkeypatch.setattr(service, "reload_runtime", unrelated_reload)
+    pending = asyncio.create_task(service.runtime.process_mail_now(make_mail()))
+    try:
+        await entered.wait()
+        await service.set_setting("general.hourly_summary", True)
+        values = service.config.notifiers[0].model_dump()
+        values["minimum_urgency"] = "urgent"
+        await service.update_config_entry("notifiers", 0, values)
+        assert not pending.done()
+        assert load_config(tmp_path / "config.toml").notifiers[0].minimum_urgency.value == "urgent"
+        release.set()
+        record = await pending
+        assert record is not None and record.summary == "analysis finished"
+        assert await service.storage.get_mail(record.record_id) is not None
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)

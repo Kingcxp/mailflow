@@ -362,3 +362,54 @@ async def test_quiet_import_and_reanalysis_keep_reminder_history_and_local_state
     await runtime.process_mail_now(history)
     assert await runtime.run_reminder_tick() == 0
     assert len(notifier.sent) == 2
+
+
+async def test_digest_covers_same_day_reminder_but_observing_events_is_not_delivery() -> None:
+    storage = MemoryStorage()
+    item = await schedule(storage)
+    now = datetime.now(UTC)
+    await storage.set_preference(f"digest.{now.date().isoformat()}", "")
+    notifier = FakeNotifier()
+    service = make_service(storage, notifier)
+    service.config.general.timezone = "UTC"
+    assert await service.runtime.run_reminder_tick() == 1
+    assert len(notifier.sent) == 1  # The digest already included this task.
+    assert item.summary in notifier.sent[0]
+    assert await service.runtime.run_reminder_tick() == 0
+    assert len(notifier.sent) == 1
+
+    another = MemoryStorage()
+    await schedule(another)
+    observer = make_service(another)
+
+    async def log_only(**payload: Any) -> None:
+        pass
+
+    observer.on("mailflow.action.reminder", log_only)
+    assert await observer.runtime.run_reminder_tick() == 0
+    assert not any(
+        value == "fired"
+        for key, value in another.preferences.items()
+        if key.startswith("reminder.")
+    )
+
+
+async def test_unsubscribed_recipient_cannot_be_retried_from_failures() -> None:
+    storage = MemoryStorage()
+    await schedule(storage)
+
+    class Targeted(FakeNotifier):
+        async def push_to_target(self, target: str, text: str) -> None:
+            await self.push_text(text)
+
+    notifier = Targeted(failures=1)
+    service = make_service(storage, notifier)
+    channel = service.runtime._notifier_configs[0]  # pyright: ignore[reportPrivateUsage]
+    channel.options = {"targets": ["group:42"]}
+    assert await service.runtime.run_reminder_tick() == 0
+    failures = await service.failed_deliveries()
+    assert len(failures) == 1
+    channel.options["excluded_targets"] = ["group:42"]
+    await service.retry_deliveries([failures[0]["delivery_id"]])
+    assert notifier.sent == []
+    assert await service.failed_deliveries() == []

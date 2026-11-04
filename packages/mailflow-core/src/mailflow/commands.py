@@ -919,7 +919,7 @@ class CommandRouter:
             and not clear_snooze
         ):
             return self._err(self._t("action.edit_usage"))
-        due = None if due_raw in {None, "none"} else self._parse_local_time(due_raw)
+        due = self._parse_local_time(due_raw) if due_raw is not None and due_raw != "none" else None
         if due_raw not in {None, "none"} and due is None:
             return self._err(self._t("action.invalid_due", value=due_raw))
         try:

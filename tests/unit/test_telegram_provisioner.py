@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any, ClassVar
 
 import pytest
@@ -47,6 +50,12 @@ class _StubResponse:
     def json(self) -> Any:
         return self._payload
 
+    def raise_for_status(self) -> None:
+        pass
+
+    async def aiter_lines(self) -> AsyncIterator[str]:
+        yield json.dumps(self._payload)
+
 
 class _StubClient:
     """Minimal ``httpx.AsyncClient`` stand-in for the provisioner tests."""
@@ -66,6 +75,12 @@ class _StubClient:
     async def get(self, url: str) -> _StubResponse:
         del url
         return _StubResponse(self.payload)
+
+    @asynccontextmanager
+    async def stream(
+        self, method: str, url: str, json: Any = None
+    ) -> AsyncGenerator[_StubResponse]:
+        yield await self.post(url, json=json)
 
     async def post(self, url: str, json: Any = None) -> _StubResponse:
         _StubClient.posts.append({"url": url, **(json or {})})
@@ -198,6 +213,8 @@ async def test_dispatch_forwards_the_command_payload(
             "chat_type": "private",
             "provider": "telegram",
             "instance_id": "tg-1",
+            "request_id": "5",
+            "stream": True,
         }
     ]
     # both reply pages went back through sendMessage, in order
@@ -223,6 +240,16 @@ async def test_dispatch_ignores_self_and_non_text_messages(
     # a sticker: no text field
     await bridge._handle_update(  # pyright: ignore[reportPrivateUsage]
         {"update_id": 2, "message": {"chat": {"id": 1}, "from": {"id": 9}}}
+    )
+    await bridge._handle_update(  # pyright: ignore[reportPrivateUsage]
+        {
+            "update_id": 3,
+            "message": {
+                "text": "/mailflow@other_bot help",
+                "chat": {"id": 1, "type": "supergroup"},
+                "from": {"id": 9},
+            },
+        }
     )
     assert _StubClient.posts == []
 
@@ -289,9 +316,9 @@ async def test_custom_api_url_applies_to_identity_polling_and_delivery(
 
     monkeypatch.setattr(httpx, "AsyncClient", client)
     bridge = TelegramBridge("one", "test", "", "http://fake-api/")
-    await bridge._load_identity()
-    await bridge._request("getUpdates")
-    await bridge._request("sendMessage", {"chat_id": "7", "text": "ready"})
+    await bridge._load_identity()  # pyright: ignore[reportPrivateUsage]
+    await bridge._request("getUpdates")  # pyright: ignore[reportPrivateUsage]
+    await bridge._request("sendMessage", {"chat_id": "7", "text": "ready"})  # pyright: ignore[reportPrivateUsage]
     assert requests == [
         f"http://fake-api/bottest/{method}" for method in ("getMe", "getUpdates", "sendMessage")
     ]

@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 from mailflow.config import NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
+from mailflow.forms import FormField
 from mailflow.notifications import DeliveryError, check_result, format_mail, targets_of
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
@@ -131,6 +132,16 @@ class NotifierPlugin:
 
     def mailflow_register(self, registrar: PluginRegistrar, config: Any) -> None:
         registrar.add_notifier("onebot", OneBotNotifier)
+        registrar.add_form_fields(
+            ComponentKind.NOTIFIER,
+            "onebot",
+            (
+                FormField("http_url", required=True),
+                FormField("access_token", kind="password", secret=True),
+                FormField("admins", kind="list", description_key="tui.extras_admins"),
+                FormField("targets", kind="list", description_key="tui.extras_targets"),
+            ),
+        )
         from mailflow_notify_onebot.gateway import NapCatProvisioner
 
         registrar.add_gateway_provisioner("napcat", NapCatProvisioner)

@@ -98,7 +98,6 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
 
             # collection passes required with a typed value, and the value
             # lands in options.admins (the napcat gateway field)
-            from mailflow.settings import SettingsError
 
             form = cast(Any, app.screen)
             # the form requires a notifier id; fill it so collection reaches
@@ -109,13 +108,8 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
             row_a.value = "123456"
             collected = form._collect()
             assert collected["options"]["admins"] == ["123456"]
-            # empty admins still fails required validation
+            # An empty administrator list leaves all mutation commands denied.
             row_a.value = ""
-            try:
-                form._collect()
-                raise AssertionError("expected SettingsError for empty admins")
-            except SettingsError as exc:
-                assert exc.option == "admins"
-                assert "required" in exc.message
+            assert form._collect()["options"].get("admins", []) == []
     finally:
         await service.stop()

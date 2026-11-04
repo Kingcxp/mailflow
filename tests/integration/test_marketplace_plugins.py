@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
+import json
 import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 from urllib.request import Request
 
 import pytest
@@ -16,10 +18,12 @@ from mailflow.domain import ComponentKind, MailRecord, Urgency
 from mailflow.plugins import PluginManager
 from mailflow_testkit.fakes import make_mail
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 @pytest.fixture(params=["bundled", "marketplace"])
 def telegram_modules(request: pytest.FixtureRequest) -> Iterator[tuple[ModuleType, ModuleType]]:
-    root = Path(__file__).resolve().parents[2]
+    root = ROOT
     if request.param == "bundled":
         package_dir = root / "plugins/mailflow-notify-telegram/src/mailflow_notify_telegram"
     else:
@@ -94,3 +98,58 @@ async def test_registered_notifier_delivers_once_per_target_without_exposing_cre
     assert all(request.full_url.endswith("botsensitive-token/sendMessage") for request in sent)
     assert all(record.mail.subject in payload["text"][0] for payload in payloads)
     assert all("sensitive-token" not in payload["text"][0] for payload in payloads)
+
+
+async def test_marketplace_signing_credentials_reach_delivery_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = ROOT.parent / "mailflow-repo/notifier"
+    if not root.is_dir():
+        pytest.skip("companion plugin checkout is unavailable")
+    requests: list[Request] = []
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return b'{"code":0}'
+
+    def send(request: Request, timeout: float) -> Response:
+        requests.append(request)
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", send)
+    record = MailRecord(
+        record_id="signed", mail=make_mail(subject="Signed notice"), auto_urgency=Urgency.INFO
+    )
+    for provider in ("feishu", "dingtalk"):
+        path = root / f"mailflow-notify-{provider}/src/mailflow_notify_{provider}/plugin.py"
+        spec = importlib.util.spec_from_file_location(f"signed_{provider}", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        manager = PluginManager()
+        manager.register(module.plugin)
+        registry = manager.build_registry()
+        notifier = registry.notifier_factory(provider)(
+            NotifierConfig(
+                notifier_id=provider,
+                provider=provider,
+                options={"webhook_url": "http://fake-hook", "secret": "private-signing-key"},
+            )
+        )
+        await notifier.notify(record)
+        assert "secret" in {
+            field.field_id for field in registry.form_fields(ComponentKind.NOTIFIER, provider)
+        }
+    first = requests[0]
+    assert isinstance(first.data, bytes)
+    feishu = json.loads(first.data)
+    dingtalk = parse_qs(urlparse(requests[1].full_url).query)
+    assert feishu["sign"] and feishu["timestamp"]
+    assert dingtalk["sign"][0] and dingtalk["timestamp"][0]
+    assert "private-signing-key" not in first.data.decode() + requests[1].full_url

@@ -775,7 +775,11 @@ class NotificationsPane(Vertical):
         gateway_by_id: dict[str, str] = {}
         for instance in instances:
             status = str(getattr(instance, "status", ""))
-            if status == "error":
+            if getattr(instance, "extra", {}).get("logged_in") is False:
+                gateway_by_id[str(instance.instance_id)] = self._service.t("tui.bots_not_logged_in")
+            elif getattr(instance, "extra", {}).get("receiving") is False:
+                gateway_by_id[str(instance.instance_id)] = self._service.t("chat.receiving_failed")
+            elif status == "error":
                 error = error_detail(
                     self._service, RuntimeError(getattr(instance, "error", "") or "")
                 )

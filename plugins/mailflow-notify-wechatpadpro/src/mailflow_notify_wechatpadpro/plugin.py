@@ -17,8 +17,7 @@ Options:
 
 Send contract: ``POST {base_url}/Msg/SendTxt`` with
 ``{"Wxid": <bot wxid or "">, "ToWxid": <target>, "Content": <text>,
-"Type": 0}``; success is ``Code == 0`` in the response JSON. Transport
-failures are logged, never raised.
+"Type": 0}``; success is ``Code == 0`` in the response JSON. Delivery failures are raised to the runtime for accurate retry.
 """
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ from typing import Any, cast
 import httpx
 from mailflow.config import NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
+from mailflow.forms import FormField
 from mailflow.notifications import DeliveryError, check_result, format_mail, targets_of
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
@@ -167,6 +167,17 @@ class NotifierPlugin:
         from .gateway import WechatPadProProvisioner
 
         registrar.add_notifier("wechatpadpro", WechatPadProNotifier)
+        registrar.add_form_fields(
+            ComponentKind.NOTIFIER,
+            "wechatpadpro",
+            (
+                FormField("base_url", required=True),
+                FormField("auth_key", kind="password", secret=True),
+                FormField("admin_key", kind="password", secret=True),
+                FormField("admins", kind="list", description_key="tui.extras_admins"),
+                FormField("targets", kind="list", description_key="tui.extras_targets"),
+            ),
+        )
         registrar.add_gateway_provisioner("wechatpadpro", lambda: WechatPadProProvisioner())
 
 

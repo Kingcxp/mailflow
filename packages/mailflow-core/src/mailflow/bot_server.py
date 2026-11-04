@@ -17,8 +17,12 @@ import asyncio
 import contextlib
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, cast
 
+import httpx
+
+from mailflow.i18n import I18n
 from mailflow.lifecycle import OwnedListener
 
 logger = logging.getLogger("mailflow.bot_server")
@@ -129,16 +133,26 @@ class BotServer(OwnedListener):
             if path == "/bot/message":
                 instance = str(payload.get("instance_id") or "")
                 chat_id = str(payload.get("chat_id") or "")
-                # INFO on every chat hop: the chain (platform -> bridge ->
-                # here -> command) is otherwise invisible, and a missing
-                # log line pinpoints where it broke.
-                logger.info(
-                    "chat[%s] %s:%s: %.80r",
-                    instance,
-                    payload.get("chat_type") or "chat",
-                    chat_id,
-                    text,
-                )
+                if payload.get("stream"):
+                    writer.write(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n"
+                    )
+                    await writer.drain()
+                    async for reply in self._service.chat_command_stream(
+                        text,
+                        sender=str(payload.get("sender") or ""),
+                        chat_id=chat_id,
+                        chat_type=str(payload.get("chat_type") or ""),
+                        provider=str(payload.get("provider") or ""),
+                        instance_id=instance,
+                        request_id=str(payload.get("request_id") or ""),
+                    ):
+                        writer.write(
+                            json.dumps({"reply": self._service.chat_reply_chunks(reply)}).encode()
+                            + b"\n"
+                        )
+                        await writer.drain()
+                    return
                 reply = await self._service.command_dispatch(
                     text,
                     sender=str(payload.get("sender") or ""),
@@ -148,10 +162,12 @@ class BotServer(OwnedListener):
                     instance_id=instance,
                 )
                 if reply:
-                    preview = (
-                        f"{len(reply)} chunks" if isinstance(reply, list) else repr(reply)[:80]
+                    logger.info(
+                        "chat[%s] reply to %s (%d page(s))",
+                        instance,
+                        chat_id,
+                        len(reply) if isinstance(reply, list) else 1,
                     )
-                    logger.info("chat[%s] reply to %s: %s", instance, chat_id, preview)
                 # Gateway bridges send every returned page in order. Do not
                 # truncate here: platform-specific clipping silently loses
                 # confirmation tokens and command details.
@@ -188,3 +204,26 @@ class BotServer(OwnedListener):
         )
         writer.write(body)
         await writer.drain()
+
+
+async def command_replies(url: str, payload: dict[str, Any]) -> AsyncIterator[list[str]]:
+    """Read command progress without imposing a platform timeout on a local job."""
+    try:
+        async with (
+            httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None)) as client,
+            client.stream("POST", url, json={**payload, "stream": True}) as response,
+        ):
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                reply = json.loads(line).get("reply")
+                pages: list[Any] = cast("list[Any]", reply) if isinstance(reply, list) else [reply]
+                yield [str(page) for page in pages if page]
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("local bot command connection failed")
+        word = str(payload.get("text") or "").strip().partition(" ")[0].casefold()
+        if "mailflow" in word:
+            yield [I18n().t("chat.connection_lost")]

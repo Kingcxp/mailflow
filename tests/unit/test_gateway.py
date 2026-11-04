@@ -8,6 +8,7 @@ from typing import Any, cast
 import pytest
 from mailflow.config import MailFlowConfig
 from mailflow.contracts import GatewayInstance
+from mailflow.domain import Urgency
 from mailflow.gateway import GatewayManager
 from mailflow.registry import ComponentRegistry, PluginRegistrar
 
@@ -624,7 +625,7 @@ async def test_notification_settings_keep_connections_and_only_reconnect_changed
     try:
         changed = config.model_copy(deep=True)
         changed.notifiers[0].options["hourly_summary"] = True
-        changed.notifiers[0].minimum_urgency = "important"
+        changed.notifiers[0].minimum_urgency = Urgency.IMPORTANT
         await manager.update_notifiers(config, changed)
         assert provisioner.stopped == []
         assert (await manager.instances())[0].status == "running"
@@ -632,6 +633,7 @@ async def test_notification_settings_keep_connections_and_only_reconnect_changed
         reconnected.notifiers[0].options["http_url"] = "http://new"
         await manager.update_notifiers(changed, reconnected)
         assert provisioner.stopped == ["one"]
-        assert manager.instance("fake-gw", "two").status == "running"
+        other = manager.instance("fake-gw", "two")
+        assert other is not None and other.status == "running"
     finally:
         await manager.stop()

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import unicodedata
@@ -18,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
 from difflib import SequenceMatcher
 from typing import Any, cast
+from weakref import WeakValueDictionary
 from zoneinfo import ZoneInfo
 
 from mailflow.action_store import ActionStore
@@ -39,7 +41,7 @@ from mailflow.errors import error_code, error_text
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.lifecycle import bounded, cancel_tasks
-from mailflow.notifications import format_mail, targets_of
+from mailflow.notifications import format_mail, option_enabled, targets_of
 from mailflow.pipeline import PipelineEngine
 from mailflow.prompts import prompt_context
 
@@ -144,6 +146,7 @@ class MailFlowRuntime:
         self._queue = _MailQueue(maxsize=config.general.queue_size)
         self._retry_mails: deque[MailMessage] = deque()
         self._stop_event = asyncio.Event()
+        self._reminder_wake = asyncio.Event()
         self._tasks: list[asyncio.Task[Any]] = []
         # One lifecycle gate covers start/stop/reconfigure.  Hosts can call
         # these entry points from settings, shutdown hooks and a reload
@@ -163,7 +166,7 @@ class MailFlowRuntime:
         self._pending_mail_accounts: dict[str, str] = {}
         self._started_at: datetime | None = None
         self._closed = False
-        self._record_locks = [asyncio.Lock() for _ in range(64)]
+        self._record_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self.write_lock = asyncio.Lock()
         self.deliveries = DeliveryFailures(storage)
         self.action_store = ActionStore(storage)
@@ -747,9 +750,9 @@ class MailFlowRuntime:
     ) -> MailRecord | None:
         generation = self._processing_generation
         identity = mail.normalized_message_id()
-        # Fixed stripes keep memory bounded while serializing concurrent
-        # deliveries and explicit re-analysis of the same mail.
-        async with self._record_locks[hash(identity) % len(self._record_locks)]:
+        # A blocked mail must not hold up an unrelated mail with a colliding hash.
+        # Active contexts keep their lock alive; idle locks release automatically.
+        async with self._record_locks.setdefault(identity, asyncio.Lock()):
             if _skip_dedup:
                 async with self.write_lock:
                     await self._storage.set_preference(f"mail.deleted.{identity}", "")
@@ -1029,7 +1032,7 @@ class MailFlowRuntime:
         for notifier, config in zip(self._notifiers, self._notifier_configs, strict=True):
             if only and config.notifier_id != only:
                 continue
-            if not config.options.get("mail_notifications", True):
+            if not option_enabled(config.options, "mail_notifications"):
                 continue
             if record.effective_urgency.rank < config.minimum_urgency.rank:
                 continue
@@ -1040,6 +1043,8 @@ class MailFlowRuntime:
                 continue
             targeted = getattr(notifier, "notify_to_target", None)
             targets = targets_of(config)
+            if not targets and config.options.get("excluded_targets"):
+                continue
             complete = True
             for target in targets if targets and callable(targeted) else [None]:
                 identity = hashlib.sha256(
@@ -1108,7 +1113,14 @@ class MailFlowRuntime:
         }
         active: list[dict[str, Any]] = []
         today = datetime.now(UTC).astimezone(ZoneInfo(self._config.general.timezone)).date()
+        channels = {
+            value.notifier_id: value for value in [*self._notifier_configs, *self._config.notifiers]
+        }
         for receipt, row in rows.items():
+            channel = channels.get(str(row.get("channel") or ""))
+            if channel is None or (row.get("target") and row["target"] not in targets_of(channel)):
+                await self.deliveries.update(receipt, None)
+                continue
             item = open_items.get(row.get("item_id", ""))
             stale_reminder = bool(
                 item is not None
@@ -1154,7 +1166,8 @@ class MailFlowRuntime:
                 for notifier, config in zip(self._notifiers, self._notifier_configs, strict=True):
                     if (
                         config.notifier_id == row.get("channel")
-                        and config.options.get("hourly_summary")
+                        and self._config.general.hourly_summary
+                        and option_enabled(config.options, "hourly_summary", False)
                         and briefing
                     ):
                         await self._push_hourly_targeted(
@@ -1170,7 +1183,7 @@ class MailFlowRuntime:
                         n
                         for n, c in zip(self._notifiers, self._notifier_configs, strict=True)
                         if c.notifier_id == row.get("channel")
-                        and c.options.get(str(row.get("option", "task_reminders")), True)
+                        and option_enabled(c.options, str(row.get("option", "task_reminders")))
                     ),
                     None,
                 )
@@ -1180,6 +1193,7 @@ class MailFlowRuntime:
                 if not getattr(self._config.general, option, False):
                     continue
                 text = str(row["text"])
+                items: list[ActionItem] = []
                 if row.get("item_ids"):
                     now = datetime.now(UTC)
                     items = [
@@ -1205,6 +1219,11 @@ class MailFlowRuntime:
                     await self.deliveries.update(receipt, {**row, "error_code": error_code(exc)})
                 else:
                     await self._storage.set_preference(receipt, "delivered")
+                    if option == "daily_digest" and row.get("item_ids"):
+                        await self._storage.set_preference(
+                            receipt + ".items",
+                            json.dumps([reminder_identity(item) for item in items]),
+                        )
                     await self.deliveries.update(receipt, None)
         remaining = await self.deliveries.read()
         return sum(receipt in rows and receipt not in remaining for receipt in delivery_ids)
@@ -1267,15 +1286,21 @@ class MailFlowRuntime:
     async def _reminder_loop(self) -> None:
         stop_event = self._stop_event
         while not stop_event.is_set():
+            self._reminder_wake.clear()
             try:
                 await self.run_reminder_tick()
             except Exception as exc:
                 logger.error("reminder tick failed: %s", exc)
-            with suppress(TimeoutError):
-                await asyncio.wait_for(
-                    stop_event.wait(),
+            wake = asyncio.create_task(self._reminder_wake.wait())
+            stopped = asyncio.create_task(stop_event.wait())
+            try:
+                await asyncio.wait(
+                    [wake, stopped],
                     timeout=max(10, self._config.general.reminder_interval_seconds),
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
+            finally:
+                await cancel_tasks([wake, stopped])
 
     async def run_reminder_tick(self) -> int:
         """Deliver each due reminder once; unsuccessful destinations can retry."""
@@ -1284,10 +1309,9 @@ class MailFlowRuntime:
             config = self._config.general
             fired = 0
             async with self.action_store.lock:
+                await self._fire_daily_digest(now, config)
                 for entry in await self.action_store.read() if config.task_reminders else []:
                     fired += await self._fire_reminder(entry.item, entry.record, now, config)
-            async with self.action_store.lock:
-                await self._fire_daily_digest(now, config)
             await self._fire_hourly_summary(now, config)
             return fired
 
@@ -1371,7 +1395,7 @@ class MailFlowRuntime:
             for notifier, notifier_config in zip(
                 self._notifiers, self._notifier_configs, strict=True
             )
-            if notifier_config.options.get("hourly_summary")
+            if option_enabled(notifier_config.options, "hourly_summary", False)
         ]
         if not mails or not opted_in:
             await self._storage.set_preference(key, "fired")
@@ -1424,6 +1448,8 @@ class MailFlowRuntime:
         targets never toggled default to on. Uses push-targeted sends when
         the notifier supports them, else the plain chat push."""
         targets = targets_of(notifier_config)
+        if not targets and notifier_config.options.get("excluded_targets"):
+            return True
         send_targeted = getattr(notifier, "push_to_target", None)
         complete = True
         for target in targets if targets and send_targeted is not None else [None]:
@@ -1686,16 +1712,33 @@ class MailFlowRuntime:
                 else f"{getattr(notifier, 'backend_id', type(notifier).__name__)}.{index}"
             )
             channel_kind = "daily_digest" if event.endswith("action.digest") else "task_reminders"
-            if config is not None and not config.options.get(channel_kind, True):
+            if config is not None and not option_enabled(config.options, channel_kind):
                 continue
             targeted = getattr(notifier, "push_to_target", None)
             targets = targets_of(config) if config is not None else []
+            if not targets and config is not None and config.options.get("excluded_targets"):
+                continue
             for target in targets if targets and callable(targeted) else [None]:
                 destinations += 1
                 identity = hashlib.sha256(f"{notifier_id}|{target or ''}".encode()).hexdigest()[:24]
                 receipt = f"{key}.delivered.{identity}"
                 if await self._storage.get_preference(receipt):
                     continue
+                item = payload.get("item")
+                if channel_kind == "task_reminders" and isinstance(item, ActionItem):
+                    day = (
+                        datetime.now(UTC)
+                        .astimezone(ZoneInfo(self._config.general.timezone))
+                        .date()
+                        .isoformat()
+                    )
+                    covered = await self._storage.get_preference(
+                        f"digest.{day}.delivered.{identity}.items"
+                    )
+                    if covered and reminder_identity(item) in json.loads(covered):
+                        await self._storage.set_preference(receipt, "covered")
+                        await self.deliveries.update(receipt, None)
+                        continue
                 try:
                     if target is None:
                         await cast("Callable[[str], Awaitable[None]]", push)(text)
@@ -1728,6 +1771,17 @@ class MailFlowRuntime:
                     )
                 else:
                     await self._storage.set_preference(receipt, "delivered")
+                    if channel_kind == "daily_digest":
+                        await self._storage.set_preference(
+                            receipt + ".items",
+                            json.dumps(
+                                [
+                                    reminder_identity(value)
+                                    for value in payload.get("items", [])
+                                    if isinstance(value, ActionItem)
+                                ]
+                            ),
+                        )
                     await self.deliveries.update(receipt, None)
         if destinations:
             if not complete:
@@ -1793,6 +1847,7 @@ class MailFlowRuntime:
 
     def update_config(self, config: MailFlowConfig) -> None:
         self._config = config
+        self._reminder_wake.set()
 
     async def reconfigure_notifiers(
         self, notifiers: list[Notifier], notifier_configs: list[NotifierConfig]
@@ -1805,7 +1860,9 @@ class MailFlowRuntime:
             for notifier in previous:
                 close = getattr(notifier, "close", None)
                 if callable(close) and notifier not in notifiers:
-                    await bounded(close(), timeout_seconds=3.0, label="notifier close")
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await bounded(result, timeout_seconds=3.0, label="notifier close")
 
     # -- status -----------------------------------------------------------------------
 

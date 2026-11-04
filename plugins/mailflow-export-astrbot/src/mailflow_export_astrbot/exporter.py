@@ -34,6 +34,8 @@ the dashboard); the MailFlow service starts when the plugin is activated and
 stops when it is disabled or reloaded. Configure it by editing
 ``config.toml`` next to this file.
 
+Notifications and reminders use the configured MailFlow notification channels.
+
 Chat commands are triggered with the ``/mailflow`` prefix (AstrBot
 convention; NoneBot uses a bare ``mailflow`` prefix) so they never collide
 with other plugins' commands.
@@ -76,7 +78,6 @@ class Main(Star):
             config, plugin_manager=create_plugin_manager(config), discover_plugins=False
         )
         _router = CommandRouter(_service)
-        _service.on("mailflow.action.digest", self._on_digest)
 
     async def terminate(self) -> None:
         """Called when the plugin is disabled or reloaded: stop MailFlow."""
@@ -90,7 +91,9 @@ class Main(Star):
     async def mailflow(self, event: AstrMessageEvent):
         """Dispatch ``/mailflow <line>`` chat messages to the shared router."""
         if _router is None:
-            yield event.plain_result("mailflow is still starting...")
+            from mailflow.i18n import I18n
+
+            yield event.plain_result(I18n().t("chat.router_missing"))
             return
         line = (event.message_str or "").strip()
         if line.startswith("/mailflow"):
@@ -99,28 +102,20 @@ class Main(Star):
             line = line[len("mailflow "):].strip()
         sender = str(event.get_sender_id())
         group_id = str(event.get_group_id() or "")
-        reply = await _service.command_dispatch(
+        async for reply in _service.chat_command_stream(
             _service.command_prefix() + "mailflow " + line,
             sender=sender,
             provider=str(event.platform_meta.name),
             instance_id=str(event.platform_meta.id),
             chat_id=group_id or sender,
             chat_type="group" if group_id else "private",
-        )
-        pages = _service.chat_reply_chunks(reply)
-        for page in pages if isinstance(pages, list) else [pages]:
-            yield event.plain_result(page)
+            request_id=str(getattr(getattr(event, "message_obj", None), "message_id", "") or ""),
+        ):
+            pages = _service.chat_reply_chunks(reply)
+            for page in pages if isinstance(pages, list) else [pages]:
+                if page:
+                    yield event.plain_result(page)
 
-    async def _on_digest(self, event: str, **payload: Any) -> None:
-        """Daily digest arrives as an event; log it and point at the command."""
-        items = payload.get("items") or []
-        logger.warning(
-            "mailflow digest: %d due today, %d approaching (%d items); "
-            "run /mailflow action list --page 1 to view",
-            payload.get("today_count", 0),
-            payload.get("upcoming_count", 0),
-            len(items),
-        )
 '''
 
 _README = """# {name}

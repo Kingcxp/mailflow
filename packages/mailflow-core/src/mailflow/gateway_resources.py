@@ -24,6 +24,7 @@ from typing import Any, cast
 import httpx
 
 from mailflow.contracts import GatewayInstance
+from mailflow.i18n import I18n
 from mailflow.lifecycle import bounded
 
 logger = logging.getLogger("mailflow.gateway")
@@ -317,6 +318,9 @@ class LocalProcessGateway(GatewayFiles):
             "MAILFLOW_BOT_URL": str(options.get("bot_url") or ""),
             "MAILFLOW_PROVIDER": self.provider,
             "MAILFLOW_INSTANCE": instance_id,
+            "MAILFLOW_COMMAND_ERROR": str(
+                options.get("_command_error") or I18n().t("chat.connection_lost")
+            ),
         }
 
         def launch() -> subprocess.Popen[Any]:
@@ -367,6 +371,7 @@ class LocalProcessGateway(GatewayFiles):
             try:
                 async with httpx.AsyncClient(timeout=3.0) as client:
                     response = await client.get(f"{self._endpoint(instance_id)}/health")
+                    response.raise_for_status()
                     payload: Any = response.json()
                     login = (
                         payload.get("logged_in")

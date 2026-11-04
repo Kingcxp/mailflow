@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
+from mailflow.bot_server import command_replies
 from mailflow.contracts import GatewayInstance
 from mailflow.gateway import GatewayNotInstalledError
 from mailflow.gateway_resources import (
@@ -40,6 +41,7 @@ from mailflow.gateway_resources import (
     terminate_process,
 )
 from mailflow.lifecycle import OwnedListener
+from mailflow.notifications import check_result
 
 logger = logging.getLogger("mailflow.gateway.napcat")
 
@@ -543,62 +545,22 @@ class _OneBotEventBridge(OwnedListener):
         if not text or user_id is None:
             return
         chat_id = str(group_id) if message_type == "group" else str(user_id)
-        # demoted to DEBUG: bot_server logs the dispatched message at
-        # INFO — two near-identical lines per message was log noise
-        logger.debug(
-            "onebot bridge %s: %s message from %s in %s: %.60r",
-            self._instance_id,
-            message_type,
-            user_id,
-            chat_id,
-            text,
-        )
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                resp = await client.post(
-                    self._bot_url,
-                    json={
-                        "text": text,
-                        "sender": str(user_id),
-                        "chat_id": chat_id,
-                        "chat_type": message_type,
-                        "provider": "napcat",
-                        "instance_id": self._instance_id,
-                    },
-                )
-                data: dict[str, Any] = resp.json() or {}
-            except Exception as exc:
-                logger.warning("onebot dispatch to bot_server failed: %s", exc)
-                return
-        # bot_server may return a plain string or a chunk list (multi-
-        # message help/example). Chunk lists go out as one merged-forward
-        # node message when the platform supports it — clearer than a
-        # wall of text and immune to per-message length caps.
-        raw_reply: Any = data.get("reply") or ""
-        if isinstance(raw_reply, list):
-            items: list[Any] = [entry for entry in raw_reply]  # pyright: ignore[reportUnknownVariableType]
-        else:
-            items = [raw_reply]
-        chunks: list[str] = [str(item) for item in items if str(item).strip()]
-        if chunks:
-            logger.info(
-                "onebot bridge %s: replying to %s:%s (%d chunk(s))",
-                self._instance_id,
-                message_type,
-                chat_id,
-                len(chunks),
-            )
-            if len(chunks) > 1:
-                sent = await self._send_forward(chunks, message_type, chat_id, user_id)
-                if not sent:
-                    # platform refused the forward (old NapCat, private
-                    # chat quirks): fall back to paced segments
-                    for index, chunk in enumerate(chunks):
-                        if index:
-                            await asyncio.sleep(3.0)
-                        await self._send_reply(chunk, message_type, chat_id, str(user_id))
-            else:
-                await self._send_reply(chunks[0], message_type, chat_id, str(user_id))
+        async for chunks in command_replies(
+            self._bot_url,
+            {
+                "text": text,
+                "sender": str(user_id),
+                "chat_id": chat_id,
+                "chat_type": message_type,
+                "provider": "napcat",
+                "instance_id": self._instance_id,
+                "request_id": str(event.get("message_id") or ""),
+            },
+        ):
+            if len(chunks) > 1 and await self._send_forward(chunks, message_type, chat_id, user_id):
+                continue
+            for chunk in chunks:
+                await self._send_reply(chunk, message_type, chat_id, str(user_id))
 
     async def _send_reply(self, reply: str, message_type: str, chat_id: str, user_id: str) -> None:
         headers = {"Content-Type": "application/json"}
@@ -617,16 +579,8 @@ class _OneBotEventBridge(OwnedListener):
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
                 resp = await client.post(endpoint, json=payload, headers=headers)
-                # a non-2xx (bad token, not-logged-in API) previously
-                # vanished silently — the message was simply never sent
-                if resp.status_code >= 400:
-                    logger.warning(
-                        "onebot reply to %s:%s rejected: HTTP %d %s",
-                        message_type,
-                        chat_id,
-                        resp.status_code,
-                        resp.text[:120],
-                    )
+                resp.raise_for_status()
+                check_result(resp.json())
             except Exception as exc:
                 logger.warning("onebot reply to %s:%s failed: %s", message_type, chat_id, exc)
 
@@ -687,8 +641,9 @@ class _OneBotEventBridge(OwnedListener):
                     # OneBot v11: retcode 0 = accepted (data shape varies
                     # between implementations — NapCat echoes a message
                     # object, others just ok/retcode)
+                    check_result(body)
                     if "retcode" in body:
-                        return int(body.get("retcode") or 0) == 0
+                        return True
                     return bool(body.get("data") or body.get("message_id"))
                 logger.warning(
                     "onebot forward to %s:%s rejected: HTTP %d %s",
@@ -810,7 +765,9 @@ class NapCatProvisioner(GatewayFiles):
                         f"{endpoint}/get_login_info", json={}, **request_options
                     )
                     login.raise_for_status()
-                    data: Any = login.json().get("data") or {}
+                    payload = login.json()
+                    check_result(payload)
+                    data: Any = payload.get("data") or {}
                     uin = str(data.get("user_id") or data.get("uin") or data.get("account") or "")
                     if uin:
                         return uin
@@ -1649,7 +1606,9 @@ class NapCatProvisioner(GatewayFiles):
                         f"{endpoint}/get_login_info", json={}, **request_options
                     )
                     login.raise_for_status()
-                    login_data: Any = login.json().get("data") or {}
+                    payload = login.json()
+                    check_result(payload)
+                    login_data: Any = payload.get("data") or {}
                     # accept any id field NapCat/OneBot variants emit
                     # (user_id / uin / account); an empty dict = not yet
                     logged_in = bool(

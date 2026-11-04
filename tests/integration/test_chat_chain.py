@@ -375,3 +375,75 @@ async def test_chain_silently_loses_events_without_bot_url() -> None:
     prov = NapCatProvisioner()
     bridge = await prov.ensure_bridge("napcat-x", {})  # no bot_url
     assert bridge is None  # documented silent mode; callers must warn
+
+
+async def test_slow_chat_requests_acknowledge_cancel_and_deduplicate_across_hosts() -> None:
+    from mailflow_test_support.commands import commands_service
+
+    service = commands_service()
+    started = asyncio.Event()
+    calls: list[str] = []
+
+    class SlowCommands:
+        async def execute(self, line: str) -> Any:
+            calls.append(line)
+            started.set()
+            await asyncio.Event().wait()
+            return "done"
+
+    service.commands = cast(Any, SlowCommands())
+    identity: dict[str, Any] = {
+        "provider": "telegram",
+        "instance_id": "one",
+        "sender": "reader",
+        "chat_id": "room",
+    }
+    stream = service.chat_command_stream("/mailflow mail list", request_id="42", **identity)
+    assert await anext(stream) == service.t("chat.accepted", prefix="/")
+    duplicate = asyncio.ensure_future(
+        anext(service.chat_command_stream("/mailflow mail list", request_id="42", **identity))
+    )
+    await started.wait()
+    await asyncio.sleep(0)
+    assert calls == ["mail list"]
+    assert await service.command_dispatch(
+        "/mailflow cancel", provider="telegram", instance_id="one", chat_id="room", sender="other"
+    ) == service.t("chat.cancel_idle")
+    assert await service.command_dispatch("/mailflow cancel", **identity) == service.t(
+        "chat.cancel_requested"
+    )
+    assert await anext(stream) == service.t("chat.cancelled")
+    assert await duplicate == service.t("chat.cancelled")
+    restarted = commands_service()
+    restarted.storage = service.storage
+    assert [
+        reply
+        async for reply in restarted.chat_command_stream(
+            "/mailflow mail list", request_id="42", **identity
+        )
+    ] == [service.t("chat.cancelled")]
+    assert calls == ["mail list"]
+
+
+async def test_streaming_bridge_receives_progress_and_final_result() -> None:
+    from mailflow.bot_server import BotServer, command_replies
+
+    service = _service()
+
+    async def slow(text: str, **identity: Any) -> str:
+        await asyncio.sleep(1.05)
+        return "Finished"
+
+    cast(Any, service).command_dispatch = slow
+    server = BotServer(service)
+    await server.start()
+    try:
+        replies = [
+            pages
+            async for pages in command_replies(
+                server.url, {"text": "#mailflow mail list", "request_id": "one"}
+            )
+        ]
+        assert replies == [[service.t("chat.accepted", prefix="#")], ["Finished"]]
+    finally:
+        await server.stop()

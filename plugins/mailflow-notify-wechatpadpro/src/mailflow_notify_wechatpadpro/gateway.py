@@ -42,10 +42,12 @@ from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+from mailflow.bot_server import command_replies
 from mailflow.contracts import GatewayInstance
 from mailflow.gateway import GatewayNotInstalledError
 from mailflow.gateway_resources import GatewayFiles, instance_directory, reserved_ports, run_command
 from mailflow.lifecycle import OwnedListener, bounded, cancel_tasks
+from mailflow.notifications import check_result
 
 logger = logging.getLogger("mailflow.gateway.wechatpadpro")
 
@@ -679,54 +681,30 @@ class _WebhookBridge(OwnedListener):
         if not content or push_type not in (None, 1, "1"):
             return
         chat_type = "group" if from_user.endswith("@chatroom") else "private"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.post(
-                    self.bot_url,
-                    json={
-                        "text": content,
-                        "sender": str(data.get("SenderUserName") or from_user),
-                        "chat_id": from_user,
-                        "chat_type": chat_type,
-                        "provider": "wechatpadpro",
-                        "instance_id": self.instance_id,
-                    },
-                )
-                if response.status_code >= 400:
-                    logger.warning(
-                        "wechatpadpro %s bot_server rejected a command: HTTP %d",
-                        self.instance_id,
-                        response.status_code,
-                    )
-                    return
-                response_payload = cast_dict(response.json())
-            except Exception as exc:
-                logger.warning(
-                    "wechatpadpro %s dispatch to bot_server failed: %s",
-                    self.instance_id,
-                    exc,
-                )
-                return
-            raw_reply = response_payload.get("reply")
-            replies: list[Any] = (
-                cast(list[Any], raw_reply) if isinstance(raw_reply, list) else [raw_reply]
-            )
-            pages: list[str] = [
-                reply for reply in replies if isinstance(reply, str) and reply.strip()
-            ]
+        sender = str(data.get("SenderUserName") or from_user)
+        original = str(data.get("Content") or "")
+        if chat_type == "group" and ":\n" in original and not data.get("SenderUserName"):
+            sender = original.partition(":\n")[0]
+        async for pages in command_replies(
+            self.bot_url,
+            {
+                "text": content,
+                "sender": sender,
+                "chat_id": from_user,
+                "chat_type": chat_type,
+                "provider": "wechatpadpro",
+                "instance_id": self.instance_id,
+                "request_id": str(data.get("MsgId") or data.get("NewMsgId") or ""),
+            },
+        ):
             if not pages:
-                return
+                continue
             key = await self._reply_key()
             if not key:
                 return
-            logger.info(
-                "wechatpadpro %s: replying to %s (%d page(s))",
-                self.instance_id,
-                from_user,
-                len(pages),
-            )
-            for page in pages:
-                await self._send_reply(client, from_user, page, key)
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                for page in pages:
+                    await self._send_reply(client, from_user, page, key)
 
     async def _reply_key(self) -> str:
         if not self._gateway_url or self._key_supplier is None:
@@ -754,14 +732,8 @@ class _WebhookBridge(OwnedListener):
                 params={"key": key},
                 json={"Wxid": "", "ToWxid": to_wxid, "Content": text, "Type": 0},
             )
-            response_payload = cast_dict(response.json())
-            if response.status_code >= 400 or response_payload.get("Code") not in (0, "0", None):
-                logger.warning(
-                    "wechatpadpro %s reply to %s rejected: HTTP %d",
-                    self.instance_id,
-                    to_wxid,
-                    response.status_code,
-                )
+            response.raise_for_status()
+            check_result(response.json())
         except Exception as exc:
             logger.warning("wechatpadpro %s reply to %s failed: %s", self.instance_id, to_wxid, exc)
 
@@ -1121,12 +1093,31 @@ class WechatPadProProvisioner(GatewayFiles):
             and await self._owns_running(instance_id, compose)
             and await self._wait_http(endpoint, wait_seconds=2.0)
         )
+        login: bool | None = None
+        failure = ""
+        meta = self._meta(instance_id) or {}
+        if running and meta.get("login_key") and meta.get("uuid"):
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.get(
+                        f"{endpoint}/login/CheckLoginStatus",
+                        params={"key": meta["login_key"], "uuid": meta["uuid"]},
+                    )
+                    response.raise_for_status()
+                    payload = cast_dict(response.json())
+                    login = payload.get("code") in (200, "200")
+            except Exception:
+                failure = "login_check_failed"
+        elif running:
+            login = False
         if running:
             return GatewayInstance(
                 provider=self.provider,
                 instance_id=instance_id,
                 status="running",
                 endpoint=endpoint,
+                error=failure,
+                extra={"api_ready": True, "logged_in": login},
             )
         return GatewayInstance(
             provider=self.provider,
@@ -1152,6 +1143,7 @@ class WechatPadProProvisioner(GatewayFiles):
                         params={"key": key},
                         json={"Check": False, "Proxy": ""},
                     )
+                    response.raise_for_status()
                     payload = cast_dict(response.json())
                     data = cast_dict(payload.get("data") or {})
                     uuid = str(data.get("uuid") or "")
@@ -1169,6 +1161,7 @@ class WechatPadProProvisioner(GatewayFiles):
                     f"{endpoint}/login/CheckLoginStatus",
                     params={"key": meta["login_key"], "uuid": meta["uuid"]},
                 )
+                response.raise_for_status()
                 payload = cast_dict(response.json())
                 code = payload.get("code")
                 if code == 200:
@@ -1222,10 +1215,18 @@ class WechatPadProProvisioner(GatewayFiles):
                 params={"key": str(meta.get("admin_key") or "")},
                 json={"Count": 1, "Days": 3650},
             )
+            response.raise_for_status()
             payload = cast_dict(response.json())
-        data = cast_dict(payload.get("data"))
+            if payload.get("Code", payload.get("code", 0)) not in (0, 200, "0", "200"):
+                return ""
+        raw_data = payload.get("data")
+        data = cast_dict(raw_data)
         key = ""
-        entries: list[Any] = list(data.get("list") or data.get("keys") or [])
+        entries: list[Any] = (
+            list(cast(list[Any], raw_data))
+            if isinstance(raw_data, list)
+            else list(data.get("list") or data.get("keys") or [])
+        )
         if entries:
             key = str(cast_dict(entries[0]).get("Key") or "")
         elif data:

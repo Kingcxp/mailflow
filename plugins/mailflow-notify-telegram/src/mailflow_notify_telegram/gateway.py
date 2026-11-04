@@ -21,6 +21,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import httpx
+from mailflow.bot_server import command_replies
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
 from mailflow.lifecycle import cancel_tasks
 from mailflow.notifications import check_result
@@ -59,6 +60,7 @@ async def _call(
     """One Bot API call; raises with the API's own description on failure."""
     async with httpx.AsyncClient(timeout=float(_POLL_TIMEOUT) + 10.0) as client:
         response = await client.post(_api(token, method, api_base), json=payload or {})
+        response.raise_for_status()
     try:
         body: Any = response.json()
     except ValueError as exc:
@@ -91,6 +93,11 @@ class TelegramBridge:
         self._stopping = False
         self.identity: dict[str, Any] = {}
         self._lock = asyncio.Lock()
+        self._commands: set[asyncio.Task[None]] = set()
+
+    @property
+    def api_base(self) -> str:
+        return self._api_base
 
     @property
     def running(self) -> bool:
@@ -118,7 +125,8 @@ class TelegramBridge:
             self._stopping = True
             task, self._task = self._task, None
             if task is not None:
-                await cancel_tasks([task])
+                await cancel_tasks([task, *self._commands])
+                self._commands.clear()
 
     async def _request(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         if self._api_base == _API_ROOT:
@@ -147,7 +155,13 @@ class TelegramBridge:
                     cast("list[Any]", raw_updates) if isinstance(raw_updates, list) else []
                 )
                 for update in updates:
-                    await self._handle_update(as_object(update))
+                    task = asyncio.create_task(
+                        self._handle_update(as_object(update)),
+                        name=f"telegram-command-{self._instance_id}",
+                    )
+                    self._commands.add(task)
+                    task.add_done_callback(self._commands.discard)
+                    await asyncio.sleep(0)
                 # An empty/fast long-poll response must still allow stop and
                 # configuration changes to run on the same event loop.
                 await asyncio.sleep(0)
@@ -169,7 +183,7 @@ class TelegramBridge:
             return
         message = as_object(raw_message)
         text = as_text(message.get("text"))
-        if not text:
+        if not text.strip():
             return
         chat = as_object(message.get("chat"))
         chat_id = as_text(chat.get("id"))
@@ -180,14 +194,35 @@ class TelegramBridge:
         if bot_id and sender_id == bot_id:
             return
         chat_type = "group" if as_text(chat.get("type")) in {"group", "supergroup"} else "private"
-        reply = await self._dispatch(text, sender_id, chat_id, chat_type)
-        for page in reply:
-            try:
-                await self._request("sendMessage", {"chat_id": chat_id, "text": page})
-            except Exception as exc:
-                logger.warning(
-                    "telegram %s: reply to %s failed: %s", self._instance_id, chat_id, exc
-                )
+        command_name = text.split()[0]
+        if (
+            "@" in command_name
+            and command_name.split("@", 1)[1].casefold()
+            != as_text(self.identity.get("username")).casefold()
+        ):
+            return
+        async for reply in command_replies(
+            self._bot_url,
+            {
+                "text": text,
+                "sender": sender_id,
+                "chat_id": chat_id,
+                "chat_type": chat_type,
+                "provider": "telegram",
+                "instance_id": self._instance_id,
+                "request_id": str(raw_id or ""),
+            },
+        ):
+            for page in reply:
+                try:
+                    await self._request("sendMessage", {"chat_id": chat_id, "text": page})
+                except Exception as exc:
+                    logger.warning(
+                        "telegram %s: reply to %s failed: %s",
+                        self._instance_id,
+                        chat_id,
+                        type(exc).__name__,
+                    )
 
     async def _dispatch(self, text: str, sender: str, chat_id: str, chat_type: str) -> list[str]:
         """POST one inbound message to the MailFlow command endpoint."""
@@ -201,20 +236,10 @@ class TelegramBridge:
             "provider": "telegram",
             "instance_id": self._instance_id,
         }
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(self._bot_url, json=payload)
-            body: Any = response.json()
-        except Exception as exc:
-            logger.warning("telegram %s: command dispatch failed: %s", self._instance_id, exc)
-            return []
-        reply: Any = as_object(body).get("reply")
-        if isinstance(reply, str):
-            return [reply] if reply else []
-        if isinstance(reply, list):
-            pages = cast("list[Any]", reply)
-            return [as_text(page) for page in pages if as_text(page)]
-        return []
+        pages: list[str] = []
+        async for reply in command_replies(self._bot_url, payload):
+            pages.extend(reply)
+        return pages
 
 
 class TelegramProvisioner(GatewayProvisioner):
@@ -302,7 +327,7 @@ class TelegramProvisioner(GatewayProvisioner):
             status="running",
             # Telegram has no local endpoint: the "endpoint" is the API base
             # the notifier posts to, which is also what the form stores.
-            endpoint=bridge._api_base,
+            endpoint=bridge.api_base,
             extra={
                 "username": as_text(identity.get("username")),
                 "bot_id": as_text(identity.get("id")),
@@ -345,7 +370,7 @@ class TelegramProvisioner(GatewayProvisioner):
             provider="telegram",
             instance_id=instance_id,
             status="running",
-            endpoint=bridge._api_base,
+            endpoint=bridge.api_base,
             extra={"in_process": True, "logged_in": True, "receiving": not bridge.error},
             error=bridge.error,
         )

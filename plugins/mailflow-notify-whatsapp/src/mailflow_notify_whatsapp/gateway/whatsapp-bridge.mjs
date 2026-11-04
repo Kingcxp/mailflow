@@ -37,6 +37,8 @@ const logger = pino({ level: 'silent' })
 const state = { status: 'pending', qr: '', error: '', started: Date.now() }
 let sock = null
 let reconnectDelayMs = 1000
+let reconnectTimer = null
+let connecting = false
 
 function log(message) {
   console.log(`[whatsapp-bridge] ${message}`)
@@ -84,9 +86,8 @@ async function sendText(chatId, text) {
   await sock.sendMessage(chatId, { text })
 }
 
-async function dispatch(text, sender, chatId, chatType) {
+async function dispatch(text, sender, chatId, chatType, requestId) {
   if (!BOT_URL) return
-  let pages = []
   try {
     const response = await fetch(BOT_URL, {
       method: 'POST',
@@ -98,25 +99,37 @@ async function dispatch(text, sender, chatId, chatType) {
         chat_type: chatType,
         provider: PROVIDER,
         instance_id: INSTANCE,
+        request_id: requestId || "",
+        stream: true,
       }),
     })
-    const data = await response.json().catch(() => null)
-    const reply = data ? data.reply : null
-    // bot_server answers with one string or a page list; send every page in
-    // order, exactly as returned (pages are already fitted for chat transport)
-    if (Array.isArray(reply)) pages = reply
-    else if (typeof reply === 'string' && reply.trim()) pages = [reply]
+    if (!response.ok) throw new Error(`MailFlow HTTP ${response.status}`)
+    const decoder = new TextDecoder()
+    let pending = ''
+    async function deliver(line) {
+      if (!line.trim()) return
+      const data = JSON.parse(line)
+      const pages = Array.isArray(data.reply) ? data.reply : [data.reply]
+      for (const page of pages) {
+        if (typeof page === 'string' && page.trim()) await sendText(chatId, page)
+      }
+    }
+    for await (const chunk of response.body) {
+      pending += decoder.decode(chunk, { stream: true })
+      let newline
+      while ((newline = pending.indexOf('\n')) >= 0) {
+        await deliver(pending.slice(0, newline))
+        pending = pending.slice(newline + 1)
+      }
+    }
+    pending += decoder.decode()
+    if (pending.trim()) await deliver(pending)
   } catch (err) {
-    log(`bot dispatch failed: ${err && err.message ? err.message : err}`)
-    return
-  }
-  for (const page of pages) {
-    const chunk = page === null || page === undefined ? '' : String(page)
-    if (!chunk.trim()) continue
-    try {
-      await sendText(chatId, chunk)
-    } catch (err) {
-      log(`reply to ${chatId} failed: ${err && err.message ? err.message : err}`)
+    log(`command connection failed: ${err && err.message ? err.message : err}`)
+    if (/^[^\p{L}\p{N}_]*mailflow(?:\s|$)/iu.test(text) && process.env.MAILFLOW_COMMAND_ERROR) {
+      await sendText(chatId, process.env.MAILFLOW_COMMAND_ERROR).catch((error) =>
+        log(`error reply failed: ${error && error.message ? error.message : error}`),
+      )
     }
   }
 }
@@ -132,7 +145,7 @@ function handleMessages(event) {
     if (!text) continue
     const isGroup = chatId.endsWith('@g.us')
     const sender = isGroup ? (message.key && message.key.participant) || chatId : chatId
-    dispatch(text, sender, chatId, isGroup ? 'group' : 'private').catch((err) => {
+    dispatch(text, sender, chatId, isGroup ? 'group' : 'private', message.key && message.key.id).catch((err) => {
       log(`dispatch failed: ${err && err.message ? err.message : err}`)
     })
   }
@@ -180,26 +193,49 @@ async function handleConnectionUpdate(update) {
   state.qr = ''
   state.error = `connection closed (code ${statusCode}); reconnecting in ${Math.round(delay / 1000)}s`
   log(state.error)
-  setTimeout(() => {
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
     connect().catch((err) => log(`reconnect failed: ${err && err.message ? err.message : err}`))
   }, delay)
 }
 
 async function connect() {
-  const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
-  sock = makeWASocket({
-    auth: authState,
-    printQRInTerminal: false,
-    browser: ['MailFlow', 'Desktop', '1.0'],
-    logger,
-  })
-  sock.ev.on('creds.update', saveCreds)
-  sock.ev.on('connection.update', (update) => {
-    handleConnectionUpdate(update).catch((err) =>
-      log(`connection update failed: ${err && err.message ? err.message : err}`),
-    )
-  })
-  sock.ev.on('messages.upsert', handleMessages)
+  if (connecting) return
+  connecting = true
+  try {
+    const previous = sock
+    if (previous) previous.ev.removeAllListeners?.()
+    const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
+    sock = makeWASocket({
+      auth: authState,
+      printQRInTerminal: false,
+      browser: ['MailFlow', 'Desktop', '1.0'],
+      logger,
+    })
+    const current = sock
+    current.ev.on('creds.update', saveCreds)
+    current.ev.on('connection.update', (update) => {
+      if (sock !== current) return
+      handleConnectionUpdate(update).catch((err) =>
+        log(`connection update failed: ${err && err.message ? err.message : err}`),
+      )
+    })
+    current.ev.on('messages.upsert', (event) => { if (sock === current) handleMessages(event) })
+  } catch (err) {
+    state.status = 'pending'
+    state.error = 'connection failed; retrying'
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    const delay = reconnectDelayMs
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30000)
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      connect().catch((error) => log(`reconnect failed: ${error && error.message ? error.message : error}`))
+    }, delay)
+    throw err
+  } finally {
+    connecting = false
+  }
 }
 
 // --- HTTP contract -----------------------------------------------------------

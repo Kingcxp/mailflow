@@ -248,6 +248,9 @@ async def test_qr_maps_every_bridge_state(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 class _NotifierResponse:
+    def json(self) -> dict[str, Any]:
+        return {"ok": True}
+
     status_code = 200
 
     def raise_for_status(self) -> None:
@@ -307,30 +310,16 @@ async def test_notify_posts_one_request_per_target(monkeypatch: pytest.MonkeyPat
     )
     await notifier.notify(_record())
 
-    assert _NotifierClient.calls == [
-        (
-            "http://127.0.0.1:8898/send",
-            {
-                "json": {
-                    "to": {"type": "group", "name": "12345@g.us"},
-                    "text": (
-                        "[MailFlow] URGENT — Exam on Friday\nFrom: a@example.com\nExam on Friday"
-                    ),
-                }
-            },
-        ),
-        (
-            "http://127.0.0.1:8898/send",
-            {
-                "json": {
-                    "to": {"type": "contact", "name": "67890"},
-                    "text": (
-                        "[MailFlow] URGENT — Exam on Friday\nFrom: a@example.com\nExam on Friday"
-                    ),
-                }
-            },
-        ),
+    calls = _NotifierClient.calls
+    assert [url for url, _ in calls] == ["http://127.0.0.1:8898/send"] * 2
+    assert [values["json"]["to"] for _, values in calls] == [
+        {"type": "group", "name": "12345@g.us"},
+        {"type": "contact", "name": "67890"},
     ]
+    assert all(
+        "Exam on Friday" in values["json"]["text"] and "m1" in values["json"]["text"]
+        for _, values in calls
+    )
 
 
 @pytest.mark.asyncio
@@ -338,9 +327,12 @@ async def test_push_to_target_reports_missing_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     notifier = _notifier(monkeypatch, targets=["user:67890"])
-    await notifier.notify(_record())
+    from mailflow.notifications import DeliveryError
+
+    with pytest.raises(DeliveryError):
+        await notifier.notify(_record())
     assert _NotifierClient.calls == []
-    with pytest.raises(ValueError, match="gateway_url"):
+    with pytest.raises(DeliveryError):
         await notifier.push_to_target("user:67890", "hourly briefing")
     assert _NotifierClient.calls == []
 

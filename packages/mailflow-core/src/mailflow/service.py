@@ -17,8 +17,9 @@ import json
 import logging
 import secrets
 import tomllib
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, ClassVar, TextIO, cast
 from uuid import uuid4
@@ -445,6 +446,10 @@ class MailFlowService:
         self._smart_plan_lock = asyncio.Lock()
         self._reply_create_lock = asyncio.Lock()
         self._subscription_lock = asyncio.Lock()
+        self._chat_lock = asyncio.Lock()
+        self._chat_tasks: dict[str, asyncio.Task[str | list[str] | None]] = {}
+        self._chat_running: dict[str, set[asyncio.Task[str | list[str] | None]]] = {}
+        self._chat_results: dict[str, dict[str, Any]] | None = None
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -511,7 +516,14 @@ class MailFlowService:
             for task in (self._update_task, self._expiry_task, self._storage_watch_task)
             if task is not None
         ]
-        await cancel_tasks(tasks)
+        await cancel_tasks(
+            task
+            for task in [
+                *tasks,
+                *(task for values in self._chat_running.values() for task in values),
+            ]
+            if task is not asyncio.current_task()
+        )
         self._update_task = None
         self._expiry_task = None
         self._storage_watch_task = None
@@ -3134,6 +3146,118 @@ Return every candidate in this batch."""
             for index, chunk in enumerate(chunks, start=1)
         ]
 
+    @staticmethod
+    def _chat_actor(provider: str, instance_id: str, chat_id: str, sender: str) -> str:
+        return sha256(
+            json.dumps([normalize_provider(provider), instance_id, chat_id, sender]).encode()
+        ).hexdigest()
+
+    async def chat_command_stream(
+        self,
+        text: str,
+        *,
+        sender: str = "",
+        provider: str = "",
+        instance_id: str = "",
+        chat_id: str = "",
+        chat_type: str = "",
+        request_id: str = "",
+    ) -> AsyncIterator[str | list[str] | None]:
+        """Stream acknowledgement and result using the service's owned command tasks."""
+        word = text.removeprefix(self.command_prefix()).strip().partition(" ")[0]
+        if word.split("@", 1)[0].casefold() != "mailflow":
+            yield await self.command_dispatch(
+                text,
+                sender=sender,
+                provider=provider,
+                instance_id=instance_id,
+                chat_id=chat_id,
+                chat_type=chat_type,
+            )
+            return
+        actor = self._chat_actor(provider, instance_id, chat_id, sender)
+        key = sha256(f"{actor}:{request_id}".encode()).hexdigest() if request_id else ""
+        async with self._chat_lock:
+            if self._chat_results is None:
+                raw = await self.storage.get_preference("chat.request_results")
+                try:
+                    self._chat_results = json.loads(raw) if raw else {}
+                except (ValueError, TypeError):
+                    self._chat_results = {}
+                if not isinstance(self._chat_results, dict):
+                    self._chat_results = {}
+            cutoff = (utcnow() - timedelta(days=1)).isoformat()
+            self._chat_results = {
+                name: value
+                for name, value in self._chat_results.items()
+                if value.get("at", "") > cutoff
+            }
+            cached = self._chat_results.get(key) if key else None
+            if key in self._chat_tasks:
+                cached = None
+            if cached is not None:
+                task = None
+            else:
+                task = self._chat_tasks.get(key) if key else None
+                if task is None:
+
+                    async def run() -> str | list[str] | None:
+                        try:
+                            reply = await self.command_dispatch(
+                                text,
+                                sender=sender,
+                                provider=provider,
+                                instance_id=instance_id,
+                                chat_id=chat_id,
+                                chat_type=chat_type,
+                            )
+                        except asyncio.CancelledError:
+                            reply = self.t("chat.cancelled")
+                        except Exception:
+                            logger.exception("chat command failed")
+                            reply = self.t("chat.error_reply")
+                        current = asyncio.current_task()
+                        async with self._chat_lock:
+                            if current is not None:
+                                self._chat_running.get(actor, set()).discard(current)
+                            if key:
+                                self._chat_tasks.pop(key, None)
+                                assert self._chat_results is not None
+                                self._chat_results[key] = {
+                                    "at": utcnow().isoformat(),
+                                    "reply": reply,
+                                }
+                                self._chat_results = dict(list(self._chat_results.items())[-128:])
+                                await self.storage.set_preference(
+                                    "chat.request_results", json.dumps(self._chat_results)
+                                )
+                        return reply
+
+                    if key:
+                        self._chat_results[key] = {
+                            "at": utcnow().isoformat(),
+                            "reply": self.t("chat.interrupted"),
+                        }
+                        await self.storage.set_preference(
+                            "chat.request_results", json.dumps(self._chat_results)
+                        )
+                    command = text.removeprefix(self.command_prefix()).strip().split()
+                    sending = len(command) >= 3 and command[1:3] == ["reply", "confirm"]
+                    task = asyncio.create_task(
+                        run(), name="chat-send" if sending else "chat-command"
+                    )
+                    self._chat_running.setdefault(actor, set()).add(task)
+                    if key:
+                        self._chat_tasks[key] = task
+        if cached is not None:
+            yield cached.get("reply")
+            return
+        assert task is not None
+        done, _ = await asyncio.wait([task], timeout=1.0)
+        if not done:
+            yield self.t("chat.accepted", prefix=self.command_prefix())
+        yield await asyncio.shield(task)
+
     async def command_dispatch(
         self,
         text: str,
@@ -3224,7 +3348,7 @@ Return every candidate in this batch."""
             # to tell 'crashed' from 'ignored'. Log the traceback (the
             # bot_server DEBUG swallow hid a live 500 with zero trace) and
             # return a visible error reply.
-            logger.exception("chat command %r failed", args)
+            logger.exception("chat command %s failed", args.split()[:1])
             return self.t("chat.error_reply")
 
     async def _mailflow_command_inner(
@@ -3245,14 +3369,42 @@ Return every candidate in this batch."""
             return self.t("chat.needs_context")
         if sub in self._CHAT_SUBCOMMANDS:
             authorize_command(sub, parts[1:], self.t)
+        if sub == "cancel":
+            actor = self._chat_actor(provider, instance_id, chat_id, sender)
+            tasks = [
+                task
+                for task in self._chat_running.get(actor, set())
+                if task is not asyncio.current_task() and not task.done()
+            ]
+            cancellable = [task for task in tasks if task.get_name() != "chat-send"]
+            for task in cancellable:
+                task.cancel()
+            return self.t(
+                "chat.cancel_requested"
+                if cancellable
+                else "chat.cancel_sending"
+                if tasks
+                else "chat.cancel_idle"
+            )
         if sub == "help":
             return self._chat_help(prefix)
         if sub == "example":
             return await self._chat_example(provider, instance_id)
         if sub in {"subscribe", "unsubscribe", "hourly"}:
             notifier = self._chat_notifier(provider, instance_id)
-            if notifier is None or not notifier.enabled:
+            if notifier is None or (not notifier.enabled and sub != "unsubscribe"):
                 return self.t("chat.channel_unavailable")
+            if sub != "unsubscribe":
+                from mailflow.notifications import connection_configured
+
+                if not connection_configured(notifier):
+                    return self.t("chat.channel_setup")
+                if (
+                    self.registry.has(ComponentKind.NOTIFIER, notifier.provider)
+                    and sub == "hourly"
+                    and "hourly_summary" not in self.notifier_capabilities(notifier.provider)
+                ):
+                    return self.t("common.unsupported")
             if sub in {"subscribe", "unsubscribe"}:
                 async with self._subscription_lock:
                     subscribe = sub == "subscribe"
@@ -3278,7 +3430,7 @@ Return every candidate in this batch."""
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg not in {"", "on", "off"}:
                 return self.t("chat.hourly_usage")
-            from mailflow.notifications import target_id, targets_of
+            from mailflow.notifications import option_enabled, target_id, targets_of
 
             normalized = normalize_provider(provider)
             pref_key = f"hourly_summary.chat.{normalized}.{notifier.notifier_id}.{chat_id}"
@@ -3287,7 +3439,7 @@ Return every candidate in this batch."""
             reason = ""
             if not self.config.general.hourly_summary:
                 reason = self.t("chat.hourly_global_off")
-            elif not notifier.options.get("hourly_summary", False):
+            elif not option_enabled(notifier.options, "hourly_summary", False):
                 reason = self.t("chat.hourly_channel_off")
             elif not any(target_id(target) == chat_id for target in targets_of(notifier)):
                 reason = self.t("chat.hourly_no_target")
@@ -3365,7 +3517,9 @@ Return every candidate in this batch."""
             self.t(
                 "chat.example_reminder",
                 summary=self.t("chat.example_action"),
-                due="2026-09-10 09:00",
+                due=(utcnow() + timedelta(days=2))
+                .astimezone(ZoneInfo(self.config.general.timezone))
+                .strftime("%Y-%m-%d %H:%M"),
             ),
             self.t("chat.example_digest", count=3),
         ]

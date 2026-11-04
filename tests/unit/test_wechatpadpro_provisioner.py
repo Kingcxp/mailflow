@@ -8,9 +8,12 @@ import json
 import platform
 import shutil
 import subprocess
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
+import httpx
 import pytest
 from mailflow.config import NotifierConfig
 from mailflow_notify_wechatpadpro import gateway
@@ -221,6 +224,12 @@ class _BridgeResponse:
     def json(self) -> dict[str, Any]:
         return self._payload
 
+    def raise_for_status(self) -> None:
+        pass
+
+    async def aiter_lines(self) -> AsyncIterator[str]:
+        yield json.dumps(self._payload)
+
 
 class _BridgeClient:
     calls: ClassVar[list[tuple[str, dict[str, Any]]]] = []
@@ -233,6 +242,10 @@ class _BridgeClient:
 
     async def __aexit__(self, *_: Any) -> None:
         pass
+
+    @asynccontextmanager
+    async def stream(self, method: str, url: str, **kwargs: Any) -> AsyncGenerator[_BridgeResponse]:
+        yield await self.post(url, **kwargs)
 
     async def post(self, url: str, **kwargs: Any) -> _BridgeResponse:
         self.calls.append((url, kwargs))
@@ -285,6 +298,8 @@ async def test_webhook_bridge_sends_every_bot_reply_page(
                 "chat_type": "group",
                 "provider": "wechatpadpro",
                 "instance_id": "wechat-1",
+                "stream": True,
+                "request_id": "",
             }
         },
     )
@@ -553,3 +568,34 @@ def test_windows_installer_starts_fresh_docker_desktop(monkeypatch: pytest.Monke
 
     assert gateway.install_docker_dependencies() == docker
     assert starts == [True]
+
+
+@pytest.mark.parametrize("code,logged_in", [(200, True), (300, False)])
+async def test_gateway_status_checks_login_instead_of_only_http(
+    code: int, logged_in: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gateway, "_data_root", lambda: tmp_path)
+    monkeypatch.setattr(gateway, "_find_docker_compose", lambda: "fake-compose")
+    provisioner = gateway.WechatPadProProvisioner()
+    directory = gateway._instance_dir("one")  # pyright: ignore[reportPrivateUsage]
+    directory.mkdir(parents=True)
+    (directory / "instance.json").write_text(
+        json.dumps({"login_key": "fake-device", "uuid": "fake-uuid"}), encoding="utf-8"
+    )
+
+    async def ready(*args: Any, **kwargs: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(provisioner, "_owns_running", ready)
+    monkeypatch.setattr(provisioner, "_wait_http", ready)
+    client_type = httpx.AsyncClient
+
+    def client(**kwargs: Any) -> httpx.AsyncClient:
+        return client_type(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"code": code})),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    status = await provisioner.status("one")
+    assert status.status == "running" and status.extra["logged_in"] is logged_in

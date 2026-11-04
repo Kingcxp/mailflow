@@ -24,6 +24,7 @@ from typing import Any
 import httpx
 from mailflow.config import MailFlowConfig, NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
+from mailflow.forms import FormField
 from mailflow.notifications import DeliveryError, check_result, format_mail, targets_of
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
@@ -125,6 +126,15 @@ class WhatsappPlugin:
 
     def mailflow_register(self, registrar: PluginRegistrar, config: MailFlowConfig) -> None:
         registrar.add_notifier("whatsapp", WhatsappNotifier)
+        registrar.add_form_fields(
+            ComponentKind.NOTIFIER,
+            "whatsapp",
+            (
+                FormField("gateway_url", required=True),
+                FormField("admins", kind="list", description_key="tui.extras_admins"),
+                FormField("targets", kind="list", description_key="tui.extras_targets"),
+            ),
+        )
         registrar.add_gateway_provisioner("whatsapp", lambda: WhatsappProvisioner())
         # component registration is routine startup detail, not something
         # the user needs at INFO — it fires on every app start whether or

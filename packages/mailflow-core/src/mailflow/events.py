@@ -13,7 +13,7 @@ from typing import Any
 
 logger = logging.getLogger("mailflow.events")
 
-EventHandler = Callable[..., Awaitable[None]]
+EventHandler = Callable[..., Awaitable[bool | None]]
 Unsubscribe = Callable[[], None]
 
 
@@ -42,7 +42,7 @@ class EventBus:
         await self.emit_confirmed(event, **payload)
 
     async def emit_confirmed(self, event: str, **payload: Any) -> bool:
-        """Whether at least one subscriber accepted the event and none failed."""
+        """Whether a delivery handler explicitly acknowledged delivery and none failed."""
         handlers = list(self._subscribers.get(event, []))
         wildcard = list(self._subscribers.get("*", []))
         if not handlers and not wildcard:
@@ -60,7 +60,9 @@ class EventBus:
                     event,
                     result,
                 )
-        return not any(isinstance(result, BaseException) for result in results)
+        return any(result is True for result in results[: len(handlers)]) and not any(
+            isinstance(result, BaseException) for result in results
+        )
 
 
 __all__ = ["EventBus", "EventHandler", "Unsubscribe"]

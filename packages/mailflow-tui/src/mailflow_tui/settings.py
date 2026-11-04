@@ -609,7 +609,13 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     into_options=field.into_options,
                     secret=field.secret or field.kind == "password",
                     required=field.required
-                    and not (self._group == "llms" and field.field_id == "api_key"),
+                    and not (self._group == "llms" and field.field_id == "api_key")
+                    and not (
+                        self._group == "notifiers"
+                        and not self._editing
+                        and self._gateway_for(provider) is not None
+                        and field.field_id in {"gateway_url", "base_url", "http_url"}
+                    ),
                     choices=tuple(field.choices),
                     label_key=field.label_key,
                     description_key=field.description_key,
@@ -643,7 +649,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             next_btn.disabled = bool(self._busy)
         if test_btn is not None:
             test_btn.display = not gateway
-            test_btn.disabled = self._busy == "saving"
+            test_btn.disabled = self._busy == "saving" or (
+                self._group == "notifiers"
+                and provider
+                not in {"onebot", "telegram", "openwechat", "wechatpadpro", "whatsapp", "console"}
+                and self._service.registry.probe(ComponentKind.NOTIFIER, provider) is None
+            )
             test_btn.label = self._t(
                 "tui.btn_cancel" if self._busy == "testing" else "tui.btn_test"
             )

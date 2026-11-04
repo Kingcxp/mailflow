@@ -8,6 +8,7 @@ import urllib.request as _ur
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import mailflow_notify_onebot.gateway as gw_mod
 import pytest
 from mailflow_notify_onebot.gateway import (
@@ -223,12 +224,17 @@ async def test_qr_clears_cached_uin_when_logged_out(
     prov = NapCatProvisioner()
     prov._uins["A-Bot-NapCat-5baf4a"] = "404291187"  # pyright: ignore[reportPrivateUsage]
 
-    # HTTP probe fails (no server) -> falls through to QR payload;
-    # logged_in stays False -> the cached uin is invalidated
-    def _dead_endpoint(iid: str) -> str:
-        return "http://127.0.0.1:1"
+    # HTTP success with a rejected business result and a stale cached identity
+    # must not report a successful login.
+    client_type = httpx.AsyncClient
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"retcode": 100, "data": {"user_id": 404291187}})
+    )
 
-    monkeypatch.setattr(prov, "_endpoint", _dead_endpoint)
+    def client(**kwargs: Any) -> httpx.AsyncClient:
+        return client_type(**kwargs, transport=transport)
+
+    monkeypatch.setattr(gw_mod.httpx, "AsyncClient", client)
 
     result = await prov.qr("A-Bot-NapCat-5baf4a")
     assert result != "__MAILFLOW_LOGGED_IN__"

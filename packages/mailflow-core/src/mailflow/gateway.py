@@ -199,6 +199,11 @@ class GatewayManager:
     def progress(self, provider: str, instance_id: str) -> InstallProgress | None:
         return self._progress.get(self._key(provider, instance_id))
 
+    def _start_options(self, options: dict[str, Any]) -> dict[str, Any]:
+        if self._service_ref is not None:
+            return {**options, "_command_error": self._service_ref.t("chat.connection_lost")}
+        return options
+
     # -- lifecycle --------------------------------------------------------------
 
     async def start(self) -> None:
@@ -343,7 +348,11 @@ class GatewayManager:
             if old.enabled and old_connection == new_connection:
                 continue
             await self.shutdown_instance(provider, old.notifier_id)
-            instance.extra["options"] = {**dict(instance.extra.get("options") or {}), **new.options}
+            options = dict(instance.extra.get("options") or {})
+            for name in old.options:
+                options.pop(name, None)
+            options.update(new.options)
+            instance.extra["options"] = options
             instance.status = "starting"
             instance.error = ""
             self._stopped_keys.discard(self._key(provider, old.notifier_id))
@@ -663,7 +672,8 @@ class GatewayManager:
                     self._stopped_keys.discard(self._key(instance.provider, instance.instance_id))
                     started = await bounded(
                         self.provisioner(instance.provider).start(
-                            instance.instance_id, instance.extra.get("options", {})
+                            instance.instance_id,
+                            self._start_options(instance.extra.get("options", {})),
                         ),
                         timeout_seconds=900.0,
                         label=f"gateway {instance.provider}.{instance.instance_id} restart",
@@ -811,7 +821,7 @@ class GatewayManager:
         await self._save_state(instance)
         progress = InstallProgress()
         self._progress[key] = progress
-        operation_options = {**options, "_progress": progress}
+        operation_options = {**self._start_options(options), "_progress": progress}
         try:
             await bounded(
                 provisioner.install(instance_id, operation_options),

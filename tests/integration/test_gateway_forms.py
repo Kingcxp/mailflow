@@ -212,3 +212,40 @@ async def test_guide_escape_cancels_deployment_and_shuts_down() -> None:
         assert service.shutdowns == [("wechatpadpro", "wechat-1")]
         assert service.provision_cancelled.is_set()
         assert app.screen is not guide
+
+
+@pytest.mark.parametrize(
+    "provider,payload",
+    [
+        ("onebot", {"status": "failed", "retcode": 100}),
+        ("telegram", {"ok": False}),
+        ("openwechat", {"logged_in": False}),
+        ("whatsapp", {"logged_in": False}),
+    ],
+)
+async def test_http_success_without_platform_login_is_not_online(
+    provider: str, payload: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mailflow_tui.notifications import NotifierProbe
+
+    client_type = httpx.AsyncClient
+
+    def client(**kwargs: Any) -> httpx.AsyncClient:
+        return client_type(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload)),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    i18n = I18n("zh-CN")
+    result = await NotifierProbe.probe(
+        provider,
+        {
+            "http_url": "http://fake",
+            "gateway_url": "http://fake",
+            "api_base": "http://fake",
+            "bot_token": "fake",
+        },
+        i18n.t,
+    )
+    assert result == i18n.t("tui.bots_not_logged_in")

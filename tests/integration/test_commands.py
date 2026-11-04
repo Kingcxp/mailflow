@@ -1075,12 +1075,17 @@ async def test_unsubscribe_disables_equivalent_fixed_and_subscribed_targets(
             NotifierConfig(
                 notifier_id="bot",
                 provider=provider,
-                options={"targets": [f"group:{chat_id}"], "chat_id": chat_id},
+                options={
+                    "targets": [f"group:{chat_id}"],
+                    "chat_id": chat_id,
+                    "bot_token": "fake",
+                    "gateway_url": "http://fake",
+                },
             )
         ]
     )
     service = commands_service(config)
-    identity = {
+    identity: dict[str, Any] = {
         "provider": provider,
         "instance_id": "bot",
         "chat_id": chat_id,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import urllib.request
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 from urllib.request import Request
 
 from mailflow.config import NotifierConfig
@@ -18,6 +18,13 @@ class DeliveryError(RuntimeError):
         super().__init__(reason)
         self.code = f"delivery.{reason}"
         self.params: dict[str, Any] = {}
+
+
+def option_enabled(options: dict[str, Any], key: str, default: bool = True) -> bool:
+    value = options.get(key, default)
+    if isinstance(value, str):
+        return value.strip().casefold() not in {"", "0", "false", "off", "no"}
+    return bool(value)
 
 
 def target_id(target: str) -> str:
@@ -56,6 +63,24 @@ def targets_of(config: NotifierConfig) -> list[str]:
     return targets
 
 
+def connection_configured(config: NotifierConfig) -> bool:
+    required = {
+        "onebot": "http_url",
+        "telegram": "bot_token",
+        "openwechat": "gateway_url",
+        "whatsapp": "gateway_url",
+        "wechatpadpro": "base_url",
+    }
+    name = required.get(config.provider)
+    if name is None or not config.options.get(name):
+        return False
+    return config.provider != "wechatpadpro" or bool(
+        config.options.get("auth_key")
+        or config.options.get("admin_key")
+        or config.options.get("gateway")
+    )
+
+
 def format_mail(record: MailRecord, translate: Callable[..., str] | None = None) -> str:
     t = translate or I18n().t
     lines = [
@@ -75,8 +100,11 @@ def format_mail(record: MailRecord, translate: Callable[..., str] | None = None)
     return "\n".join(lines)
 
 
-def check_result(payload: dict[str, Any]) -> None:
+def check_result(payload: Any) -> None:
     """Check the explicit rejection fields used by bundled adapters."""
+    if not isinstance(payload, dict) or not payload:
+        raise DeliveryError("rejected")
+    payload = cast("dict[str, Any]", payload)
     if (
         payload.get("ok") is False
         or payload.get("Success") is False
@@ -106,4 +134,4 @@ def post_webhook(request: Request, timeout: float, *, provider: str = "") -> Non
             raise DeliveryError("rejected") from None
         return
     if isinstance(result, dict):
-        check_result(result)
+        check_result(cast("dict[str, Any]", result))
