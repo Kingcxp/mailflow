@@ -159,21 +159,20 @@ class WhatsappProvisioner(LocalProcessGateway, GatewayProvisioner):
         node = await asyncio.to_thread(_find_node)
         if node is None:
             raise RuntimeError(f"whatsapp needs the Node.js toolchain: {_NODE_HINT}")
-        npm = _find_npm()
-        if npm is None:
-            raise RuntimeError(f"whatsapp needs npm to install its bridge: {_NPM_HINT}")
         target = _instance_dir(instance_id)
-        if (target / _BRIDGE_NAME).exists() and _deps_installed(target):
-            logger.info("whatsapp %s: bridge already installed at %s", instance_id, target)
-            progress_done = options.get("_progress")
-            if progress_done is not None:
-                progress_done.update(100.0, "bridge already installed", "installed")
-            return
         self.prepare_directory(instance_id, target)
         progress = options.get("_progress")
         if progress is not None:
             progress.update(5.0, "writing the WhatsApp bridge…", "installing")
         await asyncio.to_thread(_write_payload, target)
+        if _deps_installed(target):
+            logger.info("whatsapp %s: bridge updated; reusing installed dependencies", instance_id)
+            if progress is not None:
+                progress.update(100.0, "bridge updated", "installed")
+            return
+        npm = _find_npm()
+        if npm is None:
+            raise RuntimeError(f"whatsapp needs npm to install its bridge: {_NPM_HINT}")
         if progress is not None:
             progress.update(
                 20.0,

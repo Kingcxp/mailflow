@@ -42,19 +42,33 @@ async def test_install_requires_go(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_install_builds_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_install_builds_bridge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("mailflow_notify_openwechat.gateway._find_go", lambda: "/usr/bin/go")
+    source = tmp_path / "bridge.go"
+    source.write_bytes(b"source v1")
+    monkeypatch.setattr(gateway, "_BRIDGE_GO", source)
+    builds: list[bytes] = []
 
     async def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         bridge = _bridge_path("wx-1")
         bridge.parent.mkdir(parents=True, exist_ok=True)
-        bridge.write_bytes(b"#!fake")
+        builds.append(source.read_bytes())
+        bridge.write_bytes(b"compiled " + builds[-1])
         return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
 
     monkeypatch.setattr("mailflow_notify_openwechat.gateway.run_command", fake_run)
     prov = OpenWechatProvisioner()
     await prov.install("wx-1", {})
-    assert _bridge_path("wx-1").exists()
+    bridge = _bridge_path("wx-1")
+    assert bridge.read_bytes() == b"compiled source v1"
+    session = bridge.parent / "openwechat-session.json"
+    session.write_text("saved login", encoding="utf-8")
+    await prov.install("wx-1", {})
+    assert len(builds) == 1
+    source.write_bytes(b"source v2")
+    await prov.install("wx-1", {})
+    assert bridge.read_bytes() == b"compiled source v2"
+    assert session.read_text(encoding="utf-8") == "saved login"
 
 
 @pytest.mark.asyncio

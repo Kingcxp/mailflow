@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -29,6 +30,7 @@ from mailflow.gateway_resources import (
     LocalProcessGateway,
     instance_directory,
     instance_token,
+    read_metadata,
     run_command,
 )
 
@@ -94,7 +96,9 @@ class OpenWechatProvisioner(LocalProcessGateway, GatewayProvisioner):
         target = _instance_dir(instance_id)
         self.prepare_directory(instance_id, target)
         bridge = target / "openwechat-bridge"
-        if bridge.exists():
+        source_hash = hashlib.sha256(await asyncio.to_thread(_BRIDGE_GO.read_bytes)).hexdigest()
+        metadata = read_metadata(target)
+        if bridge.exists() and metadata.get("bridge_source_hash") == source_hash:
             logger.info("openwechat %s: bridge already built", instance_id)
             return
         progress = options.get("_progress")
@@ -119,6 +123,11 @@ class OpenWechatProvisioner(LocalProcessGateway, GatewayProvisioner):
                 f"openwechat {instance_id}: bridge build failed: {result.stderr.strip()[:400]}"
             )
         await asyncio.to_thread(os.chmod, bridge, 0o755)
+        await asyncio.to_thread(
+            (target / "mailflow.json").write_text,
+            json.dumps({**read_metadata(target), "bridge_source_hash": source_hash}),
+            encoding="utf-8",
+        )
         logger.info("openwechat %s: bridge ready", instance_id)
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:

@@ -111,8 +111,16 @@ async def test_install_runs_npm_and_writes_the_bridge(
     ]
     manifest = (_bridge_path("wa-1").parent / "package.json").read_text(encoding="utf-8")
     assert '"@whiskeysockets/baileys": "6.7.24"' in manifest
+    bridge = _bridge_path("wa-1")
+    bridge.write_text("old bridge", encoding="utf-8")
+    credentials = bridge.parent / "auth" / "creds.json"
+    credentials.parent.mkdir()
+    credentials.write_text("saved login", encoding="utf-8")
+    monkeypatch.setattr(gw_mod, "_find_npm", lambda: None)
     await WhatsappProvisioner().install("wa-1", {})
     assert len(calls) == 1
+    assert bridge.read_bytes() == gw_mod._BRIDGE_SOURCE.read_bytes()  # pyright: ignore[reportPrivateUsage]
+    assert credentials.read_text(encoding="utf-8") == "saved login"
 
 
 @pytest.mark.asyncio
