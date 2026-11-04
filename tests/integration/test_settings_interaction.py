@@ -121,9 +121,6 @@ async def test_provider_drafts_do_not_cross_and_save_failure_keeps_input(
             **(
                 {
                     "mail_notifications": True,
-                    "task_reminders": True,
-                    "daily_digest": True,
-                    "hourly_summary": False,
                 }
                 if group == "notifiers"
                 else {}

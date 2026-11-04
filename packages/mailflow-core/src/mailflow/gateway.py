@@ -310,6 +310,49 @@ class GatewayManager:
         finally:
             self._reconfiguring = False
 
+    async def update_notifiers(self, previous: MailFlowConfig, config: MailFlowConfig) -> None:
+        """Apply channel changes without disconnecting unrelated sessions."""
+        self._config = config
+        current = {item.notifier_id: item for item in config.notifiers}
+        delivery_options = {
+            "targets",
+            "chat_id",
+            "subscription_targets",
+            "excluded_targets",
+            "admins",
+            "mail_notifications",
+            "task_reminders",
+            "daily_digest",
+            "hourly_summary",
+        }
+        for old in previous.notifiers:
+            provider = str(old.options.get("gateway") or "")
+            instance = self.instance(provider, old.notifier_id) if provider else None
+            if instance is None:
+                continue
+            new = current.get(old.notifier_id)
+            if new is None or not new.enabled or new.provider != old.provider:
+                await self.shutdown_instance(provider, old.notifier_id)
+                continue
+            old_connection = {
+                key: value for key, value in old.options.items() if key not in delivery_options
+            }
+            new_connection = {
+                key: value for key, value in new.options.items() if key not in delivery_options
+            }
+            if old.enabled and old_connection == new_connection:
+                continue
+            await self.shutdown_instance(provider, old.notifier_id)
+            instance.extra["options"] = {**dict(instance.extra.get("options") or {}), **new.options}
+            instance.status = "starting"
+            instance.error = ""
+            self._stopped_keys.discard(self._key(provider, old.notifier_id))
+            await self._save_state(instance)
+            if self._running:
+                self._supervise_tasks[self._key(provider, old.notifier_id)] = asyncio.create_task(
+                    self._supervise(instance, resume=True), name=f"gateway-{instance.instance_id}"
+                )
+
     async def _list_persisted(self) -> list[GatewayInstance]:
         found: list[GatewayInstance] = []
         # preferences are keyed `gateway.instance.<provider>.<instance>` and

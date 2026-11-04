@@ -45,13 +45,15 @@ _TELEGRAM_FIELDS: tuple[FormField, ...] = (
         kind="password",
         required=True,
         secret=True,
-        description_key="telegram_bot_token",
+        description_key="tui.extras_telegram_bot_token",
     ),
+    FormField(field_id="chat_id", required=False),
+    FormField(field_id="api_base", required=False, default="https://api.telegram.org"),
     FormField(
         field_id="admins",
         kind="list",
         required=False,
-        description_key="admins",
+        description_key="tui.extras_admins",
     ),
 )
 
@@ -73,6 +75,7 @@ class TelegramNotifier:
         options: dict[str, Any] = getattr(config, "options", None) or {}
         self._token = str(options.get("bot_token", "") or "")
         self._targets = targets_of(config)
+        self._api_base = str(options.get("api_base") or "https://api.telegram.org").rstrip("/")
 
     async def notify(self, record: MailRecord) -> None:
         await self.push_text(format_mail(record))
@@ -103,7 +106,15 @@ class TelegramNotifier:
         chat_id = target.partition(":")[2].strip() or target.strip()
         if not chat_id:
             raise DeliveryError("configuration")
-        await asyncio.to_thread(send_text, self._token, chat_id, text)
+        await asyncio.to_thread(
+            send_text,
+            self._token,
+            chat_id,
+            text,
+            **(
+                {"api_base": self._api_base} if self._api_base != "https://api.telegram.org" else {}
+            ),
+        )
 
 
 class NotifyPlugin:

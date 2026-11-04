@@ -36,8 +36,8 @@ def _token_of(options: dict[str, Any]) -> str:
     return str(options.get("bot_token") or "").strip()
 
 
-def _api(token: str, method: str) -> str:
-    return f"{_API_ROOT}/bot{token}/{method}"
+def _api(token: str, method: str, api_base: str = _API_ROOT) -> str:
+    return f"{api_base.rstrip('/')}/bot{token}/{method}"
 
 
 def as_object(value: Any) -> dict[str, Any]:
@@ -53,10 +53,12 @@ def as_text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
-async def _call(token: str, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+async def _call(
+    token: str, method: str, payload: dict[str, Any] | None = None, *, api_base: str = _API_ROOT
+) -> dict[str, Any]:
     """One Bot API call; raises with the API's own description on failure."""
     async with httpx.AsyncClient(timeout=float(_POLL_TIMEOUT) + 10.0) as client:
-        response = await client.post(_api(token, method), json=payload or {})
+        response = await client.post(_api(token, method, api_base), json=payload or {})
     try:
         body: Any = response.json()
     except ValueError as exc:
@@ -76,10 +78,14 @@ async def _call(token: str, method: str, payload: dict[str, Any] | None = None) 
 class TelegramBridge:
     """In-process getUpdates long-poll that feeds the MailFlow command router."""
 
-    def __init__(self, instance_id: str, token: str, bot_url: str) -> None:
+    def __init__(
+        self, instance_id: str, token: str, bot_url: str, api_base: str = _API_ROOT
+    ) -> None:
         self._instance_id = instance_id
         self._token = token
         self._bot_url = bot_url
+        self._api_base = api_base.rstrip("/")
+        self.error = ""
         self._task: asyncio.Task[Any] | None = None
         self._offset = 0
         self._stopping = False
@@ -90,8 +96,12 @@ class TelegramBridge:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def matches_connection(self, bot_url: str, token: str) -> bool:
-        return self._bot_url == bot_url and self._token == token
+    def matches_connection(self, bot_url: str, token: str, api_base: str = _API_ROOT) -> bool:
+        return (
+            self._bot_url == bot_url
+            and self._token == token
+            and self._api_base == api_base.rstrip("/")
+        )
 
     async def start(self) -> None:
         async with self._lock:
@@ -110,16 +120,20 @@ class TelegramBridge:
             if task is not None:
                 await cancel_tasks([task])
 
+    async def _request(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        if self._api_base == _API_ROOT:
+            return await _call(self._token, method, payload)
+        return await _call(self._token, method, payload, api_base=self._api_base)
+
     async def _load_identity(self) -> None:
         """Cache the bot's own id so self-messages are never dispatched."""
-        result = await _call(self._token, "getMe")
+        result = await self._request("getMe")
         self.identity = as_object(result.get("result"))
 
     async def _poll_loop(self) -> None:
         while not self._stopping:
             try:
-                result = await _call(
-                    self._token,
+                result = await self._request(
                     "getUpdates",
                     {
                         "offset": self._offset,
@@ -127,6 +141,7 @@ class TelegramBridge:
                         "allowed_updates": ["message"],
                     },
                 )
+                self.error = ""
                 raw_updates: Any = result.get("result")
                 updates: list[Any] = (
                     cast("list[Any]", raw_updates) if isinstance(raw_updates, list) else []
@@ -139,7 +154,10 @@ class TelegramBridge:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("telegram %s: poll failed: %s", self._instance_id, exc)
+                self.error = "poll_failed"
+                logger.warning(
+                    "telegram %s: poll failed (%s)", self._instance_id, type(exc).__name__
+                )
                 await asyncio.sleep(_RETRY_DELAY)
 
     async def _handle_update(self, update: dict[str, Any]) -> None:
@@ -165,7 +183,7 @@ class TelegramBridge:
         reply = await self._dispatch(text, sender_id, chat_id, chat_type)
         for page in reply:
             try:
-                await _call(self._token, "sendMessage", {"chat_id": chat_id, "text": page})
+                await self._request("sendMessage", {"chat_id": chat_id, "text": page})
             except Exception as exc:
                 logger.warning(
                     "telegram %s: reply to %s failed: %s", self._instance_id, chat_id, exc
@@ -213,12 +231,20 @@ class TelegramProvisioner(GatewayProvisioner):
         async with self._lock:
             bot_url = str(options.get("bot_url") or "")
             bridge = self._bridges.get(instance_id)
-            if bridge is not None and bridge.matches_connection(bot_url, token) and bridge.running:
+            if (
+                bridge is not None
+                and bridge.matches_connection(
+                    bot_url, token, str(options.get("api_base") or _API_ROOT)
+                )
+                and bridge.running
+            ):
                 return bridge
             if bridge is not None:
                 await bridge.stop()
                 self._bridges.pop(instance_id, None)
-            new = TelegramBridge(instance_id, token, bot_url)
+            new = TelegramBridge(
+                instance_id, token, bot_url, str(options.get("api_base") or _API_ROOT)
+            )
             if bridge is not None and bridge._token == token:  # pyright: ignore[reportPrivateUsage]
                 new._offset = bridge._offset  # pyright: ignore[reportPrivateUsage]
             try:
@@ -250,7 +276,11 @@ class TelegramProvisioner(GatewayProvisioner):
                 "telegram needs a bot token from @BotFather — open the form, "
                 "paste the token, and run the setup again"
             )
-        result = await _call(token, "getMe")
+        result = (
+            await _call(token, "getMe", api_base=str(options["api_base"]))
+            if options.get("api_base")
+            else await _call(token, "getMe")
+        )
         username = as_text(as_object(result.get("result")).get("username"))
         logger.info("telegram %s: token accepted (@%s)", instance_id, username or "bot")
         if progress is not None:
@@ -272,7 +302,7 @@ class TelegramProvisioner(GatewayProvisioner):
             status="running",
             # Telegram has no local endpoint: the "endpoint" is the API base
             # the notifier posts to, which is also what the form stores.
-            endpoint=_API_ROOT,
+            endpoint=bridge._api_base,
             extra={
                 "username": as_text(identity.get("username")),
                 "bot_id": as_text(identity.get("id")),
@@ -315,8 +345,9 @@ class TelegramProvisioner(GatewayProvisioner):
             provider="telegram",
             instance_id=instance_id,
             status="running",
-            endpoint=_API_ROOT,
-            extra={"in_process": True},
+            endpoint=bridge._api_base,
+            extra={"in_process": True, "logged_in": True, "receiving": not bridge.error},
+            error=bridge.error,
         )
 
     async def qr(self, instance_id: str) -> str:
@@ -333,11 +364,11 @@ class TelegramProvisioner(GatewayProvisioner):
         )
 
 
-def send_text(token: str, chat_id: str, text: str) -> None:
+def send_text(token: str, chat_id: str, text: str, *, api_base: str = _API_ROOT) -> None:
     """Blocking one-shot sendMessage used by the notifier's worker thread."""
     payload = urlencode({"chat_id": chat_id, "text": text}).encode()
     request = Request(
-        _api(token, "sendMessage"),
+        _api(token, "sendMessage", api_base),
         data=payload,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )

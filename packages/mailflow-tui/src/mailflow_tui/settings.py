@@ -534,6 +534,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         if self._group != "notifiers":
             return extras
         existing = {field.field_id for field in extras}
+        capabilities = self._service.notifier_capabilities(provider)
         return extras + tuple(
             _Extra(name, kind="boolean", default=default, label_key="ux." + name)
             for name, default in (
@@ -542,7 +543,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 ("daily_digest", "true"),
                 ("hourly_summary", "false"),
             )
-            if name not in existing
+            if name not in existing and name in capabilities
         )
 
     def _provider_extras_for(self, provider: str) -> tuple[_Extra, ...]:
@@ -567,12 +568,16 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 # number / wxid), one per line; everything else
                 # (subscriptions, mail queries) happens via chat commands
                 # like <prefix>mailflow subscribe
-                return (_Extra("admins", kind="lines", required=True),)
+                return (
+                    _Extra("admins", kind="lines", description_key="tui.extras_admins"),
+                    _Extra("targets", kind="lines"),
+                )
             if provider == "onebot":
                 return (
                     _Extra("http_url", required=True),
                     _Extra("access_token", kind="password", secret=True),
                     _Extra("targets", required=True),
+                    _Extra("admins", kind="lines", description_key="tui.extras_admins"),
                 )
         return ()
 
@@ -626,7 +631,11 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         """Match the visible actions to the provider and current operation."""
         save_btn = self.query_one_optional("#entry-form-save", Button)
         provider = self._current_provider()
-        gateway = self._group == "notifiers" and self._gateway_for(provider) is not None
+        gateway = (
+            self._group == "notifiers"
+            and self._gateway_for(provider) is not None
+            and not self._editing
+        )
         next_btn = self.query_one_optional("#entry-form-next", Button)
         test_btn = self.query_one_optional("#entry-form-test", Button)
         if next_btn is not None:

@@ -3,7 +3,7 @@
 Telegram has no local runtime to install — the Bot API *is* the gateway — so
 what these tests pin is the part that can silently break: token validation,
 the in-process long-poll bridge that carries chat commands, and the notifier's
-skip-without-credentials / one-request-per-target behaviour.
+credential errors and delivery to each configured target.
 """
 
 from __future__ import annotations
@@ -230,7 +230,10 @@ async def test_dispatch_ignores_self_and_non_text_messages(
 @pytest.mark.asyncio
 async def test_notifier_posts_one_message_per_target(sent: list[Any]) -> None:
     record = _record()
-    await _notifier().notify(record)
+    from mailflow.notifications import DeliveryError
+
+    with pytest.raises(DeliveryError):
+        await _notifier().notify(record)
     assert sent == []
     record.manual_urgency = Urgency.URGENT
     notifier = _notifier(bot_token="t", chat_id="42", targets=["user:7", "user:42"])
@@ -267,3 +270,40 @@ async def test_one_failing_target_does_not_abort_the_rest(
     with pytest.raises(RuntimeError, match="chat not found"):
         await _notifier(bot_token="t", targets=["user:1", "user:2"]).push_text("x")
     assert delivered == ["2"]
+
+
+async def test_custom_api_url_applies_to_identity_polling_and_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    requests: list[str] = []
+    client_type = httpx.AsyncClient
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(200, json={"ok": True, "result": {"id": 7}})
+
+    def client(**kwargs: Any) -> httpx.AsyncClient:
+        return client_type(transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    bridge = TelegramBridge("one", "test", "", "http://fake-api/")
+    await bridge._load_identity()
+    await bridge._request("getUpdates")
+    await bridge._request("sendMessage", {"chat_id": "7", "text": "ready"})
+    assert requests == [
+        f"http://fake-api/bottest/{method}" for method in ("getMe", "getUpdates", "sendMessage")
+    ]
+    assert bridge.identity["id"] == 7
+
+    sent_to: list[str] = []
+
+    def send(token: str, chat_id: str, text: str, *, api_base: str) -> None:
+        sent_to.append(api_base)
+
+    monkeypatch.setattr(
+        importlib.import_module("mailflow_notify_telegram.plugin"), "send_text", send
+    )
+    await _notifier(bot_token="test", chat_id="7", api_base="http://fake-api/").push_text("ready")
+    assert sent_to == ["http://fake-api"]

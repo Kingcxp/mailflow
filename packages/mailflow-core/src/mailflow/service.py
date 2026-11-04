@@ -598,6 +598,15 @@ class MailFlowService:
             notifier_configs.append(notifier)
         await self.runtime.reconfigure_notifiers(notifiers, notifier_configs)
 
+    def notifier_capabilities(self, provider: str) -> set[str]:
+        provider = "onebot" if provider == "napcat" else provider
+        capabilities = {"mail_notifications"}
+        if self.registry.has(ComponentKind.NOTIFIER, provider):
+            component = inspect.unwrap(self.registry.notifier_factory(provider))
+            if callable(getattr(component, "push_text", None)):
+                capabilities.update({"task_reminders", "daily_digest", "hourly_summary"})
+        return capabilities
+
     @admin_operation
     async def reload_runtime(self, *, restart_sources: bool | None = None) -> None:
         """Rebuild components after releasing their previous task owners."""
@@ -2390,6 +2399,7 @@ Return every candidate in this batch."""
 
     async def _persist_config(self, updated: MailFlowConfig, key: str) -> None:
         """Write ``updated`` back, preferring a comment-preserving patch."""
+        previous = self.config
         if self.config_path is None:
             raise translated_error(ValueError, self.t, "errors.config_required")
         patched = False
@@ -2405,7 +2415,31 @@ Return every candidate in this batch."""
             # a runtime rebuild problem must never swallow the fact that the
             # config itself was persisted (panes re-read it regardless)
             try:
-                await self.reload_runtime()
+                notification_fields = {
+                    "mail_notifications",
+                    "task_reminders",
+                    "daily_digest",
+                    "daily_digest_hour",
+                    "daily_digest_minute",
+                    "hourly_summary",
+                    "reminder_days_before",
+                    "reminder_hour",
+                    "reminder_minute",
+                    "reminder_interval_seconds",
+                }
+                changed_general = {
+                    name
+                    for name, value in updated.general.model_dump().items()
+                    if value != previous.general.model_dump().get(name)
+                }
+                if key.split(".")[0] == "notifiers":
+                    self.runtime.update_config(updated)
+                    await self._rebuild_notifiers()
+                    await self.gateways.update_notifiers(previous, updated)
+                elif key.startswith("general.") and changed_general <= notification_fields:
+                    self.runtime.update_config(updated)
+                else:
+                    await self.reload_runtime()
             except Exception as exc:
                 detail = str(exc)
                 for secret in sorted(_collect_secrets(updated), key=len, reverse=True):
@@ -3282,6 +3316,8 @@ Return every candidate in this batch."""
                 )
                 if gateway is not None and gateway.error:
                     state = self.t("chat.connection_error")
+                elif gateway is not None and gateway.extra.get("logged_in") is False:
+                    state = self.t("tui.bots_not_logged_in")
             return self.t(
                 "chat.status_detail", gateway=instance_id or provider, state=state, chats=len(subs)
             )

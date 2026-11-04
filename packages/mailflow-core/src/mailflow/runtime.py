@@ -1056,7 +1056,7 @@ class MailFlowRuntime:
                         if target is None:
                             await notifier.notify(record)
                         else:
-                            await targeted(
+                            await cast(Any, targeted)(
                                 target,
                                 record,
                                 text=format_mail(record, self._i18n.t if self._i18n else None),
@@ -1165,7 +1165,7 @@ class MailFlowRuntime:
                 row = rows.get(receipt, {})
                 if row.get("kind") != "text":
                     continue
-                notifier = next(
+                text_notifier = next(
                     (
                         n
                         for n, c in zip(self._notifiers, self._notifier_configs, strict=True)
@@ -1174,7 +1174,7 @@ class MailFlowRuntime:
                     ),
                     None,
                 )
-                if notifier is None or not row.get("text"):
+                if text_notifier is None or not row.get("text"):
                     continue
                 option = str(row.get("option", "task_reminders"))
                 if not getattr(self._config.general, option, False):
@@ -1198,9 +1198,9 @@ class MailFlowRuntime:
                     )
                 try:
                     if row.get("target"):
-                        await cast(Any, notifier).push_to_target(row["target"], text)
+                        await cast(Any, text_notifier).push_to_target(row["target"], text)
                     else:
-                        await cast(Any, notifier).push_text(text)
+                        await cast(Any, text_notifier).push_text(text)
                 except Exception as exc:
                     await self.deliveries.update(receipt, {**row, "error_code": error_code(exc)})
                 else:
@@ -1265,7 +1265,6 @@ class MailFlowRuntime:
                 logger.error("cleanup run failed: %s", exc)
 
     async def _reminder_loop(self) -> None:
-        interval = max(10, self._config.general.reminder_interval_seconds)
         stop_event = self._stop_event
         while not stop_event.is_set():
             try:
@@ -1273,7 +1272,10 @@ class MailFlowRuntime:
             except Exception as exc:
                 logger.error("reminder tick failed: %s", exc)
             with suppress(TimeoutError):
-                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+                await asyncio.wait_for(
+                    stop_event.wait(),
+                    timeout=max(10, self._config.general.reminder_interval_seconds),
+                )
 
     async def run_reminder_tick(self) -> int:
         """Deliver each due reminder once; unsuccessful destinations can retry."""

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from mailflow import gateway_resources as resources
 
@@ -142,6 +143,17 @@ async def test_local_gateway_custom_port_restart_and_instance_isolation(
     monkeypatch.setattr(subprocess, "Popen", launch)
     monkeypatch.setattr(resources, "port_available", port_free)
     monkeypatch.setattr(provisioner, "_wait_http_port", health)
+    client_type = httpx.AsyncClient
+
+    def client(**kwargs: Any) -> httpx.AsyncClient:
+        return client_type(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"logged_in": True})
+            ),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
     bridge_name = "openwechat-bridge" if provider == "openwechat" else "whatsapp-bridge.mjs"
     for instance_id in ("a/b", "a?b"):
         directory = module._instance_dir(instance_id)

@@ -488,7 +488,7 @@ async def test_notifier_pane_merge_gateway_error_shows_reconfig() -> None:
     pane = NotificationsPane(cast(Any, service))
     results = {"qq-1": "online", "plain-2": "ok"}
     await pane._merge_gateway_states(results)  # pyright: ignore[reportPrivateUsage]
-    assert results["qq-1"] == "t(tui.bots_need_reconfig) (t(errors.operation))"
+    assert results["qq-1"] == "t(chat.connection_error) (t(errors.operation))"
     assert "is not installed" not in results["qq-1"]
     # non-gateway notifiers are untouched
     assert results["plain-2"] == "ok"
@@ -602,3 +602,36 @@ async def test_memory_exhausted_gateway_is_recycled(monkeypatch: pytest.MonkeyPa
     await asyncio.gather(task, return_exceptions=True)
     assert provisioner.stopped.count("gw-1") >= 1, "leaky gateway was not recycled"
     assert provisioner.started == ["gw-1"], "recycle did not restart the gateway"
+
+
+async def test_notification_settings_keep_connections_and_only_reconnect_changed_channel() -> None:
+    from mailflow.config import NotifierConfig
+
+    config = MailFlowConfig(
+        notifiers=[
+            NotifierConfig(
+                notifier_id=name,
+                provider="onebot",
+                options={"gateway": "fake-gw", "http_url": "http://old"},
+            )
+            for name in ("one", "two")
+        ]
+    )
+    provisioner = FakeProvisioner()
+    manager, _ = _manager(provisioner, config)
+    await manager.provision("fake-gw", "one", {})
+    await manager.provision("fake-gw", "two", {})
+    try:
+        changed = config.model_copy(deep=True)
+        changed.notifiers[0].options["hourly_summary"] = True
+        changed.notifiers[0].minimum_urgency = "important"
+        await manager.update_notifiers(config, changed)
+        assert provisioner.stopped == []
+        assert (await manager.instances())[0].status == "running"
+        reconnected = changed.model_copy(deep=True)
+        reconnected.notifiers[0].options["http_url"] = "http://new"
+        await manager.update_notifiers(changed, reconnected)
+        assert provisioner.stopped == ["one"]
+        assert manager.instance("fake-gw", "two").status == "running"
+    finally:
+        await manager.stop()

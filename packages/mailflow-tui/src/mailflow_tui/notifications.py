@@ -90,9 +90,13 @@ class NotifierProbe:
                 if not token:
                     return str(t("tui.bots_not_configured"))
                 async with httpx.AsyncClient(timeout=8.0) as client:
-                    response = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+                    response = await client.get(
+                        f"{str(options.get('api_base') or 'https://api.telegram.org').rstrip('/')}/bot{token}/getMe"
+                    )
                 if response.status_code == 200:
                     payload = response.json()
+                    if payload.get("ok") is not True:
+                        return str(t("tui.bots_not_logged_in"))
                     result: Any = payload.get("result") if isinstance(payload, dict) else None
                     name = (
                         str((result or {}).get("username") or "")
@@ -107,10 +111,13 @@ class NotifierProbe:
                     return str(t("tui.bots_not_configured"))
                 async with httpx.AsyncClient(timeout=8.0) as client:
                     response = await client.get(f"{url}/health")
+                if response.status_code != 200:
+                    return http_status(response.status_code)
+                payload = response.json()
                 return str(
                     t("tui.bots_online")
-                    if response.status_code == 200
-                    else http_status(response.status_code)
+                    if payload.get("logged_in") is True
+                    else t("tui.bots_not_logged_in")
                 )
             if provider == "wechatpadpro":
                 url = str(options.get("base_url", "")).rstrip("/")
@@ -119,7 +126,7 @@ class NotifierProbe:
                 async with httpx.AsyncClient(timeout=8.0) as client:
                     response = await client.get(url)
                 return str(
-                    t("tui.bots_online")
+                    t("chat.connection_unverified")
                     if 200 <= response.status_code < 300
                     else http_status(response.status_code)
                 )
@@ -149,6 +156,8 @@ class NotificationsPane(Vertical):
         self._selected_id: str | None = None
         self._timer: Any = None
         self._syncing_urgency = False
+        self._mutating = False
+        self._statuses: dict[str, str] = {}
 
     def _urgency_options(self) -> list[tuple[str, str]]:
         return [
@@ -220,13 +229,24 @@ class NotificationsPane(Vertical):
         table.add_column(self._service.t("tui.bots_status"), key="status")
 
     def _render_rows(self, statuses: dict[str, str] | None = None) -> None:
-        statuses = statuses or {}
+        if statuses is not None:
+            self._statuses.update(statuses)
+        statuses = self._statuses
         table: DataTable[Any] = self.query_one("#notifications-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         view = TableView.capture(table, self._selected_id)
         table.clear()  # pyright: ignore[reportUnknownMemberType]
         for entry in self._all_notifiers():
             notifier_id = str(entry["notifier_id"])
-            raw_targets = list(entry["options"].get("targets") or [])
+            from mailflow.config import NotifierConfig
+            from mailflow.notifications import targets_of
+
+            raw_targets = targets_of(
+                NotifierConfig(
+                    notifier_id=notifier_id,
+                    provider=str(entry["provider"]),
+                    options=entry["options"],
+                )
+            )
             targets = ", ".join(str(t) for t in raw_targets) or "-"
             table.add_row(
                 notifier_id,
@@ -330,6 +350,16 @@ class NotificationsPane(Vertical):
     def _sync_selection_controls(self) -> None:
         """Mirror the selected row's enabled/urgency into the action controls."""
         index = self._selected_index()
+        for ident in ("notif-edit", "notif-delete", "notif-relogin"):
+            button = self.query_one_optional("#" + ident, Button)
+            if button is not None:
+                button.disabled = index is None or self._mutating
+                if ident == "notif-relogin" and index is not None:
+                    entry = self._service.config.notifiers[index]
+                    button.disabled = button.disabled or (
+                        not entry.options.get("gateway")
+                        and self._gateway_for(self._service, entry.provider) is None
+                    )
         toggle = self.query_one_optional("#notif-toggle", Button)
         urgency = self.query_one_optional("#notif-urgency", Select)
         if index is None:
@@ -340,14 +370,14 @@ class NotificationsPane(Vertical):
             return
         entry = self._service.config.notifiers[index]
         if toggle is not None:
-            toggle.disabled = False
+            toggle.disabled = self._mutating
             toggle.label = (
                 self._service.t("tui.notifications_disable")
                 if entry.enabled
                 else self._service.t("tui.notifications_enable")
             )
         if urgency is not None:
-            urgency.disabled = False
+            urgency.disabled = self._mutating
             from textual.css.query import QueryError
 
             self._syncing_urgency = True
@@ -361,6 +391,18 @@ class NotificationsPane(Vertical):
     # -- actions ----------------------------------------------------------------
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.disabled or self._mutating:
+            return
+        self._mutating = True
+        self._sync_selection_controls()
+        try:
+            await self._button_action(event)
+        finally:
+            self._mutating = False
+            if self.is_mounted:
+                self._sync_selection_controls()
+
+    async def _button_action(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "notif-failed":
             from mailflow_tui.mail_workflows import DeliveriesScreen
@@ -406,7 +448,7 @@ class NotificationsPane(Vertical):
     async def _set_selected_urgency(self) -> None:
         index = self._selected_index()
         urgency = self.query_one_optional("#notif-urgency", Select)
-        if index is None or urgency is None:
+        if index is None or urgency is None or self._mutating:
             return
         selected = urgency.value
         if selected is Select.NULL or selected == "":
@@ -419,11 +461,16 @@ class NotificationsPane(Vertical):
             return
         values = entry.model_dump()
         values["minimum_urgency"] = parsed.value
+        self._mutating = True
+        self._sync_selection_controls()
         try:
             await self._service.update_config_entry("notifiers", index, values)
         except Exception as exc:
             self._show_error(exc)
             return
+        finally:
+            self._mutating = False
+            self._sync_selection_controls()
         self._render_rows()
 
     async def _toggle_selected(self) -> None:
@@ -532,6 +579,8 @@ class NotificationsPane(Vertical):
                 "gateway": gateway,
             }
             values["provider"] = "onebot" if gateway == "napcat" else gateway
+        elif provider == "napcat":
+            values["provider"] = "onebot"
         warning = ""
         try:
             if index is None:
@@ -731,7 +780,7 @@ class NotificationsPane(Vertical):
                     self._service, RuntimeError(getattr(instance, "error", "") or "")
                 )
                 gateway_by_id[str(instance.instance_id)] = (
-                    f"{self._service.t('tui.bots_need_reconfig')} ({error})"
+                    f"{self._service.t('chat.connection_error')} ({error})"
                 )
         if not gateway_by_id:
             return

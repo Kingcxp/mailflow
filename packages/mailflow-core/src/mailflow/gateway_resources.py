@@ -362,12 +362,26 @@ class LocalProcessGateway(GatewayFiles):
         process = self._processes.get(instance_id)
         alive = process is not None and process.poll() is None
         healthy = alive and await self._wait_http_port(self._port(instance_id), wait_seconds=0.5)
+        login: bool | None = None
+        if healthy:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    response = await client.get(f"{self._endpoint(instance_id)}/health")
+                    payload: Any = response.json()
+                    login = (
+                        payload.get("logged_in")
+                        if isinstance(payload.get("logged_in"), bool)
+                        else None
+                    )
+            except Exception:
+                healthy = False
         return GatewayInstance(
             provider=self.provider,
             instance_id=instance_id,
             status="running" if healthy else "starting" if alive else "stopped",
             endpoint=self._endpoint(instance_id),
             error="" if healthy else "bridge not answering",
+            extra={"logged_in": login, "api_ready": healthy},
         )
 
     async def qr(self, instance_id: str) -> str:
