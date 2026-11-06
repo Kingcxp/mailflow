@@ -431,6 +431,7 @@ class SQLiteStorage:
                     starred=record.starred,
                     archived=record.archived,
                     analysis_state=record.analysis_state,
+                    analysis_error_code=record.analysis_error_code,
                 )
             )
         return trash

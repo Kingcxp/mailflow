@@ -1,35 +1,79 @@
-"""Switching general.language hot-rebuilds the pipeline so the LLM
-processor's summary language follows the UI language immediately."""
+"""Interface language changes affect generated content and explicit failed-mail retries."""
 
 from __future__ import annotations
 
-from typing import Any, cast
+import asyncio
+import json
+import re
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 import pytest
-from mailflow.config import LLMConfig, MailFlowConfig
+from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
 from mailflow.contracts import LLMCompletion
-from mailflow.events import EventBus
-from mailflow.i18n import I18n
-from mailflow.pipeline import PipelineEngine
+from mailflow.domain import MailAnalysis, MailRecord, Urgency
+from mailflow.mail_query import MailQuery
 from mailflow.plugin_api import define_plugin
 from mailflow.plugins import PluginManager
-from mailflow.service import MailFlowService
+from mailflow.service import MailFlowService, start_service
+from mailflow_storage_sqlite.plugin import plugin as storage_plugin
+from mailflow_testkit.fakes import make_mail
+from mailflow_tui.labels import analysis_status
 
 
-class _Store:
+class Model:
     def __init__(self) -> None:
-        self.preferences: dict[str, str] = {}
+        self.languages: list[str] = []
+        self.fail = False
+        self.block = False
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
 
-    async def initialize(self) -> None: ...
-    async def close(self) -> None: ...
-    async def get_preference(self, k: str) -> str | None:
-        return self.preferences.get(k)
+    async def complete(self, messages: list[dict[str, Any]]) -> LLMCompletion:
+        prompt = "\n".join(str(message.get("content", "")) for message in messages)
+        match = re.search(r"language:\s*(zh-CN|en)\b", prompt)
+        assert match is not None, "Generated content must request the current language"
+        language = match.group(1)
+        self.languages.append(language)
+        if self.block:
+            self.entered.set()
+            await self.release.wait()
+        if self.fail:
+            raise RuntimeError("fake model unavailable")
+        summary, reason, reply, action = (
+            ("请提交报告", "需要处理", "好的，我会提交。", "提交报告")
+            if language == "zh-CN"
+            else (
+                "Please submit the report",
+                "Action required",
+                "I will submit it.",
+                "Submit report",
+            )
+        )
+        return LLMCompletion(
+            text=json.dumps(
+                {
+                    "summary": summary,
+                    "reason": reason,
+                    "urgency": "important",
+                    "suggested_reply": reply,
+                    "action_items": [
+                        {
+                            "summary": action,
+                            "action_type": "errand",
+                            "due_at": "2099-01-01T09:00:00+00:00",
+                            "must_do": True,
+                        }
+                    ],
+                }
+            )
+        )
 
-    async def set_preference(self, k: str, v: str) -> None:
-        self.preferences[k] = v
 
-
-def fake_manager(config: MailFlowConfig | None = None) -> PluginManager:
+async def open_service(
+    model: Model, db: Path, *, config_path: Path | None = None
+) -> MailFlowService:
     class Backend:
         backend_id = "language-test"
 
@@ -37,120 +81,167 @@ def fake_manager(config: MailFlowConfig | None = None) -> PluginManager:
             pass
 
         async def chat(
-            self, messages: Any, *, temperature: Any = None, options: Any = None, tools: Any = None
+            self,
+            messages: list[dict[str, Any]],
+            *,
+            temperature: Any = None,
+            options: Any = None,
+            tools: Any = None,
         ) -> LLMCompletion:
-            return LLMCompletion(text='{"summary": "local fake", "urgency": "info"}')
+            return await model.complete(messages)
 
+    config = MailFlowConfig()
+    config.storage.path = str(db)
+    config.general.summary_language = "en"  # Legacy overrides must not freeze output in English.
+    config.llms = [LLMConfig(llm_id="main", provider="language-test", model="local")]
+    config.processors = [
+        ProcessorConfig(
+            processor_id="llm-importance",
+            provider="llm-importance",
+            llm="main",
+            options={"language": "en"},
+            retries=0,
+        )
+    ]
     plugin = define_plugin("mailflow-language-test")
     plugin.llm("language-test")(Backend)
     manager = PluginManager(config)
     manager.register(plugin.build())
-    return manager
-
-
-@pytest.fixture
-def service(tmp_path: Any) -> MailFlowService:
-    manager = fake_manager()
-    svc = MailFlowService(
-        config=MailFlowConfig(),
-        registry=manager.build_registry(),
-        plugin_manager=manager,
-        storage=cast(Any, _Store()),
-        sources={},
-        router=cast(Any, None),
-        pipeline=PipelineEngine([]),
-        notifiers=[],
-        notifier_configs=[],
-        events=EventBus(),
-        i18n=I18n(),
-    )
-    return svc
-
-
-async def test_language_switch_updates_pipeline_language(service: MailFlowService) -> None:
-    # an llm-importance entry exists as soon as the user configures an LLM
-    from mailflow.config import LLMConfig, ProcessorConfig
-    from mailflow.llm import LLMRouterImpl
-    from mailflow.processors import register_builtin_processors
-    from mailflow.service import _build_processors  # pyright: ignore[reportPrivateUsage]
-
-    register_builtin_processors(service.registry)
-    service.config.llms = [LLMConfig(llm_id="main", provider="language-test", model="local")]
-    service.config.processors = [
-        ProcessorConfig(processor_id="llm-importance", provider="llm-importance", llm="main")
-    ]
-
-    # seed a pipeline the way start_service does
-    service.pipeline = _build_processors(
-        service.config, service.registry, LLMRouterImpl({}, {}), language="en"
-    )
-
-    assert _pipeline_language(service) == "en"
-
-    await service.set_setting("general.language", "zh-CN")
-
-    assert service.i18n.language == "zh-CN"
-    assert _pipeline_language(service) == "zh-CN"
-
-
-def _pipeline_language(service: MailFlowService) -> str:
-    """The language option baked into the llm-importance binding."""
-    for binding in service.pipeline._bindings:  # pyright: ignore[reportPrivateUsage]
-        options = binding.options or {}
-        if binding.processor_id == "llm-importance":
-            return str(options.get("language", ""))
-    return ""
-
-
-async def test_startup_applies_persisted_language_to_pipeline(tmp_path: Any) -> None:
-    """A fresh service start must build the pipeline with the persisted UI
-    language — not the [i18n] bootstrap default (regression: zh-CN
-    preference with an en bootstrap produced English summaries)."""
-    from pathlib import Path
-
-    from mailflow.service import start_service
-    from mailflow_storage_sqlite.plugin import plugin as storage_plugin
-
-    def build_config(db: Path) -> Any:
-        from mailflow.config import LLMConfig, MailFlowConfig, ProcessorConfig
-
-        cfg = MailFlowConfig()
-        cfg.storage.path = str(db)
-        cfg.i18n.language = "en"  # bootstrap default, as in example configs
-        cfg.general.language = "zh-CN"
-        cfg.llms = [LLMConfig(llm_id="main", provider="language-test", model="local")]
-        cfg.processors = [
-            ProcessorConfig(processor_id="llm-importance", provider="llm-importance", llm="main")
-        ]
-        return cfg
-
-    config_path = tmp_path / "cfg.toml"
-    config_path.write_text("", encoding="utf-8")
-
-    # first run: persist the zh-CN preference the way the TUI does
-    config = build_config(tmp_path / "language.db")
-    manager = fake_manager(config)
     manager.register(storage_plugin)
-    service = await start_service(
+    return await start_service(
         config,
         config_path=config_path,
         plugin_manager=manager,
         discover_plugins=False,
         enable_logging=False,
+        background=False,
     )
-    await service.set_language("zh-CN")
-    await service.stop()
 
-    # second run: the persisted preference must reach the pipeline
-    service2 = await start_service(
-        build_config(tmp_path / "language.db"),
-        config_path=config_path,
-        plugin_manager=manager,
-        discover_plugins=False,
-        enable_logging=False,
-    )
+
+@pytest.mark.parametrize("entry", ["settings", "language_command", "config_command"])
+async def test_language_switch_marks_old_results_failed_until_explicit_retry(
+    tmp_path: Path,
+    entry: str,
+) -> None:
+    model = Model()
+    path = tmp_path / "config.toml" if entry != "language_command" else None
+    service = await open_service(model, tmp_path / "language.db", config_path=path)
     try:
-        assert await service2.get_language() == "zh-CN"
-        assert _pipeline_language(service2) == "zh-CN"
+        record = await service.process_mail(make_mail())
+        assert record is not None and record.analysis is not None
+        assert record.analysis.language == "en" and record.analysis_state == "ready"
+        old_analysis = record.analysis.model_copy(deep=True)
+        old_action = old_analysis.action_items[0]
+        old_action.completed_at = datetime(2026, 11, 1, tzinfo=UTC)
+        old_action.reminder_enabled = False
+        old_action.snoozed_until = datetime(2099, 1, 1, tzinfo=UTC)
+        await service.storage.save_mail(record.model_copy(update={"analysis": old_analysis}))
+        await service.set_mail_urgency(record.record_id, Urgency.URGENT)
+        if entry == "settings":
+            await service.set_setting("general.language", "zh-CN")
+        elif entry == "config_command":
+            await service.set_config_value("general.language", "zh-CN")
+        else:
+            await service.set_language("zh-CN")
+        assert await service.get_language() == service.config.general.language == "zh-CN"
+        assert model.languages == ["en"]  # Switching never schedules analysis.
+        failed = await service.list_failed_mails()
+        assert [mail.record_id for mail in failed] == [record.record_id]
+        assert (await service.query_mails(MailQuery(state="failed"))).total == 1
+        assert failed[0].analysis == old_analysis
+        assert failed[0].analysis_state == "failed"
+        assert analysis_status(service, failed[0]) == service.t("mail.analysis_language_changed")
+        assert service.t("mail.analysis_language_changed") != "mail.analysis_language_changed"
+        assert (await service.create_reply(record.record_id)).body == ""
+
+        model.fail = True
+        retained = await service.process_mail(failed[0].mail, force=True)
+        assert retained is not None and retained.analysis == old_analysis
+        assert retained.analysis_state == "failed" and retained.analysis_error_code
+        model.fail = False
+        for mail in await service.list_failed_mails():
+            await service.process_mail(mail.mail, force=True)
+        updated = await service.get_mail(record.record_id)
+        assert updated is not None and updated.analysis is not None
+        assert updated.analysis.language == "zh-CN" and updated.analysis.summary == "请提交报告"
+        assert (
+            updated.analysis.reason == "需要处理"
+            and updated.analysis.suggested_reply == "好的，我会提交。"
+        )
+        action = updated.action_items[0]
+        assert action.summary == "提交报告" and action.item_id == old_action.item_id
+        assert action.completed_at == old_action.completed_at
+        assert action.snoozed_until == old_action.snoozed_until and not action.reminder_enabled
+        assert action.reminder_key == old_action.reminder_key
+        assert updated.manual_urgency == Urgency.URGENT
+        assert updated.analysis_state == "ready" and updated.analysis_error_code == ""
+        assert await service.list_failed_mails() == []
+        assert (await service.query_mails(MailQuery(state="failed"))).total == 0
     finally:
-        await service2.stop()
+        await service.stop()
+
+
+async def test_startup_and_trash_restore_keep_language_failures_without_auto_analysis(
+    tmp_path: Path,
+) -> None:
+    model = Model()
+    db = tmp_path / "language.db"
+    service = await open_service(model, db)
+    try:
+        generated = await service.process_mail(make_mail())
+        assert generated is not None
+        await service.delete_mail(generated.record_id)
+        legacy = MailRecord(
+            record_id="legacy",
+            mail=make_mail(message_id="legacy"),
+            analysis=MailAnalysis(summary="Old unlabelled summary", urgency=Urgency.INFO),
+        )
+        await service.storage.save_mail(legacy)
+        await service.set_language("zh-CN")
+    finally:
+        await service.stop()
+
+    service = await open_service(model, db)
+    try:
+        assert await service.get_language() == service.config.general.language == "zh-CN"
+        assert model.languages == ["en"]
+        failed = await service.list_failed_mails()
+        assert [record.record_id for record in failed] == ["legacy"]
+        assert failed[0].analysis == legacy.analysis
+        restored = await service.restore_mail(generated.record_id)
+        assert restored is not None and restored.analysis_state == "failed"
+        assert restored.analysis_error_code == "mail.analysis_language_changed"
+        await service.delete_mail(restored.record_id)
+        trash = await service.list_trash()
+        assert trash[0].to_mail_record().analysis_error_code == restored.analysis_error_code
+        await service.restore_mail(restored.record_id)
+        for record in await service.list_failed_mails():
+            await service.process_mail(record.mail, force=True)
+        assert await service.list_failed_mails() == []
+        assert model.languages == ["en", "zh-CN", "zh-CN"]
+    finally:
+        await service.stop()
+
+
+async def test_old_language_analysis_finishing_after_switch_stays_retryable(tmp_path: Path) -> None:
+    model = Model()
+    model.block = True
+    service = await open_service(model, tmp_path / "language.db")
+    task = asyncio.create_task(service.process_mail(make_mail()))
+    try:
+        await asyncio.wait_for(model.entered.wait(), timeout=2)
+        await service.set_setting("general.language", "zh-CN")
+        assert not task.done()  # Ordinary language settings do not cancel an active request.
+        model.release.set()
+        record = await asyncio.wait_for(task, timeout=2)
+        assert record is not None and record.analysis is not None
+        assert record.analysis.language == "en" and record.analysis_state == "failed"
+        assert [mail.record_id for mail in await service.list_failed_mails()] == [record.record_id]
+        model.block = False
+        updated = await service.process_mail(record.mail, force=True)
+        assert updated is not None and updated.analysis is not None
+        assert updated.analysis.language == "zh-CN" and updated.analysis_state == "ready"
+    finally:
+        model.release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await service.stop()

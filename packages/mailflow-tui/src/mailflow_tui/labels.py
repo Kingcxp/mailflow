@@ -66,7 +66,8 @@ def mail_status(service: Any, record: MailRecord) -> Text:
     if status:
         color = (
             "red"
-            if any(note.status == "failed" for note in record.processor_notes)
+            if record.analysis_state == "failed"
+            or any(note.status == "failed" for note in record.processor_notes)
             else "yellow"
             if record.analysis_is_fallback
             else "dim"
@@ -77,6 +78,8 @@ def mail_status(service: Any, record: MailRecord) -> Text:
 
 def analysis_status(service: Any, record: MailRecord) -> str:
     """Use the same failure/fallback status in mail and action details."""
+    if record.analysis_error_code == "mail.analysis_language_changed":
+        return str(service.t("mail.analysis_language_changed"))
     failed = [note for note in record.processor_notes if note.status == "failed"]
     if failed:
         key = (

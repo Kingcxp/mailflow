@@ -243,6 +243,7 @@ def _group_specs(
             language_choices=language_choices,
         )
         for name, info in _fields_of(type(model)).items()
+        if (group, name) != ("general", "summary_language")
     ]
 
 

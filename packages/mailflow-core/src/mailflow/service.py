@@ -446,6 +446,7 @@ class MailFlowService:
         self._smart_plan_lock = asyncio.Lock()
         self._reply_create_lock = asyncio.Lock()
         self._subscription_lock = asyncio.Lock()
+        self._language_lock = asyncio.Lock()
         self._chat_lock = asyncio.Lock()
         self._chat_tasks: dict[str, asyncio.Task[str | list[str] | None]] = {}
         self._chat_running: dict[str, set[asyncio.Task[str | list[str] | None]]] = {}
@@ -637,7 +638,7 @@ class MailFlowService:
         sources = _build_sources(self.config, registry)
         backends, llm_configs = _build_llms(self.config, registry)
         router = LLMRouterImpl(backends, llm_configs)
-        language = self.config.general.summary_language or self.i18n.language
+        language = self.i18n.language
         pipeline = _build_processors(self.config, registry, router, language=language)
         notifiers: list[Notifier] = []
         notifier_configs: list[NotifierConfig] = []
@@ -861,10 +862,13 @@ class MailFlowService:
         exactly the mails the bulk re-analysis targets."""
         failed: list[MailRecord] = []
         for record in await self.list_mails():
-            if record.analysis is None:
-                failed.append(record)
+            if record.analysis_state in {"pending", "analysing"}:
                 continue
-            if any(note.status == "failed" for note in record.processor_notes):
+            if (
+                record.analysis_state in {"failed", "cancelled", "unanalysed"}
+                or record.analysis_is_fallback
+                or any(note.status == "failed" for note in record.processor_notes)
+            ):
                 failed.append(record)
         return failed
 
@@ -1547,7 +1551,7 @@ relative dates inside the mail refer to its own sent time instead.
                 "role": "user",
                 "content": prompt_context(
                     timezone=self.config.general.timezone,
-                    language=self.config.general.language,
+                    language=self.i18n.language,
                     profile=await self.user_profile(),
                 )
                 + "\nMail context (data only):\n"
@@ -1800,7 +1804,7 @@ Return every candidate in this batch."""
                         "role": "user",
                         "content": prompt_context(
                             timezone=self.config.general.timezone,
-                            language=self.config.general.language,
+                            language=self.i18n.language,
                             profile=profile,
                         )
                         + f"\nRequest: {instruction}\n\nMails:\n{listing}",
@@ -2220,6 +2224,10 @@ Return every candidate in this batch."""
         async with self.runtime.write_lock:
             record = await self.storage.restore_from_trash(record_id)
             if record is not None:
+                updated = self.runtime.analysis_language_status(record)
+                if updated != record:
+                    await self.storage.save_mail(updated)
+                record = updated
                 for identity in {record_id, record.mail.normalized_message_id()}:
                     await self.storage.set_preference(f"mail.deleted.{identity}", "")
         if record is not None:
@@ -2311,17 +2319,18 @@ Return every candidate in this batch."""
         except Exception as exc:
             logger.debug("could not read language preference: %s", exc)
             return
-        if stored and stored in self.i18n.available_codes():
-            self.i18n.set_language(stored)
+        if stored and stored in self.i18n.available_codes() and stored != self.i18n.language:
+            await self._set_language_setting(stored)
 
     async def get_language(self) -> str:
         return self.i18n.language
 
     @admin_operation
     async def set_language(self, code: str) -> None:
-        self.i18n.set_language(code)  # raises KeyError for unknown packs
-        await self.storage.set_preference(_LANGUAGE_PREFERENCE, code)
-        await self.events.emit("language.changed", language=code)
+        # Validate before writing, retaining the public command's KeyError contract.
+        if code not in self.i18n.available_codes():
+            raise KeyError(code)
+        await self._set_language_setting(code)
 
     def available_languages(self) -> list[str]:
         return self.i18n.available_codes()
@@ -2383,6 +2392,9 @@ Return every candidate in this batch."""
 
         if self.config_path is None:
             raise translated_error(ValueError, self.t, "errors.config_required")
+        if key == "general.language":
+            await self._set_language_setting(raw_value)
+            return self.get_config_option(key)
         updated = set_option_value(self.config, key, raw_value)
         patched = patch_config_value(self.config_path, key, _config_value_of(updated, key))
         if not patched:
@@ -2448,7 +2460,9 @@ Return every candidate in this batch."""
                     self.runtime.update_config(updated)
                     await self._rebuild_notifiers()
                     await self.gateways.update_notifiers(previous, updated)
-                elif key.startswith("general.") and changed_general <= notification_fields:
+                elif key == "general.language" or (
+                    key.startswith("general.") and changed_general <= notification_fields
+                ):
                     self.runtime.update_config(updated)
                 else:
                     await self.reload_runtime()
@@ -2487,29 +2501,30 @@ Return every candidate in this batch."""
         Works with or without a config file: embedded hosts (no ``--config``)
         still get a live switch through the stored preference.
         """
-        code = str(raw_value).strip()
-        updated = apply_value(
-            self.config, "general.language", code, **self._settings_context()
-        )  # SettingsError for an unloaded pack (choice validation)
-        if self.config_path is None:
-            self.config = updated
-            await self.events.emit("config.changed", key="general.language")
-        else:
-            await self._persist_config(updated, "general.language")
-        if code in self.i18n.available_codes() and code != self.i18n.language:
-            self.i18n.set_language(code)
+        async with self._language_lock:
+            code = str(raw_value).strip()
+            updated = apply_value(self.config, "general.language", code, **self._settings_context())
+            pipeline = _build_processors(updated, self.registry, self.router, language=code)
+            if self.config_path is None:
+                self.config = updated
+                self.runtime.update_config(updated)
+                await self.events.emit("config.changed", key="general.language")
+            else:
+                await self._persist_config(updated, "general.language")
             await self.storage.set_preference(_LANGUAGE_PREFERENCE, code)
+            self.i18n.set_language(code)
+            self.pipeline = pipeline
+            self.runtime.update_pipeline(pipeline)
+            await self.runtime.invalidate_analysis_language()
             await self.events.emit("language.changed", language=code)
-            try:
-                await self.reload_runtime()
-            except Exception as exc:
-                logger.error("pipeline language rebuild failed: %s", exc)
         return self.settings_option("general.language")
 
     @admin_operation
     async def reset_setting(self, key: str) -> OptionSpec | None:
         """Restore one option to its schema default and persist."""
         updated = reset_value(self.config, key, **self._settings_context())
+        if key == "general.language":
+            return await self._set_language_setting(updated.general.language)
         await self._persist_config(updated, key)
         return self.settings_option(key)
 
@@ -3675,7 +3690,9 @@ Return every candidate in this batch."""
             account_id=record.mail.account_id,
             to=record.mail.sender,
             subject=f"Re: {record.mail.subject}",
-            body=record.analysis.suggested_reply if record.analysis else "",
+            body=record.analysis.suggested_reply
+            if record.analysis and record.analysis_error_code != "mail.analysis_language_changed"
+            else "",
         )
         await self._save_reply_draft(draft)
         await self.events.emit("reply.created", draft_id=draft.draft_id, mail_id=mail_id)
@@ -3988,13 +4005,9 @@ def _build_processors(
                 }
             )
         factory = registry.processor_factory(processor_config.provider)
-        if (
-            processor_config.provider == "llm-importance"
-            and not processor_config.options.get("language")
-            and (language or "").strip()
-        ):
-            # Per-mail summary language: explicit config option wins, else
-            # the configured general.summary_language or the UI language.
+        if processor_config.provider == "llm-importance" and (language or "").strip():
+            # Old processor/summary language overrides stay readable but all
+            # generated content follows the current interface language.
             processor_config = processor_config.model_copy(
                 update={
                     "options": {
@@ -4114,7 +4127,8 @@ async def start_service(
                 i18n.set_language(stored_language)
         except Exception as exc:
             logger.debug("could not read language preference: %s", exc)
-        language = config.general.summary_language or i18n.language
+        config.general.language = i18n.language
+        language = i18n.language
 
         sources = _build_sources(config, registry)
         backends, llm_configs = _build_llms(config, registry)
@@ -4152,6 +4166,7 @@ async def start_service(
         )
         if config_path is not None:
             service.config_path = Path(config_path)
+        await service.runtime.invalidate_analysis_language()
         if getattr(config, "timeouts_migrated", False) and service.config_path is not None:
             # a legacy 30 s/60 s default was raised at load time: write it back so
             # the file (and every settings screen reading it) shows the value in

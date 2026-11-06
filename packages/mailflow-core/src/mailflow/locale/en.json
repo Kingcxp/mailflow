@@ -135,7 +135,7 @@
         "general.reminder_hour": "Local-time hour (0-23) of the early reminder and of the daily digest.",
         "general.reminder_interval_seconds": "How often the scheduler checks for due reminders (10-3600 seconds).",
         "general.reminder_minute": "Local-time minute (0-59) of the early reminder and of the daily digest.",
-        "general.summary_language": "Language the LLM writes summaries, reasons and reply drafts in (e.g. zh-CN). Empty follows the interface language.",
+        "general.summary_language": "Legacy setting retained for compatibility. Generated summaries, reasons and reply suggestions follow the interface language.",
         "general.timezone": "IANA timezone used for display, the daily cleanup and reminders (e.g. Asia/Shanghai).",
         "general.trash_retention_days": "Trash entries older than this many days, counted from deletion, are purged for good.",
         "general.workers": "How many mails are analyzed in parallel. Raise it for more LLM throughput.",
@@ -229,6 +229,7 @@
       "not_found": "Model {llm_id} does not exist."
     },
     "mail": {
+      "analysis_language_changed": "Analysis needs updating to the current language. Use Re-analyze failed mail.",
       "btn_wipe": "Wipe & redo",
       "deleted": "Mail {mail_id} moved to trash",
       "field_account": "Account",

@@ -174,8 +174,7 @@ class GeneralConfig(BaseModel):
     )
     summary_language: str = Field(
         default="",
-        description="Language for LLM mail summaries/reasons/replies (e.g. zh-CN, en); "
-        "empty follows the interface language",
+        description="Legacy option retained for config compatibility; generated content follows the interface language",
     )
     browser_mode: str = Field(
         default="auto",

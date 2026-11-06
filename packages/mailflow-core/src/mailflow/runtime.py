@@ -328,7 +328,8 @@ class MailFlowRuntime:
                 ):
                     state = (
                         "failed"
-                        if any(note.status == "failed" for note in record.processor_notes)
+                        if record.analysis_error_code
+                        or any(note.status == "failed" for note in record.processor_notes)
                         else "ready"
                         if record.analysis is not None
                         else "cancelled"
@@ -729,7 +730,8 @@ class MailFlowRuntime:
                     if record is not None and record.analysis_state in {"pending", "analysing"}:
                         state = (
                             "failed"
-                            if any(note.status == "failed" for note in record.processor_notes)
+                            if record.analysis_error_code
+                            or any(note.status == "failed" for note in record.processor_notes)
                             else "ready"
                             if record.analysis is not None
                             else "cancelled"
@@ -789,10 +791,12 @@ class MailFlowRuntime:
             mail = await asyncio.to_thread(apply_image_text, mail, enabled=enabled)
             guidelines = await self._storage.get_preference("feedback.guidelines") or ""
             local_feedback = await self._storage.get_preference(f"feedback.{record_id}") or ""
+            language = self.analysis_language
             analysis, notes, _, _ = await self._pipeline.process(
                 mail,
                 mail.account_id,
                 timezone=self._config.general.timezone,
+                language=language,
                 feedback_guidelines="\n".join(
                     part for part in (guidelines, local_feedback) if part
                 ),
@@ -837,6 +841,8 @@ class MailFlowRuntime:
                         analysis.action_items,
                         previous,
                         quiet=mail.ingestion != "live" and not mail.notify_requested,
+                        language_changed=previous.analysis is not None
+                        and previous.analysis.language != language,
                     )
                     analysis = analysis.model_copy(update={"action_items": actions})
                     persisted_mail = mail.model_copy(deep=True)
@@ -847,6 +853,7 @@ class MailFlowRuntime:
                         "auto_urgency": analysis.urgency,
                         "analysis": analysis,
                         "processor_notes": notes,
+                        "analysis_error_code": "",
                         "archived": previous.archived
                         or (previous.analysis is None and analysis.archive_requested),
                     }
@@ -857,6 +864,7 @@ class MailFlowRuntime:
                         "ingestion": mail.ingestion,
                     }
                 )
+                record = self.analysis_language_status(record)
                 await self._persist_with_retry(record)
             self._pending_mail_accounts.pop(mail.normalized_message_id(), None)
             await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
@@ -893,6 +901,7 @@ class MailFlowRuntime:
         previous: MailRecord | None,
         *,
         quiet: bool = False,
+        language_changed: bool = False,
     ) -> list[ActionItem]:
         others = [
             entry.item
@@ -930,10 +939,13 @@ class MailFlowRuntime:
                     for old in candidates
                     if old.action_type == item.action_type
                     and action_time_window(old) == action_time_window(item)
-                    and SequenceMatcher(
-                        None, summary_key(old.summary), summary_key(item.summary)
-                    ).ratio()
-                    >= 0.85
+                    and (
+                        language_changed
+                        or SequenceMatcher(
+                            None, summary_key(old.summary), summary_key(item.summary)
+                        ).ratio()
+                        >= 0.85
+                    )
                 ]
                 if len(similar) == 1:
                     old = similar[0]
@@ -1162,14 +1174,32 @@ class MailFlowRuntime:
                         only_delivery=receipt,
                     )
             elif row and row.get("kind") == "hourly":
-                briefing = await self._storage.get_preference(f"{row['key']}.briefing")
-                for notifier, config in zip(self._notifiers, self._notifier_configs, strict=True):
-                    if (
-                        config.notifier_id == row.get("channel")
-                        and self._config.general.hourly_summary
-                        and option_enabled(config.options, "hourly_summary", False)
-                        and briefing
-                    ):
+                if not self._config.general.hourly_summary:
+                    continue
+                channels = [
+                    (notifier, config)
+                    for notifier, config in zip(
+                        self._notifiers, self._notifier_configs, strict=True
+                    )
+                    if config.notifier_id == row.get("channel")
+                    and option_enabled(config.options, "hourly_summary", False)
+                ]
+                if not channels:
+                    continue
+                key = row["key"]
+                hour_start = datetime.fromisoformat(key.removeprefix("hourly_summary.")).replace(
+                    tzinfo=UTC
+                )
+                hour_end = hour_start + timedelta(hours=1)
+                mails = [
+                    record
+                    for record in await self._storage.list_mails()
+                    if hour_start <= record.mail.received_at < hour_end
+                    and record.ingestion == "live"
+                ]
+                briefing = await self._hourly_briefing(key, mails, hour_start, hour_end)
+                for notifier, config in channels:
+                    if briefing:
                         await self._push_hourly_targeted(
                             notifier, config, briefing, row["key"], only=receipt
                         )
@@ -1406,12 +1436,9 @@ class MailFlowRuntime:
         if not mails or not opted_in:
             await self._storage.set_preference(key, "fired")
             return 0
-        briefing = await self._storage.get_preference(f"{key}.briefing")
-        if not briefing:
-            briefing = await self._summarize_hour(mails, hour_start, hour_end)
+        briefing = await self._hourly_briefing(key, mails, hour_start, hour_end)
         if not briefing:
             return 0
-        await self._storage.set_preference(f"{key}.briefing", briefing)
         complete = True
         for notifier, notifier_config in zip(self._notifiers, self._notifier_configs, strict=True):
             if notifier not in opted_in:
@@ -1507,6 +1534,21 @@ class MailFlowRuntime:
         is the instance id by guided-setup convention."""
         return notifier_config.notifier_id
 
+    async def _hourly_briefing(
+        self, key: str, mails: list[MailRecord], hour_start: datetime, hour_end: datetime
+    ) -> str:
+        language = self.analysis_language
+        briefing = await self._storage.get_preference(f"{key}.briefing")
+        if await self._storage.get_preference(f"{key}.language") != language:
+            briefing = None
+        if not briefing:
+            briefing = await self._summarize_hour(mails, hour_start, hour_end)
+            if not briefing or language != self.analysis_language:
+                return ""
+            await self._storage.set_preference(f"{key}.briefing", briefing)
+            await self._storage.set_preference(f"{key}.language", language)
+        return briefing
+
     async def _summarize_hour(
         self, mails: list[MailRecord], hour_start: datetime, hour_end: datetime
     ) -> str:
@@ -1526,7 +1568,7 @@ class MailFlowRuntime:
         zone = ZoneInfo(general.timezone)
         context = prompt_context(
             timezone=general.timezone,
-            language=general.summary_language or general.language,
+            language=self.analysis_language,
         )
         # Bound each request, while including every mail in a busy hour.
         batches = [mails[index : index + 50] for index in range(0, len(mails), 50)]
@@ -1854,6 +1896,52 @@ class MailFlowRuntime:
     def update_config(self, config: MailFlowConfig) -> None:
         self._config = config
         self._reminder_wake.set()
+
+    @property
+    def analysis_language(self) -> str:
+        return str(self._i18n.language if self._i18n is not None else self._config.general.language)
+
+    def update_pipeline(self, pipeline: PipelineEngine) -> None:
+        """Replace language-dependent processors without cancelling active work."""
+        self._pipeline = pipeline
+
+    def analysis_language_status(self, record: MailRecord) -> MailRecord:
+        if record.analysis is None or record.analysis_is_fallback:
+            return record
+        mismatch = record.analysis.language != self.analysis_language
+        if mismatch:
+            return record.model_copy(
+                update={
+                    "analysis_state": record.analysis_state
+                    if record.analysis_state in {"pending", "analysing"}
+                    else "failed",
+                    "analysis_error_code": "mail.analysis_language_changed",
+                }
+            )
+        if record.analysis_error_code == "mail.analysis_language_changed":
+            return record.model_copy(
+                update={
+                    "analysis_error_code": "",
+                    "analysis_state": record.analysis_state
+                    if record.analysis_state in {"pending", "analysing"}
+                    else "failed"
+                    if any(note.status == "failed" for note in record.processor_notes)
+                    else "ready",
+                }
+            )
+        return record
+
+    async def invalidate_analysis_language(self) -> None:
+        """Keep previous content, marking incompatible/unknown analysis languages for explicit retry."""
+        changed = 0
+        async with self.write_lock:
+            for record in await self._storage.list_mails():
+                updated = self.analysis_language_status(record)
+                if updated != record:
+                    await self._persist_with_retry(updated)
+                    changed += 1
+        if changed:
+            await self._events.emit("mail.analysis.invalidated", count=changed)
 
     async def reconfigure_notifiers(
         self, notifiers: list[Notifier], notifier_configs: list[NotifierConfig]

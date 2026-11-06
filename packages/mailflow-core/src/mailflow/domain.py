@@ -329,6 +329,7 @@ class MailAnalysis(BaseModel):
     """Structured interpretation of a mail produced by the processor chain."""
 
     summary: str
+    language: str = ""  # Empty for legacy results whose generation language is unknown.
     urgency: Urgency
     reason: str = ""
     # True only when the pipeline had no generated summary and showed the
@@ -363,6 +364,7 @@ class MailRecord(BaseModel):
     starred: bool = False
     archived: bool = False
     analysis_state: str = "ready"  # unanalysed | pending | analysing | ready | failed | cancelled
+    analysis_error_code: str = ""
     ingestion: str = "live"  # live | history | reanalysis
 
     @property
@@ -481,6 +483,7 @@ class TrashRecord(BaseModel):
     starred: bool = False
     archived: bool = False
     analysis_state: str = "ready"
+    analysis_error_code: str = ""
     deleted_at: datetime
     expires_at: datetime  # the deletion timestamp the backend stored
 
@@ -497,6 +500,7 @@ class TrashRecord(BaseModel):
             starred=self.starred,
             archived=self.archived,
             analysis_state=self.analysis_state,
+            analysis_error_code=self.analysis_error_code,
         )
 
 

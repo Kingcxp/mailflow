@@ -155,6 +155,7 @@ class ProcessingContext(BaseModel):
 
     account_id: str
     timezone: str = "UTC"
+    language: str = ""
     options: dict[str, Any] = Field(default_factory=lambda: {})
     now: datetime | None = None  # injected clock for deterministic processors
     feedback_guidelines: str = ""  # user notes on what to ignore, for the LLM

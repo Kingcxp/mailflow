@@ -446,7 +446,7 @@ class LLMImportanceProcessor:
                 "may be ad only without a required action or obligation):\n"
                 f"{context.user_profile}\n"
             )
-        language = str(self._config.options.get("language") or "").strip()
+        language = context.language or str(self._config.options.get("language") or "").strip()
         if language:
             user += (
                 "\nWrite the summary, reason, suggested reply, action-item "

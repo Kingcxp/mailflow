@@ -497,7 +497,10 @@ class TestDailyDigest:
         assert len(digests) == 1
 
 
-async def test_hourly_summary_respects_closed_hours_preferences_and_delivery_receipts() -> None:
+@pytest.mark.parametrize("switch_language", [False, True])
+async def test_hourly_summary_respects_closed_hours_preferences_and_delivery_receipts(
+    switch_language: bool,
+) -> None:
     calls: list[list[dict[str, Any]]] = []
     pushed: list[tuple[str, str]] = []
 
@@ -508,7 +511,8 @@ async def test_hourly_summary_respects_closed_hours_preferences_and_delivery_rec
 
             if len(calls) == 1:
                 raise TimeoutError("model unavailable")
-            return LLMCompletion(text="Hour briefing: one important mail.")
+            language = "zh-CN" if "Response language: zh-CN" in messages[1]["content"] else "en"
+            return LLMCompletion(text=f"Hour briefing ({language}): one important mail.")
 
     class Notifier:
         fail = True
@@ -534,7 +538,8 @@ async def test_hourly_summary_respects_closed_hours_preferences_and_delivery_rec
                 "workers": 1,
                 "hourly_summary": False,
                 "timezone": "Asia/Shanghai",
-                "summary_language": "zh-CN",
+                "language": "zh-CN",
+                "summary_language": "en",
             },
             "llms": [{"llm_id": "llm-1"}],
         }
@@ -576,11 +581,16 @@ async def test_hourly_summary_respects_closed_hours_preferences_and_delivery_rec
     assert not await storage.get_preference("hourly_summary.2026-08-16T09:00")
     assert [target for target, _ in pushed] == ["group:888"]
     calls_before_retry = len(calls)
+    if switch_language:
+        config.general.language = "en"
+        failures = await runtime.failed_deliveries()
+        assert await runtime.retry_deliveries([row["delivery_id"] for row in failures]) == 1
     assert await runtime._fire_hourly_summary(closed, config.general) == 1  # pyright: ignore[reportPrivateUsage]
     assert [target for target, _ in pushed] == ["group:888", "group:777"]
-    assert pushed[0][1] == pushed[1][1]
-    assert len(calls) == calls_before_retry  # reuse the completed briefing, not the model
-    prompt = "\n".join(message["content"] for call in calls[1:] for message in call)
+    assert (pushed[0][1] != pushed[1][1]) == switch_language
+    assert len(calls) == calls_before_retry + (2 if switch_language else 0)
+    calls_before_retry = len(calls)
+    prompt = "\n".join(message["content"] for call in calls[1:3] for message in call)
     assert all(prompt.count(f"hour-mail-{index:03d}") == 1 for index in range(51))
     assert "zh-CN" in prompt and "Asia/Shanghai" in prompt
     assert "2026-08-16T17:00:00+08:00" in prompt

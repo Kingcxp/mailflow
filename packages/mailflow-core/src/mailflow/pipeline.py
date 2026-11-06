@@ -135,6 +135,7 @@ class PipelineEngine:
         account_id: str,
         *,
         timezone: str = "UTC",
+        language: str = "",
         now: datetime | None = None,
         feedback_guidelines: str = "",
         user_profile: str = "",
@@ -166,6 +167,7 @@ class PipelineEngine:
             context = ProcessingContext(
                 account_id=account_id,
                 timezone=timezone,
+                language=language,
                 options=binding.options,
                 now=started_at,
                 feedback_guidelines=feedback_guidelines,
@@ -241,6 +243,7 @@ class PipelineEngine:
             )
         if not accumulated.backend:
             accumulated.backend = llm_backend
+        accumulated.language = language
         return accumulated, notes, llm_used, llm_backend
 
 

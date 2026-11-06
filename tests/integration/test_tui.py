@@ -1229,7 +1229,9 @@ async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path
             record_id="stale-ad",
             mail=stale,
             auto_urgency=Urgency.AD,
-            analysis=MailAnalysis(summary="promotion", urgency=Urgency.AD),
+            analysis=MailAnalysis(
+                summary="promotion", urgency=Urgency.AD, language=service.i18n.language
+            ),
         )
     )
     live = make_mail(
@@ -1242,6 +1244,7 @@ async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path
             auto_urgency=Urgency.INFO,
             analysis=MailAnalysis(
                 summary="Lab talk",
+                language=service.i18n.language,
                 urgency=Urgency.INFO,
                 action_items=[
                     ActionItem(

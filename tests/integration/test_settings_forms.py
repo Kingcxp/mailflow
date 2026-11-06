@@ -901,7 +901,7 @@ async def test_reparse_failed_works_without_selection(tmp_path: Path) -> None:
     service.process_mail = _spy  # type: ignore[method-assign]
 
     # a record whose LLM analysis failed (processor note marked failed)
-    from mailflow.domain import MailRecord
+    from mailflow.domain import MailAnalysis, MailRecord
 
     mail = make_test_mail(message_id="failed-1", subject="解析失败邮件")
     record = MailRecord(
@@ -921,6 +921,17 @@ async def test_reparse_failed_works_without_selection(tmp_path: Path) -> None:
     )
     await service.storage.save_mail(record)
 
+    # Language mismatches have an intact previous summary and no processor exception.
+    stale = MailRecord(
+        record_id="old-language",
+        mail=make_test_mail(message_id="old-language", subject="旧语言摘要"),
+        analysis=MailAnalysis(
+            summary="Previous English summary", urgency=Urgency.INFO, language="en"
+        ),
+    )
+    await service.storage.save_mail(stale)
+    await service.set_language("zh-CN")
+
     CommandRouter(service)
     app = MailFlowApp(cast(Any, service), queue_module.Queue())
     try:
@@ -935,12 +946,12 @@ async def test_reparse_failed_works_without_selection(tmp_path: Path) -> None:
             pane._selected_id = None  # pyright: ignore[reportPrivateUsage]
             assert pane._selected_id is None  # pyright: ignore[reportPrivateUsage]
             app.query_one("#btn-reparse-failed", Button).press()
-            completion = service.t("tui.history_reanalyzed", count=1)
+            completion = service.t("tui.history_reanalyzed", count=2)
             await _wait_until(
                 pilot,
                 lambda: completion in str(app.query_one("#mail-operation-status", Static).render()),
             )
-            assert "failed-1" in calls, (
+            assert {"failed-1", "old-language"} <= set(calls), (
                 "re-analyze failed must process failed mails without a selection; "
                 f"process_mail calls: {calls}"
             )

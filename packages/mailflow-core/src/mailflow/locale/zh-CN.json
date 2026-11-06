@@ -135,7 +135,7 @@
         "general.reminder_hour": "提前提醒与每日摘要的本地时间小时（0-23）。",
         "general.reminder_interval_seconds": "提醒调度器检查到期事项的间隔秒数（10-3600）。",
         "general.reminder_minute": "提前提醒与每日摘要的本地时间分钟（0-59）。",
-        "general.summary_language": "大模型撰写摘要、理由与回复草稿所用的语言（如 zh-CN）。留空则跟随界面语言。",
+        "general.summary_language": "保留旧配置以兼容。摘要、理由和建议回复统一跟随界面语言。",
         "general.timezone": "用于显示、每日清理与提醒的 IANA 时区（如 Asia/Shanghai）。",
         "general.trash_retention_days": "回收站中自删除起超过该天数的记录会被彻底清除。",
         "general.workers": "并行分析邮件的数量。调大可提升大模型处理吞吐。",
@@ -229,6 +229,7 @@
       "not_found": "模型 {llm_id} 不存在。"
     },
     "mail": {
+      "analysis_language_changed": "分析结果需按当前语言更新，请使用“重析失败邮件”。",
       "btn_wipe": "清空重析",
       "deleted": "邮件 {mail_id} 已移入回收站",
       "field_account": "账户",

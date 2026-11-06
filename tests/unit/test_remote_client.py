@@ -235,7 +235,12 @@ async def test_remote_adapter_uses_real_domain_and_setting_types(
     assert not await adapter.list_actions()
     assert await adapter.delete_mail(record.record_id)
     assert (await adapter.list_trash())[0].to_mail_record() == record
-    assert await adapter.restore_mail(record.record_id) == record
+    assert await adapter.restore_mail(record.record_id) == record.model_copy(
+        update={
+            "analysis_state": "failed",
+            "analysis_error_code": "mail.analysis_language_changed",
+        }
+    )
     assert await adapter.get_mail("missing") is None
     assert not await adapter.delete_mail("missing")
     await adapter.refresh_settings()
