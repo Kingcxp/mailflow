@@ -12,7 +12,7 @@ import inspect
 import json
 import logging
 import unicodedata
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -907,7 +907,9 @@ class MailFlowRuntime:
         language_changed: bool = False,
     ) -> list[ActionItem]:
         others = await self._storage.list_custom_actions()
-        actions = [item.model_copy(update={"mail_id": record_id}) for item in actions]
+        actions = dedupe_actions(
+            [item.model_copy(update={"mail_id": record_id}) for item in actions]
+        )
         prior = previous.action_items if previous is not None else []
         used: set[str] = set()
         dismissed = await self.action_store.dismissed()
@@ -920,11 +922,36 @@ class MailFlowRuntime:
                 if not unicodedata.category(char).startswith(("P", "Z"))
             )
 
+        def details_key(item: ActionItem) -> tuple[str, str, str, str, str]:
+            return summary_key(item.summary), item.action_type, item.notes, item.location, item.url
+
+        actions = [
+            item for item in actions if not any(actions_duplicate(item, other) for other in others)
+        ]
+        # Reserve unchanged tasks before matching moved deadlines or rewritten
+        # titles, so a new earlier task cannot take an existing task's state.
+        exact: dict[int, ActionItem] = {}
+        reserved: set[str] = set()
+        for index, item in enumerate(actions):
+            for previous_item in prior:
+                if (
+                    previous_item.item_id not in reserved
+                    and details_key(previous_item) == details_key(item)
+                    and " ".join(previous_item.summary.split()).casefold()
+                    == " ".join(item.summary.split()).casefold()
+                    and action_time_window(previous_item) == action_time_window(item)
+                ):
+                    exact[index] = previous_item
+                    reserved.add(previous_item.item_id)
+                    break
+        unmatched = [item for index, item in enumerate(actions) if index not in exact]
+        title_counts = Counter(summary_key(item.summary) for item in unmatched)
+        detail_counts = Counter(details_key(item) for item in unmatched)
         retained: list[ActionItem] = []
-        for item in dedupe_actions(actions):
-            if any(actions_duplicate(item, other) for other in others):
-                continue
-            candidates = [old for old in prior if old.item_id not in used]
+        for index, item in enumerate(actions):
+            candidates = [
+                old for old in prior if old.item_id not in used and old.item_id not in reserved
+            ]
             same_title = [
                 old for old in candidates if summary_key(old.summary) == summary_key(item.summary)
             ]
@@ -934,7 +961,7 @@ class MailFlowRuntime:
                 if (old.action_type, old.notes, old.location, old.url)
                 == (item.action_type, item.notes, item.location, item.url)
             ]
-            old = next(
+            old = exact.get(index) or next(
                 (
                     old
                     for old in same_details
@@ -942,18 +969,15 @@ class MailFlowRuntime:
                 ),
                 None,
             )
-            if old is None and len(same_details) == 1:
+            if old is None and len(same_details) == 1 and detail_counts[details_key(item)] == 1:
                 old = same_details[0]
             if (
                 old is None
                 and len(same_title) == 1
-                and sum(
-                    summary_key(other.summary) == summary_key(item.summary) for other in actions
-                )
-                == 1
+                and title_counts[summary_key(item.summary)] == 1
             ):
                 old = same_title[0]
-            if old is None:
+            if old is None and not same_title:
                 similar = [
                     old
                     for old in candidates
@@ -1304,6 +1328,8 @@ class MailFlowRuntime:
         )
 
     async def cleanup_candidates(self) -> list[MailRecord]:
+        if self._config.general.mail_retention_days <= 0:
+            return []
         records = await self._storage.list_mails()
         linked: dict[str, list[ActionItem]] = {}
         for entry in await self.action_store.read(deduplicate=False, records=records):

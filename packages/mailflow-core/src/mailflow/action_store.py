@@ -93,11 +93,7 @@ class ActionStore:
     async def read(
         self, *, deduplicate: bool = True, records: list[MailRecord] | None = None
     ) -> list[ScheduledAction]:
-        """Deleted mail actions stay hidden; custom rows own their deletion.
-
-        Recently ended entries remain visible until the expiry sweep retires
-        them. Reminder and cleanup callers use the same end-of-window rule.
-        """
+        """Share visible task state; overdue tasks remain until explicitly removed."""
         dismissed = await self.dismissed()
         if records is None:
             records = await self.storage.list_mails()

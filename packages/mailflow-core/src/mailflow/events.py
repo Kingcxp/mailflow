@@ -42,7 +42,7 @@ class EventBus:
         await self.emit_confirmed(event, **payload)
 
     async def emit_confirmed(self, event: str, **payload: Any) -> bool:
-        """Whether a delivery handler explicitly acknowledged delivery and none failed."""
+        """Whether a named delivery handler acknowledged delivery and none of them failed."""
         handlers = list(self._subscribers.get(event, []))
         wildcard = list(self._subscribers.get("*", []))
         if not handlers and not wildcard:

@@ -456,6 +456,27 @@ class TestDeduplication:
         completed = [item.notes for item in repeated.action_items if item.completed_at is not None]
         assert completed == ["Client A"]
         assert len(await runtime.action_store.read()) == 5
+        original = next(item for item in new_analysis.action_items if item.notes == "Client A")
+        new_analysis.action_items.append(
+            original.model_copy(update={"due_at": due - timedelta(days=1)})
+        )
+        expanded = await runtime.process_mail_now(new_mail, force=True)
+        assert expanded is not None and len(expanded.action_items) == 4
+        assert len({item.item_id for item in expanded.action_items}) == 4
+        completed_tasks = [item for item in expanded.action_items if item.completed_at is not None]
+        assert [(item.item_id, item.due_at) for item in completed_tasks] == [
+            (item_ids["Client A"], due)
+        ]
+        original.due_at = due - timedelta(days=2)
+        moved = await runtime.process_mail_now(new_mail, force=True)
+        assert moved is not None
+        assert {item.item_id for item in moved.action_items} == {
+            item.item_id for item in expanded.action_items
+        }
+        completed_tasks = [item for item in moved.action_items if item.completed_at is not None]
+        assert [(item.item_id, item.due_at) for item in completed_tasks] == [
+            (item_ids["Client A"], original.due_at)
+        ]
 
 
 class TestDailyDigest:
@@ -664,6 +685,8 @@ class TestFailedReanalysisKeepsPrevious:
 
     async def test_failed_run_keeps_the_previous_analysis(self) -> None:
         class FailingProcessor:
+            processor_id = "llm-importance"
+
             async def process(
                 self, mail: MailMessage, context: ProcessingContext
             ) -> ProcessorResult:
