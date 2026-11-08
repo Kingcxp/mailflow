@@ -43,7 +43,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS mails (
     record_id   TEXT PRIMARY KEY,
     record_json TEXT NOT NULL,
-    received_ts REAL NOT NULL
+    received_ts REAL NOT NULL,
+    search_text TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS trash_records (
     record_id   TEXT PRIMARY KEY,
@@ -84,6 +85,28 @@ class SQLiteStorage:
 
     # -- lifecycle ---------------------------------------------------------------
 
+    @staticmethod
+    def _prepare_mail_search(conn: sqlite3.Connection) -> None:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(mails)")}
+        if "search_text" not in columns:
+            conn.execute("ALTER TABLE mails ADD COLUMN search_text TEXT NOT NULL DEFAULT ''")
+            rows = conn.execute("SELECT record_id, record_json FROM mails")
+            while batch := rows.fetchmany(200):
+                conn.executemany(
+                    "UPDATE mails SET search_text = ? WHERE record_id = ?",
+                    [
+                        (
+                            searchable_record_text(MailRecord.model_validate_json(raw)).casefold(),
+                            key,
+                        )
+                        for key, raw in batch
+                    ],
+                )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS mails_received ON mails(received_ts DESC, record_id)"
+        )
+        conn.commit()
+
     async def initialize(self) -> None:
         async with self._lock:
             if self._conn is not None:
@@ -95,7 +118,7 @@ class SQLiteStorage:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(_SCHEMA)
-            self._conn.commit()
+            self._prepare_mail_search(self._conn)
 
     async def close(self) -> None:
         async with self._lock:
@@ -147,6 +170,7 @@ class SQLiteStorage:
             async with self._lock:
                 snapshot.backup(self._check_conn())
                 self._check_conn().execute("PRAGMA journal_mode=WAL")
+                self._prepare_mail_search(self._check_conn())
         finally:
             snapshot.close()
 
@@ -162,8 +186,13 @@ class SQLiteStorage:
         async with self._lock:
             conn = self._check_conn()
             conn.execute(
-                "INSERT OR REPLACE INTO mails (record_id, record_json, received_ts) VALUES (?, ?, ?)",
-                (record.record_id, stored.model_dump_json(), record.received_at.timestamp()),
+                "INSERT OR REPLACE INTO mails (record_id, record_json, received_ts, search_text) VALUES (?, ?, ?, ?)",
+                (
+                    record.record_id,
+                    stored.model_dump_json(),
+                    record.received_at.timestamp(),
+                    searchable_record_text(stored).casefold(),
+                ),
             )
             conn.commit()
 
@@ -209,23 +238,19 @@ class SQLiteStorage:
         def fold(text: Any) -> str:
             return str(text or "").casefold()
 
-        self._check_conn().create_function("casefold", 1, fold)
         if query.sender:
             where(
                 "instr(casefold(COALESCE(json_extract(record_json, '$.mail.sender.name'), '') || ' <' || json_extract(record_json, '$.mail.sender.address') || '>'), ?) > 0",
                 query.sender.casefold(),
             )
         if query.text:
-
-            def searchable(raw: str) -> str:
-                return searchable_record_text(MailRecord.model_validate_json(raw)).casefold()
-
-            self._check_conn().create_function("mail_search", 1, searchable)
-            where("instr(mail_search(record_json), ?) > 0", query.text.casefold())
+            where("instr(search_text, ?) > 0", query.text.casefold())
         condition = " WHERE " + " AND ".join(clauses) if clauses else ""
         offset, limit = max(0, query.offset), min(500, max(1, query.limit))
-        async with self._lock:
+
+        def read_page() -> MailPage:
             conn = self._check_conn()
+            conn.create_function("casefold", 1, fold)
             total = int(
                 conn.execute("SELECT COUNT(*) FROM mails" + condition, values).fetchone()[0]
             )
@@ -235,11 +260,20 @@ class SQLiteStorage:
                 + " ORDER BY received_ts DESC, record_id LIMIT ? OFFSET ?",
                 [*values, limit, offset],
             ).fetchall()
-        return MailPage(
-            records=[MailRecord.model_validate_json(row[0]) for row in rows],
-            total=total,
-            next_offset=offset + limit if offset + limit < total else None,
-        )
+            return MailPage(
+                records=[MailRecord.model_validate_json(row[0]) for row in rows],
+                total=total,
+                next_offset=offset + limit if offset + limit < total else None,
+            )
+
+        async with self._lock:
+            task = asyncio.create_task(asyncio.to_thread(read_page))
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # The shared connection remains locked until its worker has finished.
+                await task
+                raise
 
     async def list_mails(self, limit: int | None = None) -> list[MailRecord]:
         async with self._lock:
@@ -317,8 +351,8 @@ class SQLiteStorage:
                 analysis.reason = reason
             stored = self._without_payload(record)
             conn.execute(
-                "UPDATE mails SET record_json = ? WHERE record_id = ?",
-                (stored.model_dump_json(), record_id),
+                "UPDATE mails SET record_json = ?, search_text = ? WHERE record_id = ?",
+                (stored.model_dump_json(), searchable_record_text(stored).casefold(), record_id),
             )
             conn.commit()
         return record
@@ -448,8 +482,13 @@ class SQLiteStorage:
             conn.execute("DELETE FROM trash_records WHERE record_id = ?", (record_id,))
             stored = self._without_payload(record)
             conn.execute(
-                "INSERT OR REPLACE INTO mails (record_id, record_json, received_ts) VALUES (?, ?, ?)",
-                (record.record_id, stored.model_dump_json(), record.received_at.timestamp()),
+                "INSERT OR REPLACE INTO mails (record_id, record_json, received_ts, search_text) VALUES (?, ?, ?, ?)",
+                (
+                    record.record_id,
+                    stored.model_dump_json(),
+                    record.received_at.timestamp(),
+                    searchable_record_text(stored).casefold(),
+                ),
             )
             conn.commit()
         return record

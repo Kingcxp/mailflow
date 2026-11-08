@@ -371,7 +371,7 @@ class RemoteServiceAdapter:
         return MailRecord.model_validate(data) if data is not None else None
 
     async def count_mails(self) -> int:
-        return len(await self.client.list_mails())
+        return await self.client.count_mails()
 
     async def list_actions(self, *, include_completed: bool = False) -> list[ActionItem]:
         return [

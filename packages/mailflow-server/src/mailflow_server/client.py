@@ -253,6 +253,10 @@ class RemoteClient:
         result: list[dict[str, Any]] = await self._request("GET", path)
         return result
 
+    async def count_mails(self) -> int:
+        result = await self._request("GET", "/mails/count")
+        return int(result["count"])
+
     async def get_mail(self, record_id: str) -> dict[str, Any] | None:
         try:
             result: dict[str, Any] = await self._request("GET", f"/mails/{record_id}")

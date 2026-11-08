@@ -222,6 +222,7 @@ async def test_remote_adapter_uses_real_domain_and_setting_types(
     assert adapter.snapshot().processors == initial.processors
     assert adapter.snapshot().processors[0].fallback_llm_ids == ["fallback"]
     assert await adapter.get_mail(record.record_id) == record
+    assert await adapter.count_mails() == 1
     assert (await adapter.list_mails())[0].mail.sender.display == record.mail.sender.display
     assert (await adapter.list_mails())[0].processor_notes[0].duration_ms == 0
     item = await adapter.add_action("remote action", now + timedelta(days=5), notes="saved")
@@ -234,6 +235,7 @@ async def test_remote_adapter_uses_real_domain_and_setting_types(
     assert await adapter.delete_action(item.item_id)
     assert not await adapter.list_actions()
     assert await adapter.delete_mail(record.record_id)
+    assert await adapter.count_mails() == 0
     assert (await adapter.list_trash())[0].to_mail_record() == record
     assert await adapter.restore_mail(record.record_id) == record.model_copy(
         update={

@@ -18,6 +18,7 @@ from mailflow.domain import (
     Urgency,
     utcnow,
 )
+from mailflow.mail_query import MailQuery
 from mailflow_storage_sqlite.plugin import SQLiteStorage
 from mailflow_testkit.fakes import make_mail
 
@@ -41,6 +42,11 @@ def make_record(record_id: str = "r1", *, urgency: Urgency = Urgency.IMPORTANT) 
 async def test_existing_database_rows_survive_initialize_and_reopen(tmp_path: Path) -> None:
     path = tmp_path / "existing.db"
     record = make_record("legacy-message-id")
+    record.mail.body_html = "<p>旧邮件 <strong>RéSUMÉ</strong></p>"
+    record.mail.image_text = "Up date"
+    record.mail.attachments = [
+        Attachment(filename="合同.pdf", content_type="application/pdf", size=5)
+    ]
     record.manual_urgency = Urgency.URGENT
     payload = record.model_dump(mode="json")
     payload.pop("processor_notes")
@@ -60,6 +66,15 @@ async def test_existing_database_rows_survive_initialize_and_reopen(tmp_path: Pa
     for _ in range(2):
         backend = SQLiteStorage(StorageConfig(path=str(path)))
         await backend.initialize()
+        for term in ("résumé", "Update", "合同.pdf", "旧邮件"):
+            assert (await backend.query_mails(MailQuery(text=term))).total == 1
+        if _ == 0:
+            with sqlite3.connect(":memory:") as old_backup:
+                old_backup.deserialize(await backend.export_backup())
+                old_backup.execute("ALTER TABLE mails DROP COLUMN search_text")
+                old_backup.commit()
+                await backend.restore_backup(old_backup.serialize())
+            assert (await backend.query_mails(MailQuery(text="合同.pdf"))).total == 1
         try:
             restored = await backend.get_mail(record.record_id)
             assert restored is not None

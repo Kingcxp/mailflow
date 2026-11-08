@@ -76,6 +76,11 @@ async def test_mail_states_search_and_task_survive_trash_and_reopen(
     assert (await service.query_mails(MailQuery(text="Update"))).total == 1
     assert (await service.query_mails(MailQuery(sender="name"))).total == 0
     assert (await service.query_mails(MailQuery(sender=record.mail.sender.address))).total == 1
+    await service.storage.update_mail_analysis("mail", summary="First summary")
+    assert (await service.query_mails(MailQuery(text="First summary"))).total == 1
+    await service.storage.update_mail_analysis("mail", summary="Revised summary")
+    assert (await service.query_mails(MailQuery(text="First summary"))).total == 0
+    assert (await service.query_mails(MailQuery(text="Revised summary"))).total == 1
     await service.set_mail_state(["mail"], is_read=True, starred=True, archived=True)
     assert (await service.query_mails(MailQuery())).total == 0
     archived = await service.query_mails(MailQuery(state="archived", account_id="acct-1"))
@@ -88,6 +93,7 @@ async def test_mail_states_search_and_task_survive_trash_and_reopen(
     assert len(trashed) == 1 and trashed[0].archived and trashed[0].starred
     await service.edit_action("task", completed=True)
     await service.batch_mail(["mail"], operation="restore")
+    assert (await service.query_mails(MailQuery(text="Revised summary", state="all"))).total == 1
     assert not await service.list_actions()
     assert len(await service.list_actions_all()) == 1
     await service.edit_action("task", completed=False)
