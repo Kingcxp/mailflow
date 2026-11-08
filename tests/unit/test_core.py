@@ -87,6 +87,25 @@ class TestMailRecordUrgency:
             summary="Hello", urgency=Urgency.INFO, summary_is_fallback=True
         )
         assert record.summary == "Hello" and record.analysis_is_fallback
+        legacy = record.model_dump(mode="json")
+        legacy["analysis"].pop("summary_is_fallback")
+        legacy["processor_notes"] = [
+            {
+                "processor_id": "pipeline",
+                "plugin_id": "core",
+                "status": "failed",
+                "message": "fallback summary used",
+                "started_at": legacy["mail"]["date"],
+                "finished_at": legacy["mail"]["date"],
+            }
+        ]
+        restored = MailRecord.model_validate(legacy)
+        assert restored.analysis_is_fallback
+        assert MailRecord.model_validate_json(restored.model_dump_json()).analysis_is_fallback
+        legacy["analysis"]["summary_is_fallback"] = False
+        preserved = MailRecord.model_validate(legacy)
+        assert not preserved.analysis_is_fallback
+        assert not MailRecord.model_validate_json(preserved.model_dump_json()).analysis_is_fallback
 
 
 class TestMailMessage:

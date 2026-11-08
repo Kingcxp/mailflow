@@ -375,6 +375,14 @@ class MailRecord(BaseModel):
     analysis_error_code: str = ""
     ingestion: str = "live"  # live | history | reanalysis
 
+    def model_post_init(self, context: Any, /) -> None:
+        # Preserve legacy fallback state when the record is serialized again.
+        if (
+            self.analysis is not None
+            and "summary_is_fallback" not in self.analysis.model_fields_set
+        ):
+            self.analysis.summary_is_fallback = self.analysis_is_fallback
+
     @property
     def effective_urgency(self) -> Urgency:
         """Manual override wins; reset (None) restores the automatic value."""
