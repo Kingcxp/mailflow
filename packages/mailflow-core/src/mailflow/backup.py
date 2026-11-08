@@ -113,6 +113,8 @@ async def restore_backup(service: MailFlowService, source: str) -> str:
             if service.config_path is not None:
                 write_config(updated, service.config_path)
             await service._reload_runtime_unlocked(restart_sources=True)  # pyright: ignore[reportPrivateUsage]
+            await service._load_persisted_language()  # pyright: ignore[reportPrivateUsage]
+            await service.runtime.invalidate_analysis_language()
         if was_started:
             await service.start()
     except BaseException:
@@ -131,6 +133,8 @@ async def restore_backup(service: MailFlowService, source: str) -> str:
                 else:
                     service.config_path.unlink(missing_ok=True)
             await service._reload_runtime_unlocked(restart_sources=True)  # pyright: ignore[reportPrivateUsage]
+            await service._load_persisted_language()  # pyright: ignore[reportPrivateUsage]
+            await service.runtime.invalidate_analysis_language()
         if was_started:
             with contextlib.suppress(Exception):
                 await service.start()

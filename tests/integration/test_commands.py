@@ -298,7 +298,9 @@ class TestCommandRouter:
         assert "llms[].api_key*" in response.text  # secret marker
 
     async def test_config_set_persists_to_file(self, tmp_path: Path) -> None:
-        from mailflow.config import MailFlowConfig
+        from mailflow.config import MailFlowConfig, NotifierConfig
+
+        from mailflow_test_support.runtime import RecordingNotifier
 
         config = MailFlowConfig()
         path = tmp_path / "config.toml"
@@ -316,6 +318,20 @@ class TestCommandRouter:
         response = await commands.execute("config set general.reminder_hour oops")
         assert not response.ok
         assert load_config(path).general.reminder_hour == 9
+        notifier = RecordingNotifier()
+        await service.runtime.reconfigure_notifiers(
+            [notifier],
+            [NotifierConfig(notifier_id="fake", provider="fake", minimum_urgency=Urgency.INFO)],
+        )
+        response = await commands.execute("config set general.mail_notifications false")
+        assert response.ok and not load_config(path).general.mail_notifications
+        await service.process_mail(make_record("muted").mail, notify=True)
+        assert not notifier.notified
+        response = await commands.execute("config set general.mail_notifications true")
+        assert response.ok and load_config(path).general.mail_notifications
+        await service.process_mail(make_record("enabled").mail, notify=True)
+        assert len(notifier.notified) == 1
+        await service.stop()
 
     async def test_config_set_requires_config_file(
         self, router: tuple[CommandRouter, MemoryStorage]

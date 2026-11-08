@@ -277,14 +277,22 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     await service.storage.save_mail(make_record("saved"))
     task = await service.add_action("Unscheduled task")
     await service.edit_action(task.item_id, completed=True)
+    # A fresh installation can use the configured language before a UI
+    # preference has ever been written to the database.
+    service.config.general.language = "zh-CN"
+    service.i18n.set_language("zh-CN")
     path = await service.create_backup(str(tmp_path / "backup.zip"))
+    await service.set_language("en")
     await service.batch_mail(["saved"])
     await service.delete_action(task.item_id)
     service.config.general.timezone = "Asia/Tokyo"
     recovery = await service.restore_backup(path)
     assert await asyncio.to_thread(Path(recovery).is_file)
     assert service.config.general.timezone == "UTC"
+    assert await service.get_language() == service.config.general.language == "zh-CN"
+    assert service.runtime.analysis_language == "zh-CN"
     assert await service.storage.get_mail("saved") is not None
+    assert [record.record_id for record in await service.list_failed_mails()] == ["saved"]
     restored_tasks = await service.list_actions_all()
     assert len(restored_tasks) == 1 and restored_tasks[0].completed_at is not None
     broken = tmp_path / "broken.zip"
@@ -293,6 +301,7 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
         await service.restore_backup(str(broken))
     assert await service.storage.get_mail("saved") is not None
     assert len(await service.list_actions_all()) == 1
+    assert await service.get_language() == "zh-CN"
 
 
 def test_remembered_remote_password_uses_vault_and_migrates_old_session(

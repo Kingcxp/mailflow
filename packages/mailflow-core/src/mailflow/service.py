@@ -2319,8 +2319,11 @@ Return every candidate in this batch."""
         except Exception as exc:
             logger.debug("could not read language preference: %s", exc)
             return
-        if stored and stored in self.i18n.available_codes() and stored != self.i18n.language:
-            await self._set_language_setting(stored)
+        code = stored or self.config.general.language
+        if code in self.i18n.available_codes() and (
+            code != self.i18n.language or code != self.config.general.language
+        ):
+            await self._set_language_setting(code)
 
     async def get_language(self) -> str:
         return self.i18n.language
@@ -2388,7 +2391,7 @@ Return every candidate in this batch."""
     @admin_operation
     async def set_config_value(self, key: str, raw_value: str) -> Any:
         """Coerce, validate and persist one scalar config option."""
-        from mailflow.config import patch_config_value, set_option_value, write_config
+        from mailflow.config import set_option_value
 
         if self.config_path is None:
             raise translated_error(ValueError, self.t, "errors.config_required")
@@ -2396,11 +2399,7 @@ Return every candidate in this batch."""
             await self._set_language_setting(raw_value)
             return self.get_config_option(key)
         updated = set_option_value(self.config, key, raw_value)
-        patched = patch_config_value(self.config_path, key, _config_value_of(updated, key))
-        if not patched:
-            write_config(updated, self.config_path)
-        self.config = updated
-        await self.events.emit("config.changed", key=key)
+        await self._persist_config(updated, key)
         return self.get_config_option(key)
 
     # -- settings editor (sections, typed edits, list entries) -----------------
