@@ -1327,6 +1327,8 @@
       "initial_recent": "Import recent mail",
       "initial_all": "Import all history",
       "initial_days": "Recent mail: days",
+      "catch_up_missed": "Receive mail missed while offline (without analysis)",
+      "catch_up_missed_help": "Off by default. Uses this account's saved sync position to receive missed mail silently. Analyze it manually when needed; first setup and mailbox resets still skip existing mail.",
       "include_past_actions": "Include past tasks from history",
       "preferences_hint": "Preferences for future analyses (edit or clear to remove)",
       "remember_correction": "Remember this preference for similar mail",

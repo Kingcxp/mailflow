@@ -466,11 +466,20 @@ class IMAPSource:
             if changed:
                 baseline = 0 if import_history else max(uids, default=0)
             elif self._session_history_until is None and not import_history:
-                # A receive checkpoint is not permission to import old mail.
-                # Start new-only sessions at the current mailbox head, even
-                # when a legacy cursor is months behind. Browsing history is
-                # explicit and never changes this live receive position.
-                baseline = max(self._last_uid or 0, max(uids, default=0))
+                catch_up = (
+                    self._account.options.get("catch_up_missed", False)
+                    and self._last_uid is not None
+                    and self._checkpoint_scope == self._scope
+                    and bool(validity)
+                    and self._uidvalidity == validity
+                )
+                # Only an explicit choice and a valid scoped checkpoint may
+                # receive offline mail. These messages remain quiet history.
+                baseline = (
+                    self._last_uid
+                    if catch_up and self._last_uid is not None
+                    else max(self._last_uid or 0, max(uids, default=0))
+                )
             elif self._last_uid is not None:
                 baseline = self._last_uid
             elif initial_sync == "all":
@@ -721,6 +730,13 @@ def account_form(preset: str = "qq") -> tuple[FormField, ...]:
             label_key="ux.initial_sync",
         ),
         FormField("initial_days", kind="number", default=30, label_key="ux.initial_days"),
+        FormField(
+            "catch_up_missed",
+            kind="boolean",
+            default=False,
+            label_key="ux.catch_up_missed",
+            description_key="ux.catch_up_missed_help",
+        ),
         FormField(
             "include_past_actions",
             kind="boolean",

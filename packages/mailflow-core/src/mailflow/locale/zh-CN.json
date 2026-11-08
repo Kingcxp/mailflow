@@ -1327,6 +1327,8 @@
       "initial_recent": "导入近期邮件",
       "initial_all": "导入全部历史",
       "initial_days": "近期邮件天数",
+      "catch_up_missed": "收取离线期间的邮件（暂不分析）",
+      "catch_up_missed_help": "默认关闭。按此账户保存的同步位置安静收取遗漏邮件，需要时手动分析；首次接入或邮箱标识重置时仍跳过已有邮件。",
       "include_past_actions": "将历史邮件中的旧事项纳入待办",
       "preferences_hint": "今后分析邮件时参考的偏好（可编辑，清空即删除）",
       "remember_correction": "今后同类邮件也这样处理",

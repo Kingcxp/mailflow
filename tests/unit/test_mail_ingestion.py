@@ -112,17 +112,20 @@ async def test_failed_queue_handoff_is_not_acknowledged(
     assert received == ["mail 1", "mail 2", "mail 3"]
 
 
-@pytest.mark.parametrize("sync_options", [{}, {"analyze_backlog": True}, {"initial_sync": "new"}])
 async def test_startup_skips_old_checkpoints_but_receives_new_arrivals(
     monkeypatch: pytest.MonkeyPatch,
-    sync_options: dict[str, Any],
 ) -> None:
     mailbox = Mailbox()
     monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", Mock(return_value=mailbox))
     account = MailAccountConfig(
         account_id="account",
         provider="imap",
-        options={"preset": "gmail", "interval_seconds": 0.01, **sync_options},
+        options={
+            "preset": "gmail",
+            "interval_seconds": 0.01,
+            "initial_sync": "new",
+            "analyze_backlog": True,
+        },
     )
     source = IMAPSource(account)
     runtime, storage, _ = build_runtime({"account": source}, accounts=[account])
@@ -168,6 +171,37 @@ async def test_startup_skips_old_checkpoints_but_receives_new_arrivals(
         assert mailbox.fetched == [4]
     finally:
         await runtime.stop()
+
+    mailbox.uids.extend([5, 6])
+    account = account.model_copy(update={"options": {**account.options, "catch_up_missed": True}})
+    catching_up, _, notifiers = build_runtime(
+        {"account": IMAPSource(account)}, accounts=[account], storage=storage
+    )
+    received = asyncio.Event()
+    analyzed.clear()
+
+    async def saved(event: str, **payload: Any) -> None:
+        if event == "mail.received.saved" and payload["record"].mail.subject == "mail 6":
+            received.set()
+        if event == "mailflow.mail.processed":
+            analyzed.set()
+
+    catching_up._events.subscribe_all(saved)  # pyright: ignore[reportPrivateUsage]
+    await catching_up.start()
+    try:
+        await asyncio.wait_for(received.wait(), 2)
+        assert await catching_up.wait_idle()
+        missed = [row for row in storage.saved if row.mail.subject in {"mail 5", "mail 6"}]
+        assert len(missed) == 2
+        assert all(row.analysis is None and row.analysis_state == "unanalysed" for row in missed)
+        assert all(row.ingestion == "history" for row in missed)
+        assert not notifiers[0].notified
+        mailbox.uids.append(7)
+        await asyncio.wait_for(analyzed.wait(), 2)
+        assert await catching_up.wait_idle()
+        assert [row.mail.subject for row in notifiers[0].notified] == ["mail 7"]
+    finally:
+        await catching_up.stop()
 
 
 async def test_full_runtime_queue_cancellation_keeps_the_pending_mail_retryable(
