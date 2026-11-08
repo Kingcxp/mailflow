@@ -87,25 +87,28 @@ class SQLiteStorage:
 
     @staticmethod
     def _prepare_mail_search(conn: sqlite3.Connection) -> None:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(mails)")}
-        if "search_text" not in columns:
-            conn.execute("ALTER TABLE mails ADD COLUMN search_text TEXT NOT NULL DEFAULT ''")
-            rows = conn.execute("SELECT record_id, record_json FROM mails")
-            while batch := rows.fetchmany(200):
-                conn.executemany(
-                    "UPDATE mails SET search_text = ? WHERE record_id = ?",
-                    [
-                        (
-                            searchable_record_text(MailRecord.model_validate_json(raw)).casefold(),
-                            key,
-                        )
-                        for key, raw in batch
-                    ],
-                )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS mails_received ON mails(received_ts DESC, record_id)"
-        )
-        conn.commit()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(mails)")}
+            if "search_text" not in columns:
+                conn.execute("ALTER TABLE mails ADD COLUMN search_text TEXT NOT NULL DEFAULT ''")
+                rows = conn.execute("SELECT record_id, record_json FROM mails")
+                while batch := rows.fetchmany(200):
+                    conn.executemany(
+                        "UPDATE mails SET search_text = ? WHERE record_id = ?",
+                        [
+                            (
+                                searchable_record_text(
+                                    MailRecord.model_validate_json(raw)
+                                ).casefold(),
+                                key,
+                            )
+                            for key, raw in batch
+                        ],
+                    )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS mails_received ON mails(received_ts DESC, record_id)"
+            )
 
     async def initialize(self) -> None:
         async with self._lock:
@@ -114,11 +117,16 @@ class SQLiteStorage:
                 # preference must be readable before pipeline construction)
             if self._path != ":memory:":
                 Path(self._path).parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(self._path, check_same_thread=False)
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.executescript(_SCHEMA)
-            self._prepare_mail_search(self._conn)
+            conn = sqlite3.connect(self._path, check_same_thread=False)
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA busy_timeout=5000")
+                conn.executescript(_SCHEMA)
+                self._prepare_mail_search(conn)
+            except BaseException:
+                conn.close()
+                raise
+            self._conn = conn
 
     async def close(self) -> None:
         async with self._lock:

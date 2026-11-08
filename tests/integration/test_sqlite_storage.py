@@ -6,6 +6,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from mailflow.config import StorageConfig
@@ -65,6 +66,15 @@ async def test_existing_database_rows_survive_initialize_and_reopen(tmp_path: Pa
         conn.execute("INSERT INTO user_notes VALUES(?)", ("保留用户扩展数据",))
     for _ in range(2):
         backend = SQLiteStorage(StorageConfig(path=str(path)))
+        if _ == 0:
+            with (
+                patch(
+                    "mailflow_storage_sqlite.plugin.searchable_record_text",
+                    side_effect=RuntimeError("interrupted"),
+                ),
+                pytest.raises(RuntimeError, match="interrupted"),
+            ):
+                await backend.initialize()
         await backend.initialize()
         for term in ("résumé", "Update", "合同.pdf", "旧邮件"):
             assert (await backend.query_mails(MailQuery(text=term))).total == 1
