@@ -70,6 +70,7 @@ if TYPE_CHECKING:
     from mailflow.service import MailFlowService
 
 _LOG_BUFFER = 500
+_SMART_JOB_IDLE_SECONDS = 60.0
 
 
 class ActionCreate(BaseModel):
@@ -317,6 +318,7 @@ def create_app(service: MailFlowService) -> FastAPI:
         job: dict[str, Any] = {
             "owner": current_context(),
             "created": time.monotonic(),
+            "last_seen": time.monotonic(),
             "state": "running",
             "events": [],
             "seq": 0,
@@ -336,13 +338,22 @@ def create_app(service: MailFlowService) -> FastAPI:
             job["events"] = job["events"][-300:]
 
         async def run() -> None:
-            try:
-                job["result"] = await service.smart_action(
+            operation = asyncio.create_task(
+                service.smart_action(
                     str(body.get("instruction", "")),
                     record_ids=body.get("record_ids"),
                     account_id=str(body.get("account_id", "")),
                     progress=progress,
-                )
+                ),
+                name=f"smart-operation-{job_id}",
+            )
+            try:
+                while not operation.done():
+                    remaining = _SMART_JOB_IDLE_SECONDS - (time.monotonic() - job["last_seen"])
+                    if remaining <= 0:
+                        raise asyncio.CancelledError
+                    await asyncio.wait({operation}, timeout=remaining)
+                job["result"] = operation.result()
                 job["state"] = "done"
             except asyncio.CancelledError:
                 job["state"] = "cancelled"
@@ -350,6 +361,10 @@ def create_app(service: MailFlowService) -> FastAPI:
             except Exception as exc:
                 logger.warning("smart query failed: %s", exc)
                 job["state"], job["error"] = "failed", error_text(exc, service.t)
+            finally:
+                if not operation.done():
+                    operation.cancel()
+                await asyncio.gather(operation, return_exceptions=True)
 
         job["task"] = asyncio.create_task(run(), name=f"smart-{job_id}")
         jobs[job_id] = job
@@ -397,6 +412,7 @@ def create_app(service: MailFlowService) -> FastAPI:
     @app.get("/smart/jobs/{job_id}")
     async def smart_job(job_id: str, after: int = 0, _: None = Depends(guard)) -> Any:
         job = query_job(job_id)
+        job["last_seen"] = time.monotonic()
         return _jsonable(
             {
                 "state": job["state"],

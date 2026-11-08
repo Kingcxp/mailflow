@@ -251,7 +251,11 @@ class TestReminderScheduler:
             reminders.append(payload)
             return True
 
+        async def unavailable_view(event: str, **payload: Any) -> None:
+            raise RuntimeError("view disconnected")
+
         events.subscribe("mailflow.action.reminder", capture)
+        events.subscribe_all(unavailable_view)
         fired = await runtime.run_reminder_tick()
         assert fired == 1
         assert reminders[0]["kind"] == "early"

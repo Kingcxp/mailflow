@@ -61,7 +61,7 @@ class EventBus:
                     result,
                 )
         return any(result is True for result in results[: len(handlers)]) and not any(
-            isinstance(result, BaseException) for result in results
+            isinstance(result, BaseException) for result in results[: len(handlers)]
         )
 
 

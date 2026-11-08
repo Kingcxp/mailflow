@@ -85,6 +85,7 @@ class RemoteClient:
         self._logs_lock = asyncio.Lock()
         self.connection_state = "stopped"
         self.retry_after = 0.0
+        self._pending_smart_cancellations: set[str] = set()
 
     # -- low level -------------------------------------------------------------
 
@@ -120,12 +121,31 @@ class RemoteClient:
                     response.status_code, code, message, dict(failure.get("params") or {})
                 )
             raise RemoteError(response.status_code, "", str(detail))
+        if not (method == "DELETE" and path.startswith("/smart/jobs/")):
+            await asyncio.gather(
+                *(
+                    self._cancel_smart_job(job_id)
+                    for job_id in tuple(self._pending_smart_cancellations)
+                )
+            )
         if not response.content:
             return None
         try:
             return response.json()
         except json.JSONDecodeError:
             return response.text
+
+    async def _cancel_smart_job(self, job_id: str) -> None:
+        self._pending_smart_cancellations.add(job_id)
+        try:
+            async with asyncio.timeout(3):
+                await self._request("DELETE", f"/smart/jobs/{job_id}")
+        except RemoteError as exc:
+            if exc.status != 404:
+                return
+        except Exception:
+            return
+        self._pending_smart_cancellations.discard(job_id)
 
     def on(self, event: str, handler: Callable[..., Any]) -> Callable[[], None]:
         """Register an event handler; '*' receives every server event."""
@@ -300,8 +320,7 @@ class RemoteClient:
                     raise RemoteError(400, "smart.model_failed", str(status.get("error") or ""))
                 await asyncio.sleep(0.2)
         finally:
-            with contextlib.suppress(Exception):
-                await self._request("DELETE", f"/smart/jobs/{job_id}")
+            await self._cancel_smart_job(job_id)
 
     async def apply_smart_plan(
         self, plan_id: str, operations: list[dict[str, Any]]

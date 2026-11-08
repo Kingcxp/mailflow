@@ -170,7 +170,15 @@ async def test_remote_smart_task_is_reviewed_and_applied_once(
 
     service.config.llms = [LLMConfig(llm_id="fake")]
     service.router = cast(Any, Router())
-    mock_http_client(monkeypatch, httpx.ASGITransport(app=create_app(service)))
+    transport = httpx.ASGITransport(app=create_app(service))
+    offline = False
+
+    async def route(request: httpx.Request) -> httpx.Response:
+        if offline and request.url.path.startswith("/smart/jobs/"):
+            raise httpx.ConnectError("offline", request=request)
+        return await transport.handle_async_request(request)
+
+    mock_http_client(monkeypatch, httpx.MockTransport(route))
     remote = RemoteServiceAdapter(
         RemoteClient("http://fake", "admin", "test-secret"), json_value(service.snapshot()), I18n()
     )
@@ -188,6 +196,40 @@ async def test_remote_smart_task_is_reviewed_and_applied_once(
     with pytest.raises(RemoteError):
         await remote.apply_smart_plan(result.plan_id, result.pending)
     assert len(await service.list_actions()) == 1
+
+    entered, stopped = asyncio.Event(), asyncio.Event()
+
+    class BlockingRouter:
+        async def chat(self, messages: Any, **kwargs: Any) -> LLMCompletion:
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+            return LLMCompletion(text="")
+
+    service.router = cast(Any, BlockingRouter())
+    offline = True
+    with pytest.raises(httpx.ConnectError):
+        await remote.smart_action("Find messages")
+    await asyncio.wait_for(entered.wait(), 1)
+    assert not stopped.is_set()
+    offline = False
+    await remote.client.snapshot()
+    await asyncio.wait_for(stopped.wait(), 1)
+
+    # A vanished client must also release the server job without reconnecting.
+    monkeypatch.setattr("mailflow_server.app._SMART_JOB_IDLE_SECONDS", 0.05)
+    entered.clear()
+    stopped.clear()
+    async with httpx.AsyncClient(base_url="http://fake", auth=("admin", "test-secret")) as http:
+        started = await http.post("/smart/jobs", json={"instruction": "Find messages"})
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(stopped.wait(), 1)
+        job_id = started.json()["job_id"]
+        status = await http.get(f"/smart/jobs/{job_id}")
+        assert status.json()["state"] == "cancelled"
+        assert (await http.delete(f"/smart/jobs/{job_id}")).is_success
 
 
 async def test_task_notification_failure_retries_without_repeating_success(
