@@ -354,7 +354,8 @@ class ToolRegistry:
                 "add_action",
                 (
                     "Stage a new schedule entry (something the user must do). "
-                    "Requires an absolute ISO-8601 `due_at` with offset. "
+                    "Omit due_at when the user gives no deadline; otherwise use an "
+                    "absolute ISO-8601 timestamp with offset. Never invent a deadline. "
                     "action_type may be a built-in or any concise non-empty custom label."
                 ),
                 {

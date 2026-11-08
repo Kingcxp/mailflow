@@ -380,7 +380,7 @@ class TestDeduplication:
         assert len(notifiers[0].notified) == 2
         assert {record.mail.account_id for record in storage.saved} == {"acct-1", "acct-2"}
 
-    async def test_new_analysis_is_deduped_against_existing_and_custom_actions(self) -> None:
+    async def test_similar_tasks_from_other_sources_survive_reanalysis(self) -> None:
         storage = FakeStorage()
         old_mail = make_mail(subject="Old notice")
         due = datetime(2099, 5, 1, 9, tzinfo=UTC)
@@ -434,8 +434,12 @@ class TestDeduplication:
         stored = await runtime.process_mail_now(new_mail)
 
         assert stored is not None
-        assert stored.action_items == []
-        assert stored.analysis is not None and stored.analysis.action_items == []
+        assert len(stored.action_items) == 2
+        item_ids = [item.item_id for item in stored.action_items]
+        repeated = await runtime.process_mail_now(new_mail, force=True)
+        assert repeated is not None
+        assert [item.item_id for item in repeated.action_items] == item_ids
+        assert len(await runtime.action_store.read()) == 4
 
 
 class TestDailyDigest:
@@ -643,45 +647,29 @@ class TestFailedReanalysisKeepsPrevious:
         return runtime, storage
 
     async def test_failed_run_keeps_the_previous_analysis(self) -> None:
-        class FailingPipeline:
-            router = None
+        class FailingProcessor:
+            async def process(
+                self, mail: MailMessage, context: ProcessingContext
+            ) -> ProcessorResult:
+                raise TimeoutError("model unavailable")
 
-            async def process(self, mail: Any, account_id: str, **kwargs: Any) -> Any:
-                # what the pipeline returns when every processor failed
-                return (
-                    MailAnalysis(
-                        summary=mail.subject,
-                        urgency=Urgency.INFO,
-                        summary_is_fallback=True,
-                    ),
-                    [
-                        ProcessorNote(
-                            processor_id="llm-importance",
-                            plugin_id="mailflow-core",
-                            status="failed",
-                            message="failed: processor timed out after 120 seconds",
-                            started_at=datetime(2026, 1, 1, tzinfo=UTC),
-                            finished_at=datetime(2026, 1, 1, tzinfo=UTC),
-                        )
-                    ],
-                    "",
-                    "",
-                )
-
-        runtime, storage = await self._runtime_with(FailingPipeline())
+        pipeline = PipelineEngine(
+            [ProcessorBinding("llm-importance", "fake", FailingProcessor(), retries=0)]
+        )
+        runtime, storage = await self._runtime_with(pipeline)
         mail = (await storage.list_mails())[0].mail
-
-        stored = await runtime.process_mail_now(mail, force=True)
-
-        assert stored is not None
-        # the previous content survives, the failure is disclosed
-        assert stored.summary == "Good previous summary"
-        assert stored.effective_urgency is Urgency.URGENT
-        assert stored.analysis is not None and stored.analysis.reason == "previous reason"
-        assert [item.summary for item in stored.action_items] == ["Collect the document"]
-        assert any(note.status == "failed" for note in stored.processor_notes)
-        persisted = await storage.get_mail(stored.record_id)
-        assert persisted is not None and persisted.summary == "Good previous summary"
+        for _ in range(3):
+            stored = await runtime.process_mail_now(mail, force=True)
+            assert stored is not None
+            assert stored.summary == "Good previous summary"
+            assert stored.effective_urgency is Urgency.URGENT
+            assert stored.analysis is not None and stored.analysis.reason == "previous reason"
+            assert not stored.analysis_is_fallback
+            assert stored.analysis_state == "failed"
+            assert [item.summary for item in stored.action_items] == ["Collect the document"]
+            assert any(note.status == "failed" for note in stored.processor_notes)
+            # Include the JSON round trip used when storage is reopened.
+            await storage.save_mail(MailRecord.model_validate_json(stored.model_dump_json()))
 
     async def test_successful_run_replaces_the_previous_analysis(self) -> None:
         class WorkingPipeline:

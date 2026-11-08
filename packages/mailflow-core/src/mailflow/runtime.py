@@ -831,6 +831,9 @@ class MailFlowRuntime:
                 ):
                     record = previous.model_copy(
                         update={
+                            "analysis": previous.analysis.model_copy(
+                                update={"summary_is_fallback": False}
+                            ),
                             "processor_notes": [*previous.processor_notes, *notes][-_NOTES_KEPT:],
                         }
                     )

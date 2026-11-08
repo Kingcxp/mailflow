@@ -15,6 +15,7 @@ from mailflow.domain import (
     MailAddress,
     PluginSnapshot,
     ProcessorNote,
+    SmartActionResult,
     Urgency,
 )
 from mailflow.i18n import I18n
@@ -35,7 +36,7 @@ from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.mail_workflows import MailReader
 from mailflow_tui.remote import RemoteServiceAdapter
 from mailflow_tui.widgets import Input as EditingInput
-from mailflow_tui.widgets import SelectionTable, ShortcutHelp
+from mailflow_tui.widgets import SearchToggle, SelectionTable, ShortcutHelp
 from mailflow_tui.widgets import TextArea as EditingTextArea
 from textual.app import App, ComposeResult
 from textual.containers import ScrollableContainer
@@ -301,7 +302,9 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         assert todos.row_count == 0
 
 
-async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(host: Any) -> None:
+async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
+    host: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service, view, app, emit, _failures = host
     now = datetime.now(UTC)
     action = ActionItem(
@@ -341,6 +344,20 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
             assert "SummaryNeedle" in text(app, "#mail-summary")
             result, _ = await ToolRegistry(service).call("find_mail", {"contains": query})
             assert "id=target" in result and "id=other" not in result
+        regex = app.query_one("#mail-search-regex", SearchToggle)
+        regex.press()
+        search.value = "SubjectNeedle.*"
+        await settle(pilot)
+        assert keys(table) == ["target"]
+        smart = AsyncMock(return_value=SmartActionResult(records=[target]))
+        monkeypatch.setattr(view, "smart_action", smart)
+        pane._smart_scope = "results"  # pyright: ignore[reportPrivateUsage]
+        app.query_one("#smart-action", Button).press()
+        await settle(pilot)
+        assert smart.await_args is not None
+        assert smart.await_args.kwargs["record_ids"] == keys(table) == ["target"]
+        regex.press()
+        app.query_one("#btn-refresh", Button).press()
         search.value = "no matching mail"
         await settle(pilot)
         assert keys(table) == [] and not text(app, "#mail-summary").strip()

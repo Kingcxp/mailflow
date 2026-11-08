@@ -190,109 +190,72 @@ async def test_legacy_import_remains_an_editable_deletable_task(service: MailFlo
 
 
 class TestEventDedupe:
-    """Schedule visibility uses normalized summaries and exact overlap."""
+    """Only the same source and task details can identify a repeated action."""
 
     @staticmethod
-    def _item(
-        item_id: str,
-        *,
-        mail_id: str,
-        summary: str = "毕业论文答辩",
-        due_at: datetime | None = None,
-        due_end: datetime | None = None,
-        action_type: str = "meeting",
-    ) -> ActionItem:
-        return ActionItem(
-            item_id=item_id,
-            mail_id=mail_id,
-            summary=summary,
-            action_type=action_type,
-            due_at=due_at or _DUE,
-            due_end=due_end,
+    def _item(item_id: str, **changes: Any) -> ActionItem:
+        return ActionItem.model_validate(
+            {
+                "item_id": item_id,
+                "mail_id": "mail-1",
+                "summary": "Review contract",
+                "action_type": "errand",
+                "due_at": _DUE,
+                **changes,
+            }
         )
 
-    async def test_duplicate_points_collapse_but_audit_list_keeps_both(
+    async def test_independent_tasks_stay_visible_and_can_be_deleted(
         self, service: MailFlowService
     ) -> None:
+        from mailflow_test_support.commands import make_record
+
         store = cast(Any, service.storage)
-        first = self._item("a", mail_id="mail-1", due_at=_DUE)
-        second = self._item("b", mail_id="mail-2", due_at=_DUE, action_type="exam")
-        store.mails["mail-1"] = cast(Any, type("R", (), {"action_items": [first]}))
-        store.mails["mail-2"] = cast(Any, type("R", (), {"action_items": [second]}))
+        for due in (None, _DUE):
+            store.preferences.clear()
+            first = self._item("a", due_at=due, notes="Client A")
+            second = self._item("b", mail_id="mail-2", due_at=due, notes="Client B")
+            third = self._item("c", due_at=due, notes="Client C")
+            record = make_record("mail-1", action=first)
+            assert record.analysis is not None
+            record.analysis.action_items.append(third)
+            store.mails = {
+                "mail-1": record,
+                "mail-2": make_record("mail-2", action=second),
+            }
+            assert {item.item_id for item in await service.list_actions()} == {"a", "b", "c"}
+            assert await service.delete_action("b")
+            assert {item.item_id for item in await service.list_actions()} == {"a", "c"}
 
-        listed = await service.list_actions()
+    def test_duplicate_detection_respects_scope_details_and_input_order(self) -> None:
+        first = self._item("a", summary="  Review   CONTRACT ")
+        duplicate = self._item("b")
+        assert actions_duplicate(first, duplicate)
+        assert dedupe_actions([first, duplicate]) == [first]
+        assert dedupe_actions([duplicate, first]) == [duplicate]
+        for changes in (
+            {"mail_id": "another-mail"},
+            {"action_type": "meeting"},
+            {"notes": "Another client"},
+            {"location": "Another office"},
+            {"url": "https://example.com/another-contract"},
+            {"due_at": _DUE + timedelta(minutes=30)},
+            {"completed_at": _DUE},
+            {"summary": "[NOTICE] Review contract"},
+        ):
+            assert not actions_duplicate(first, duplicate.model_copy(update=changes))
+        blank = first.model_copy(update={"summary": " "})
+        assert not actions_duplicate(blank, blank.model_copy(update={"item_id": "b"}))
 
-        assert [item.item_id for item in listed] == ["a"]
-        assert len(await service.list_actions_all()) == 2
-
-    async def test_points_at_different_times_remain_distinct(
-        self, service: MailFlowService
-    ) -> None:
-        first = self._item("a", mail_id="mail-1", due_at=_DUE)
-        second = self._item("b", mail_id="mail-2", due_at=_DUE + timedelta(minutes=30))
-        store = cast(Any, service.storage)
-        store.mails["mail-1"] = cast(Any, type("R", (), {"action_items": [first]}))
-        store.mails["mail-2"] = cast(Any, type("R", (), {"action_items": [second]}))
-
-        assert len(await service.list_actions()) == 2
-
-    async def test_point_inside_window_duplicates_but_end_boundary_does_not(self) -> None:
-        window = self._item("w", mail_id="m1", due_at=_DUE, due_end=_DUE + timedelta(hours=1))
-        inside = self._item("p", mail_id="m2", due_at=_DUE + timedelta(minutes=30))
-        boundary = self._item("b", mail_id="m3", due_at=_DUE + timedelta(hours=1))
-
+    def test_duplicate_windows_require_positive_overlap(self) -> None:
+        window = self._item("a", due_end=_DUE + timedelta(hours=1))
+        inside = self._item("b", due_at=_DUE + timedelta(minutes=30))
+        boundary = self._item("c", due_at=_DUE + timedelta(hours=1))
+        overlap = inside.model_copy(update={"due_end": _DUE + timedelta(hours=2)})
+        next_window = boundary.model_copy(update={"due_end": _DUE + timedelta(hours=2)})
         assert actions_duplicate(window, inside)
+        assert actions_duplicate(window, overlap)
         assert not actions_duplicate(window, boundary)
-
-    async def test_windows_require_positive_overlap(self) -> None:
-        first = self._item("a", mail_id="m1", due_at=_DUE, due_end=_DUE + timedelta(hours=1))
-        overlap = self._item(
-            "b",
-            mail_id="m2",
-            due_at=_DUE + timedelta(minutes=30),
-            due_end=_DUE + timedelta(hours=2),
-        )
-        boundary = self._item(
-            "c",
-            mail_id="m3",
-            due_at=_DUE + timedelta(hours=1),
-            due_end=_DUE + timedelta(hours=2),
-        )
-
-        assert actions_duplicate(first, overlap)
-        assert not actions_duplicate(first, boundary)
-
-    async def test_whitespace_casefold_and_type_normalization(self) -> None:
-        left = self._item(
-            "a",
-            mail_id="m1",
-            summary="  Final   EXAM ",
-            due_at=_DUE,
-        )
-        right = self._item(
-            "b",
-            mail_id="m2",
-            summary="final exam",
-            due_at=_DUE,
-            action_type="exam",
-        )
-
-        assert actions_duplicate(left, right)
-        assert dedupe_actions([left, right]) == [left]
-
-        equal_time_later_input = right.model_copy(update={"item_id": "c"})
-        assert dedupe_actions([equal_time_later_input, right]) == [equal_time_later_input]
-
-    async def test_blank_summaries_and_meeting_markers_are_not_rewritten(self) -> None:
-        blank_left = self._item("a", mail_id="m1", summary="  ")
-        blank_right = self._item("b", mail_id="m2", summary="")
-        plain = self._item("c", mail_id="m3", summary="人工智能前沿讲座")
-        marked = self._item("d", mail_id="m4", summary="[NOTICE] 人工智能前沿讲座")
-
-        assert not actions_duplicate(blank_left, blank_right)
-        assert not actions_duplicate(plain, marked)
-
-    async def test_nonpositive_window_end_is_treated_as_a_point(self) -> None:
-        point = self._item("a", mail_id="m1", due_at=_DUE, due_end=_DUE)
-
+        assert not actions_duplicate(window, next_window)
+        point = self._item("p", due_end=_DUE - timedelta(hours=1))
         assert action_time_window(point) == (_DUE, _DUE)

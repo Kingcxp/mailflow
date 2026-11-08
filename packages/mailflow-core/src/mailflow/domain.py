@@ -279,13 +279,21 @@ def action_sort_time(item: ActionItem) -> datetime:
 
 
 def actions_duplicate(left: ActionItem, right: ActionItem) -> bool:
-    """Whether two normalized summaries identify the same overlapping event.
+    """Whether the same source describes the same task in an overlapping window.
 
     Windows are half-open. Point actions match only an equal point or a point
     inside a window; windows match only when their overlap has positive length.
     """
     if (left.completed_at is None) != (right.completed_at is None):
         return False
+    if left.mail_id != right.mail_id:
+        return False
+    for field in ("action_type", "notes", "location", "url"):
+        if (
+            " ".join(getattr(left, field).split()).casefold()
+            != " ".join(getattr(right, field).split()).casefold()
+        ):
+            return False
     left_summary = " ".join(left.summary.split()).casefold()
     right_summary = " ".join(right.summary.split()).casefold()
     if not left_summary or left_summary != right_summary:
@@ -387,8 +395,8 @@ class MailRecord(BaseModel):
         """
         if self.analysis is None:
             return True
-        if self.analysis.summary_is_fallback:
-            return True
+        if "summary_is_fallback" in self.analysis.model_fields_set:
+            return self.analysis.summary_is_fallback
         return any(
             note.processor_id == "pipeline" and note.message.startswith("fallback summary used")
             for note in self.processor_notes

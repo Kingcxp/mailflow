@@ -1344,7 +1344,7 @@ class MailPane(Vertical):
         records = [record for record in self._mail_cache or [] if self._query.matches(record)]
         if self._smart_action_running:
             return
-        self._records = records
+        has_records = bool(records)
         table = self._mail_table()
         if table is not None:
             available = {record.record_id for record in records}
@@ -1389,9 +1389,10 @@ class MailPane(Vertical):
             status += " " + self._service.t(
                 "ux.loaded_mail", shown=len(records), total=self._page_total
             )
+        self._records = records
         await self._render_records(
             records,
-            empty_hint_key="tui.mail_no_match" if self._records else "tui.mail_empty",
+            empty_hint_key="tui.mail_no_match" if has_records else "tui.mail_empty",
             status_hint=status,
         )
 
