@@ -305,7 +305,11 @@ async def test_smart_query_task_crud_requires_confirmation(tmp_path: Path) -> No
             search.value = "查找包含 lecture 的邮件，并在2099年10月15日14:00添加项目复核待办"
 
             def modal() -> SmartActionReviewModal | None:
-                screens = [s for s in app.screen_stack if isinstance(s, SmartActionReviewModal)]
+                screens = [
+                    s
+                    for s in app.screen_stack
+                    if isinstance(s, SmartActionReviewModal) and s.is_mounted
+                ]
                 return screens[-1] if screens else None
 
             app.query_one("#smart-action", Button).press()
