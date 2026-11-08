@@ -2184,20 +2184,27 @@ Return every candidate in this batch."""
                         if record is None:
                             result.skipped.append(record_id)
                             continue
-                        if operation == "cleanup" and record_id not in {
-                            row.record_id for row in await self.runtime.cleanup_candidates()
-                        }:
+                        entries = await self.runtime.action_store.read(
+                            deduplicate=False, records=[record]
+                        )
+                        linked = [
+                            entry.item
+                            for entry in entries
+                            if (entry.record.record_id if entry.record else entry.item.mail_id)
+                            == record_id
+                        ]
+                        if operation == "cleanup" and not self.runtime.is_cleanup_candidate(
+                            record, linked=linked
+                        ):
                             result.skipped.append(record_id)
                             continue
-                        if operation == "expired":
-                            linked = await self._actions_by_mail()
-                            if not self._is_expired(
-                                record, utcnow(), linked=linked.get(record_id, [])
-                            ):
-                                result.skipped.append(record_id)
-                                continue
+                        if operation == "expired" and not self._is_expired(
+                            record, utcnow(), linked=linked
+                        ):
+                            result.skipped.append(record_id)
+                            continue
                         await self.runtime.action_store.trash_mail(
-                            record, delete_actions=delete_actions
+                            record, delete_actions=delete_actions, entries=entries
                         )
                         changed = record
                     await self.events.emit("mail.deleted", record_id=record_id)
@@ -2206,6 +2213,8 @@ Return every candidate in this batch."""
                 (result.succeeded if changed else result.skipped).append(record_id)
             except Exception as exc:
                 result.failed[record_id] = error_text(exc, self.t)
+            finally:
+                await asyncio.sleep(0)
         return result
 
     @admin_operation

@@ -518,7 +518,7 @@ class TestActionMutations:
 
         with pytest.raises(ValueError) as add_error:
             await service.add_action(
-                "  PAY   THE FEE  ", start + timedelta(minutes=30), action_type="meeting"
+                "  PAY   THE FEE  ", start + timedelta(minutes=30), action_type="errand"
             )
         assert existing.summary in str(add_error.value)
         assert existing.time_range in str(add_error.value)

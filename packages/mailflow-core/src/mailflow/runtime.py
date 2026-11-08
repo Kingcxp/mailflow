@@ -906,11 +906,8 @@ class MailFlowRuntime:
         quiet: bool = False,
         language_changed: bool = False,
     ) -> list[ActionItem]:
-        others = [
-            entry.item
-            for entry in await self.action_store.read(deduplicate=False)
-            if entry.record is None or entry.record.record_id != record_id
-        ]
+        others = await self._storage.list_custom_actions()
+        actions = [item.model_copy(update={"mail_id": record_id}) for item in actions]
         prior = previous.action_items if previous is not None else []
         used: set[str] = set()
         dismissed = await self.action_store.dismissed()
@@ -928,14 +925,34 @@ class MailFlowRuntime:
             if any(actions_duplicate(item, other) for other in others):
                 continue
             candidates = [old for old in prior if old.item_id not in used]
+            same_title = [
+                old for old in candidates if summary_key(old.summary) == summary_key(item.summary)
+            ]
+            same_details = [
+                old
+                for old in same_title
+                if (old.action_type, old.notes, old.location, old.url)
+                == (item.action_type, item.notes, item.location, item.url)
+            ]
             old = next(
                 (
                     old
-                    for old in candidates
-                    if summary_key(old.summary) == summary_key(item.summary)
+                    for old in same_details
+                    if action_time_window(old) == action_time_window(item)
                 ),
                 None,
             )
+            if old is None and len(same_details) == 1:
+                old = same_details[0]
+            if (
+                old is None
+                and len(same_title) == 1
+                and sum(
+                    summary_key(other.summary) == summary_key(item.summary) for other in actions
+                )
+                == 1
+            ):
+                old = same_title[0]
             if old is None:
                 similar = [
                     old
@@ -959,6 +976,9 @@ class MailFlowRuntime:
                     action_sort_time(item).isoformat(),
                     to_utc(item.due_end).isoformat() if item.due_end else "",
                     item.action_type.casefold(),
+                    item.notes,
+                    item.location,
+                    item.url,
                 ],
                 ensure_ascii=False,
             )
@@ -1269,26 +1289,30 @@ class MailFlowRuntime:
 
     # -- retention cleanup ----------------------------------------------------------
 
-    async def cleanup_candidates(self) -> list[MailRecord]:
+    def is_cleanup_candidate(self, record: MailRecord, *, linked: list[ActionItem]) -> bool:
         days = self._config.general.mail_retention_days
         if days <= 0:
-            return []
+            return False
         cutoff = datetime.now(UTC) - timedelta(days=days)
-        entries = await self.action_store.read(deduplicate=False)
-        protected = {
-            entry.record.record_id if entry.record else entry.item.mail_id
-            for entry in entries
-            if entry.item.completed_at is None
-        }
-        return [
-            record
-            for record in await self._storage.list_mails()
-            if record.mail.received_at < cutoff
+        return (
+            record.mail.received_at < cutoff
             and not record.starred
             and record.manual_urgency is None
             and record.effective_urgency not in {Urgency.IMPORTANT, Urgency.URGENT}
             and record.analysis_state == "ready"
-            and record.record_id not in protected
+            and not any(item.completed_at is None for item in linked)
+        )
+
+    async def cleanup_candidates(self) -> list[MailRecord]:
+        records = await self._storage.list_mails()
+        linked: dict[str, list[ActionItem]] = {}
+        for entry in await self.action_store.read(deduplicate=False, records=records):
+            mail_id = entry.record.record_id if entry.record else entry.item.mail_id
+            linked.setdefault(mail_id, []).append(entry.item)
+        return [
+            record
+            for record in records
+            if self.is_cleanup_candidate(record, linked=linked.get(record.record_id, []))
         ]
 
     async def run_cleanup(self) -> tuple[int, int]:

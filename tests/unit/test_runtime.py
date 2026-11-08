@@ -419,6 +419,7 @@ class TestDeduplication:
                     summary="  PAY   THE FEE ",
                     action_type="meeting",
                     due_at=due,
+                    notes="Client A",
                 ),
                 ActionItem(
                     item_id="new-custom-duplicate",
@@ -429,17 +430,28 @@ class TestDeduplication:
                 ),
             ],
         )
+        new_analysis.action_items.append(
+            new_analysis.action_items[0].model_copy(
+                update={"item_id": "other-client", "notes": "Client B"}
+            )
+        )
         runtime, _, _ = build_runtime({}, analysis=new_analysis, storage=storage)
 
         stored = await runtime.process_mail_now(new_mail)
 
         assert stored is not None
-        assert len(stored.action_items) == 2
-        item_ids = [item.item_id for item in stored.action_items]
+        assert len(stored.action_items) == 3
+        item_ids = {item.notes: item.item_id for item in stored.action_items}
+        assert len(set(item_ids.values())) == 3
+        stored.action_items[0].completed_at = datetime.now(UTC)
+        await storage.save_mail(stored)
+        new_analysis.action_items.reverse()
         repeated = await runtime.process_mail_now(new_mail, force=True)
         assert repeated is not None
-        assert [item.item_id for item in repeated.action_items] == item_ids
-        assert len(await runtime.action_store.read()) == 4
+        assert {item.notes: item.item_id for item in repeated.action_items} == item_ids
+        completed = [item.notes for item in repeated.action_items if item.completed_at is not None]
+        assert completed == ["Client A"]
+        assert len(await runtime.action_store.read()) == 5
 
 
 class TestDailyDigest:

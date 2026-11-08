@@ -39,6 +39,12 @@ def _legacy_key(item: ActionItem) -> str:
     return f"{item.mail_id}|{action_sort_time(item).isoformat()}|{item.action_type}"
 
 
+def _dismissal_key(item: ActionItem) -> str:
+    return "v3|" + json.dumps(
+        [action_key(item), item.notes, item.location, item.url], ensure_ascii=False
+    )
+
+
 def action_has_ended(item: ActionItem, now: datetime) -> bool:
     return item.due_at is not None and action_time_window(item)[1] <= to_utc(now)
 
@@ -58,7 +64,13 @@ class ActionStore:
     @staticmethod
     def is_dismissed(item: ActionItem, keys: frozenset[str] | set[str]) -> bool:
         return any(
-            key in keys for key in (f"id|{item.item_id}", action_key(item), _legacy_key(item))
+            key in keys
+            for key in (
+                f"id|{item.item_id}",
+                _dismissal_key(item),
+                action_key(item),
+                _legacy_key(item),
+            )
         )
 
     async def dismissed(self) -> frozenset[str]:
@@ -102,8 +114,12 @@ class ActionStore:
         if not deduplicate:
             return entries
         kept: list[ScheduledAction] = []
+        by_summary: dict[tuple[str, str], list[ScheduledAction]] = {}
         for entry in entries:
-            if not any(actions_duplicate(entry.item, prior.item) for prior in kept):
+            key = (entry.item.mail_id, " ".join(entry.item.summary.split()).casefold())
+            siblings = by_summary.setdefault(key, [])
+            if not any(actions_duplicate(entry.item, prior.item) for prior in siblings):
+                siblings.append(entry)
                 kept.append(entry)
         return kept
 
@@ -132,26 +148,33 @@ class ActionStore:
         """Caller holds lock, so dismissals cannot overwrite another deletion."""
         if target.custom:
             return await self.storage.delete_custom_action(target.item.item_id)
-        keys = {
-            action_key(entry.item)
+        matches = [
+            entry
             for entry in entries
             if not entry.custom
             and (
-                action_key(entry.item) == action_key(target.item)
+                entry.item.item_id == target.item.item_id
                 or actions_duplicate(entry.item, target.item)
             )
+        ]
+        keys = {
+            key
+            for entry in matches
+            for key in (f"id|{entry.item.item_id}", _dismissal_key(entry.item))
         }
-        keys.update(
-            f"id|{entry.item.item_id}"
-            for entry in entries
-            if not entry.custom and action_key(entry.item) in keys
-        )
         await self.set_dismissed(await self.dismissed() | keys)
         return bool(keys)
 
-    async def trash_mail(self, record: MailRecord, *, delete_actions: bool = False) -> None:
+    async def trash_mail(
+        self,
+        record: MailRecord,
+        *,
+        delete_actions: bool = False,
+        entries: list[ScheduledAction] | None = None,
+    ) -> None:
         """Caller holds schedule and mail-write locks; keep task history and source context."""
-        entries = await self.read(deduplicate=False)
+        if entries is None:
+            entries = await self.read(deduplicate=False, records=[record])
         for entry in entries:
             linked = entry.record.record_id if entry.record else entry.item.mail_id
             if linked != record.record_id:

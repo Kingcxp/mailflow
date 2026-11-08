@@ -226,6 +226,8 @@ class TestEventDedupe:
             assert {item.item_id for item in await service.list_actions()} == {"a", "b", "c"}
             assert await service.delete_action("b")
             assert {item.item_id for item in await service.list_actions()} == {"a", "c"}
+            assert await service.delete_action("a")
+            assert [item.item_id for item in await service.list_actions()] == ["c"]
 
     def test_duplicate_detection_respects_scope_details_and_input_order(self) -> None:
         first = self._item("a", summary="  Review   CONTRACT ")
