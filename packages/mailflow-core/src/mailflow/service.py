@@ -766,7 +766,7 @@ class MailFlowService:
         )
 
     async def list_mails(self, limit: int | None = None) -> list[MailRecord]:
-        records = await self.storage.list_mails()
+        records = await self.storage.list_mails(limit=limit)
         store = self.runtime.action_store
         return store.mail_view(records, await store.read(records=records))[:limit]
 
@@ -775,7 +775,7 @@ class MailFlowService:
         if record is None:
             return record
         store = self.runtime.action_store
-        return store.mail_view([record], await store.read())[0]
+        return store.mail_view([record], await store.read(records=[record]))[0]
 
     async def query_mails(self, query: MailQuery) -> MailPage:
         query = query.model_copy(
