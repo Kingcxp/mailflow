@@ -152,6 +152,7 @@ class MailMessage(BaseModel):
     account_id: str
     subject: str
     sender: MailAddress
+    reply_to: MailAddress | None = None
     recipients: list[MailAddress] = Field(default_factory=lambda: [])
     cc: list[MailAddress] = Field(default_factory=lambda: [])
     date: datetime  # send time as reported by the provider
@@ -543,6 +544,8 @@ class ReplyDraft(BaseModel):
     to: MailAddress
     subject: str
     body: str
+    in_reply_to: str = ""
+    references: list[str] = Field(default_factory=lambda: [])
     state: ReplyState = ReplyState.DRAFT
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

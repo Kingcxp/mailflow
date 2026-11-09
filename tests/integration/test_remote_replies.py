@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
-from mailflow.domain import ReplyState
+from mailflow.domain import MailAddress, ReplyState
 from mailflow.i18n import I18n
 from mailflow.replies import ReplyError
 from mailflow.service import MailFlowService
@@ -40,7 +40,13 @@ async def test_local_and_remote_edits_share_state_and_one_confirmation(
     service: MailFlowService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     remote = remote_adapter(service, monkeypatch)
+    record = await service.storage.get_mail("m1")
+    assert record is not None
+    record.mail.reply_to = MailAddress(address="support@example.com")
+    record.mail.headers = {"Message-ID": "<parent@example.com>"}
+    await service.storage.save_mail(record)
     draft = await remote.create_reply("m1")
+    assert draft.to.address == "support@example.com"
     edited = await remote.edit_draft(draft.draft_id, "Re: Hello", "Remote body")
     local = await service.get_draft(draft.draft_id)
     assert local == edited
@@ -49,6 +55,8 @@ async def test_local_and_remote_edits_share_state_and_one_confirmation(
     )
     assert opened == [edited, edited]
     prepared = await service.prepare_reply(draft.draft_id)
+    assert prepared.in_reply_to == "<parent@example.com>"
+    assert prepared.references == ["<parent@example.com>"]
     assert (await remote.get_draft(draft.draft_id)) == prepared
     results = await asyncio.gather(
         remote.confirm_reply(draft.draft_id, prepared.token or ""),

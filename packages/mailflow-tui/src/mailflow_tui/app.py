@@ -257,7 +257,8 @@ class ReplyModal(ModalScreen[Any]):
         with Vertical(id="reply-dialog"):
             yield Label(f"{self._t('mail.field_account')}: {escape(self._record.mail.account_id)}")
             yield Label(
-                f"{self._t('tui.reply_to_label')}: {escape(self._record.mail.sender.display)}"
+                f"{self._t('tui.reply_to_label')}: "
+                f"{escape((self._record.mail.reply_to or self._record.mail.sender).display)}"
             )
             yield Label(
                 f"{self._t('tui.reply_subject_label')}: "
@@ -459,7 +460,7 @@ class ReplyModal(ModalScreen[Any]):
 
         tz = ZoneInfo(self._service.config.general.timezone)
         today = datetime.now(tz).date()
-        recipient = self._record.mail.sender.display or self._record.mail.sender.address
+        recipient = (self._record.mail.reply_to or self._record.mail.sender).display
         body = build_letter(language, recipient=recipient, today=today)
         self.query_one("#reply-body", TextArea).text = body
         label = self._t("tui.reply_tpl_cn" if language == "cn" else "tui.reply_tpl_en")

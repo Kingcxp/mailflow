@@ -235,9 +235,38 @@ async def test_smtp_quit_failure_does_not_turn_accepted_reply_into_retry(
             options={"smtp_host": "fake", "password": "fake"},
         )
     )
+    from mailflow_mail_imap.plugin import parse_mime
+
+    record = await service.storage.get_mail("m1")
+    assert record is not None
+    record.mail = parse_mime(
+        b"From: Sender <noreply@example.com>\r\n"
+        b"Reply-To: Support <support@example.com>\r\n"
+        b"To: me@example.com, colleague@example.com\r\n"
+        b"Cc: first@example.com, second@example.com\r\n"
+        b"Message-ID: <parent@example.com>\r\n"
+        b"References: <root@example.com> <parent@example.com>\r\n"
+        b"In-Reply-To: <root@example.com>\r\n"
+        b"Subject: Hello\r\n\r\nOriginal body",
+        "acct-1",
+    )
+    await service.storage.save_mail(record)
     draft = await service.create_reply("m1")
+    assert draft.to.address == "support@example.com"
+    assert [address.address for address in record.mail.recipients] == [
+        "me@example.com",
+        "colleague@example.com",
+    ]
+    assert [address.address for address in record.mail.cc] == [
+        "first@example.com",
+        "second@example.com",
+    ]
     await service.edit_draft(draft.draft_id, "Re: Hello", "Accepted body")
     prepared = await service.prepare_reply(draft.draft_id)
     confirmed = await service.confirm_reply(draft.draft_id, prepared.token or "")
     assert confirmed.state is ReplyState.SENT and len(sent) == 1
     assert "Accepted body" in str(sent[0])
+    assert sent[0]["To"] == "support@example.com"
+    assert sent[0]["In-Reply-To"] == "<parent@example.com>"
+    assert sent[0]["References"] == "<root@example.com> <parent@example.com>"
+    assert sent[0]["Message-ID"]

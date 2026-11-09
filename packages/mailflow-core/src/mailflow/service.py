@@ -3696,7 +3696,7 @@ Return every candidate in this batch."""
             draft_id=uuid4().hex[:16],
             mail_id=mail_id,
             account_id=record.mail.account_id,
-            to=record.mail.sender,
+            to=record.mail.reply_to or record.mail.sender,
             subject=f"Re: {record.mail.subject}",
             body=record.analysis.suggested_reply
             if record.analysis and record.analysis_error_code != "mail.analysis_language_changed"
@@ -3723,7 +3723,7 @@ Return every candidate in this batch."""
         record = await self._reply_record(mail_id)
         tz = ZoneInfo(self.config.general.timezone)
         today = datetime.now(tz).date()
-        recipient = record.mail.sender.display or record.mail.sender.address
+        recipient = (record.mail.reply_to or record.mail.sender).display
         body_html = build_letter(
             language,
             recipient=recipient,
@@ -3736,7 +3736,7 @@ Return every candidate in this batch."""
             draft_id=uuid4().hex[:16],
             mail_id=mail_id,
             account_id=record.mail.account_id,
-            to=record.mail.sender,
+            to=record.mail.reply_to or record.mail.sender,
             subject=f"Re: {record.mail.subject}",
             body=body_html,
         )
@@ -3779,6 +3779,9 @@ Return every candidate in this batch."""
 
     async def _reply_source(self, draft: ReplyDraft) -> MailSource:
         record = await self._reply_record(draft.mail_id)
+        from mailflow.replies import reply_thread
+
+        draft.in_reply_to, draft.references = reply_thread(record.mail)
         account = next((a for a in self.config.accounts if a.account_id == draft.account_id), None)
         if account is None or record.mail.account_id != draft.account_id:
             raise self._reply_error("reply.account_missing", account_id=draft.account_id)

@@ -25,7 +25,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from email import message_from_bytes
 from email.header import decode_header
 from email.message import EmailMessage, Message
-from email.utils import formatdate, parseaddr, parsedate_to_datetime
+from email.utils import formatdate, getaddresses, make_msgid, parseaddr, parsedate_to_datetime
 from typing import Any, cast
 
 from mailflow.config import MailAccountConfig
@@ -36,6 +36,7 @@ from mailflow.domain import (
     ComponentKind,
     MailAddress,
     MailMessage,
+    ReplyDraft,
 )
 from mailflow.forms import FormField
 from mailflow.mail_body import html_to_text
@@ -257,8 +258,16 @@ def _parse_mime(
     message = message_from_bytes(raw)
     subject = _decode(message.get("Subject")) or "(no subject)"
     sender = _mail_address(message.get("From"))
-    recipients = [_mail_address(value) for value in (message.get_all("To") or [])]
-    cc = [_mail_address(value) for value in (message.get_all("Cc") or [])]
+    recipients = [
+        MailAddress(name=_decode(name), address=address)
+        for name, address in getaddresses(message.get_all("To") or [])
+        if address
+    ]
+    cc = [
+        MailAddress(name=_decode(name), address=address)
+        for name, address in getaddresses(message.get_all("Cc") or [])
+        if address
+    ]
     message_id = str(message.get("Message-ID") or "").strip("<>")
     date_raw = message.get("Date")
     try:
@@ -275,6 +284,7 @@ def _parse_mime(
             account_id=account_id,
             subject=subject,
             sender=sender,
+            reply_to=_mail_address(message.get("Reply-To")) if message.get("Reply-To") else None,
             recipients=recipients,
             cc=cc,
             date=date,
@@ -283,6 +293,12 @@ def _parse_mime(
             body_html=body_html,
             attachments=attachments,
             provider=provider,
+            in_reply_to=message.get("In-Reply-To"),
+            headers={
+                name: str(message[name])
+                for name in ("Message-ID", "In-Reply-To", "References")
+                if message.get(name)
+            },
         ),
         enabled=ocr_enabled,
     )
@@ -658,11 +674,11 @@ class IMAPSource:
         if not 1 <= port <= 65535:
             raise ReplySourceError("smtp_port")
 
-    async def send_reply(self, mail_id: str, draft: Any) -> None:
+    async def send_reply(self, mail_id: str, draft: ReplyDraft) -> None:
         await self.check_reply_ready()
         await asyncio.to_thread(self._send_smtp, draft)
 
-    def _send_smtp(self, draft: Any) -> None:
+    def _send_smtp(self, draft: ReplyDraft) -> None:
         host = str(self._settings.get("smtp_host", ""))
         port = int(self._settings.get("smtp_port", 465))
         if not host:
@@ -672,6 +688,11 @@ class IMAPSource:
         message["To"] = draft.to.address
         message["Subject"] = draft.subject
         message["Date"] = formatdate(localtime=True)
+        message["Message-ID"] = make_msgid()
+        if draft.in_reply_to:
+            message["In-Reply-To"] = draft.in_reply_to
+        if draft.references:
+            message["References"] = " ".join(draft.references)
         body = str(getattr(draft, "body", "") or "")
         stripped = body.lstrip()
         looks_like_html = stripped.startswith("<") and "</" in body
