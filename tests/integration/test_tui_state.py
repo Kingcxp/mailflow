@@ -378,6 +378,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         await app.query_one(ActionsPane).refresh_actions()
         assert "Dismiss me" not in text(app, "#mail-actions")
         assert app.query_one("#actions-table", DataTable).row_count == 0
+        assert app.query_one("#actions-status", Button).disabled
         assert not (await view.get_mail("target")).action_items
         assert not (await service.runtime._approaching_actions(now, 1, now=now))
         # Visibility is a view; the saved analysis remains available for reanalysis.
@@ -665,6 +666,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
 
 async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any) -> None:
     service, view, app, _emit, _failures = host
+    task = await service.add_action("Finish review")
     for index in range(3):
         await service.storage.save_mail(make_record(f"select-{index}", subject=f"Select {index}"))
     async with app.run_test(size=(80, 24)) as pilot:
@@ -697,3 +699,21 @@ async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any)
         await settle(pilot)
         assert not service.snapshot().analysis_paused
         assert not view.snapshot().analysis_paused
+        app.query_one(TabbedContent).active = "tab-actions"
+        status = app.query_one("#actions-status", Button)
+        status.press()
+        await until(pilot, lambda: bool(app.screen.query("#workflow-choice")))
+        assert status.disabled
+        app.screen.query_one("#workflow-apply", Button).press()
+        await settle(pilot)
+        assert not await service.list_actions() and status.disabled
+        app.query_one("#actions-range", Select).value = "completed"
+        await settle(pilot)
+        assert keys(app.query_one("#actions-table", DataTable)) == [task.item_id]
+        status.press()
+        await until(pilot, lambda: bool(app.screen.query("#workflow-choice")))
+        app.screen.query_one("#workflow-choice", Select).value = "reopen_tasks"
+        app.screen.query_one("#workflow-apply", Button).press()
+        await settle(pilot)
+        assert (await service.list_actions())[0].item_id == task.item_id
+        assert status.disabled

@@ -2715,12 +2715,14 @@ class ActionsPane(Vertical):
                 self._service.t("tui.btn_edit"),
                 id="actions-edit",
                 variant="primary",
+                disabled=True,
             )
-            yield Button(self._service.t("ux.task_operations"), id="actions-status")
+            yield Button(self._service.t("ux.task_operations"), id="actions-status", disabled=True)
             yield Button(
                 self._service.t("tui.btn_delete_todo"),
                 id="actions-delete",
                 variant="error",
+                disabled=True,
             )
         yield Static(self._service.t("tui.empty"), id="actions-hint")
 
@@ -2938,6 +2940,9 @@ class ActionsPane(Vertical):
         if edit is not None:
             edit.tooltip = self._service.t("tui.selection_current_help")
             edit.disabled = self._delete_busy or self._selected_item() is None
+        status = self.query_one_optional("#actions-status", Button)
+        if status is not None:
+            status.disabled = self._delete_busy or not (count or self._selected_item())
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             message = self._action_status
@@ -3040,8 +3045,12 @@ class ActionsPane(Vertical):
 
     async def _handle_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "actions-status":
+            if self._delete_busy:
+                return
+            self._delete_busy = True
+            self._sync_action_controls()
             self.run_worker(
-                self._change_task_status(),
+                self._run_task_status(),
                 exclusive=True,
                 group="actions-status",
                 exit_on_error=False,
@@ -3085,6 +3094,14 @@ class ActionsPane(Vertical):
             exit_on_error=False,
         )
 
+    async def _run_task_status(self) -> None:
+        try:
+            await self._change_task_status()
+        finally:
+            self._delete_busy = False
+            if self.is_mounted:
+                self._sync_action_controls()
+
     async def _change_task_status(self) -> None:
         from datetime import timedelta
 
@@ -3112,16 +3129,19 @@ class ActionsPane(Vertical):
                 + timedelta(hours=1 if choice == "snooze_hour" else 24),
                 reminder_enabled=True,
             )
-        failed = success = 0
+        failed: set[str] = set()
+        success = 0
         for item_id in ids:
             try:
                 await self._service.edit_action(item_id, **values)
                 success += 1
             except Exception as exc:
                 logger.warning("task update %s: %s", item_id, exc)
-                failed += 1
+                failed.add(item_id)
+        if table is not None:
+            table.set_checks(failed)
         self._action_status = self._service.t(
-            "ux.batch_result", success=success, failed=failed, skipped=0
+            "ux.batch_result", success=success, failed=len(failed), skipped=0
         )
         await self.refresh_actions()
         self.query_one("#actions-hint", Static).update(self._action_status)
