@@ -33,7 +33,7 @@ from mailflow_tui.app import (
     RuntimePane,
 )
 from mailflow_tui.confirm import ConfirmModal
-from mailflow_tui.mail_workflows import MailReader
+from mailflow_tui.mail_workflows import DraftsScreen, MailReader
 from mailflow_tui.remote import RemoteServiceAdapter
 from mailflow_tui.widgets import Input as EditingInput
 from mailflow_tui.widgets import SearchToggle, SelectionTable, ShortcutHelp
@@ -592,6 +592,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         )
         assert isinstance(app.screen, ReplyModal)
         assert app.screen.query_one("#reply-body", TextArea).text == "I will attend."
+
         assert len(cast(MemoryStorage, service.storage).drafts) == 1
         draft_screen = app.screen
         draft_screen.query_one("#reply-body", TextArea).text = "My unfinished reply"
@@ -639,6 +640,27 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         await settle(pilot)
         assert isinstance(app.screen, ReplyModal)
         assert app.screen.query_one("#reply-body", TextArea).text == "I will attend."
+        await pilot.press("escape")
+        await settle(pilot)
+        drafts = DraftsScreen(cast(Any, view))
+        app.push_screen(drafts)
+        await settle(pilot)
+        draft_search = drafts.query_one("#draft-search", Input)
+        draft_search.value = "My unfinished reply"
+        await settle(pilot)
+        assert drafts.query_one("#draft-table", DataTable).row_count == 1
+        assert "My unfinished reply" in drafts.query_one("#draft-body", TextArea).text
+        assert drafts.query_one("#draft-continue", Button).disabled
+        drafts.query_one("#draft-filter", Select).value = "unsent"
+        await settle(pilot)
+        assert drafts.query_one("#draft-table", DataTable).row_count == 0
+        assert drafts.query_one("#draft-body", TextArea).text == ""
+        assert drafts.query_one("#draft-continue", Button).disabled
+        draft_search.value = ""
+        await settle(pilot)
+        assert drafts.query_one("#draft-table", DataTable).row_count == 1
+        assert "I will attend." in drafts.query_one("#draft-body", TextArea).text
+        assert not drafts.query_one("#draft-continue", Button).disabled
 
 
 async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any) -> None:

@@ -542,6 +542,7 @@ class DraftsScreen(WorkflowScreen):
         table.clear()
         mode = str(cast(Select[str], self.query_one("#draft-filter", Select)).value)
         query = self.query_one("#draft-search", Input).value.strip().casefold()
+        zone = ZoneInfo(self.service.config.general.timezone)
         for row in self.rows.values():
             if (
                 query
@@ -550,17 +551,18 @@ class DraftsScreen(WorkflowScreen):
             ):
                 continue
             if (mode == "sent" and row.state.value != "sent") or (
-                mode == "unsent" and row.state.value == "sent"
+                mode == "unsent" and row.state.value in {"sent", "cancelled"}
             ):
                 continue
             table.add_row(
                 row.subject,
                 row.account_id,
                 self.t("reply.state_" + row.state.value),
-                row.updated_at.strftime("%Y-%m-%d %H:%M"),
+                row.updated_at.astimezone(zone).strftime("%Y-%m-%d %H:%M"),
                 key=row.draft_id,
             )
         view.restore(table)
+        self._show_selected()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "draft-search":
@@ -571,14 +573,24 @@ class DraftsScreen(WorkflowScreen):
             self.render_rows()
 
     def on_data_table_row_highlighted(self, event: Any) -> None:
-        row = self.rows.get(str(event.row_key.value))
-        if row:
-            self.query_one("#draft-body", TextArea).load_text(f"{row.to.display}\n\n{row.body}")
-            self.query_one("#draft-continue", Button).disabled = row.state.value in {
-                "sent",
-                "cancelled",
-                "sending",
-            }
+        if event.data_table.id == "draft-table":
+            self._show_selected()
+
+    def _show_selected(self) -> None:
+        table = cast(DataTable[Any], self.query_one("#draft-table", DataTable))
+        row = (
+            self.rows.get(str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value))
+            if table.row_count
+            else None
+        )
+        self.query_one("#draft-body", TextArea).load_text(
+            f"{row.to.display}\n\n{row.body}" if row else ""
+        )
+        self.query_one("#draft-continue", Button).disabled = row is None or row.state.value in {
+            "sent",
+            "cancelled",
+            "sending",
+        }
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "draft-close":
