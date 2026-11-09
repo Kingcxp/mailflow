@@ -1193,6 +1193,7 @@ class MailPane(Vertical):
         reviewed = await self._ask_screen(SmartActionReviewModal(self._service, operations))
         if reviewed is None:
             result.pending.clear()
+            self._smart_retry = None
             self._pending_status_hint = self._service.t("tui.smart_changes_cancelled")
             await self.refresh_mail()
             return
