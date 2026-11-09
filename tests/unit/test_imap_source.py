@@ -44,6 +44,9 @@ class TestIMAPMailSource:
         assert mail.body_text == "Hello body"
         assert mail.account_id == "acct-1"
         assert mail.date.utcoffset() is not None
+        assert mail.reply_to is None
+        blank_reply_to = parse_mime(b"Reply-To: undisclosed-recipients:;\r\n" + raw, "acct-1")
+        assert blank_reply_to.reply_to is None
 
     def test_parse_mime_html_preferred(self) -> None:
         from mailflow_mail_imap.plugin import parse_mime

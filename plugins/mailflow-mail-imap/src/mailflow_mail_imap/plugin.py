@@ -258,6 +258,7 @@ def _parse_mime(
     message = message_from_bytes(raw)
     subject = _decode(message.get("Subject")) or "(no subject)"
     sender = _mail_address(message.get("From"))
+    reply_to = _mail_address(message.get("Reply-To"))
     recipients = [
         MailAddress(name=_decode(name), address=address)
         for name, address in getaddresses(message.get_all("To") or [])
@@ -284,7 +285,7 @@ def _parse_mime(
             account_id=account_id,
             subject=subject,
             sender=sender,
-            reply_to=_mail_address(message.get("Reply-To")) if message.get("Reply-To") else None,
+            reply_to=reply_to if reply_to.address else None,
             recipients=recipients,
             cc=cc,
             date=date,
