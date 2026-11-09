@@ -1279,6 +1279,7 @@
       "save_path": "Save to",
       "download": "Download",
       "open_saved": "Open saved file",
+      "attachment_open_unavailable": "This terminal has no desktop file opener. Use the saved path to access the file.",
       "no_attachments": "This mail has no attachments.",
       "downloading": "Fetching attachment…",
       "overwrite": "Replace the existing file at {path}?",

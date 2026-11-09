@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shutil
+import sys
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -23,6 +26,19 @@ from textual.widgets import Button, Checkbox, DataTable, Select, Static
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.view_state import TableView
 from mailflow_tui.widgets import Input, SafeSelect, SelectionTable, TextArea
+
+
+def _save_attachment(target: Path, data: bytes) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, suffix=".part", delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(data)
+        temporary.replace(target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 class WorkflowScreen(ModalScreen[Any]):
@@ -283,6 +299,14 @@ class AttachmentsScreen(WorkflowScreen):
         super().__init__(service)
         self.record = record
         self.saved: Path | None = None
+        self.busy = False
+        self._opener: str | None = None
+        if os.name == "nt":
+            self._opener = "startfile"
+        elif sys.platform == "darwin":
+            self._opener = shutil.which("open")
+        elif os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+            self._opener = shutil.which("xdg-open")
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -301,7 +325,14 @@ class AttachmentsScreen(WorkflowScreen):
                 yield Static("", id="workflow-status", markup=False)
                 with Horizontal():
                     yield Button(self.t("ux.download"), id="attachment-download", variant="primary")
-                    yield Button(self.t("ux.open_saved"), id="attachment-open", disabled=True)
+                    yield Button(
+                        self.t("ux.open_saved"),
+                        id="attachment-open",
+                        disabled=True,
+                        tooltip=self.t("ux.attachment_open_unavailable")
+                        if self._opener is None
+                        else None,
+                    )
                     yield Button(self.t("tui.btn_back"), id="attachment-close")
             else:
                 yield Static(self.t("ux.no_attachments"))
@@ -318,46 +349,74 @@ class AttachmentsScreen(WorkflowScreen):
                 Path.home() / "Downloads" / (name or "attachment")
             )
             self.saved = None
-            self.query_one("#attachment-open", Button).disabled = True
+            self._sync_controls()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "attachment-path":
+            self.saved = None
+            self._sync_controls()
+
+    def _sync_controls(self) -> None:
+        self.query_one("#attachment-download", Button).disabled = self.busy
+        self.query_one("#attachment-choice", Select).disabled = self.busy
+        self.query_one("#attachment-path", Input).disabled = self.busy
+        self.query_one("#attachment-open", Button).disabled = (
+            self.busy or self.saved is None or self._opener is None
+        )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "attachment-close":
             self.dismiss(None)
+        elif self.busy or event.button.disabled:
+            return
         elif event.button.id == "attachment-download":
+            self.busy = True
+            self.saved = None
+            self._sync_controls()
             self.run_worker(self._download(), exclusive=True, exit_on_error=False)
-        elif event.button.id == "attachment-open" and self.saved is not None:
+        elif event.button.id == "attachment-open":
             self.run_worker(self._open(), exclusive=True, exit_on_error=False)
 
     async def _open(self) -> None:
         try:
-            if self.saved is not None:
-                await asyncio.to_thread(os.startfile, str(self.saved))
+            if self.saved is not None and self._opener:
+                if self._opener == "startfile":
+                    await asyncio.to_thread(os.startfile, str(self.saved))
+                else:
+                    process = await asyncio.create_subprocess_exec(
+                        self._opener,
+                        str(self.saved),
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    if await process.wait():
+                        raise OSError("file opener failed")
         except Exception as exc:
             self.status(error_text(exc, self.service.t))
 
     async def _download(self) -> None:
-        button = self.query_one("#attachment-download", Button)
-        button.disabled = True
         self.status(self.t("ux.downloading"))
         try:
-            target_raw = self.query_one("#attachment-path", Input).value
+            target_raw = self.query_one("#attachment-path", Input).value.strip()
+            index = int(str(cast(Select[str], self.query_one("#attachment-choice", Select)).value))
+            if not target_raw:
+                raise ValueError
             target = await asyncio.to_thread(lambda: Path(target_raw).expanduser().resolve())
             if await asyncio.to_thread(target.exists) and not await self.ask(
                 self.confirmation(self.t("ux.overwrite", path=str(target)))
             ):
                 self.status(self.t("ux.cancelled"))
                 return
-            index = int(str(cast(Select[str], self.query_one("#attachment-choice", Select)).value))
             data = await self.service.fetch_attachment(self.record.record_id, index)
-            await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
-            await asyncio.to_thread(target.write_bytes, data)
+            await asyncio.to_thread(_save_attachment, target, data)
             self.saved = target
-            self.query_one("#attachment-open", Button).disabled = False
             self.status(self.t("ux.downloaded", path=str(target)))
         except Exception as exc:
             self.status(error_text(exc, self.service.t))
         finally:
-            button.disabled = False
+            self.busy = False
+            if self.is_mounted:
+                self._sync_controls()
 
 
 class TrashScreen(WorkflowScreen):

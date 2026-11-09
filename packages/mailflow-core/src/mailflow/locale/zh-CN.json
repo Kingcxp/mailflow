@@ -1279,6 +1279,7 @@
       "save_path": "保存路径",
       "download": "下载",
       "open_saved": "打开已保存文件",
+      "attachment_open_unavailable": "此终端没有桌面文件打开功能，请通过保存路径访问文件。",
       "no_attachments": "这封邮件没有附件。",
       "downloading": "正在获取附件……",
       "overwrite": "是否覆盖已有文件：{path}？",

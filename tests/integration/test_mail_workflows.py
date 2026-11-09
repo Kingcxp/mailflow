@@ -18,7 +18,7 @@ from mailflow.contracts import (
     ProcessorResult,
     ToolCall,
 )
-from mailflow.domain import ActionItem, MailAnalysis, MailRecord, Urgency
+from mailflow.domain import ActionItem, Attachment, MailAnalysis, MailMessage, MailRecord, Urgency
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.mail_query import MailQuery
@@ -30,13 +30,15 @@ from mailflow.service import MailFlowService
 from mailflow_server.app import create_app
 from mailflow_server.client import RemoteClient, RemoteError
 from mailflow_storage_sqlite.plugin import SQLiteStorage
-from mailflow_tui.mail_workflows import MailReader, TrashScreen
+from mailflow_testkit.fakes import FakeMailSource
+from mailflow_tui.confirm import ConfirmModal
+from mailflow_tui.mail_workflows import AttachmentsScreen, MailReader, TrashScreen
 from mailflow_tui.remote import RemoteServiceAdapter
 from textual.app import App
-from textual.widgets import Button, TextArea
+from textual.widgets import Button, Input, Select, TextArea
 
 from mailflow_test_support.commands import make_record
-from mailflow_test_support.ui import mock_http_client
+from mailflow_test_support.ui import mock_http_client, until
 
 
 @pytest.fixture
@@ -284,12 +286,28 @@ async def test_task_notification_failure_retries_without_repeating_success(
     assert (await service.list_actions())[0].reply_task
 
 
-async def test_reader_reaches_end_and_trash_restore_changes_mailbox(
+async def test_mail_read_download_and_trash_recovery(
     service: MailFlowService,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     record = make_record("long")
     record.mail.body_text = "a" * 21000 + "END OF ORIGINAL"
     record.mail.body_html = ""
+    record.mail.attachments = [Attachment(filename="first.txt"), Attachment(filename="second.txt")]
+    entered, release, cancelled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    class Source(FakeMailSource):
+        async def fetch_attachment(self, mail: MailMessage, index: int) -> bytes:
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return b"FIRST" if index == 0 else b"SECOND"
+
+    service.sources[record.mail.account_id] = Source()
     await service.storage.save_mail(record)
     app = App[None]()
     async with app.run_test(size=(110, 40)) as pilot:
@@ -300,6 +318,63 @@ async def test_reader_reaches_end_and_trash_restore_changes_mailbox(
         await pilot.pause()
         assert "END OF ORIGINAL" in reader.query_one("#reader-body", TextArea).text
         reader.query_one("#reader-close", Button).press()
+        await pilot.pause()
+        target = tmp_path / "downloads" / "first.txt"
+        attachments = AttachmentsScreen(service, record)
+        app.push_screen(attachments)
+        await pilot.pause()
+        attachments.query_one("#attachment-path", Input).value = str(target)
+        attachments.query_one("#attachment-download", Button).press()
+        await asyncio.wait_for(entered.wait(), 1)
+        assert attachments.query_one("#attachment-choice", Select).disabled
+        assert attachments.query_one("#attachment-path", Input).disabled
+        attachments.query_one("#attachment-close", Button).press()
+        await asyncio.wait_for(cancelled.wait(), 1)
+        assert not target.exists()
+        attachments = AttachmentsScreen(service, record)
+        app.push_screen(attachments)
+        await pilot.pause()
+        attachments.query_one("#attachment-path", Input).value = str(target)
+        release.set()
+        attachments.query_one("#attachment-download", Button).press()
+        await until(pilot, lambda: attachments.saved == target)
+        assert target.read_bytes() == b"FIRST"
+        assert not list(target.parent.glob("*.part"))
+        attachments.query_one("#attachment-choice", Select).value = "1"
+        await pilot.pause()
+        assert attachments.query_one("#attachment-open", Button).disabled
+        attachments.query_one("#attachment-path", Input).value = str(target)
+        attachments.query_one("#attachment-download", Button).press()
+        await until(
+            pilot,
+            lambda: isinstance(app.screen, ConfirmModal) and app.screen.is_mounted,
+        )
+        app.screen.query_one("#confirm-cancel", Button).press()
+        await until(pilot, lambda: not attachments.busy)
+        assert target.read_bytes() == b"FIRST"
+        with monkeypatch.context() as patch:
+
+            def refuse_replace(*args: Any, **kwargs: Any) -> Any:
+                raise PermissionError("private file system detail")
+
+            patch.setattr(Path, "replace", refuse_replace)
+            attachments.query_one("#attachment-download", Button).press()
+            await until(
+                pilot, lambda: isinstance(app.screen, ConfirmModal) and app.screen.is_mounted
+            )
+            app.screen.query_one("#confirm-run", Button).press()
+            await until(pilot, lambda: not attachments.busy)
+            assert target.read_bytes() == b"FIRST"
+            assert not list(target.parent.glob("*.part"))
+            assert service.t("errors.access") in str(
+                attachments.query_one("#workflow-status").render()
+            )
+        attachments.query_one("#attachment-download", Button).press()
+        await until(pilot, lambda: isinstance(app.screen, ConfirmModal) and app.screen.is_mounted)
+        app.screen.query_one("#confirm-run", Button).press()
+        await until(pilot, lambda: attachments.saved == target)
+        assert target.read_bytes() == b"SECOND"
+        attachments.query_one("#attachment-close", Button).press()
         await pilot.pause()
         await service.batch_mail(["long"])
         trash = TrashScreen(service)
