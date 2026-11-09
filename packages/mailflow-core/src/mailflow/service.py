@@ -1220,7 +1220,7 @@ class MailFlowService:
                     "reminder_key": item.reminder_key,
                     "completed_at": item.completed_at
                     if completed is None
-                    else (utcnow() if completed else None),
+                    else ((item.completed_at or utcnow()) if completed else None),
                     "reminder_enabled": item.reminder_enabled
                     if reminder_enabled is None
                     else reminder_enabled,

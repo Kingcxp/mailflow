@@ -491,6 +491,12 @@ class TestActionMutations:
         assert updated.location == "Office 5" and updated.url == "https://example.com/updated"
         cleared = await service.edit_action(item.item_id, clear_end=True)
         assert cleared.due_end is None
+        completed = await service.edit_action(item.item_id, completed=True)
+        edited = await service.edit_action(item.item_id, summary="Filed form", completed=True)
+        assert edited.completed_at == completed.completed_at
+        assert not await service.list_actions()
+        reopened = await service.edit_action(item.item_id, completed=False)
+        assert reopened.completed_at is None and (await service.list_actions())[0] == reopened
 
     async def test_action_times_must_be_aware_and_end_after_start(self) -> None:
         service = self.make_service()

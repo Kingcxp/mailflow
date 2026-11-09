@@ -122,6 +122,16 @@ class TodoCreateModal(ModalScreen[bool]):
         tz = ZoneInfo(self._service.config.general.timezone)
         due_at = local_due.replace(tzinfo=tz) if local_due else None
         due_end = local_end.replace(tzinfo=tz) if local_end is not None else None
+        if self._item is not None:
+            for field, raw in (("due_at", due_raw), ("due_end", end_raw)):
+                original = getattr(self._item, field)
+                if original is not None and raw == original.astimezone(tz).strftime(
+                    "%Y-%m-%d %H:%M"
+                ):
+                    if field == "due_at":
+                        due_at = original
+                    else:
+                        due_end = original
         if due_end is not None and (due_at is None or due_end <= due_at):
             error.update(f"[yellow]{self._t('tui.todo_invalid_window')}[/yellow]")
             return
@@ -198,3 +208,6 @@ class TodoEditModal(TodoCreateModal):
             else item.time_range_in(self._service.config.general.timezone).split(" ~ ", 1)[-1]
         )
         self.query_one("#todo-type", Input).value = item.action_type
+        self.query_one("#todo-notes", Input).value = item.notes
+        self.query_one("#todo-location", Input).value = item.location
+        self.query_one("#todo-url", Input).value = item.url

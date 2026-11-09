@@ -730,6 +730,8 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             due_input.value = "2099-01-01 09:00"
             notes_input = app.screen.query_one("#todo-notes", Input)
             notes_input.value = "每周例会前"
+            app.screen.query_one("#todo-location", Input).value = "会议室 2"
+            app.screen.query_one("#todo-url", Input).value = "https://example.com/report"
             app.screen.query_one("#todo-save", Button).press()
             await pilot.pause(0.3)
 
@@ -741,6 +743,11 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             assert item.summary == "给导师发进度报告"
             assert item.mail_id == ""  # user-created: no source mail
             assert item.due_at is not None and item.due_at.year == 2099
+            item = await service.edit_action(
+                item.item_id,
+                due_at=item.due_at.replace(second=45),
+                due_end=item.due_at.replace(hour=11, second=30),
+            )
 
             # shows up in the actions table
             table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
@@ -773,7 +780,6 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             edit_summary = app.screen.query_one("#todo-summary", Input)
             assert str(edit_summary.value) == "给导师发进度报告"  # pre-filled
             edit_summary.value = "给导师发周报"
-            app.screen.query_one("#todo-due", Input).value = "2099-02-03 10:30"
             app.screen.query_one("#todo-save", Button).press()
             await _wait_until(
                 pilot,
@@ -782,7 +788,11 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             edited = await service.storage.list_custom_actions()
             assert [item.summary for item in edited] == ["给导师发周报"]
             assert edited[0].due_at is not None
-            assert edited[0].due_at.year == 2099 and edited[0].due_at.month == 2
+            assert edited[0].due_at == item.due_at and edited[0].due_end == item.due_end
+            assert edited[0].reminder_key == item.reminder_key
+            assert edited[0].notes == "每周例会前"
+            assert edited[0].location == "会议室 2"
+            assert edited[0].url == "https://example.com/report"
             # the table shows the edited row without a manual refresh
             await _wait_until(
                 pilot,
