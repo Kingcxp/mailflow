@@ -211,7 +211,9 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
         await service.stop()
 
 
-async def test_smart_query_task_crud_requires_confirmation(tmp_path: Path) -> None:
+async def test_smart_query_task_crud_requires_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Queries create, find, edit and delete ordinary tasks through one confirmation."""
     import queue
 
@@ -321,7 +323,31 @@ async def test_smart_query_task_crud_requires_confirmation(tmp_path: Path) -> No
             assert prompt is not None, "a staged schedule entry must ask before it is added"
             # nothing exists until the user confirms
             assert await service.storage.list_custom_actions() == []
+            apply_plan = service.apply_smart_plan
+
+            async def offline(*args: Any, **kwargs: Any) -> Any:
+                raise ConnectionError("private connection details")
+
+            monkeypatch.setattr(service, "apply_smart_plan", offline)
             prompt.query_one("#smart-review-apply", Button).press()
+            await until(
+                pilot,
+                lambda: (
+                    service.t("errors.connection")
+                    in str(app.query_one("#mail-empty-hint", Static).render())
+                ),
+            )
+            assert not await service.storage.list_custom_actions()
+            assert "private connection details" not in str(
+                app.query_one("#mail-empty-hint", Static).render()
+            )
+            monkeypatch.setattr(service, "apply_smart_plan", apply_plan)
+            app.query_one("#btn-more", Button).press()
+            await until(pilot, lambda: bool(app.screen.query("#workflow-choice")))
+            app.screen.query_one("#workflow-choice", Select).value = "retry_changes"
+            app.screen.query_one("#workflow-apply", Button).press()
+            await until(pilot, lambda: modal() is not None)
+            app.screen.query_one("#smart-review-apply", Button).press()
             for _ in range(120):
                 if await service.storage.list_custom_actions():
                     break

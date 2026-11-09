@@ -1205,10 +1205,18 @@ class MailPane(Vertical):
         """Apply confirmed changes once and show failures without aborting the batch."""
         applied = failed = deleted = 0
         selected = list(operations if operations is not None else result.pending)
-        result.pending.clear()
         errors: list[str] = []
         if result.plan_id:
-            outcome = await self._service.apply_smart_plan(result.plan_id, selected)
+            try:
+                outcome = await self._service.apply_smart_plan(result.plan_id, selected)
+            except Exception as exc:
+                logger.warning("smart plan confirmation failed (%s)", type(exc).__name__)
+                result.pending = selected
+                self._smart_retry = result
+                self._smart_action_result = self._smart_review_result = result
+                self._pending_status_hint = error_text(exc, self._service.t)
+                await self.refresh_mail()
+                return
             applied = int(outcome["applied"])
             failed = len(outcome["failed"])
             deleted = len(outcome["deleted"])
@@ -1217,6 +1225,7 @@ class MailPane(Vertical):
             self._smart_retry = result if failed else None
             errors.extend(str(detail) for detail in outcome["errors"])
         else:
+            result.pending.clear()
             for operation in selected:
                 try:
                     changed = await self._apply_operation(operation.tool, operation.arguments)
