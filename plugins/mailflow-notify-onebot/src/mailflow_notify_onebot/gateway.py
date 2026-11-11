@@ -928,9 +928,14 @@ class NapCatProvisioner(GatewayFiles):
         while asyncio.get_running_loop().time() < deadline:
             try:
                 async with httpx.AsyncClient(timeout=3.0) as client:
-                    response = await client.get(url)
-                if response.status_code < 500:
-                    return True
+                    token = self._tokens.get(instance_id, "")
+                    headers = {"Authorization": f"Bearer {token}"} if token else {}
+                    response = await client.post(f"{url}/get_login_info", headers=headers)
+                    response.raise_for_status()
+                    payload: Any = response.json()
+                    check_result(payload)
+                    if isinstance(payload.get("data"), dict) and payload["data"].get("user_id"):
+                        return True
             except Exception:
                 pass
             await asyncio.sleep(1.0)

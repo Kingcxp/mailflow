@@ -498,6 +498,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     async def _wait_qr_tick(self) -> None:
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self._manual_login.wait(), timeout=5.0)
+        self._manual_login.clear()
 
     async def _qr_loop(self, service: MailFlowService, provider: str) -> None:
         """Poll the QR endpoint until the session logs in or 5 min passes.
@@ -511,7 +512,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._log("INFO", self._t("tui.bots_guide_qr_wait", provider=self._provider))
         self._set_status(self._t("tui.bots_guide_qr_pending", provider=self._provider), "yellow")
         # first AppImage launch is slow (extract + QQ boot): 5 minutes
-        deadline = time.monotonic() + 300
+        deadline = time.monotonic() + float(self._options.get("login_timeout_seconds", 300))
         last_qr = ""
         self._logged_no_qr = False
         while time.monotonic() < deadline and not getattr(self, "_qr_done", False):
@@ -602,17 +603,17 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         the endpoint until it responds or a short timeout elapses, so the
         saved config is immediately usable."""
         endpoint = (self._result or {}).get("endpoint", "")
-        if not endpoint:
-            return True
         self._log("INFO", self._t("tui.bots_guide_endpoint_checking", endpoint=endpoint))
-        import httpx
-
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             try:
-                async with httpx.AsyncClient(timeout=3.0) as client:
-                    resp = await client.get(endpoint)
-                if resp.status_code < 500:
+                state = await self._service.gateway_check(self._provider, self._instance_id)
+                if (
+                    state.status == "running"
+                    and state.extra.get("logged_in") is not False
+                    and state.extra.get("receiving") is not False
+                    and not state.error
+                ):
                     self._log("INFO", self._t("tui.bots_guide_endpoint_ready", endpoint=endpoint))
                     return True
             except Exception:
@@ -633,12 +634,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             # manual confirmation: the phone already logged in; stop the
             # QR polling and enable Done — Done remains the explicit
             # final confirmation that saves the notifier
-            self._qr_done = True
             self._manual_login.set()
             event.button.disabled = True
-            self._set_qr(self._logged_in_banner())
-            self._log("INFO", self._t("tui.bots_guide_logged_in"))
-            self._set_status(self._t("tui.bots_guide_logged_in"), "green")
             return
         if event.button.id == "guide-cancel":
             await self._cancel_and_cleanup()

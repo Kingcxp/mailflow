@@ -37,6 +37,7 @@ from mailflow.config import (
     write_config,
 )
 from mailflow.contracts import (
+    GatewayInstance,
     HistoryCapableSource,
     LLMBackend,
     LLMRouter,
@@ -3113,6 +3114,9 @@ Return every candidate in this batch."""
     async def gateway_qr(self, provider: str, instance_id: str) -> str:
         """QR payload for the login step ('' when not supported)."""
         return await self.gateways.qr(provider, instance_id)
+
+    async def gateway_check(self, provider: str, instance_id: str) -> GatewayInstance:
+        return await self.gateways.check(provider, instance_id)
 
     @admin_operation
     async def gateway_shutdown(self, provider: str, instance_id: str) -> None:

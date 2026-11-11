@@ -82,6 +82,10 @@ async def test_failed_guide_cannot_save_and_can_be_cancelled(
         async def gateway_qr(self, provider: str, instance_id: str) -> str:
             return "__MAILFLOW_LOGGED_IN__"
 
+        async def gateway_check(self, provider: str, instance_id: str) -> Any:
+            clock.now += 31.0
+            return SimpleNamespace(status="starting", extra={"logged_in": False}, error="")
+
         async def gateway_shutdown(self, provider: str, instance_id: str) -> None:
             self.shutdowns.append((provider, instance_id))
 
@@ -107,7 +111,7 @@ async def test_failed_guide_cannot_save_and_can_be_cancelled(
         await pilot.click("#guide-done")
         assert app.screen is guide and results == []
         assert service.shutdowns == [("wechatpadpro", "one")]
-        assert requests == ([] if failure == "qr-timeout" else ["http://fake-endpoint"])
+        assert requests == []  # Readiness uses the platform session, not the landing page.
 
         await pilot.press("escape")
         await until(pilot, lambda: app.screen is not guide)

@@ -734,6 +734,20 @@ class GatewayManager:
         except Exception as exc:
             return f"error: {exc}"
 
+    async def check(self, provider: str, instance_id: str) -> GatewayInstance:
+        """Probe the platform session, rather than an arbitrary HTTP landing page."""
+        current = await bounded(
+            self.provisioner(provider).status(instance_id),
+            timeout_seconds=_PROBE_TIMEOUT_SECONDS,
+            label=f"gateway {provider}.{instance_id} check",
+        )
+        previous = self.instance(provider, instance_id)
+        if previous is not None:
+            current.extra = {**previous.extra, **current.extra}
+        self._instances[self._key(provider, instance_id)] = current
+        await self._save_state(current)
+        return current
+
     async def provision(
         self,
         provider: str,
