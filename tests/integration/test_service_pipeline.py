@@ -170,6 +170,16 @@ async def wait_until(predicate: Any, timeout_seconds: float = 5.0) -> None:
 async def test_full_service_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[Any] = []
     notified: list[MailRecord] = []
+    release_analysis = asyncio.Event()
+    original_chat = CapturingLLM.chat
+
+    async def delayed_chat(
+        backend: CapturingLLM, messages: list[dict[str, str]], **kwargs: Any
+    ) -> LLMCompletion:
+        await release_analysis.wait()
+        return await original_chat(backend, messages, **kwargs)
+
+    monkeypatch.setattr(CapturingLLM, "chat", delayed_chat)
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     fixture_plugin = ServiceFixturePlugin(captured, notified)
     for plugin in (fixture_plugin, storage_plugin, notify_plugin):
@@ -188,8 +198,19 @@ async def test_full_service_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
         # -- pipeline: fake source -> queue -> rules+llm -> storage -------------
 
-        async def mails_processed() -> bool:
+        async def mail_received() -> bool:
             return await service.count_mails() == 1
+
+        await wait_until(mail_received)
+        received = (await service.list_mails())[0]
+        assert received.mail.message_id == "fixture-1"
+        assert received.analysis is None
+        assert not notified
+        release_analysis.set()
+
+        async def mails_processed() -> bool:
+            records = await service.list_mails()
+            return len(records) == 1 and records[0].analysis_state == "ready"
 
         await wait_until(mails_processed)
         record = (await service.list_mails())[0]

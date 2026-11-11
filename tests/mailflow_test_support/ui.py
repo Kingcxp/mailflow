@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from inspect import isawaitable
 from typing import Any
 
 import httpx
@@ -19,7 +20,17 @@ def mock_http_client(monkeypatch: pytest.MonkeyPatch, transport: httpx.AsyncBase
     monkeypatch.setattr(httpx, "AsyncClient", client)
 
 
-async def until(pilot: Any, condition: Callable[[], bool], *, deadline_seconds: float = 8) -> None:
+async def until(
+    pilot: Any,
+    condition: Callable[[], bool | Awaitable[bool]],
+    *,
+    deadline_seconds: float = 8,
+) -> None:
     async with asyncio.timeout(deadline_seconds):
-        while not condition():
+        while True:
+            result = condition()
+            if isawaitable(result):
+                result = await result
+            if result:
+                return
             await pilot.pause(0.05)

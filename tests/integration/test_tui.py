@@ -727,7 +727,10 @@ async def test_reply_letter_template_and_toolbar(
             record = next(r for r in await service.list_mails() if r.mail.message_id == "m-id")
             pane._selected_id = record.record_id  # pyright: ignore[reportPrivateUsage]
             cast(Button, app.query_one("#btn-reply")).press()
-            await pilot.pause(0.1)
+            await until(
+                pilot,
+                lambda: isinstance(app.screen, ReplyModal) and app.screen.is_mounted,
+            )
             assert isinstance(app.screen, ReplyModal)
             textarea = app.screen.query_one("#reply-body", TextArea)
             # apply the Chinese letter template: structure + auto date + alignment
@@ -751,11 +754,20 @@ async def test_reply_letter_template_and_toolbar(
             assert "text-align:right" in textarea.text
             # saving persists the templated body
             cast(Button, app.screen.query_one("#reply-save")).press()
-            await pilot.pause(0.1)
             modal = app.screen
             assert isinstance(modal, ReplyModal)
             draft = modal._draft  # pyright: ignore[reportPrivateUsage]
             assert draft is not None
+            draft_id = draft.draft_id
+
+            async def draft_saved(state: ReplyState) -> bool:
+                current = await service.get_draft(draft_id)
+                return (
+                    current is not None and current.state is state and current.body == textarea.text
+                )
+
+            await until(pilot, lambda: draft_saved(ReplyState.DRAFT))
+            await until(pilot, lambda: not modal.query_one("#reply-save", Button).disabled)
             stored = await service.get_draft(draft.draft_id)
             assert stored is not None and stored.body == textarea.text
             await pilot.press("escape")
@@ -765,6 +777,7 @@ async def test_reply_letter_template_and_toolbar(
                 pilot,
                 lambda: (
                     isinstance(app.screen, ReplyModal)
+                    and app.screen.is_mounted
                     and app.screen.query_one("#reply-body", TextArea).text == stored.body
                 ),
             )
@@ -775,13 +788,13 @@ async def test_reply_letter_template_and_toolbar(
             assert len(await service.storage.list_drafts(record.record_id)) == 1
             # Preparing saves the editor contents, and later edits disable confirm.
             modal.query_one("#reply-prepare", Button).press()
-            await pilot.pause(0.1)
+            await until(pilot, lambda: not modal.query_one("#reply-confirm", Button).disabled)
             assert not modal.query_one("#reply-confirm", Button).disabled
             textarea.text = "Updated reply from the editor"
-            await pilot.pause(0.05)
+            await until(pilot, lambda: modal.query_one("#reply-confirm", Button).disabled)
             assert modal.query_one("#reply-confirm", Button).disabled
             modal.query_one("#reply-prepare", Button).press()
-            await pilot.pause(0.1)
+            await until(pilot, lambda: not modal.query_one("#reply-confirm", Button).disabled)
             source = service.sources[record.mail.account_id]
             original_send = source.send_reply
 
@@ -790,7 +803,8 @@ async def test_reply_letter_template_and_toolbar(
 
             monkeypatch.setattr(source, "send_reply", fail_send)
             modal.query_one("#reply-confirm", Button).press()
-            await pilot.pause(0.1)
+            await until(pilot, lambda: draft_saved(ReplyState.FAILED))
+            await until(pilot, lambda: not modal.query_one("#reply-prepare", Button).disabled)
             failed = await service.get_draft(draft.draft_id)
             assert failed is not None and failed.state is ReplyState.FAILED
             assert failed.body == textarea.text
@@ -803,6 +817,7 @@ async def test_reply_letter_template_and_toolbar(
                 pilot,
                 lambda: (
                     isinstance(app.screen, ReplyModal)
+                    and app.screen.is_mounted
                     and app.screen.query_one("#reply-body", TextArea).text == failed.body
                 ),
             )
@@ -811,9 +826,9 @@ async def test_reply_letter_template_and_toolbar(
             assert modal.query_one("#reply-body", TextArea).text == failed.body
             monkeypatch.setattr(source, "send_reply", original_send)
             modal.query_one("#reply-prepare", Button).press()
-            await pilot.pause(0.1)
+            await until(pilot, lambda: not modal.query_one("#reply-confirm", Button).disabled)
             modal.query_one("#reply-confirm", Button).press()
-            await pilot.pause(0.1)
+            await until(pilot, lambda: draft_saved(ReplyState.SENT))
             sent = await service.get_draft(draft.draft_id)
             assert sent is not None and sent.state is ReplyState.SENT
             assert modal.query_one("#reply-confirm", Button).disabled
@@ -1332,7 +1347,7 @@ async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path
             purge_dialog: ConfirmModal | None = None
             for _ in range(80):
                 current = app.screen
-                if isinstance(current, ConfirmModal):
+                if isinstance(current, ConfirmModal) and current.is_mounted:
                     purge_dialog = current
                     break
                 await pilot.pause(0.05)
@@ -1360,7 +1375,7 @@ async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path
             reanalyze_dialog: ConfirmModal | None = None
             for _ in range(80):
                 current = app.screen
-                if isinstance(current, ConfirmModal):
+                if isinstance(current, ConfirmModal) and current.is_mounted:
                     reanalyze_dialog = current
                     break
                 await pilot.pause(0.05)
@@ -1383,7 +1398,7 @@ async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path
             double_dialog: ConfirmModal | None = None
             for _ in range(80):
                 current = app.screen
-                if isinstance(current, ConfirmModal) and current.query("#confirm-cancel"):
+                if isinstance(current, ConfirmModal) and current.is_mounted:
                     double_dialog = current
                     break
                 await pilot.pause(0.05)
@@ -1399,7 +1414,7 @@ async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path
             profile_dialog: UserProfileModal | None = None
             for _ in range(80):
                 current = app.screen
-                if isinstance(current, UserProfileModal):
+                if isinstance(current, UserProfileModal) and current.is_mounted:
                     profile_dialog = current
                     break
                 await pilot.pause(0.05)
