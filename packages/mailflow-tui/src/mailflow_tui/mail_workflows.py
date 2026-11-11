@@ -669,7 +669,6 @@ class TaskMenu(MailMenu):
                     (self.t("ux." + key), key)
                     for key in (
                         "complete_tasks",
-                        "reopen_tasks",
                         "mute_tasks",
                         "enable_tasks",
                         "snooze_hour",

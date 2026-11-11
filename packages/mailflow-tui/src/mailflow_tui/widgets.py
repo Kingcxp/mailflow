@@ -278,6 +278,7 @@ class SelectionTable(DataTable[Any]):
         super().__init__(**kwargs)
         self._t = t or I18n().t
         self.checked_keys: set[str] = set()
+        self.unselectable_keys: set[str] = set()
         self._anchor: str | None = None
         self.selection_mode = False
 
@@ -302,6 +303,8 @@ class SelectionTable(DataTable[Any]):
             self._check_range(key)
 
     def check_label(self, key: str) -> Text:
+        if key in self.unselectable_keys:
+            return Text("·", style="dim")
         return Text("[x]" if key in self.checked_keys else "[ ]", style="bold cyan")
 
     def visible_keys(self) -> list[str]:
@@ -311,6 +314,7 @@ class SelectionTable(DataTable[Any]):
         self.set_checks(self.checked_keys & available)
 
     def set_checks(self, keys: set[str]) -> None:
+        keys = keys - self.unselectable_keys
         if keys == self.checked_keys:
             return
         self.checked_keys = set(keys)
@@ -336,7 +340,7 @@ class SelectionTable(DataTable[Any]):
             self.set_checks(self.checked_keys ^ {key})
 
     def action_toggle_all(self) -> None:
-        visible = set(self.visible_keys())
+        visible = set(self.visible_keys()) - self.unselectable_keys
         self.set_checks(
             self.checked_keys - visible
             if visible <= self.checked_keys

@@ -35,6 +35,7 @@ from mailflow.domain import (
     action_time_window,
     actions_duplicate,
     dedupe_actions,
+    reminder_end,
     to_utc,
 )
 from mailflow.errors import error_code, error_text
@@ -1168,7 +1169,7 @@ class MailFlowRuntime:
                 entry.item.snoozed_until is None
                 or to_utc(entry.item.snoozed_until) <= datetime.now(UTC)
             )
-            and action_time_window(entry.item)[1] > datetime.now(UTC)
+            and reminder_end(entry.item, self._config.general.timezone) > datetime.now(UTC)
         }
         active: list[dict[str, Any]] = []
         today = datetime.now(UTC).astimezone(ZoneInfo(self._config.general.timezone)).date()
@@ -1691,7 +1692,7 @@ class MailFlowRuntime:
             if entry.item.completed_at is None
             and entry.item.due_at is not None
             and entry.item.reminder_enabled
-            and action_time_window(entry.item)[1] > to_utc(now or day_start)
+            and reminder_end(entry.item, self._config.general.timezone) > to_utc(now or day_start)
             and (
                 entry.item.snoozed_until is None
                 or to_utc(entry.item.snoozed_until) <= to_utc(now or day_start)
@@ -1716,7 +1717,7 @@ class MailFlowRuntime:
             or item.due_at is None
             or not item.reminder_enabled
             or (item.snoozed_until is not None and item.snoozed_until > now)
-            or action_time_window(item)[1] <= to_utc(now)
+            or reminder_end(item, config.timezone) <= to_utc(now)
         ):
             return 0
         windows = reminder_times(
@@ -1726,6 +1727,8 @@ class MailFlowRuntime:
             config.reminder_hour,
             config.reminder_minute,
         )
+        if item.plan_id:
+            windows = [(to_utc(item.due_at), "period")]
         if item.snoozed_until is not None:
             windows = [(to_utc(item.snoozed_until), "snooze." + item.snoozed_until.isoformat())]
         eligible = sorted(
@@ -1748,7 +1751,11 @@ class MailFlowRuntime:
             display_range = item.time_range_in(config.timezone)
             delivered = await self._deliver_notification(
                 key,
-                self._rt("reminder.push", summary=item.summary, due=display_range)
+                self._rt(
+                    "recurrence.reminder" if item.plan_id else "reminder.push",
+                    summary=item.summary,
+                    due=display_range,
+                )
                 or f"Reminder: {item.summary} ({display_range})",
                 f"{_EVENT_PREFIX}action.reminder",
                 item=item,

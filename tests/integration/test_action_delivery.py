@@ -307,7 +307,7 @@ async def test_ineligible_tasks_stay_visible_without_reminders_or_digest(state: 
     service = make_service(storage, notifier)
     assert await service.runtime.run_reminder_tick() == 0
     assert notifier.sent == []
-    assert len(await service.list_actions_all()) == 1
+    assert len(await service.list_actions_all()) == (0 if state == "completed" else 1)
 
 
 async def test_quiet_import_and_reanalysis_keep_reminder_history_and_local_state() -> None:

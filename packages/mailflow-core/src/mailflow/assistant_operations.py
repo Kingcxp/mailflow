@@ -21,7 +21,15 @@ SCHEMAS: dict[str, tuple[str, dict[str, Any], list[str]]] = {
         {
             "resource": {
                 "type": "string",
-                "enum": ["runtime", "accounts", "models", "plugins", "gateways", "settings"],
+                "enum": [
+                    "runtime",
+                    "accounts",
+                    "models",
+                    "plugins",
+                    "gateways",
+                    "settings",
+                    "plans",
+                ],
             },
             "query": {"type": "string"},
         },
@@ -51,6 +59,18 @@ SCHEMAS: dict[str, tuple[str, dict[str, Any], list[str]]] = {
             "send": {"type": "boolean"},
         },
         ["record_id", "body"],
+    ),
+    "manage_action_plan": (
+        "Propose editing future occurrences or stopping an entire recurring plan; existing outstanding tasks are retained.",
+        {
+            "plan_id": {"type": "string"},
+            "action": {"enum": ["edit", "stop"]},
+            "values": {
+                "type": "object",
+                "description": "Editable template fields: summary, due_at, due_end, category, tags, notes, reminder_enabled and repeat (frequency, weekdays, month_day).",
+            },
+        },
+        ["plan_id", "action"],
     ),
     "update_setting": (
         "Propose changing one existing setting key discovered with inspect_app. Secrets must be edited in settings, never requested in chat.",
@@ -106,6 +126,8 @@ async def stage(
                     for row in rows
                     if query.casefold() in json.dumps(row, ensure_ascii=False).casefold()
                 ]
+        elif resource == "plans":
+            rows = [plan.model_dump(mode="json") for plan in await service.action_plans()]
         elif resource == "accounts":
             rows = [
                 {"id": a.account_id, "email": a.email, "status": a.status} for a in snap.accounts
@@ -166,6 +188,18 @@ async def stage(
         description += f"\n{record.mail.account_id} → {(record.mail.reply_to or record.mail.sender).address}\n{record.mail.subject}\n{args['body']}"
         description += "\n" + service.t(
             "assistant.send_mail" if args.get("send") else "assistant.save_draft"
+        )
+    elif name == "manage_action_plan":
+        plan = next(
+            (p for p in await service.action_plans() if p.plan_id == args.get("plan_id")), None
+        )
+        if plan is None or args.get("action") not in {"stop", "edit"}:
+            raise translated_error(ValueError, service.t, "ux.unsupported")
+        description += (
+            f"\n{plan.template.summary}\n"
+            + service.t("recurrence.whole_plan")
+            + "\n"
+            + json.dumps(args.get("values") or {}, ensure_ascii=False)
         )
     elif name == "update_setting":
         option = service.settings_option(str(args.get("key", "")))
@@ -235,6 +269,10 @@ async def apply(service: MailFlowService, operation: PendingOperation) -> Any:
             draft = await service.prepare_reply(draft.draft_id)
             return await service.confirm_reply(draft.draft_id, draft.token or "")
         return draft
+    elif operation.tool == "manage_action_plan":
+        if args["action"] == "stop":
+            return await service.stop_action_plan(str(args["plan_id"]))
+        return await service.update_action_plan(str(args["plan_id"]), **args.get("values", {}))
     elif operation.tool == "update_setting":
         return await service.set_setting(str(args["key"]), args["value"])
     elif operation.tool == "manage_gateway":

@@ -55,7 +55,7 @@
       "type_meeting": "meeting",
       "type_other": "other",
       "updated": "Action {item_id} updated: {summary} (due {time})",
-      "usage": "action <list [--state open|completed|all]|show <id>|add <summary>|edit <id>|complete <id>|reopen <id>|delete <id>>"
+      "usage": "action <list [--state open|all]|show <id>|add <summary>|edit <id>|complete <id>|delete <id>>"
     },
     "adapter": {
       "header_id": "ADAPTER",
@@ -1176,8 +1176,8 @@
       "hourly_channel_off": "hourly summaries are disabled for this channel",
       "hourly_no_target": "this chat is not a delivery target; subscribe first",
       "hourly_effective_off": "Hourly summaries are OFF: {reason}.",
-      "help_read": "MailFlow — view mail and tasks\n{p} mail list [query]\n{p} mail show <ID|#>\n{p} mail search <need>\n{p} action list [--state open|completed|all]\n{p} action show <ID|#>\n{p} status · {p} hourly\nUse the ID from a notification or list. Numbers refer to your last result in this chat.",
-      "help_admin": "Manage mail and tasks\n{p} mail delete <ID|#> · mail urgency <ID|#> <level|auto>\n{p} action add <summary> [--due \"YYYY-MM-DD HH:MM\"]\n{p} action edit <ID|#> --summary <text> [--due <time|none>] [--reminder on|off] [--snooze <time|none>]\n{p} action complete <ID|#> · action reopen <ID|#> · action delete <ID|#>\n{p} reply create <mail ID|#> → reply show <draft> → reply edit <draft> \"<subject>\" \"<body>\" → reply prepare <draft> → reply confirm <draft> <token>\n{p} subscribe · {p} unsubscribe · {p} hourly on|off\n{p} help for details; {p} cancel stops a pending lookup.",
+      "help_read": "MailFlow — view mail and tasks\n{p} mail list [query]\n{p} mail show <ID|#>\n{p} mail search <need>\n{p} action list [--state open|all]\n{p} action show <ID|#>\n{p} status · {p} hourly\nUse the ID from a notification or list. Numbers refer to your last result in this chat.",
+      "help_admin": "Manage mail and tasks\n{p} mail delete <ID|#> · mail urgency <ID|#> <level|auto>\n{p} action add <summary> [--due \"YYYY-MM-DD HH:MM\"]\n{p} action edit <ID|#> --summary <text> [--due <time|none>] [--reminder on|off] [--snooze <time|none>]\n{p} action complete <ID|#> · action delete <ID|#>\n{p} reply create <mail ID|#> → reply show <draft> → reply edit <draft> \"<subject>\" \"<body>\" → reply prepare <draft> → reply confirm <draft> <token>\n{p} subscribe · {p} unsubscribe · {p} hourly on|off\n{p} help for details; {p} cancel stops a pending lookup.",
       "accepted": "Working on your request. Use {prefix}mailflow cancel to stop it.",
       "cancelled": "Request cancelled. Any completed changes have been kept.",
       "cancel_requested": "Cancellation requested.",
@@ -1469,7 +1469,31 @@
       "operation_manage_gateway": "Change bot connection",
       "use_settings": "Open settings to configure this item or its credentials.",
       "chat_confirm": "Proposed changes:\n{changes}\n\nReply “confirm {token}” or “cancel {token}”. In a group, mention the bot. Confirmation expires in 20 minutes.",
-      "not_running": "No task is running."
+      "not_running": "No task is running.",
+      "operation_manage_action_plan": "Manage recurring plan"
+    },
+    "recurrence": {
+      "category": "Category",
+      "tags": "Tags (comma separated)",
+      "repeat": "Repeat",
+      "once": "One time",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly",
+      "weekdays": "Weekdays: Monday 1 to Sunday 7; blank uses the start date",
+      "month_day": "Day of month (1–31; shorter months use the last day)",
+      "from_due": "Use start date",
+      "whole_plan": "Edit future occurrences; existing outstanding tasks stay unchanged",
+      "stop_plan": "End this plan; keep existing outstanding tasks",
+      "complete_delete": "Complete and permanently remove this occurrence",
+      "need_due": "Choose the first date and time for a recurring plan.",
+      "invalid_days": "Choose weekdays from 1 to 7.",
+      "use_stop": "Use End this plan to stop recurrence.",
+      "cannot_reopen": "Completed occurrences are removed permanently. Create a new task if needed.",
+      "preview": "Future occurrence (preview only)",
+      "plans": "Recurring plans",
+      "stopped": "Plan ended. Existing outstanding tasks have been kept.",
+      "reminder": "Scheduled reminder: {summary} ({due})"
     }
   }
 }

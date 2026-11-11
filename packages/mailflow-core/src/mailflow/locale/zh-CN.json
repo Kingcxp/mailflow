@@ -55,7 +55,7 @@
       "type_meeting": "会议",
       "type_other": "其他",
       "updated": "已更新日程 {item_id}：{summary}（时间 {time}）",
-      "usage": "action <list [--state open|completed|all]|show <id>|add <事项>|edit <id>|complete <id>|reopen <id>|delete <id>>"
+      "usage": "action <list [--state open|all]|show <id>|add <事项>|edit <id>|complete <id>|delete <id>>"
     },
     "adapter": {
       "header_id": "适配器",
@@ -1176,7 +1176,7 @@
       "hourly_channel_off": "该渠道尚未开启每小时摘要",
       "hourly_no_target": "当前聊天不是推送目标，请先订阅",
       "hourly_effective_off": "每小时摘要未生效：{reason}。",
-      "help_read": "MailFlow · 查看邮件与待办\n{p} mail list [关键词]\n{p} mail show <编号|#序号>\n{p} mail search <查找需求>\n{p} action list [--state open|completed|all]\n{p} action show <编号|#序号>\n{p} status · {p} hourly\n可使用通知或列表中的固定编号；序号对应你在当前聊天最近一次查询的结果。",
+      "help_read": "MailFlow · 查看邮件与待办\n{p} mail list [关键词]\n{p} mail show <编号|#序号>\n{p} mail search <查找需求>\n{p} action list [--state open|all]\n{p} action show <编号|#序号>\n{p} status · {p} hourly\n可使用通知或列表中的固定编号；序号对应你在当前聊天最近一次查询的结果。",
       "help_admin": "管理邮件与待办\n{p} mail delete <编号|#序号> · mail urgency <编号|#序号> <级别|auto>\n{p} action add <内容> [--due \"年-月-日 时:分\"]\n{p} action edit <编号|#序号> --summary <内容> [--due <时间|none>] [--reminder on|off] [--snooze <时间|none>]\n{p} action complete <编号|#序号> · action reopen <编号|#序号> · action delete <编号|#序号>\n{p} reply create <邮件编号|#序号> → reply show <草稿> → reply edit <草稿> \"<主题>\" \"<正文>\" → reply prepare <草稿> → reply confirm <草稿> <token>\n{p} subscribe · {p} unsubscribe · {p} hourly on|off\n{p} help 查看详细用法；{p} cancel 终止正在执行的查询。",
       "accepted": "正在处理你的请求。可使用 {prefix}mailflow cancel 终止。",
       "cancelled": "请求已终止，已经完成的操作已保留。",
@@ -1469,7 +1469,31 @@
       "operation_manage_gateway": "调整机器人连接",
       "use_settings": "请在设置页配置该项目或其凭据。",
       "chat_confirm": "待执行的操作：\n{changes}\n\n回复“确认 {token}”或“取消 {token}”；群聊中请 @ 机器人。确认在 20 分钟后失效。",
-      "not_running": "当前没有正在执行的任务。"
+      "not_running": "当前没有正在执行的任务。",
+      "operation_manage_action_plan": "调整周期计划"
+    },
+    "recurrence": {
+      "category": "分类",
+      "tags": "标签（逗号分隔）",
+      "repeat": "重复安排",
+      "once": "不重复",
+      "daily": "每天",
+      "weekly": "每周",
+      "monthly": "每月",
+      "weekdays": "星期：周一为 1，周日为 7；留空沿用开始日期",
+      "month_day": "每月日期（1–31；日期不存在时使用月底）",
+      "from_due": "沿用开始日期",
+      "whole_plan": "修改未来计划，已有未完成事项保持原样",
+      "stop_plan": "结束整个计划，保留已有未完成事项",
+      "complete_delete": "完成并永久移除当期待办",
+      "need_due": "周期计划需要填写首次日期和时间。",
+      "invalid_days": "星期请填写 1 到 7。",
+      "use_stop": "请使用“结束整个计划”停止重复安排。",
+      "cannot_reopen": "已完成的当期待办已永久移除；需要时请新建待办。",
+      "preview": "未来事项（仅预览）",
+      "plans": "周期计划",
+      "stopped": "计划已结束，已有未完成事项已保留。",
+      "reminder": "周期待办提醒：{summary}（{due}）"
     }
   }
 }

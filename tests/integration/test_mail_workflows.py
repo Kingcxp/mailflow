@@ -98,9 +98,9 @@ async def test_mail_states_search_and_task_survive_trash_and_reopen(
     await service.batch_mail(["mail"], operation="restore")
     assert (await service.query_mails(MailQuery(text="Revised summary", state="all"))).total == 1
     assert not await service.list_actions()
-    assert len(await service.list_actions_all()) == 1
-    await service.edit_action("task", completed=False)
-    assert len(await service.list_actions()) == 1
+    assert not await service.list_actions_all()
+    with pytest.raises(ValueError):
+        await service.edit_action("task", completed=False)
     assert (await service.batch_mail(["mail"], delete_actions=True)).succeeded == ["mail"]
     assert not await service.list_actions_all()
 
@@ -275,9 +275,7 @@ async def test_task_notification_failure_retries_without_repeating_success(
     await service.runtime.run_reminder_tick()
     assert len(flaky.messages) == before
     flaky.failing = True
-    reopened = await service.edit_action(
-        task.item_id, completed=False, summary="Rescheduled task", due_at=now + timedelta(days=1)
-    )
+    reopened = await service.add_action("Rescheduled task", now + timedelta(days=1))
     await service.runtime.run_reminder_tick()
     assert await service.failed_deliveries()
     await service.edit_action(
@@ -400,7 +398,8 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
 ) -> None:
     await service.storage.save_mail(make_record("saved"))
     task = await service.add_action("Unscheduled task")
-    await service.edit_action(task.item_id, completed=True)
+    completed = await service.add_action("Completed task")
+    await service.edit_action(completed.item_id, completed=True)
     # A fresh installation can use the configured language before a UI
     # preference has ever been written to the database.
     service.config.general.language = "zh-CN"
@@ -424,7 +423,8 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     assert await service.storage.get_mail("saved") is not None
     assert [record.record_id for record in await service.list_failed_mails()] == ["saved"]
     restored_tasks = await service.list_actions_all()
-    assert len(restored_tasks) == 1 and restored_tasks[0].completed_at is not None
+    assert len(restored_tasks) == 1 and restored_tasks[0].item_id == task.item_id
+    assert all(item.item_id != completed.item_id for item in restored_tasks)
     broken = tmp_path / "broken.zip"
     broken.write_bytes(b"not a backup")
     with pytest.raises(ValueError):
@@ -695,3 +695,57 @@ async def test_open_mailbox_refreshes_after_another_connection_clears_records(
             assert not await service.list_mails() and not await service.list_trash()
     finally:
         await other.close()
+
+
+async def test_recurring_tasks_keep_current_occurrence_and_preview_without_completed_history(
+    service: MailFlowService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mailflow.recurrence as recurrence
+
+    clock = datetime(2028, 1, 31, 10, tzinfo=UTC)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return clock.astimezone(tz)
+
+    monkeypatch.setattr(recurrence, "datetime", Clock)
+    await service.add_action(
+        "Monthly bill",
+        datetime(2028, 1, 31, 9, tzinfo=UTC),
+        repeat={"frequency": "monthly", "month_day": 31},
+        category="Home",
+        tags=["bills", "bills"],
+    )
+    january = (await service.list_actions())[0]
+    assert january.due_at == datetime(2028, 1, 31, 9, tzinfo=UTC) and january.tags == ["bills"]
+    assert [
+        item.due_at for item in await service.list_actions_all(preview_days=30) if item.preview
+    ] == [datetime(2028, 2, 29, 9, tzinfo=UTC)]
+    await service.edit_action(january.item_id, completed=True)
+    assert not await service.list_actions_all()
+    await service.storage.close()
+    await service.storage.initialize()
+    assert not await service.list_actions_all()
+    clock = datetime(2028, 3, 31, 10, tzinfo=UTC)
+    march = (await service.list_actions())[0]
+    assert march.due_at == datetime(2028, 3, 31, 9, tzinfo=UTC)
+    assert await service.stop_action_plan(march.plan_id)
+    assert not [item for item in await service.list_actions_all(preview_days=30) if item.preview]
+    assert (await service.list_actions())[0].item_id == march.item_id
+    await service.edit_action(march.item_id, completed=True)
+    assert not await service.list_actions_all()
+    await service.add_action(
+        "Weekly", clock.replace(hour=9), repeat={"frequency": "weekly", "weekdays": [0, 4]}
+    )
+    days = [
+        item.due_at
+        for item in await service.list_actions_all(preview_days=30)
+        if item.due_at is not None
+    ]
+    assert all(day.weekday() in {0, 4} for day in days)
+    clock += timedelta(days=40)
+    assert (
+        len(await service.list_actions()) == 2
+    )  # existing outstanding + current, no missed occurrences

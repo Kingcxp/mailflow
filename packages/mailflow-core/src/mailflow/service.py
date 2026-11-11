@@ -51,6 +51,7 @@ from mailflow.domain import (
     AccountSnapshot,
     ActionItem,
     ActionOrigin,
+    ActionPlan,
     BatchResult,
     ComponentKind,
     LLMSnapshot,
@@ -58,6 +59,7 @@ from mailflow.domain import (
     MailRecord,
     PendingOperation,
     ProcessorBindingSnapshot,
+    RepeatSchedule,
     ReplyDraft,
     ReplyState,
     RuntimeSnapshot,
@@ -1105,9 +1107,57 @@ class MailFlowService:
         """Unfinished and completed tasks are user records; passing time never deletes them."""
         return 0
 
-    async def list_actions_all(self) -> list[ActionItem]:
-        """Visible entries before event deduplication, for edits and searches."""
-        return [entry.item for entry in await self.runtime.action_store.read(deduplicate=False)]
+    async def list_actions_all(self, *, preview_days: int = 0) -> list[ActionItem]:
+        """Real occurrences by default; only terminal callers request future previews."""
+        items = [entry.item for entry in await self.runtime.action_store.read(deduplicate=False)]
+        if preview_days:
+            items.extend(await self.runtime.action_store.recurring.preview(preview_days))
+        return items
+
+    async def action_plans(self) -> list[ActionPlan]:
+        return await self.runtime.action_store.recurring.read()
+
+    @admin_operation
+    async def stop_action_plan(self, plan_id: str) -> bool:
+        stopped = await self.runtime.action_store.recurring.stop(plan_id)
+        if stopped:
+            await self.events.emit("action.changed", plan_id=plan_id)
+        return stopped
+
+    @admin_operation
+    async def update_action_plan(self, plan_id: str, **values: Any) -> ActionPlan:
+        recurring = self.runtime.action_store.recurring
+        async with recurring.lock:
+            plans = await recurring.read()
+            plan = next((p for p in plans if p.plan_id == plan_id), None)
+            if plan is None:
+                raise translated_error(ValueError, self.t, "action.not_found", item_id=plan_id)
+            if "repeat" in values:
+                plan.schedule = RepeatSchedule.model_validate(values.pop("repeat"))
+            allowed = {
+                "summary",
+                "due_at",
+                "due_end",
+                "category",
+                "tags",
+                "notes",
+                "location",
+                "url",
+                "reminder_enabled",
+                "image_indices",
+            }
+            template = plan.template.model_dump()
+            template.update({k: v for k, v in values.items() if k in allowed})
+            plan.template = ActionItem.model_validate(template)
+            if plan.template.due_at is None or plan.template.due_at.tzinfo is None:
+                raise translated_error(ValueError, self.t, "recurrence.need_due")
+            if plan.template.due_end is not None and plan.template.due_end <= plan.template.due_at:
+                raise translated_error(ValueError, self.t, "action.invalid_end")
+            if any(day not in range(7) for day in plan.schedule.weekdays):
+                raise translated_error(ValueError, self.t, "recurrence.invalid_days")
+            await recurring.save(plans)
+        await self.events.emit("action.changed", plan_id=plan_id)
+        return plan
 
     @admin_operation
     async def add_action(
@@ -1123,6 +1173,10 @@ class MailFlowService:
         mail_id: str = "",
         reply_task: bool = False,
         reminder_enabled: bool = True,
+        category: str = "",
+        tags: list[str] | None = None,
+        repeat: RepeatSchedule | dict[str, Any] | None = None,
+        image_indices: list[int] | None = None,
     ) -> ActionItem:
         """Create a user-owned timed action and add it to the reminder schedule."""
         final_summary = summary.strip()
@@ -1157,7 +1211,28 @@ class MailFlowService:
             location=location.strip(),
             url=url.strip(),
             origin=ActionOrigin.CUSTOM,
+            category=category.strip(),
+            tags=list(dict.fromkeys(t.strip() for t in tags or [] if t.strip())),
+            image_indices=list(image_indices or []),
         )
+        if repeat is not None:
+            if final_due is None:
+                raise translated_error(ValueError, self.t, "recurrence.need_due")
+            schedule = RepeatSchedule.model_validate(repeat)
+            if any(day not in range(7) for day in schedule.weekdays):
+                raise translated_error(ValueError, self.t, "recurrence.invalid_days")
+            plan_id = uuid4().hex
+            plan = ActionPlan(
+                plan_id=plan_id,
+                template=item,
+                schedule=schedule,
+                timezone=self.config.general.timezone,
+            )
+            await self.runtime.action_store.recurring.add(plan)
+            await self.events.emit("action.changed", plan_id=plan_id)
+            from mailflow.recurrence import occurrence
+
+            return occurrence(plan, final_due, preview=final_due.date() > utcnow().date())
         duplicate = await self._find_duplicate_action(item)
         if duplicate is not None:
             raise translated_error(
@@ -1190,6 +1265,9 @@ class MailFlowService:
         notes: str | None = None,
         location: str | None = None,
         url: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        image_indices: list[int] | None = None,
     ) -> ActionItem:
         """Edit a task; keep a user-owned override when it came from mail analysis."""
         async with self.runtime.action_store.lock:
@@ -1198,6 +1276,10 @@ class MailFlowService:
             if target is None:
                 raise translated_error(ValueError, self.t, "action.not_found", item_id=item_id)
             item = target.item
+            if completed:
+                await self.runtime.action_store.complete(target, entries)
+                await self.events.emit("action.deleted", item_id=item.item_id)
+                return item.model_copy(update={"completed_at": utcnow()})
             if clear_end and due_end is not None:
                 raise translated_error(ValueError, self.t, "action.invalid_end")
             final_summary = item.summary if summary is None else summary.strip()
@@ -1238,6 +1320,11 @@ class MailFlowService:
                     "notes": item.notes if notes is None else notes.strip(),
                     "location": item.location if location is None else location.strip(),
                     "url": item.url if url is None else url.strip(),
+                    "category": item.category if category is None else category.strip(),
+                    "tags": item.tags
+                    if tags is None
+                    else list(dict.fromkeys(t.strip() for t in tags if t.strip())),
+                    "image_indices": item.image_indices if image_indices is None else image_indices,
                 }
             )
             from mailflow.runtime import reminder_identity
@@ -2093,6 +2180,10 @@ Return every candidate in this batch."""
                                 "mail_id",
                                 "reply_task",
                                 "reminder_enabled",
+                                "category",
+                                "tags",
+                                "repeat",
+                                "image_indices",
                             }
                             await self.add_action(
                                 **{k: v for k, v in arguments.items() if k in allowed}
@@ -2114,6 +2205,9 @@ Return every candidate in this batch."""
                                 "notes",
                                 "location",
                                 "url",
+                                "category",
+                                "tags",
+                                "image_indices",
                             }
                             await self.edit_action(
                                 **{k: v for k, v in arguments.items() if k in allowed}

@@ -756,16 +756,29 @@ class CommandRouter:
             return await self._action_add(args[1:])
         if args[0] == "edit":
             return await self._action_edit(args[1:])
-        if args[0] in {"complete", "reopen"} and len(args) == 2:
-            action = await self._find_action(
-                args[1], state="completed" if args[0] == "reopen" else "open"
+        if args[0] == "plans":
+            plans = await self.service.action_plans()
+            return self._ok(
+                "\n".join(
+                    f"{p.plan_id} · {p.template.summary} · {self._t('recurrence.' + p.schedule.frequency)}"
+                    for p in plans
+                )
+                or self._t("tui.empty")
             )
+        if args[0] == "stop-plan" and len(args) == 2:
+            if await self.service.stop_action_plan(args[1]):
+                return self._ok(self._t("recurrence.stopped"))
+            return self._err(self._t("action.not_found", item_id=args[1]))
+        if args[0] == "reopen":
+            return self._err(self._t("recurrence.cannot_reopen"))
+        if args[0] == "complete" and len(args) == 2:
+            action = await self._find_action(args[1])
             if action is None:
                 return self._err(self._t("action.not_found", item_id=args[1]))
-            await self.service.edit_action(action.item_id, completed=args[0] == "complete")
+            await self.service.edit_action(action.item_id, completed=True)
             return self._ok(
                 self._t(
-                    "ux.task_completed" if args[0] == "complete" else "ux.task_reopened",
+                    "ux.task_completed",
                     summary=action.summary,
                 )
             )
@@ -824,10 +837,21 @@ class CommandRouter:
         due_raw: str | None = None
         action_type = "errand"
         notes = ""
+        extra: dict[str, Any] = {}
+        repeat: dict[str, Any] = {}
         index = 0
         while index < len(args):
             arg = args[index]
-            if arg in ("--due", "--type", "--notes"):
+            if arg in (
+                "--due",
+                "--type",
+                "--notes",
+                "--category",
+                "--tags",
+                "--repeat",
+                "--weekdays",
+                "--month-day",
+            ):
                 if index + 1 >= len(args):
                     return self._err(self._t("action.add_usage"))
                 value = args[index + 1]
@@ -844,8 +868,18 @@ class CommandRouter:
                     due_raw = value
                 elif arg == "--type":
                     action_type = value
-                else:
+                elif arg == "--notes":
                     notes = value
+                elif arg == "--repeat":
+                    repeat["frequency"] = value
+                elif arg == "--weekdays":
+                    repeat["weekdays"] = [int(day.strip()) - 1 for day in value.split(",")]
+                elif arg == "--month-day":
+                    repeat["month_day"] = int(value)
+                elif arg == "--tags":
+                    extra["tags"] = [tag.strip() for tag in value.split(",") if tag.strip()]
+                else:
+                    extra["category"] = value
                 index += 2
                 continue
             summary = arg if summary is None else f"{summary} {arg}"
@@ -855,7 +889,9 @@ class CommandRouter:
         due = self._parse_local_time(due_raw) if due_raw is not None else None
         if due_raw is not None and due is None:
             return self._err(self._t("action.invalid_due", value=due_raw))
-        item = await self.service.add_action(summary, due, action_type=action_type, notes=notes)
+        item = await self.service.add_action(
+            summary, due, action_type=action_type, notes=notes, repeat=repeat or None, **extra
+        )
         return self._ok(
             self._t(
                 "action.added",

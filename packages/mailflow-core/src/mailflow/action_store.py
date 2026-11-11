@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
@@ -18,6 +20,7 @@ from mailflow.domain import (
     actions_duplicate,
     to_utc,
 )
+from mailflow.recurrence import RecurringActions
 
 
 def action_key(item: ActionItem) -> str:
@@ -45,6 +48,16 @@ def _dismissal_key(item: ActionItem) -> str:
     )
 
 
+def completed_key(item: ActionItem) -> str:
+    title = "".join(
+        char
+        for char in item.summary.casefold()
+        if not unicodedata.category(char).startswith(("P", "Z"))
+    )
+    value = [item.mail_id, title, item.action_type, str(item.due_at), str(item.due_end)]
+    return "done|" + hashlib.sha256(json.dumps(value).encode()).hexdigest()
+
+
 def action_has_ended(item: ActionItem, now: datetime) -> bool:
     return item.due_at is not None and action_time_window(item)[1] <= to_utc(now)
 
@@ -60,6 +73,7 @@ class ActionStore:
     def __init__(self, storage: StorageBackend) -> None:
         self.storage = storage
         self.lock = asyncio.Lock()
+        self.recurring = RecurringActions(storage)
 
     @staticmethod
     def is_dismissed(item: ActionItem, keys: frozenset[str] | set[str]) -> bool:
@@ -70,6 +84,7 @@ class ActionStore:
                 _dismissal_key(item),
                 action_key(item),
                 _legacy_key(item),
+                completed_key(item),
             )
         )
 
@@ -94,6 +109,7 @@ class ActionStore:
         self, *, deduplicate: bool = True, records: list[MailRecord] | None = None
     ) -> list[ScheduledAction]:
         """Share visible task state; overdue tasks remain until explicitly removed."""
+        await self.recurring.materialize()
         dismissed = await self.dismissed()
         if records is None:
             records = await self.storage.list_mails()
@@ -103,9 +119,13 @@ class ActionStore:
             ScheduledAction(item, record)
             for record in records
             for item in record.action_items
-            if item.item_id not in overridden and not self.is_dismissed(item, dismissed)
+            if item.item_id not in overridden
+            and not self.is_dismissed(item, dismissed)
+            and item.completed_at is None
         ]
-        entries.extend(ScheduledAction(item, custom=True) for item in custom)
+        entries.extend(
+            ScheduledAction(item, custom=True) for item in custom if item.completed_at is None
+        )
         entries.sort(key=lambda entry: action_sort_time(entry.item))
         if not deduplicate:
             return entries
@@ -160,6 +180,28 @@ class ActionStore:
         }
         await self.set_dismissed(await self.dismissed() | keys)
         return bool(keys)
+
+    async def complete(self, target: ScheduledAction, entries: list[ScheduledAction]) -> None:
+        """Remove the occurrence, retaining only opaque suppression keys for analyzed mail."""
+        matches = [
+            entry
+            for entry in entries
+            if entry.item.item_id == target.item.item_id
+            or (not target.custom and actions_duplicate(entry.item, target.item))
+        ]
+        suppressed = {completed_key(entry.item) for entry in matches if entry.item.mail_id}
+        if suppressed:
+            await self.set_dismissed(await self.dismissed() | suppressed)
+        for entry in matches:
+            if entry.custom:
+                await self.storage.delete_custom_action(entry.item.item_id)
+            if entry.record is not None and entry.record.analysis is not None:
+                record = entry.record.model_copy(deep=True)
+                assert record.analysis is not None
+                record.analysis.action_items = [
+                    item for item in record.action_items if item.item_id != entry.item.item_id
+                ]
+                await self.storage.save_mail(record)
 
     async def trash_mail(
         self,

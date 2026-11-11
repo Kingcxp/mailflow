@@ -141,7 +141,7 @@ async def test_bulk_delete_reports_what_really_moved(service: MailFlowService) -
     assert store.mails == {}
 
 
-async def test_overdue_and_undated_tasks_survive_and_completion_can_be_reopened(
+async def test_overdue_and_undated_tasks_survive_until_permanent_completion(
     service: MailFlowService,
 ) -> None:
     overdue = await service.add_action("Past deadline", datetime.now(UTC) - timedelta(days=3))
@@ -150,9 +150,12 @@ async def test_overdue_and_undated_tasks_survive_and_completion_can_be_reopened(
     assert {i.item_id for i in await service.list_actions()} == {overdue.item_id, undated.item_id}
     await service.edit_action(overdue.item_id, completed=True)
     assert [i.item_id for i in await service.list_actions()] == [undated.item_id]
-    assert len(await service.list_actions(include_completed=True)) == 2
-    await service.edit_action(overdue.item_id, completed=False)
-    assert len(await service.list_actions()) == 2
+    assert [i.item_id for i in await service.list_actions(include_completed=True)] == [
+        undated.item_id
+    ]
+    assert await service.storage.get_preference("actions.plans") is None
+    with pytest.raises(ValueError):
+        await service.edit_action(overdue.item_id, completed=False)
 
 
 async def test_custom_todo_delete_is_real(service: MailFlowService) -> None:

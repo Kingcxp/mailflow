@@ -22,6 +22,7 @@ from mailflow.action_store import action_has_ended
 from mailflow.config import MailFlowConfig
 from mailflow.domain import (
     ActionItem,
+    ActionPlan,
     BatchResult,
     MailRecord,
     PendingOperation,
@@ -379,8 +380,20 @@ class RemoteServiceAdapter:
             for item in await self.client.list_actions(include_completed=include_completed)
         ]
 
-    async def list_actions_all(self) -> list[ActionItem]:
-        return await self.list_actions(include_completed=True)
+    async def list_actions_all(self, *, preview_days: int = 0) -> list[ActionItem]:
+        return [
+            ActionItem.model_validate(item)
+            for item in await self.client.list_actions(preview_days=preview_days)
+        ]
+
+    async def action_plans(self) -> list[ActionPlan]:
+        return [ActionPlan.model_validate(item) for item in await self.client.action_plans()]
+
+    async def stop_action_plan(self, plan_id: str) -> bool:
+        return await self.client.stop_action_plan(plan_id)
+
+    async def update_action_plan(self, plan_id: str, **values: Any) -> ActionPlan:
+        return ActionPlan.model_validate(await self.client.update_action_plan(plan_id, values))
 
     async def list_trash(self) -> list[TrashRecord]:
         return [TrashRecord.model_validate(item) for item in await self.client.list_trash()]

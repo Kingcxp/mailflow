@@ -2217,8 +2217,6 @@ class ActionsPane(Vertical):
             yield SafeSelect(
                 [
                     (self._service.t("ux.range_open"), "all"),
-                    (self._service.t("ux.range_completed"), "completed"),
-                    (self._service.t("ux.range_everything"), "everything"),
                     (self._service.t("tui.range_today"), "today"),
                     (self._service.t("tui.range_week"), "week"),
                     (self._service.t("tui.filter_expired"), "expired"),
@@ -2301,8 +2299,6 @@ class ActionsPane(Vertical):
             "#actions-range",
             [
                 (self._service.t("ux.range_open"), "all"),
-                (self._service.t("ux.range_completed"), "completed"),
-                (self._service.t("ux.range_everything"), "everything"),
                 (self._service.t("tui.range_today"), "today"),
                 (self._service.t("tui.range_week"), "week"),
                 (self._service.t("tui.filter_expired"), "expired"),
@@ -2324,7 +2320,7 @@ class ActionsPane(Vertical):
         if table is None:
             return
         loaded = (
-            await self._service.list_actions_all()
+            await self._service.list_actions_all(preview_days=30)
             if reload or not self._actions_loaded
             else self._items
         )
@@ -2352,7 +2348,8 @@ class ActionsPane(Vertical):
         view = TableView.capture(table)
         table.clear()
         self._ensure_columns()
-        table.retain_checks({item.item_id for item in loaded})
+        table.unselectable_keys = {item.item_id for item in loaded if item.preview}
+        table.retain_checks({item.item_id for item in loaded if not item.preview})
         items = list(self._items)
         types = sorted({item.action_type for item in self._items})
         type_filter = self._select_value("#actions-type-filter")
@@ -2403,7 +2400,7 @@ class ActionsPane(Vertical):
                 item
                 for item in items
                 if matcher.matches(
-                    f"{item.summary} {item.action_type} {item.notes} {item.location} {item.url}"
+                    f"{item.summary} {item.action_type} {item.notes} {item.location} {item.url} {item.category} {' '.join(item.tags)}"
                 )
             ]
         _apply_options(
@@ -2430,13 +2427,17 @@ class ActionsPane(Vertical):
             # an entry that is over is styled dim instead of being hidden: the
             # user still needs to see what happened, but must not mistake it
             # for something still ahead
-            style = "dim" if self._service.is_action_expired(item) else ""
+            style = "dim" if item.preview or self._service.is_action_expired(item) else ""
             table.add_row(
-                table.check_label(item.item_id),
+                RichText("·", style="dim") if item.preview else table.check_label(item.item_id),
                 RichText(_action_time_range(self._service, item), style=style),
                 RichText(_action_type_label(self._service, item.action_type), style=style),
                 RichText(("✓ " if item.completed_at else "") + item.summary, style=style),
-                RichText(item.notes or "-", style=style),
+                RichText(
+                    " · ".join(filter(None, [item.category, ", ".join(item.tags), item.notes]))
+                    or "-",
+                    style=style,
+                ),
                 RichText(item.source_subject or item.mail_id, style=style),
                 key=item.item_id,
             )
@@ -2454,6 +2455,8 @@ class ActionsPane(Vertical):
         if table is None:
             return
         count = len(table.checked_keys)
+        current = self._selected_item()
+        real = bool(current and not current.preview)
         button = self.query_one_optional("#actions-delete", Button)
         if button is not None:
             button.label = (
@@ -2461,7 +2464,7 @@ class ActionsPane(Vertical):
                 if count
                 else self._service.t("tui.btn_delete_todo")
             )
-            button.disabled = self._delete_busy or (not table.row_count and not count)
+            button.disabled = self._delete_busy or (not real and not count)
             button.tooltip = self._service.t("tui.selection_help")
         table.disabled = self._delete_busy
         edit = self.query_one_optional("#actions-edit", Button)
@@ -2470,7 +2473,7 @@ class ActionsPane(Vertical):
             edit.disabled = self._delete_busy or self._selected_item() is None
         status = self.query_one_optional("#actions-status", Button)
         if status is not None:
-            status.disabled = self._delete_busy or not (count or self._selected_item())
+            status.disabled = self._delete_busy or not (count or real)
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             message = self._action_status
@@ -2623,6 +2626,11 @@ class ActionsPane(Vertical):
         item = self._selected_item()
         if not targets and item is not None:
             targets = [item.item_id]
+        targets = [
+            identity
+            for identity in targets
+            if any(item.item_id == identity and not item.preview for item in self._items)
+        ]
         if not targets:
             return
         self._delete_busy = True
@@ -2652,6 +2660,11 @@ class ActionsPane(Vertical):
             if table and table.checked_keys
             else ([item.item_id] if item else [])
         )
+        ids = [
+            identity
+            for identity in ids
+            if any(item.item_id == identity and not item.preview for item in self._items)
+        ]
         if not ids:
             return
         app = cast("Any", self).app

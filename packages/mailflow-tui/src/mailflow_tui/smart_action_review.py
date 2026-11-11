@@ -62,6 +62,9 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
             str(args.get("location") or ""),
             str(args.get("url") or ""),
             str(args.get("notes") or ""),
+            str(args.get("category") or ""),
+            ", ".join(args.get("tags") or []),
+            self._t("recurrence." + args["repeat"]["frequency"]) if args.get("repeat") else "",
         ]
         if operation.tool == "delete_action":
             key = (

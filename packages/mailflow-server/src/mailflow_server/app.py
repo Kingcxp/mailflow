@@ -59,7 +59,7 @@ from mailflow.permissions import (
 from mailflow.protocol import event_frame, json_value
 from mailflow.replies import ReplyError
 from mailflow.service import ConfigReloadError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.requests import HTTPConnection
 
 from mailflow_server.auth import check_basic_auth, require_credentials
@@ -84,6 +84,10 @@ class ActionCreate(BaseModel):
     notes: str = ""
     location: str = ""
     url: str = ""
+    category: str = ""
+    tags: list[str] = Field(default_factory=list)
+    repeat: dict[str, Any] | None = None
+    image_indices: list[int] = Field(default_factory=list)
 
 
 class ActionEdit(BaseModel):
@@ -101,6 +105,9 @@ class ActionEdit(BaseModel):
     reply_task: bool | None = None
     snoozed_until: datetime | None = None
     clear_snooze: bool = False
+    category: str | None = None
+    tags: list[str] | None = None
+    image_indices: list[int] | None = None
 
 
 class _LogFeed(logging.Handler):
@@ -550,8 +557,25 @@ def create_app(service: MailFlowService) -> FastAPI:
         return {"count": await service.purge_expired_mails(body.get("record_ids"))}
 
     @app.get("/actions")
-    async def actions(include_completed: bool = False, _: None = Depends(guard)) -> Any:
-        return _jsonable(await service.list_actions(include_completed=include_completed))
+    async def actions(
+        include_completed: bool = False, preview_days: int = 0, _: None = Depends(guard)
+    ) -> Any:
+        return _jsonable(await service.list_actions_all(preview_days=min(30, max(0, preview_days))))
+
+    @app.get("/action-plans")
+    async def action_plans(_: None = Depends(guard)) -> Any:
+        return _jsonable(await service.action_plans())
+
+    @app.put("/action-plans/{plan_id}")
+    async def update_plan(plan_id: str, body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        for key in ("due_at", "due_end"):
+            if body.get(key):
+                body[key] = datetime.fromisoformat(str(body[key]))
+        return _jsonable(await service.update_action_plan(plan_id, **body))
+
+    @app.delete("/action-plans/{plan_id}")
+    async def stop_plan(plan_id: str, _: None = Depends(guard)) -> Any:
+        return {"ok": await service.stop_action_plan(plan_id)}
 
     @app.post("/actions")
     async def add_action(body: ActionCreate, _: None = Depends(guard)) -> Any:

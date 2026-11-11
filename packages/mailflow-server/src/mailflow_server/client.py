@@ -422,11 +422,24 @@ class RemoteClient:
                 return None
             raise
 
-    async def list_actions(self, *, include_completed: bool = False) -> list[dict[str, Any]]:
+    async def list_actions(
+        self, *, include_completed: bool = False, preview_days: int = 0
+    ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = await self._request(
-            "GET", "/actions?include_completed=true" if include_completed else "/actions"
+            "GET",
+            f"/actions?include_completed={str(include_completed).lower()}&preview_days={preview_days}",
         )
         return result
+
+    async def action_plans(self) -> list[dict[str, Any]]:
+        return cast(list[dict[str, Any]], await self._request("GET", "/action-plans"))
+
+    async def update_action_plan(self, plan_id: str, values: dict[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], await self._request("PUT", f"/action-plans/{plan_id}", values))
+
+    async def stop_action_plan(self, plan_id: str) -> bool:
+        result = await self._request("DELETE", f"/action-plans/{plan_id}")
+        return bool(result["ok"])
 
     async def list_failed_mails(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = await self._request("GET", "/mails?view=failed")

@@ -12,9 +12,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
@@ -227,6 +227,12 @@ class ActionOrigin(StrEnum):
         return cls.CUSTOM if isinstance(value, str) else None
 
 
+class RepeatSchedule(BaseModel):
+    frequency: Literal["daily", "weekly", "monthly"]
+    weekdays: list[int] = Field(default_factory=lambda: [])
+    month_day: int | None = Field(default=None, ge=1, le=31)
+
+
 class ActionItem(BaseModel):
     """A timed item in MailFlow's provider-neutral reminder schedule."""
 
@@ -248,6 +254,12 @@ class ActionItem(BaseModel):
     reminder_after: datetime | None = None
     source_subject: str = ""
     reply_task: bool = False
+    category: str = ""
+    tags: list[str] = Field(default_factory=list)
+    plan_id: str = ""
+    repeat: RepeatSchedule | None = None
+    preview: bool = False
+    image_indices: list[int] = Field(default_factory=lambda: [])
 
     def time_range_in(self, timezone_name: str) -> str:
         """Format the stored instant in a configured display timezone."""
@@ -273,6 +285,15 @@ def action_time_window(item: ActionItem) -> tuple[datetime, datetime]:
     start = action_sort_time(item)
     end = to_utc(item.due_end) if item.due_end is not None else start
     return (start, end) if end > start else (start, start)
+
+
+def reminder_end(item: ActionItem, timezone: str) -> datetime:
+    if item.plan_id and item.due_at is not None and item.due_end is None:
+        local = item.due_at.astimezone(ZoneInfo(timezone))
+        return (
+            local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        ).astimezone(UTC)
+    return action_time_window(item)[1]
 
 
 def action_sort_time(item: ActionItem) -> datetime:
@@ -332,6 +353,14 @@ def dedupe_actions(items: Iterable[ActionItem]) -> list[ActionItem]:
         siblings.append(item)
         kept.append(item)
     return kept
+
+
+class ActionPlan(BaseModel):
+    plan_id: str
+    template: ActionItem
+    schedule: RepeatSchedule
+    timezone: str
+    last_occurrence: datetime | None = None
 
 
 class MailAnalysis(BaseModel):

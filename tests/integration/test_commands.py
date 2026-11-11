@@ -207,9 +207,9 @@ class TestCommandRouter:
         assert undated.due_at is None
         assert (await commands.execute(f"action complete {undated.item_id}")).ok
         assert "no due" not in (await commands.execute("action list")).text
-        assert "no due" in (await commands.execute("action list --state completed")).text
-        assert (await commands.execute(f"action reopen {undated.item_id}")).ok
-        assert (await commands.execute(f"action delete {undated.item_id}")).ok
+        assert "no due" not in (await commands.execute("action list --state completed")).text
+        assert not (await commands.execute(f"action reopen {undated.item_id}")).ok
+        assert not (await commands.execute(f"action delete {undated.item_id}")).ok
         # malformed due time
         response = await commands.execute('action add "bad" --due "not-a-time"')
         assert not response.ok
