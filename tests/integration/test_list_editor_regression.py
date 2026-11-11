@@ -25,10 +25,9 @@ async def _wait_until(pilot: Any, predicate: Any, budget: float = 4.0) -> None:
 
     deadline = _time.monotonic() + budget
     while _time.monotonic() < deadline:
-        if predicate():
-            await pilot.pause()
-            return
         await pilot.pause(0.05)
+        if predicate():
+            return
     raise AssertionError("condition not met in time")
 
 
@@ -75,6 +74,7 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
                 lambda: len(editor.query(".list-editor-row")) == 2,
             )
             row1 = editor.query(".list-editor-row")[1].query_one(Input)
+            await _wait_until(pilot, lambda: row1.has_focus)
             assert row1.has_focus
             # bottom add appends another row and focuses it without rebuilding prior rows
             add_btn: Button = editor.query_one("#list-editor-add", Button)
@@ -84,6 +84,7 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
                 lambda: len(editor.query(".list-editor-row")) == 3,
             )
             row2 = editor.query(".list-editor-row")[2].query_one(Input)
+            await _wait_until(pilot, lambda: row2.has_focus)
             assert row2.has_focus
             # Delete the original row by its stable token, then focus the next surviving row.
             token = (row0.id or "").removeprefix("list-editor-input-")
@@ -94,6 +95,7 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
                 pilot,
                 lambda: len(editor.query(".list-editor-row")) == 2,
             )
+            await _wait_until(pilot, lambda: row1.has_focus)
             assert row1.has_focus
 
             # collection passes required with a typed value, and the value
