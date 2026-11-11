@@ -7,7 +7,7 @@ import contextlib
 from typing import Any, cast
 
 from mailflow.domain import SmartActionResult
-from mailflow.errors import error_text
+from mailflow.errors import error_info
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -40,11 +40,13 @@ class AssistantPane(Vertical):
         self._service = service
         self._scope: dict[str, Any] = {}
         self._scope_name = ""
-        self._task: asyncio.Task[SmartActionResult] | None = None
+        self._task: asyncio.Task[Any] | None = None
         self._result: SmartActionResult | None = None
         self._history: list[dict[str, str]] = []
         self._busy = False
         self._status_key = "assistant.ready"
+        self._status_params: dict[str, Any] = {}
+        self._status_extra = ""
 
     def compose(self) -> ComposeResult:
         yield Static("", id="assistant-scope", markup=False)
@@ -56,6 +58,7 @@ class AssistantPane(Vertical):
             yield Button(self._service.t("assistant.review"), id="assistant-review", disabled=True)
             yield Button(self._service.t("assistant.all"), id="assistant-all")
         yield Static("", id="assistant-status", markup=False)
+        yield Button(self._service.t("assistant.configure_model"), id="assistant-configure")
         yield RichLog(id="assistant-progress", max_lines=100, wrap=True, markup=False)
         yield Static("", id="assistant-answer", markup=False)
         yield DataTable(id="assistant-results", cursor_type="row")
@@ -79,8 +82,11 @@ class AssistantPane(Vertical):
         self.query_one("#assistant-input", Input).placeholder = self._service.t(
             "assistant.placeholder"
         )
+        self.query_one("#assistant-configure", Button).label = self._service.t(
+            "assistant.configure_model"
+        )
         self._show_scope()
-        self._show_status(self._status_key)
+        self._render_status()
         self._render_result()
 
     def set_scope(self, scope: dict[str, Any], name: str) -> bool:
@@ -104,18 +110,32 @@ class AssistantPane(Vertical):
             self._service.t("assistant.scope", scope=label)
         )
 
-    def _show_status(self, key: str) -> None:
+    def _show_status(self, key: str, **params: Any) -> None:
         self._status_key = key
-        self.query_one("#assistant-status", Static).update(self._service.t(key))
+        self._status_params = params
+        self._status_extra = ""
+        self._render_status()
+
+    def _render_status(self) -> None:
+        self.query_one("#assistant-status", Static).update(
+            self._service.t(self._status_key, **self._status_params) + self._status_extra
+        )
+
+    def _show_error(self, exc: Exception) -> None:
+        info = error_info(exc, self._service.t)
+        self._show_status(info["code"], **info["params"])
 
     def _sync_controls(self) -> None:
         self.query_one("#assistant-send", Button).disabled = self._busy or not bool(
             self.query_one("#assistant-input", Input).value.strip()
         )
-        self.query_one("#assistant-stop", Button).disabled = not self._busy
+        self.query_one("#assistant-stop", Button).disabled = self._task is None or self._task.done()
         self.query_one("#assistant-all", Button).disabled = self._busy
         self.query_one("#assistant-review", Button).disabled = self._busy or not bool(
             self._result and self._result.pending
+        )
+        self.query_one("#assistant-configure", Button).display = not bool(
+            self._service.snapshot().llms
         )
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -135,6 +155,8 @@ class AssistantPane(Vertical):
             self.run_worker(self.review(), group="assistant-review", exit_on_error=False)
         elif event.button.id == "assistant-all":
             self.set_scope({}, "")
+        elif event.button.id == "assistant-configure":
+            self.post_message(self.OpenResult("model", ""))
 
     async def execute(self) -> None:
         text = self.query_one("#assistant-input", Input).value.strip()
@@ -161,6 +183,7 @@ class AssistantPane(Vertical):
             name="assistant-query",
         )
         self._task = task
+        self._sync_controls()
         try:
             result = await task
             self._result = result
@@ -179,7 +202,7 @@ class AssistantPane(Vertical):
         except asyncio.CancelledError:
             self._show_status("assistant.cancelled")
         except Exception as exc:
-            self.query_one("#assistant-status", Static).update(error_text(exc, self._service.t))
+            self._show_error(exc)
         finally:
             self._task = None
             self._busy = False
@@ -261,24 +284,32 @@ class AssistantPane(Vertical):
                 result.pending.clear()
                 self._show_status("tui.smart_changes_cancelled")
                 return
-            outcome = await self._service.apply_smart_plan(result.plan_id, selected)
-            result.pending = list(outcome["failed"])
-            self.query_one("#assistant-status", Static).update(
-                self._service.t(
-                    "tui.agent_applied_partial" if result.pending else "tui.agent_applied",
-                    applied=outcome["applied"],
-                    failed=len(result.pending),
-                )
-                + ("\n" + "\n".join(outcome["errors"]) if outcome["errors"] else "")
+            task = asyncio.create_task(
+                self._service.apply_smart_plan(result.plan_id, selected), name="assistant-apply"
             )
+            self._task = task
+            self._sync_controls()
+            outcome = await task
+            result.pending = list(outcome["failed"])
+            self._show_status(
+                "tui.agent_applied_partial" if result.pending else "tui.agent_applied",
+                applied=outcome["applied"],
+                failed=len(result.pending),
+            )
+            self._status_extra = "\n" + "\n".join(outcome["errors"]) if outcome["errors"] else ""
+            self._render_status()
             self._history.append(
                 {
                     "role": "assistant",
                     "content": f"Confirmed operations applied: {outcome['applied']}; failed: {len(result.pending)}",
                 }
             )
+        except asyncio.CancelledError:
+            result.pending.clear()
+            self._show_status("assistant.cancelled")
         except Exception as exc:
-            self.query_one("#assistant-status", Static).update(error_text(exc, self._service.t))
+            self._show_error(exc)
         finally:
+            self._task = None
             self._busy = False
             self._sync_controls()

@@ -500,7 +500,7 @@ class IMAPSource:
                 or (self._uidvalidity and validity and validity != self._uidvalidity)
             )
             initial_sync = self._resync_mode or self._account.options.get("initial_sync", "new")
-            import_history = initial_sync in {"all", "recent"}
+            import_history = initial_sync in {"all", "recent"} and self._last_uid is None
             catch_up_enabled = option_enabled(self._account.options, "catch_up_missed", False)
             if (
                 changed

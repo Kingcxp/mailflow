@@ -192,16 +192,19 @@ class ActionStore:
         suppressed = {completed_key(entry.item) for entry in matches if entry.item.mail_id}
         if suppressed:
             await self.set_dismissed(await self.dismissed() | suppressed)
+        records: dict[str, MailRecord] = {}
+        completed_ids = {entry.item.item_id for entry in matches}
         for entry in matches:
             if entry.custom:
                 await self.storage.delete_custom_action(entry.item.item_id)
             if entry.record is not None and entry.record.analysis is not None:
-                record = entry.record.model_copy(deep=True)
-                assert record.analysis is not None
-                record.analysis.action_items = [
-                    item for item in record.action_items if item.item_id != entry.item.item_id
-                ]
-                await self.storage.save_mail(record)
+                records[entry.record.record_id] = entry.record.model_copy(deep=True)
+        for record in records.values():
+            assert record.analysis is not None
+            record.analysis.action_items = [
+                item for item in record.action_items if item.item_id not in completed_ids
+            ]
+            await self.storage.save_mail(record)
 
     async def trash_mail(
         self,

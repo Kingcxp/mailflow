@@ -363,7 +363,7 @@ class ToolRegistry:
                         "description": "Start row; use next_offset for remaining tasks.",
                     },
                     "limit": {"type": "integer", "description": "Page size, at most 40."},
-                    "state": {"type": "string", "enum": ["open", "completed", "all"]},
+                    "state": {"type": "string", "enum": ["open", "all"]},
                 },
                 [],
             ),
@@ -387,6 +387,15 @@ class ToolRegistry:
                         "description": "Built-in type or concise non-empty custom label.",
                     },
                     "category": {"type": "string"},
+                    "mail_id": {
+                        "type": "string",
+                        "description": "Optional source mail ID from find_mail; keeps its images and source linked.",
+                    },
+                    "image_indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Optional attachment indexes from read_mail; omit to use all source images.",
+                    },
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "repeat": {
                         "type": "object",
@@ -761,6 +770,14 @@ class ToolRegistry:
         if not action_type:
             raise ToolError("`action_type` must not be empty")
         extra: dict[str, Any] = {}
+        if arguments.get("mail_id"):
+            source_id = _as_str(arguments, "mail_id")
+            if self._allowed_ids is not None and source_id not in self._allowed_ids:
+                raise ToolError("Source mail is outside the selected scope")
+            if await self._service.get_mail(source_id) is None:
+                raise ToolError("Source mail does not exist")
+            extra["mail_id"] = source_id
+            extra["image_indices"] = [int(index) for index in arguments.get("image_indices", [])]
         if "category" in arguments:
             extra["category"] = _as_str(arguments, "category")
         if "tags" in arguments:

@@ -550,7 +550,14 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 if name not in existing and name in capabilities
             )
             + (
-                (_Extra("send_interval_seconds", default="2", label_key="delivery.send_interval"),)
+                (
+                    _Extra(
+                        "send_interval_seconds",
+                        kind="number",
+                        default="2",
+                        label_key="delivery.send_interval",
+                    ),
+                )
                 if "send_interval_seconds" not in existing
                 else ()
             )

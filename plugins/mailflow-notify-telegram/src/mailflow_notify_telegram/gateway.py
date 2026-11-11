@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 from typing import Any, cast
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -24,7 +25,7 @@ import httpx
 from mailflow.bot_server import command_replies
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
 from mailflow.lifecycle import cancel_tasks
-from mailflow.notifications import check_result
+from mailflow.notifications import DeliveryError, check_http_response, check_result
 
 logger = logging.getLogger("mailflow.gateway.telegram")
 
@@ -433,13 +434,18 @@ def send_text(token: str, chat_id: str, text: str, *, api_base: str = _API_ROOT)
         data=payload,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
-    with urlopen(request, timeout=15) as response:
-        result = as_object(json.loads(response.read()))
-        if result.get("ok") is not True:
-            from mailflow.notifications import DeliveryError
-
-            raise DeliveryError("rejected")
-        check_result(result)
+    try:
+        with urlopen(request, timeout=15) as response:
+            result = as_object(json.loads(response.read()))
+    except HTTPError as exc:
+        if exc.code == 429:
+            check_http_response(
+                httpx.Response(429, content=exc.read(), headers=dict(exc.headers.items()))
+            )
+        raise
+    check_result(result)
+    if result.get("ok") is not True:
+        raise DeliveryError("rejected")
 
 
 __all__ = [

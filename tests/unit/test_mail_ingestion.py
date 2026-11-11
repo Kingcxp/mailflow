@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 from mailflow.config import MailAccountConfig
+from mailflow.contracts import SyncCursorError
 from mailflow_mail_imap.plugin import IMAPSource
 
 from mailflow_test_support.runtime import build_runtime
@@ -106,7 +107,7 @@ async def test_failed_queue_handoff_is_not_acknowledged(
     async def accept(mail: Any) -> None:
         received.append(mail.subject)
 
-    restarted = source_for(monkeypatch, Mailbox())
+    restarted = source_for(monkeypatch, Mailbox(), catch_up_missed=True)
     restarted.set_watermark_store(lambda: saved[-1], saved.append)
     await restarted._poll_once(accept)
     assert received == ["mail 1", "mail 2", "mail 3"]
@@ -193,9 +194,10 @@ async def test_startup_skips_old_checkpoints_but_receives_new_arrivals(
         assert await catching_up.wait_idle()
         missed = [row for row in storage.saved if row.mail.subject in {"mail 5", "mail 6"}]
         assert len(missed) == 2
-        assert all(row.analysis is None and row.analysis_state == "unanalysed" for row in missed)
-        assert all(row.ingestion == "history" for row in missed)
+        assert all(row.analysis is not None and row.analysis_state == "ready" for row in missed)
+        assert all(row.ingestion == "catch_up" for row in missed)
         assert not notifiers[0].notified
+        analyzed.clear()
         mailbox.uids.append(7)
         await asyncio.wait_for(analyzed.wait(), 2)
         assert await catching_up.wait_idle()
@@ -236,7 +238,7 @@ async def test_full_runtime_queue_cancellation_keeps_the_pending_mail_retryable(
     assert checkpoint is not None and json.loads(checkpoint)["uid"] == 1
     assert runtime._queue.get_nowait().subject == "mail 1"  # pyright: ignore[reportPrivateUsage]
 
-    restarted = source_for(monkeypatch, Mailbox())
+    restarted = source_for(monkeypatch, Mailbox(), catch_up_missed=True)
     runtime._inject_watermark_store(restarted, "account")  # pyright: ignore[reportPrivateUsage]
     received: list[str] = []
 
@@ -265,6 +267,10 @@ async def test_empty_baseline_uid_reset_and_history_are_independent(
     assert received == ["mail 1", "mail 2"]
     mailbox.validity = "11"
     mailbox.uids = [1]
+    with pytest.raises(SyncCursorError):
+        await source._poll_once(accept)
+    assert source._last_uid == 2 and received == ["mail 1", "mail 2"]
+    source.reset_sync("new")
     await source._poll_once(accept)
     assert received == ["mail 1", "mail 2"]
     mailbox.uids.append(2)
@@ -287,6 +293,9 @@ async def test_uid_reset_without_message_id_or_date_does_not_duplicate_mail(
 
     await source._poll_once(accept)
     mailbox.uids, mailbox.validity = [8], "11"
+    with pytest.raises(SyncCursorError):
+        await source._poll_once(accept)
+    source.reset_sync("all")
     await source._poll_once(accept)
     assert len(storage.saved) == 1
     assert source._last_uid == 8

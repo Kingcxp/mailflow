@@ -213,6 +213,7 @@ class ShortcutHelp(ModalScreen[None]):
         table.add_column(ratio=1)
         for key, description in (
             ("Tab / Shift+Tab", "help_focus"),
+            ("Ctrl+0", "help_assistant"),
             ("Enter / Space", "help_activate"),
             ("Ctrl+A / F7", "help_edit_select"),
             ("Ctrl+C / Ctrl+Insert", "help_edit_copy"),

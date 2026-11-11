@@ -2436,7 +2436,11 @@ class ActionsPane(Vertical):
                 RichText("·", style="dim") if item.preview else table.check_label(item.item_id),
                 RichText(_action_time_range(self._service, item), style=style),
                 RichText(_action_type_label(self._service, item.action_type), style=style),
-                RichText(("✓ " if item.completed_at else "") + item.summary, style=style),
+                RichText(
+                    (self._service.t("recurrence.preview") + " · " if item.preview else "")
+                    + item.summary,
+                    style=style,
+                ),
                 RichText(
                     " · ".join(filter(None, [item.category, ", ".join(item.tags), item.notes]))
                     or "-",
@@ -2583,10 +2587,10 @@ class ActionsPane(Vertical):
             table = self._actions_table()
             ids = list(table.checked_keys) if table is not None and table.checked_keys else []
             item = self._selected_item()
-            if not ids and item is not None:
+            if not ids and item is not None and not item.preview:
                 ids = [item.item_id]
             cast(MailFlowApp, self.app).open_assistant(  # pyright: ignore[reportUnknownMemberType]
-                {"action_ids": ids or [a.item_id for a in self._items]},
+                {"action_ids": ids or [a.item_id for a in self._items if not a.preview]},
                 self._service.t("assistant.task_scope"),
             )
             return
@@ -4199,6 +4203,7 @@ class MailFlowApp(App[None]):
         for key, tab_id in (
             ("ctrl+1", "tab-mail"),
             ("ctrl+2", "tab-actions"),
+            ("ctrl+0", "tab-assistant"),
             ("ctrl+3", "tab-mailboxes"),
             ("ctrl+4", "tab-llms"),
             ("ctrl+5", "tab-runtime"),
@@ -4267,7 +4272,11 @@ class MailFlowApp(App[None]):
             self.notify(self._service.t("assistant.busy"))
 
     async def on_assistant_pane_open_result(self, event: AssistantPane.OpenResult) -> None:
-        if event.kind == "mail":
+        if event.kind == "model":
+            self.query_one(TabbedContent).active = "tab-settings" if self._remote else "tab-llms"
+            if self._remote:
+                self.notify(self._service.t("assistant.remote_model_setup"))
+        elif event.kind == "mail":
             record = await self._service.get_mail(event.identity)
             if record is not None:
                 self.push_screen(MailReader(self._service, record))
@@ -4278,7 +4287,7 @@ class MailFlowApp(App[None]):
             )
             if item is not None:
                 self.push_screen(TodoEditModal(self._service, item))
-        elif event.kind == "plugin" and not self._remote:
+        elif event.kind == "plugin":
             self.query_one(TabbedContent).active = "tab-runtime"
             self.query_one(RuntimePane)._open_plugin_detail(event.identity)  # pyright: ignore[reportPrivateUsage]
 

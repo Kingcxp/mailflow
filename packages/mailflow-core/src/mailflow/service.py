@@ -2155,6 +2155,11 @@ Return every candidate in this batch."""
                                 candidate.record_ids
                             )
                         )
+                        and (
+                            candidate.tool != "add_action"
+                            or candidate.arguments.get("mail_id", "")
+                            == operation.arguments.get("mail_id", "")
+                        )
                     ),
                     None,
                 )
@@ -3574,10 +3579,28 @@ Return every candidate in this batch."""
     def _chat_confirmation(self, actor: str, result: SmartActionResult) -> str:
         token = secrets.token_hex(3)
         self._assistant_confirmations[actor] = (token, result)
-        changes = "\n".join(
-            f"{i}. {self.t(op.summary_key, **op.summary_params)}"
-            for i, op in enumerate(result.pending, 1)
-        )
+        lines: list[str] = []
+        for i, op in enumerate(result.pending, 1):
+            description = self.t(op.summary_key, **op.summary_params)
+            if op.tool in {"add_action", "edit_action"}:
+                args = op.arguments
+                repeat = args.get("repeat")
+                details = [str(args.get("category") or ""), ", ".join(args.get("tags") or [])]
+                if repeat:
+                    details.append(self.t("recurrence." + repeat["frequency"]))
+                    if repeat.get("weekdays"):
+                        details.append(
+                            self.t("recurrence.weekdays")
+                            + ": "
+                            + ", ".join(str(day + 1) for day in repeat["weekdays"])
+                        )
+                    if repeat.get("month_day"):
+                        details.append(self.t("recurrence.month_day") + f": {repeat['month_day']}")
+                if args.get("completed"):
+                    details.append(self.t("recurrence.complete_delete"))
+                description += "\n" + " · ".join(detail for detail in details if detail)
+            lines.append(f"{i}. {description.strip()}")
+        changes = "\n".join(lines)
         return self.t("assistant.chat_confirm", changes=changes, token=token)
 
     # commands that need the chat context (subscriptions) or special

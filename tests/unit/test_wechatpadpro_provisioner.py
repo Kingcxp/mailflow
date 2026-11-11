@@ -298,6 +298,7 @@ async def test_webhook_bridge_sends_every_bot_reply_page(
                 "chat_type": "group",
                 "provider": "wechatpadpro",
                 "instance_id": "wechat-1",
+                "mentioned": False,
                 "stream": True,
                 "request_id": "",
             }

@@ -1103,7 +1103,8 @@
       "help_selection_clear": "Lists: clear checks; dialogs: close",
       "help_mail_undo": "Mail list: undo the last mail deletion",
       "help_terminal_clipboard": "Copy and paste within MailFlow work in this session. Copying to your computer also needs terminal clipboard support. In a browser console, use its Paste control or Shift+Insert if Ctrl+V is intercepted. Password fields do not copy hidden text.",
-      "smtp_tls_hint": "On: STARTTLS (usually port 587); off: implicit TLS (usually port 465)."
+      "smtp_tls_hint": "On: STARTTLS (usually port 587); off: implicit TLS (usually port 465).",
+      "help_assistant": "Open the assistant"
     },
     "update": {
       "applied_title": "Applied updates",
@@ -1177,7 +1178,7 @@
       "hourly_no_target": "this chat is not a delivery target; subscribe first",
       "hourly_effective_off": "Hourly summaries are OFF: {reason}.",
       "help_read": "MailFlow — view mail and tasks\n{p} mail list [query]\n{p} mail show <ID|#>\n{p} mail search <need>\n{p} action list [--state open|all]\n{p} action show <ID|#>\n{p} status · {p} hourly\nUse the ID from a notification or list. Numbers refer to your last result in this chat.",
-      "help_admin": "Manage mail and tasks\n{p} mail delete <ID|#> · mail urgency <ID|#> <level|auto>\n{p} action add <summary> [--due \"YYYY-MM-DD HH:MM\"]\n{p} action edit <ID|#> --summary <text> [--due <time|none>] [--reminder on|off] [--snooze <time|none>]\n{p} action complete <ID|#> · action delete <ID|#>\n{p} reply create <mail ID|#> → reply show <draft> → reply edit <draft> \"<subject>\" \"<body>\" → reply prepare <draft> → reply confirm <draft> <token>\n{p} subscribe · {p} unsubscribe · {p} hourly on|off\n{p} help for details; {p} cancel stops a pending lookup.",
+      "help_admin": "Manage mail and tasks\n{p} mail delete <ID|#> · mail urgency <ID|#> <level|auto>\n{p} action add <summary> [--due \"YYYY-MM-DD HH:MM\"]\n{p} action edit <ID|#> --summary <text> [--due <time|none>] [--reminder on|off] [--snooze <time|none>]\n{p} action complete <ID|#> · action delete <ID|#>\n{p} reply create <mail ID|#> → reply show <draft> → reply edit <draft> \"<subject>\" \"<body>\" → reply prepare <draft> → reply confirm <draft> <token>\n{p} subscribe · {p} unsubscribe · {p} hourly on|off\n{p} help for details; {p} cancel stops a pending lookup.\nRecurring plans: {p} action plans · {p} action stop-plan <plan-id>. Completing permanently removes this occurrence; its plan continues.",
       "accepted": "Working on your request. Use {prefix}mailflow cancel to stop it.",
       "cancelled": "Request cancelled. Any completed changes have been kept.",
       "cancel_requested": "Cancellation requested.",
@@ -1480,7 +1481,9 @@
       "chat_confirm": "Proposed changes:\n{changes}\n\nReply “confirm {token}” or “cancel {token}”. In a group, mention the bot. Confirmation expires in 20 minutes.",
       "not_running": "No task is running.",
       "operation_manage_action_plan": "Manage recurring plan",
-      "operation_sync_account": "Change this account’s sync task"
+      "operation_sync_account": "Change this account’s sync task",
+      "configure_model": "Configure a model",
+      "remote_model_setup": "Configure a model in the server’s local settings, then return to the assistant."
     },
     "recurrence": {
       "category": "Category",
@@ -1500,7 +1503,7 @@
       "invalid_days": "Choose weekdays from 1 to 7.",
       "use_stop": "Use End this plan to stop recurrence.",
       "cannot_reopen": "Completed occurrences are removed permanently. Create a new task if needed.",
-      "preview": "Future occurrence (preview only)",
+      "preview": "Preview",
       "plans": "Recurring plans",
       "stopped": "Plan ended. Existing outstanding tasks have been kept.",
       "reminder": "Scheduled reminder: {summary} ({due})"

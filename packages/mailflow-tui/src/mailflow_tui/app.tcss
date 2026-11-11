@@ -332,7 +332,8 @@ TodoCreateModal {
 }
 #todo-create-dialog {
     width: 64;
-    height: auto;
+    max-width: 96%;
+    height: 90%;
     max-height: 90%;
     border: round $accent;
     background: $surface;
@@ -343,7 +344,7 @@ TodoCreateModal {
     margin-bottom: 1;
 }
 #todo-create-form {
-    height: auto;
+    height: 1fr;
     padding: 0 1;
 }
 .todo-label {
@@ -1110,6 +1111,7 @@ ListEditScreen, EntryFormScreen {
 
 #entry-form-dialog {
     width: 88;
+    max-width: 96%;
     height: 85%;
     border: round $accent;
     background: $surface;
@@ -1192,6 +1194,10 @@ ListEditScreen, EntryFormScreen {
 }
 
 #accounts-actions, #llms-actions, #history-actions {
+    layout: grid;
+    grid-size: 3;
+    grid-columns: 1fr 1fr 1fr;
+    grid-gutter: 1;
     height: auto;
     padding: 0 1;
     align-vertical: middle;
@@ -1215,7 +1221,8 @@ ListEditScreen, EntryFormScreen {
 
 .secret-row Input {
     width: 100%;
-    padding-right: 8;
+    padding-right: 7;
+    margin-bottom: 0;
 }
 
 .eye-btn {
@@ -1496,4 +1503,13 @@ UserProfileModal {
 #smart-review-edit-dialog {
     width: 96%;
     max-width: 78;
+}
+
+#entry-form-fields Input, #entry-form-fields Select, #entry-form-fields .secret-row {
+    width: 100%;
+    margin: 0 0 1 0;
+}
+#entry-form-fields .secret-row Input {
+    width: 100%;
+    margin-bottom: 0;
 }

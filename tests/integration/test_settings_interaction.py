@@ -121,6 +121,7 @@ async def test_provider_drafts_do_not_cross_and_save_failure_keeps_input(
             **(
                 {
                     "mail_notifications": True,
+                    "send_interval_seconds": 2,
                 }
                 if group == "notifiers"
                 else {}
@@ -548,7 +549,7 @@ async def test_gateway_cancel_waits_for_operation_and_releases_resources(
     async def qr(*_args: Any) -> str:
         if phase == "endpoint":
             qr_ready.set()
-            return "https://fake/login"
+            return "__MAILFLOW_LOGGED_IN__"
         entered.set()
         try:
             await asyncio.Future()
@@ -579,9 +580,6 @@ async def test_gateway_cancel_waits_for_operation_and_releases_resources(
         app.push_screen(guide, results.append)
         if phase == "endpoint":
             await asyncio.wait_for(qr_ready.wait(), 3)
-            await pilot.pause()
-            assert not guide.query_one("#guide-logged-in", Button).disabled
-            guide.query_one("#guide-logged-in", Button).press()
         await asyncio.wait_for(entered.wait(), 3)
         await pilot.pause()
         guide.query_one("#guide-cancel", Button).press()

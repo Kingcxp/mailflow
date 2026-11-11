@@ -214,6 +214,7 @@ async def test_dispatch_forwards_the_command_payload(
             "provider": "telegram",
             "instance_id": "tg-1",
             "request_id": "5",
+            "mentioned": False,
             "stream": True,
         }
     ]
@@ -334,3 +335,26 @@ async def test_custom_api_url_applies_to_identity_polling_and_delivery(
     )
     await _notifier(bot_token="test", chat_id="7", api_base="http://fake-api/").push_text("ready")
     assert sent_to == ["http://fake-api"]
+
+    # Text delivery must expose the same platform retry delay as image delivery.
+    from email.message import Message
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    from mailflow.notifications import DeliveryError
+
+    gateway = importlib.import_module("mailflow_notify_telegram.gateway")
+
+    def limited(*_args: Any, **_kwargs: Any) -> Any:
+        raise HTTPError(
+            "http://fake-api",
+            429,
+            "Too many requests",
+            Message(),
+            BytesIO(b'{"ok":false,"parameters":{"retry_after":4}}'),
+        )
+
+    monkeypatch.setattr(gateway, "urlopen", limited)
+    with pytest.raises(DeliveryError) as rejected:
+        gateway.send_text("test", "7", "ready", api_base="http://fake-api")
+    assert rejected.value.retry_after == 4 and rejected.value.code == "delivery.rate_limited"

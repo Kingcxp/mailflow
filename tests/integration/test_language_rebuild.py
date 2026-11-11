@@ -132,7 +132,6 @@ async def test_language_switch_marks_old_results_failed_until_explicit_retry(
         assert record.analysis.language == "en" and record.analysis_state == "ready"
         old_analysis = record.analysis.model_copy(deep=True)
         old_action = old_analysis.action_items[0]
-        old_action.completed_at = datetime(2026, 11, 1, tzinfo=UTC)
         old_action.reminder_enabled = False
         old_action.snoozed_until = datetime(2099, 1, 1, tzinfo=UTC)
         await service.storage.save_mail(record.model_copy(update={"analysis": old_analysis}))
@@ -170,7 +169,7 @@ async def test_language_switch_marks_old_results_failed_until_explicit_retry(
         )
         action = updated.action_items[0]
         assert action.summary == "提交报告" and action.item_id == old_action.item_id
-        assert action.completed_at == old_action.completed_at
+        assert action.completed_at is None
         assert action.snoozed_until == old_action.snoozed_until and not action.reminder_enabled
         assert action.reminder_key == old_action.reminder_key
         assert updated.manual_urgency == Urgency.URGENT

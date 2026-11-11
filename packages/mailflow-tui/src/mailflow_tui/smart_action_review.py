@@ -66,6 +66,17 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
             ", ".join(args.get("tags") or []),
             self._t("recurrence." + args["repeat"]["frequency"]) if args.get("repeat") else "",
         ]
+        if args.get("completed"):
+            parts.append(self._t("recurrence.complete_delete"))
+        repeat: dict[str, Any] = args.get("repeat") or {}
+        if repeat.get("weekdays"):
+            parts.append(
+                self._t("recurrence.weekdays")
+                + ": "
+                + ", ".join(str(day + 1) for day in repeat["weekdays"])
+            )
+        if repeat.get("month_day"):
+            parts.append(self._t("recurrence.month_day") + f": {repeat['month_day']}")
         if operation.tool == "delete_action":
             key = (
                 "tui.smart_review_delete_analysis"

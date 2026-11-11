@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import queue
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -41,7 +42,16 @@ from mailflow_tui.widgets import TextArea as EditingTextArea
 from textual.app import App, ComposeResult
 from textual.containers import ScrollableContainer
 from textual.coordinate import Coordinate
-from textual.widgets import Button, DataTable, Input, Select, Static, TabbedContent, TextArea
+from textual.widgets import (
+    Button,
+    DataTable,
+    Input,
+    RichLog,
+    Select,
+    Static,
+    TabbedContent,
+    TextArea,
+)
 
 from mailflow_test_support.commands import MemoryStorage, commands_service, make_record
 from mailflow_test_support.ui import mock_http_client, until
@@ -349,15 +359,51 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         search.value = "SubjectNeedle.*"
         await settle(pilot)
         assert keys(table) == ["target"]
-        smart = AsyncMock(return_value=SmartActionResult(records=[target]))
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def execute_query(*_args: Any, **kwargs: Any) -> SmartActionResult:
+            kwargs["progress"]("query", 1, 2, None)
+            entered.set()
+            await release.wait()
+            return SmartActionResult(records=[target], final_text="Found matching mail")
+
+        smart = AsyncMock(side_effect=execute_query)
         monkeypatch.setattr(view, "smart_action", smart)
-        app.open_assistant({"record_ids": keys(table)}, "Current results")
-        app.query_one("#assistant-input", Input).value = "Find matching mail"
+        scoped_ids = keys(table)
+        app.open_assistant({"record_ids": scoped_ids}, "Current results")
+        scoped_ids.append("other")  # The handoff owns a snapshot of the original range.
+        instruction = app.query_one("#assistant-input", Input)
+        instruction.value = "Find matching mail"
         await pilot.pause()
         app.query_one("#assistant-send", Button).press()
+        await asyncio.wait_for(entered.wait(), 2)
+        instruction.value = "Next question, not executed yet"
+        app.query_one(TabbedContent).active = "tab-mail"
+        await pilot.pause()
+        search.value = "unrelated"
+        service.i18n.set_language("zh-CN")
+        await emit("language.changed", language="zh-CN")
+        await until(pilot, lambda: keys(table) == ["other"])
+        app.query_one(TabbedContent).active = "tab-assistant"
+        await pilot.pause()
+        assert instruction.value == "Next question, not executed yet"
+        assert smart.await_count == 1 and not app.query_one("#assistant-stop", Button).disabled
+        release.set()
         await settle(pilot)
         assert smart.await_args is not None
-        assert smart.await_args.kwargs["record_ids"] == keys(table) == ["target"]
+        assert smart.await_args.kwargs["record_ids"] == ["target"]
+        assert keys(app.query_one("#assistant-results", DataTable)) == ["mail:target"]
+        assert not app.query_one("#assistant-progress", RichLog).display
+        # Stopping a follow-up keeps the previous result and the draft input.
+        release.clear()
+        entered.clear()
+        app.query_one("#assistant-send", Button).press()
+        await asyncio.wait_for(entered.wait(), 2)
+        app.query_one("#assistant-stop", Button).press()
+        await settle(pilot)
+        assert service.t("assistant.cancelled") in text(app, "#assistant-status")
+        assert instruction.value == "Next question, not executed yet"
+        assert keys(app.query_one("#assistant-results", DataTable)) == ["mail:target"]
         app.query_one(TabbedContent).active = "tab-mail"
         await pilot.pause()
         regex.press()
@@ -670,7 +716,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
 
 async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any) -> None:
     service, view, app, _emit, _failures = host
-    task = await service.add_action("Finish review")
+    await service.add_action("Finish review")
     for index in range(3):
         await service.storage.save_mail(make_record(f"select-{index}", subject=f"Select {index}"))
     async with app.run_test(size=(80, 24)) as pilot:
@@ -711,13 +757,6 @@ async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any)
         app.screen.query_one("#workflow-apply", Button).press()
         await settle(pilot)
         assert not await service.list_actions() and status.disabled
-        app.query_one("#actions-range", Select).value = "completed"
-        await settle(pilot)
-        assert keys(app.query_one("#actions-table", DataTable)) == [task.item_id]
-        status.press()
-        await until(pilot, lambda: bool(app.screen.query("#workflow-choice")))
-        app.screen.query_one("#workflow-choice", Select).value = "reopen_tasks"
-        app.screen.query_one("#workflow-apply", Button).press()
-        await settle(pilot)
-        assert (await service.list_actions())[0].item_id == task.item_id
-        assert status.disabled
+        assert keys(app.query_one("#actions-table", DataTable)) == []
+        assert await service.list_actions_all() == []
+        assert not await service.runtime.run_reminder_tick()
