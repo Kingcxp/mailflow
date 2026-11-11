@@ -47,6 +47,7 @@ def _write(path: Path, payload: bytes, *, overwrite: bool) -> None:
         else:
             # Exclusive creation also protects against a second backup racing.
             with path.open("xb") as destination:
+                path.chmod(0o600)
                 destination.write(payload)
     finally:
         if temporary is not None:

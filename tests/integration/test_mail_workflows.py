@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -405,6 +406,12 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     service.config.general.language = "zh-CN"
     service.i18n.set_language("zh-CN")
     path = await service.create_backup(str(tmp_path / "backup.zip"))
+    if os.name == "posix":
+        assert (await asyncio.to_thread(Path(path).stat)).st_mode & 0o777 == 0o600
+    saved_backup = await asyncio.to_thread(Path(path).read_bytes)
+    with pytest.raises(FileExistsError):
+        await service.create_backup(path)
+    assert await asyncio.to_thread(Path(path).read_bytes) == saved_backup
     await service.set_language("en")
     await service.batch_mail(["saved"])
     await service.delete_action(task.item_id)
