@@ -10,7 +10,16 @@ from typing import Any, cast
 import httpx
 import pytest
 from mailflow.config import MailFlowConfig, NotifierConfig
-from mailflow.domain import ActionItem, ActionOrigin, MailAnalysis, Urgency
+from mailflow.domain import (
+    ActionItem,
+    ActionOrigin,
+    Attachment,
+    MailAnalysis,
+    NotificationCapabilities,
+    NotificationImage,
+    NotificationMessage,
+    Urgency,
+)
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.pipeline import PipelineEngine
@@ -46,7 +55,10 @@ def make_service(storage: MemoryStorage, *notifiers: FakeNotifier) -> MailFlowSe
         pipeline=PipelineEngine([]),
         notifiers=cast(Any, list(notifiers)),
         notifier_configs=[
-            NotifierConfig(notifier_id=f"n{i}", provider="fake") for i in range(len(notifiers))
+            NotifierConfig(
+                notifier_id=f"n{i}", provider="fake", options={"send_interval_seconds": 0}
+            )
+            for i in range(len(notifiers))
         ],
         events=EventBus(),
         i18n=I18n(),
@@ -135,15 +147,20 @@ async def test_partial_target_failure_does_not_resend_successful_chat() -> None:
             if target == "group:2" and self.failures:
                 self.failures -= 1
                 raise OSError("chat unavailable")
+            assert "Meeting" in text and "Report" in text
             self.sent.append(target)
 
     storage = MemoryStorage()
-    await schedule(storage)
+    item = await schedule(storage)
+    await storage.save_custom_action(
+        item.model_copy(update={"item_id": "report", "mail_id": "", "summary": "Report"})
+    )
     notifier = TargetNotifier(failures=1)
     service = make_service(storage, notifier)
     service.runtime._notifier_configs[0].options["targets"] = ["group:1", "group:2"]  # pyright: ignore[reportPrivateUsage]
     assert await service.runtime.run_reminder_tick() == 0
-    assert await service.runtime.run_reminder_tick() == 1
+    assert notifier.sent == ["group:1"]
+    assert await service.runtime.run_reminder_tick() == 2
     assert notifier.sent == ["group:1", "group:2"]
 
 
@@ -184,6 +201,9 @@ async def test_rejected_gateway_push_raises_for_scheduler_retry(
         await notifier.push_to_target("group:1", "Reminder")
     with pytest.raises(httpx.HTTPStatusError if status == 503 else DeliveryError):
         await notifier.notify(make_record())
+    if hasattr(notifier, "push_image_to_target"):
+        with pytest.raises(httpx.HTTPStatusError if status == 503 else DeliveryError):
+            await notifier.push_image_to_target("group:1", NotificationImage(data=b"image"))
 
 
 async def test_mail_target_failure_is_visible_and_retry_does_not_repeat_success(
@@ -455,3 +475,49 @@ async def test_retry_rechecks_task_completed_while_another_delivery_is_waiting(
     finally:
         release.set()
         await retry
+
+
+async def test_image_retry_keeps_successful_text_images_and_targets() -> None:
+    class ImageChannel(FakeNotifier):
+        capabilities = NotificationCapabilities(images=True)
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.images: list[tuple[str, bytes]] = []
+            self.fail_image = True
+
+        async def push_to_target(self, target: str, text: str) -> None:
+            self.sent.append(target)
+
+        async def send_message(self, target: str, message: NotificationMessage) -> None:
+            if target == "group:2" and self.fail_image:
+                raise OSError("image temporarily unavailable")
+            self.images.extend((target, image.data) for image in message.images)
+
+    storage = MemoryStorage()
+    await schedule(storage)
+    storage.mails["m1"].mail.attachments = [
+        Attachment(filename="photo.png", content_type="image/png", size=5, data=b"image")
+    ]
+    notifier = ImageChannel()
+    service = make_service(storage, notifier)
+    service.runtime._notifier_configs[0].options.update(  # pyright: ignore[reportPrivateUsage]
+        targets=["group:1", "group:2"], notification_images=True
+    )  # pyright: ignore[reportPrivateUsage]
+    assert await service.runtime.run_reminder_tick() == 0
+    assert notifier.sent == ["group:1", "group:2"]
+    assert notifier.images == [("group:1", b"image")]
+    failures = await service.runtime.failed_deliveries()
+    assert len(failures) == 1 and failures[0]["target"] == "group:2"
+    notifier.fail_image = False
+    assert await service.runtime.retry_deliveries([failures[0]["delivery_id"]]) == 1
+    assert notifier.sent == ["group:1", "group:2"]
+    assert notifier.images == [("group:1", b"image"), ("group:2", b"image")]
+    await service.runtime.run_reminder_tick()
+    assert len(notifier.images) == len(notifier.sent) == 2
+    assert await service.runtime.run_reminder_tick() == 0
+
+    from mailflow.message_media import summary_card
+
+    card = summary_card("Summary\nMeeting at noon", "en")
+    assert card is not None and card.data.startswith(b"\x89PNG")

@@ -8,14 +8,17 @@ from collections.abc import Callable
 from typing import Any, cast
 from urllib.request import Request
 
+import httpx
+
 from mailflow.config import NotifierConfig
 from mailflow.domain import MailRecord
 from mailflow.i18n import I18n
 
 
 class DeliveryError(RuntimeError):
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, retry_after: float = 0) -> None:
         super().__init__(reason)
+        self.retry_after = retry_after
         self.code = f"delivery.{reason}"
         self.params: dict[str, Any] = {}
 
@@ -114,7 +117,28 @@ def check_result(payload: Any) -> None:
             for key in ("retcode", "errcode", "code", "Code", "StatusCode")
         )
     ):
-        raise DeliveryError("rejected")
+        delay = payload.get("parameters", {}).get("retry_after", 0)
+        raise DeliveryError("rejected", float(delay or 0))
+
+
+def check_http_response(response: httpx.Response) -> None:
+    if response.status_code == 429:
+        try:
+            result = response.json()
+        except ValueError:
+            result = {}
+        delay = (
+            cast("dict[str, Any]", result).get("parameters", {}).get("retry_after")
+            if isinstance(result, dict)
+            else None
+        )
+        try:
+            seconds = float(delay or response.headers.get("Retry-After", "2"))
+        except (ValueError, TypeError):
+            seconds = 2
+        raise DeliveryError("rate_limited", seconds)
+    response.raise_for_status()
+    check_result(response.json())
 
 
 def post_webhook(request: Request, timeout: float, *, provider: str = "") -> None:

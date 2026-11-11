@@ -292,18 +292,24 @@ func main() {
 				Name string `json:"name"`
 			} `json:"to"`
 			Text string `json:"text"`
+			Image string `json:"image"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "bad json"})
 			return
 		}
-		if body.Text == "" {
+		if body.Text == "" && body.Image == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "text required"})
 			return
 		}
 		self, err := bot.GetCurrentUser()
 		if err != nil || self == nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "no session"})
+			return
+		}
+		image, decodeErr := base64.StdEncoding.DecodeString(body.Image)
+		if decodeErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "bad image"})
 			return
 		}
 		var sendErr error
@@ -320,7 +326,11 @@ func main() {
 				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no room named " + body.To.Name})
 				return
 			}
-			_, sendErr = target.SendText(body.Text)
+			if body.Image != "" {
+				_, sendErr = target.SendImage(bytes.NewReader(image))
+			} else {
+				_, sendErr = target.SendText(body.Text)
+			}
 		} else {
 			contacts, _ := self.Friends()
 			var target *openwechat.Friend
@@ -334,7 +344,11 @@ func main() {
 				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no contact named " + body.To.Name})
 				return
 			}
-			_, sendErr = target.SendText(body.Text)
+			if body.Image != "" {
+				_, sendErr = target.SendImage(bytes.NewReader(image))
+			} else {
+				_, sendErr = target.SendText(body.Text)
+			}
 		}
 		if sendErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": sendErr.Error()})

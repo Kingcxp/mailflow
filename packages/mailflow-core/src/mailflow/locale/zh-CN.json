@@ -1399,7 +1399,9 @@
       "retry_changes": "检查并重试失败的修改",
       "undo_delete": "撤销上一次移入回收站",
       "target": "接收目标",
-      "reason": "失败原因"
+      "reason": "失败原因",
+      "notification_images": "附带邮件原图及待办关联图片",
+      "summary_cards": "附带摘要卡片"
     },
     "sessions": {
       "detach": "转入后台",
@@ -1437,7 +1439,13 @@
       "mail_title": "[MailFlow] {urgency} — {subject}",
       "sender": "发件人：{sender}",
       "mail_ref": "邮件编号：{id}",
-      "attachments": "附件：{names}"
+      "attachments": "附件：{names}",
+      "text_fallback": "当前渠道以文字发送，图片请查看来源邮件。",
+      "card_font_missing": "当前环境缺少适用字体，摘要已完整以文字发送。",
+      "send_interval": "机器人连续消息的最短间隔（秒）",
+      "image_unavailable": "文字已发送，但图片获取失败。请检查来源账户后重试。",
+      "image_failed": "文字已发送，但图片发送失败，可重试此次投递。",
+      "rate_limited": "平台正在限制发送频率，将按平台要求等待后重试。"
     },
     "assistant": {
       "tab": "智能助手",

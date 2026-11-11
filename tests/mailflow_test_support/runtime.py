@@ -208,7 +208,12 @@ def build_runtime(
         storage=storage,
         notifiers=[n for n in notifier_list],  # type: ignore[arg-type]
         notifier_configs=[
-            NotifierConfig(notifier_id=f"n{i}", provider="console", minimum_urgency=n.minimum)
+            NotifierConfig(
+                notifier_id=f"n{i}",
+                provider="console",
+                minimum_urgency=n.minimum,
+                options={"send_interval_seconds": 0},
+            )
             for i, n in enumerate(notifier_list)
         ],
         events=EventBus(),

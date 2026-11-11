@@ -138,6 +138,7 @@ class BotServer(OwnedListener):
                         b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n"
                     )
                     await writer.drain()
+                    frame_state = {"progress": False}
                     async for reply in self._service.chat_command_stream(
                         text,
                         sender=str(payload.get("sender") or ""),
@@ -147,12 +148,20 @@ class BotServer(OwnedListener):
                         instance_id=instance,
                         request_id=str(payload.get("request_id") or ""),
                         mentioned=payload.get("mentioned") is True,
+                        on_waiting=lambda: frame_state.update(progress=True),
                     ):
-                        writer.write(
-                            json.dumps({"reply": self._service.chat_reply_chunks(reply)}).encode()
-                            + b"\n"
-                        )
-                        await writer.drain()
+                        chunks = self._service.chat_reply_chunks(reply)
+                        for chunk in chunks if isinstance(chunks, list) else [chunks]:
+                            if not chunk:
+                                continue
+                            await self._service.pace_bot(
+                                str(payload.get("provider") or ""), instance
+                            )
+                            writer.write(
+                                json.dumps({"reply": chunk, **frame_state}).encode() + b"\n"
+                            )
+                            await writer.drain()
+                        frame_state["progress"] = False
                     return
                 reply = await self._service.command_dispatch(
                     text,
@@ -208,7 +217,13 @@ class BotServer(OwnedListener):
         await writer.drain()
 
 
-async def command_replies(url: str, payload: dict[str, Any]) -> AsyncIterator[list[str]]:
+class CommandReply(list[str]):
+    def __init__(self, pages: list[str], *, progress: bool = False) -> None:
+        super().__init__(pages)
+        self.progress = progress
+
+
+async def command_replies(url: str, payload: dict[str, Any]) -> AsyncIterator[CommandReply]:
     """Read command progress without imposing a platform timeout on a local job."""
     try:
         async with (
@@ -219,13 +234,16 @@ async def command_replies(url: str, payload: dict[str, Any]) -> AsyncIterator[li
             async for line in response.aiter_lines():
                 if not line.strip():
                     continue
-                reply = json.loads(line).get("reply")
+                frame = json.loads(line)
+                reply = frame.get("reply")
                 pages: list[Any] = cast("list[Any]", reply) if isinstance(reply, list) else [reply]
-                yield [str(page) for page in pages if page]
+                yield CommandReply(
+                    [str(page) for page in pages if page], progress=frame.get("progress") is True
+                )
     except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("local bot command connection failed")
         word = str(payload.get("text") or "").strip().partition(" ")[0].casefold()
         if "mailflow" in word:
-            yield [I18n().t("chat.connection_lost")]
+            yield CommandReply([I18n().t("chat.connection_lost")])

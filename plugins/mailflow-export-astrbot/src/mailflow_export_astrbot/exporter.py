@@ -122,6 +122,7 @@ class Main(Star):
             pages = _service.chat_reply_chunks(reply)
             for page in pages if isinstance(pages, list) else [pages]:
                 if page:
+                    await _service.pace_bot(str(event.platform_meta.name), str(event.platform_meta.id))
                     yield event.plain_result(page)
 
 '''

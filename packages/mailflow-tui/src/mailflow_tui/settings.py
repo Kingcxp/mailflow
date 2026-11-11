@@ -535,15 +535,25 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             return extras
         existing = {field.field_id for field in extras}
         capabilities = self._service.notifier_capabilities(provider)
-        return extras + tuple(
-            _Extra(name, kind="boolean", default=default, label_key="ux." + name)
-            for name, default in (
-                ("mail_notifications", "true"),
-                ("task_reminders", "true"),
-                ("daily_digest", "true"),
-                ("hourly_summary", "false"),
+        return (
+            extras
+            + tuple(
+                _Extra(name, kind="boolean", default=default, label_key="ux." + name)
+                for name, default in (
+                    ("mail_notifications", "true"),
+                    ("task_reminders", "true"),
+                    ("daily_digest", "true"),
+                    ("hourly_summary", "false"),
+                    ("notification_images", "false"),
+                    ("summary_cards", "false"),
+                )
+                if name not in existing and name in capabilities
             )
-            if name not in existing and name in capabilities
+            + (
+                (_Extra("send_interval_seconds", default="2", label_key="delivery.send_interval"),)
+                if "send_interval_seconds" not in existing
+                else ()
+            )
         )
 
     def _provider_extras_for(self, provider: str) -> tuple[_Extra, ...]:

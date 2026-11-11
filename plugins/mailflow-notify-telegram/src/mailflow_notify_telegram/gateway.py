@@ -220,6 +220,7 @@ class TelegramBridge:
             != as_text(self.identity.get("username")).casefold()
         ):
             return
+        progress_id: int | None = None
         async for reply in command_replies(
             self._bot_url,
             {
@@ -235,7 +236,22 @@ class TelegramBridge:
         ):
             for page in reply:
                 try:
-                    await self._request("sendMessage", {"chat_id": chat_id, "text": page})
+                    if progress_id is not None and not getattr(reply, "progress", False):
+                        try:
+                            await self._request(
+                                "editMessageText",
+                                {"chat_id": chat_id, "message_id": progress_id, "text": page},
+                            )
+                        except Exception:
+                            await self._request("sendMessage", {"chat_id": chat_id, "text": page})
+                        progress_id = None
+                    else:
+                        result = await self._request(
+                            "sendMessage", {"chat_id": chat_id, "text": page}
+                        )
+                        if getattr(reply, "progress", False):
+                            value = as_object(result.get("result")).get("message_id")
+                            progress_id = value if isinstance(value, int) else None
                 except Exception as exc:
                     logger.warning(
                         "telegram %s: reply to %s failed: %s",

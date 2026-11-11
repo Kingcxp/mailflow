@@ -1399,7 +1399,9 @@
       "retry_changes": "Review and retry failed changes",
       "undo_delete": "Undo the last move to trash",
       "target": "Recipient",
-      "reason": "Reason"
+      "reason": "Reason",
+      "notification_images": "Include original mail and linked task images",
+      "summary_cards": "Include summary cards"
     },
     "sessions": {
       "detach": "Detach",
@@ -1437,7 +1439,13 @@
       "mail_title": "[MailFlow] {urgency} — {subject}",
       "sender": "From: {sender}",
       "mail_ref": "Mail ID: {id}",
-      "attachments": "Attachments: {names}"
+      "attachments": "Attachments: {names}",
+      "text_fallback": "This channel sends text only; images are available in the source mail.",
+      "card_font_missing": "A summary card could not be rendered with the available fonts; the complete text is shown above.",
+      "send_interval": "Minimum interval between bot messages (seconds)",
+      "image_unavailable": "Text was delivered, but an image could not be retrieved. Check the source account and retry.",
+      "image_failed": "Text was delivered; an image could not be sent. Retry this delivery.",
+      "rate_limited": "The platform is limiting messages. Sending will resume after its waiting period."
     },
     "assistant": {
       "tab": "Assistant",

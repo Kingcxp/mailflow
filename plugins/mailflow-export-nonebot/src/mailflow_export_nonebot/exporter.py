@@ -129,6 +129,7 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
         pages = _service.chat_reply_chunks(reply)
         for page in pages if isinstance(pages, list) else [pages]:
             if page:
+                await _service.pace_bot(bot.adapter.get_name(), str(bot.self_id))
                 await _mailflow_matcher.send(page)
 
 

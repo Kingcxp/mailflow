@@ -556,6 +556,7 @@ version = "0.1.0"
 source = { editable = "packages/mailflow-core" }
 dependencies = [
     { name = "httpx" },
+    { name = "pillow" },
     { name = "pluggy" },
     { name = "pydantic" },
     { name = "rich" },
@@ -566,6 +567,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "pillow", specifier = ">=11.0" },
     { name = "pluggy", specifier = ">=1.5" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "rich", specifier = ">=13.7" },

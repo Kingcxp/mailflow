@@ -18,18 +18,29 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
 from difflib import SequenceMatcher
+from functools import partial
 from typing import Any, cast
 from weakref import WeakValueDictionary
 from zoneinfo import ZoneInfo
 
 from mailflow.action_store import ActionStore
 from mailflow.config import GeneralConfig, MailAccountConfig, MailFlowConfig, NotifierConfig
-from mailflow.contracts import MailSource, Notifier, StorageBackend
+from mailflow.contracts import (
+    AttachmentSource,
+    MailSource,
+    Notifier,
+    RichNotifier,
+    StorageBackend,
+    TargetedNotifier,
+    TextNotifier,
+)
 from mailflow.deliveries import DeliveryFailures
 from mailflow.domain import (
     ActionItem,
     MailMessage,
     MailRecord,
+    NotificationImage,
+    NotificationMessage,
     Urgency,
     action_sort_time,
     action_time_window,
@@ -42,7 +53,9 @@ from mailflow.errors import error_code, error_text
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.lifecycle import bounded, cancel_tasks
-from mailflow.notifications import format_mail, option_enabled, targets_of
+from mailflow.message_media import summary_card
+from mailflow.notifications import DeliveryError, format_mail, option_enabled, targets_of
+from mailflow.outbound import defer, pace
 from mailflow.pipeline import PipelineEngine
 from mailflow.prompts import prompt_context
 
@@ -873,7 +886,9 @@ class MailFlowRuntime:
             self._pending_mail_accounts.pop(mail.normalized_message_id(), None)
             await self._events.emit(f"{_EVENT_PREFIX}mail.processed", record=record)
             if mail.notify_requested or (mail.ingestion == "live" and not _skip_dedup):
-                await self._notify(record, resend=mail.notify_requested)
+                await self._notify(
+                    record.model_copy(update={"mail": mail}), resend=mail.notify_requested
+                )
             return record
 
     async def find_mail_record(self, mail: MailMessage) -> MailRecord | None:
@@ -1060,6 +1075,131 @@ class MailFlowRuntime:
                 )
                 await asyncio.sleep(0.5 * (attempt + 1))
 
+    @staticmethod
+    async def _send_mail_text(
+        notifier: Notifier, target: str | None, record: MailRecord, text: str
+    ) -> None:
+        if target is None:
+            await notifier.notify(record)
+        else:
+            await cast(TargetedNotifier, notifier).notify_to_target(target, record, text=text)
+
+    @staticmethod
+    async def _send_text(notifier: Notifier, target: str | None, text: str) -> None:
+        if target is None:
+            await cast(TextNotifier, notifier).push_text(text)
+        else:
+            await cast(TargetedNotifier, notifier).push_to_target(target, text)
+
+    async def _send_batch_text(
+        self, notifier: Notifier, target: str | None, receipts: list[str], text: str
+    ) -> None:
+        await self._send_text(notifier, target, text)
+        for receipt in receipts:
+            await self._storage.set_preference(receipt + ".text", "delivered")
+
+    async def _send_content(
+        self,
+        notifier: Notifier,
+        config: NotifierConfig | None,
+        target: str | None,
+        receipt: str,
+        text: str,
+        send_text: Callable[[str], Awaitable[None]],
+        *,
+        records: list[MailRecord] | None = None,
+        items: list[ActionItem] | None = None,
+    ) -> None:
+        options = config.options if config is not None else {}
+        want_images = option_enabled(options, "notification_images", False)
+        want_card = option_enabled(options, "summary_cards", False)
+        rich = (
+            isinstance(notifier, RichNotifier)
+            and notifier.capabilities.images
+            and target is not None
+        )
+        card = None
+        if (want_images or want_card) and not rich:
+            text += "\n" + self._rt("delivery.text_fallback")
+        elif want_card and not await self._storage.get_preference(receipt + ".card"):
+            card = await asyncio.to_thread(summary_card, text, self.analysis_language)
+            if card is None:
+                text += "\n" + self._rt("delivery.card_font_missing")
+
+        async def part(key: str, send: Callable[[], Awaitable[None]]) -> None:
+            if await self._storage.get_preference(key):
+                return
+            if config is not None:
+                await pace(config)
+            try:
+                await send()
+            except DeliveryError as exc:
+                if config is not None:
+                    defer(config, exc.retry_after)
+                raise
+            await self._storage.set_preference(key, "delivered")
+
+        await part(receipt + ".text", lambda: send_text(text))
+        if not rich:
+            return
+        rich_notifier = cast(RichNotifier, notifier)
+        destination = cast(str, target)
+        if card is not None:
+            message = NotificationMessage(images=[card])
+            await part(receipt + ".card", partial(rich_notifier.send_message, destination, message))
+        if not want_images:
+            return
+        references: dict[tuple[str, int], tuple[MailRecord, int]] = {}
+        for record in records or []:
+            for index, attachment in enumerate(record.mail.attachments):
+                if attachment.content_type.startswith("image/"):
+                    references[(record.record_id, index)] = record, index
+        for item in items or []:
+            if not item.mail_id:
+                continue
+            linked_record = await self._storage.get_mail(item.mail_id)
+            if linked_record is None:
+                linked_record = next(
+                    (
+                        row.to_mail_record()
+                        for row in await self._storage.list_trash()
+                        if row.record_id == item.mail_id
+                    ),
+                    None,
+                )
+            if linked_record is None:
+                continue
+            for index, attachment in enumerate(linked_record.mail.attachments):
+                if attachment.content_type.startswith("image/") and (
+                    not item.image_indices or index in item.image_indices
+                ):
+                    references[(linked_record.record_id, index)] = linked_record, index
+        for (record_id, index), (record, _) in references.items():
+            key = (
+                receipt
+                + ".image."
+                + hashlib.sha256(f"{record_id}:{index}".encode()).hexdigest()[:20]
+            )
+            if await self._storage.get_preference(key):
+                continue
+            attachment = record.mail.attachments[index]
+            data = attachment.data
+            if data is None:
+                source = self._sources.get(record.mail.account_id)
+                if not isinstance(source, AttachmentSource):
+                    raise DeliveryError("image_unavailable")
+                try:
+                    data = await source.fetch_attachment(record.mail, index)
+                except Exception:
+                    raise DeliveryError("image_unavailable") from None
+            image = NotificationImage(
+                filename=attachment.filename or "image.png",
+                content_type=attachment.content_type,
+                data=data,
+            )
+            message = NotificationMessage(images=[image])
+            await part(key, partial(rich_notifier.send_message, destination, message))
+
     async def _notify(
         self,
         record: MailRecord,
@@ -1118,14 +1258,16 @@ class MailFlowRuntime:
                 last_exc: Exception | None = None
                 for attempt in range(3):
                     try:
-                        if target is None:
-                            await notifier.notify(record)
-                        else:
-                            await cast(Any, targeted)(
-                                target,
-                                record,
-                                text=format_mail(record, self._i18n.t if self._i18n else None),
-                            )
+                        send = partial(self._send_mail_text, notifier, target, record)
+                        await self._send_content(
+                            notifier,
+                            config,
+                            target,
+                            receipt,
+                            format_mail(record, self._i18n.t if self._i18n else None),
+                            send,
+                            records=[record],
+                        )
                         last_exc = None
                         break
                     except Exception as exc:
@@ -1292,10 +1434,27 @@ class MailFlowRuntime:
                         items,
                     )
                 try:
-                    if row.get("target"):
-                        await cast(Any, text_notifier).push_to_target(row["target"], text)
-                    else:
-                        await cast(Any, text_notifier).push_text(text)
+                    config = next(
+                        c
+                        for n, c in zip(self._notifiers, self._notifier_configs, strict=True)
+                        if n is text_notifier
+                    )
+                    if row.get("item_id"):
+                        items.extend(
+                            entry.item
+                            for entry in await self.action_store.read()
+                            if entry.item.item_id == row["item_id"]
+                        )
+                    send = partial(self._send_text, text_notifier, row.get("target") or None)
+                    await self._send_content(
+                        text_notifier,
+                        config,
+                        row.get("target") or None,
+                        receipt,
+                        text,
+                        send,
+                        items=items,
+                    )
                 except Exception as exc:
                     await self.deliveries.update(receipt, {**row, "error_code": error_code(exc)})
                 else:
@@ -1400,8 +1559,17 @@ class MailFlowRuntime:
             fired = 0
             async with self.action_store.lock:
                 await self._fire_daily_digest(now, config)
-                for entry in await self.action_store.read() if config.task_reminders else []:
-                    fired += await self._fire_reminder(entry.item, entry.record, now, config)
+                entries = await self.action_store.read() if config.task_reminders else []
+                pending: list[tuple[str, str, ActionItem]] = []
+                for entry in entries:
+                    await self._fire_reminder(
+                        entry.item, entry.record, now, config, collect=pending
+                    )
+                blocked = await self._batch_reminder_texts(pending)
+                for entry in entries:
+                    fired += await self._fire_reminder(
+                        entry.item, entry.record, now, config, skip_destinations=blocked
+                    )
             await self._fire_hourly_summary(now, config)
             return fired
 
@@ -1555,16 +1723,17 @@ class MailFlowRuntime:
             if await self._storage.get_preference(receipt):
                 continue
             try:
-                if target is None:
-                    push = getattr(notifier, "push_text", None)
-                    if push is None:
-                        complete = False
-                        continue
-                    await push(briefing)
-                else:
-                    await cast("Callable[[str, str], Awaitable[None]]", send_targeted)(
-                        target, briefing
-                    )
+                if target is None and not callable(getattr(notifier, "push_text", None)):
+                    complete = False
+                    continue
+                await self._send_content(
+                    notifier,
+                    notifier_config,
+                    target,
+                    receipt,
+                    briefing,
+                    partial(self._send_text, notifier, target),
+                )
             except Exception as exc:
                 complete = False
                 await self.deliveries.update(
@@ -1704,12 +1873,82 @@ class MailFlowRuntime:
             and action_sort_time(entry.item) < horizon
         ]
 
+    async def _batch_reminder_texts(self, pending: list[tuple[str, str, ActionItem]]) -> set[str]:
+        """Share the text/card push, then let normal per-item delivery send images and receipts."""
+        blocked: set[str] = set()
+        if len(pending) < 2:
+            return blocked
+        for notifier, config in zip(self._notifiers, self._notifier_configs, strict=True):
+            push = getattr(notifier, "push_text", None)
+            if not callable(push) or not option_enabled(config.options, "task_reminders"):
+                continue
+            targeted = getattr(notifier, "push_to_target", None)
+            targets = targets_of(config)
+            if not targets and config.options.get("excluded_targets"):
+                continue
+            for target in targets if targets and callable(targeted) else [None]:
+                identity = hashlib.sha256(
+                    f"{config.notifier_id}|{target or ''}".encode()
+                ).hexdigest()[:24]
+                today = (
+                    datetime.now(UTC)
+                    .astimezone(ZoneInfo(self._config.general.timezone))
+                    .date()
+                    .isoformat()
+                )
+                raw = await self._storage.get_preference(
+                    f"digest.{today}.delivered.{identity}.items"
+                )
+                covered = set(json.loads(raw or "[]"))
+                unsent = [
+                    (key, text, item)
+                    for key, text, item in pending
+                    if reminder_identity(item) not in covered
+                    and not await self._storage.get_preference(f"{key}.delivered.{identity}.text")
+                    and not await self._storage.get_preference(f"{key}.delivered.{identity}")
+                ]
+                for offset in range(0, len(unsent), 8):
+                    group = unsent[offset : offset + 8]
+                    if len(group) < 2:
+                        continue
+                    receipts = [f"{key}.delivered.{identity}" for key, _, _ in group]
+                    text = "\n\n".join(value for _, value, _ in group)
+                    send = partial(self._send_batch_text, notifier, target, receipts)
+                    batch_key = (
+                        "reminder.batch." + hashlib.sha256("|".join(receipts).encode()).hexdigest()
+                    )
+                    try:
+                        await self._send_content(notifier, config, target, batch_key, text, send)
+                    except Exception as exc:
+                        for receipt, (key, value, item) in zip(receipts, group, strict=True):
+                            blocked.add(receipt)
+                            await self.deliveries.update(
+                                receipt,
+                                dict(
+                                    kind="text",
+                                    target=target or "",
+                                    text=value,
+                                    option="task_reminders",
+                                    error_code=error_code(exc),
+                                    channel=config.notifier_id,
+                                    item_id=item.item_id,
+                                    key=key,
+                                ),
+                            )
+                    else:
+                        for receipt in receipts:
+                            await self._storage.set_preference(receipt + ".card", "delivered")
+        return blocked
+
     async def _fire_reminder(
         self,
         item: ActionItem,
         record: MailRecord | None,
         now: datetime,
         config: GeneralConfig,
+        *,
+        collect: list[tuple[str, str, ActionItem]] | None = None,
+        skip_destinations: set[str] | None = None,
     ) -> int:
         """Emit a once-per-window reminder for one action item when due."""
         if (
@@ -1749,6 +1988,14 @@ class MailFlowRuntime:
             ):
                 continue
             display_range = item.time_range_in(config.timezone)
+            if collect is not None:
+                text = self._rt(
+                    "recurrence.reminder" if item.plan_id else "reminder.push",
+                    summary=item.summary,
+                    due=display_range,
+                )
+                collect.append((key, text, item))
+                continue
             delivered = await self._deliver_notification(
                 key,
                 self._rt(
@@ -1762,6 +2009,7 @@ class MailFlowRuntime:
                 record=record,
                 kind=kind,
                 scheduled=when,
+                _skip_destinations=skip_destinations or set(),
             )
             if not delivered:
                 continue
@@ -1807,6 +2055,7 @@ class MailFlowRuntime:
         The scheduler holds its lock across this call. A partial failure only
         retries failed targets, including after a normal service restart.
         """
+        skip_destinations = payload.pop("_skip_destinations", set())
         destinations = 0
         complete = True
         for index, notifier in enumerate(self._notifiers):
@@ -1830,6 +2079,9 @@ class MailFlowRuntime:
                 destinations += 1
                 identity = hashlib.sha256(f"{notifier_id}|{target or ''}".encode()).hexdigest()[:24]
                 receipt = f"{key}.delivered.{identity}"
+                if receipt in skip_destinations:
+                    complete = False
+                    continue
                 if await self._storage.get_preference(receipt):
                     continue
                 item = payload.get("item")
@@ -1848,10 +2100,13 @@ class MailFlowRuntime:
                         await self.deliveries.update(receipt, None)
                         continue
                 try:
-                    if target is None:
-                        await cast("Callable[[str], Awaitable[None]]", push)(text)
-                    else:
-                        await cast("Callable[[str, str], Awaitable[None]]", targeted)(target, text)
+                    send = partial(self._send_text, notifier, target)
+                    media_items = list(payload.get("items") or [])
+                    if isinstance(payload.get("item"), ActionItem):
+                        media_items.append(payload["item"])
+                    await self._send_content(
+                        notifier, config, target, receipt, text, send, items=media_items
+                    )
                 except Exception as exc:
                     complete = False
                     item = payload.get("item")
@@ -1875,7 +2130,11 @@ class MailFlowRuntime:
                         },
                     )
                     logger.warning(
-                        "notifier %r target %r failed for %s: %s", notifier_id, target, key, exc
+                        "notifier %r target %r failed for %s (%s)",
+                        notifier_id,
+                        target,
+                        key,
+                        type(exc).__name__,
                     )
                 else:
                     await self._storage.set_preference(receipt, "delivered")

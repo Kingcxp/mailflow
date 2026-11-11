@@ -15,10 +15,12 @@ import asyncio
 import logging
 from typing import Any
 
+import httpx
 from mailflow.config import MailFlowConfig, NotifierConfig
-from mailflow.domain import ComponentKind, MailRecord
+from mailflow.domain import ComponentKind, MailRecord, NotificationImage
 from mailflow.forms import FormField
-from mailflow.notifications import DeliveryError, format_mail, targets_of
+from mailflow.message_media import ImageNotifier
+from mailflow.notifications import DeliveryError, check_http_response, format_mail, targets_of
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -56,7 +58,7 @@ _TELEGRAM_FIELDS: tuple[FormField, ...] = (
 )
 
 
-class TelegramNotifier:
+class TelegramNotifier(ImageNotifier):
     backend_id = "telegram"
 
     def __init__(self, config: NotifierConfig) -> None:
@@ -103,6 +105,18 @@ class TelegramNotifier:
                 {"api_base": self._api_base} if self._api_base != "https://api.telegram.org" else {}
             ),
         )
+
+    async def push_image_to_target(self, target: str, image: NotificationImage) -> None:
+        if not self._token:
+            raise DeliveryError("configuration")
+        chat_id = target.partition(":")[2].strip() or target.strip()
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{self._api_base}/bot{self._token}/sendPhoto",
+                data={"chat_id": chat_id},
+                files={"photo": (image.filename, image.data, image.content_type)},
+            )
+            check_http_response(response)
 
 
 class NotifyPlugin:

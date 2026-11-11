@@ -142,7 +142,9 @@ async def test_full_chat_command_chain_replies() -> None:
 
     service.config.notifiers = [
         NotifierConfig(
-            notifier_id="napcat-test", provider="onebot", options={"admins": ["404291187"]}
+            notifier_id="napcat-test",
+            provider="onebot",
+            options={"admins": ["404291187"], "send_interval_seconds": 0},
         )
     ]
     service.bot_server = None  # type: ignore[attr-defined]
@@ -177,26 +179,13 @@ async def test_full_chat_command_chain_replies() -> None:
         )
         await asyncio.sleep(0.3)
 
-        # 5) the reply went back through the OneBot HTTP API. help returns
-        # section chunks: the bridge merges them into ONE forward message
+        # Help arrives as readable text pages in the originating chat.
         assert onebot.requests, "no reply was sent to the OneBot API"
-        path, payload = onebot.requests[0]
-        assert path == "/send_group_forward_msg", path
-        assert payload["group_id"] == 565424593
-        nodes: list[dict[str, Any]] = list(payload["messages"])
-        assert nodes
         parts: list[str] = []
-        for node in nodes:
-            node_data: dict[str, Any] = dict(node["data"])
-            # a fake forward node must use an UNMATCHABLE placeholder uin:
-            # QQ resolves a real user's uin (bot's included) to their actual
-            # nickname, ignoring the custom node name
-            assert str(node_data["uin"]) == "10000", node_data["uin"]
-            assert node_data["name"]
-            content: list[dict[str, Any]] = list(node_data["content"])
-            for seg in content:
-                text_data: dict[str, Any] = dict(seg["data"])
-                parts.append(str(text_data["text"]))
+        for _path, payload in onebot.requests:
+            assert payload["group_id"] == 565424593
+            parts.append(str(payload["message"]))
+        assert "mailflow" in "\n".join(parts).lower()
 
         # single-string replies take the repr() preview path in bot_server;
         # the invalid ".80r" f-string spec crashed exactly there

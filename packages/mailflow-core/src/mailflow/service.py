@@ -623,7 +623,25 @@ class MailFlowService:
             component = inspect.unwrap(self.registry.notifier_factory(provider))
             if callable(getattr(component, "push_text", None)):
                 capabilities.update({"task_reminders", "daily_digest", "hourly_summary"})
+            if getattr(getattr(component, "capabilities", None), "images", False):
+                capabilities.update({"notification_images", "summary_cards"})
         return capabilities
+
+    async def pace_bot(self, provider: str, instance_id: str) -> None:
+        from mailflow.outbound import pace
+
+        config = next(
+            (
+                n
+                for n in self.config.notifiers
+                if normalize_provider(n.provider) == normalize_provider(provider)
+                and (n.notifier_id == instance_id or n.options.get("instance_id") == instance_id)
+            ),
+            None,
+        )
+        if config is None:
+            config = NotifierConfig(provider=normalize_provider(provider), notifier_id=instance_id)
+        await pace(config)
 
     @admin_operation
     async def reload_runtime(self, *, restart_sources: bool | None = None) -> None:
@@ -3310,6 +3328,7 @@ Return every candidate in this batch."""
         chat_type: str = "",
         request_id: str = "",
         mentioned: bool = False,
+        on_waiting: Callable[[], None] | None = None,
     ) -> AsyncIterator[str | list[str] | None]:
         """Stream acknowledgement and result using the service's owned command tasks."""
         word = text.removeprefix(self.command_prefix()).strip().partition(" ")[0]
@@ -3408,6 +3427,8 @@ Return every candidate in this batch."""
         assert task is not None
         done, _ = await asyncio.wait([task], timeout=1.0)
         if not done:
+            if on_waiting is not None:
+                on_waiting()
             yield self.t("chat.accepted", prefix=self.command_prefix())
         yield await asyncio.shield(task)
 

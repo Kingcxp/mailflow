@@ -29,7 +29,7 @@ const BOT_URL = process.env.MAILFLOW_BOT_URL || ''
 const PROVIDER = process.env.MAILFLOW_PROVIDER || 'whatsapp'
 const INSTANCE = process.env.MAILFLOW_INSTANCE || ''
 const AUTH_DIR = './auth'
-const MAX_BODY_BYTES = 1 << 20
+const MAX_BODY_BYTES = 24 << 20
 // Baileys logs through pino; the bridge's own stdout must stay readable
 // (the provisioner tails it for diagnostics), so keep the SDK logger quiet.
 const logger = pino({ level: 'silent' })
@@ -271,7 +271,7 @@ async function handleSend(req, res) {
   }
   const body = parsed && typeof parsed === 'object' ? parsed : {}
   const text = typeof body.text === 'string' ? body.text : ''
-  if (!text) {
+  if (!text && !body.image) {
     writeJSON(res, 400, { ok: false, error: 'text required' })
     return
   }
@@ -285,7 +285,12 @@ async function handleSend(req, res) {
     return
   }
   try {
-    await sendText(jid, text)
+    if (body.image) {
+      if (!sock) throw new Error('not logged in')
+      await sock.sendMessage(jid, { image: Buffer.from(body.image, 'base64'), mimetype: body.content_type || 'image/png' })
+    } else {
+      await sendText(jid, text)
+    }
     writeJSON(res, 200, { ok: true })
   } catch (err) {
     writeJSON(res, 500, { ok: false, error: err && err.message ? err.message : String(err) })

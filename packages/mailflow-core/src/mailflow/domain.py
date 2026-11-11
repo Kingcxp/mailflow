@@ -447,6 +447,22 @@ class MailRecord(BaseModel):
         return self.analysis.action_items
 
 
+class NotificationImage(BaseModel):
+    filename: str = "image.png"
+    content_type: str = "image/png"
+    data: bytes
+
+
+class NotificationMessage(BaseModel):
+    text: str = ""
+    images: list[NotificationImage] = Field(default_factory=lambda: [])
+
+
+class NotificationCapabilities(BaseModel):
+    images: bool = False
+    edit_messages: bool = False
+
+
 class SmartSearchResult(BaseModel):
     """LLM mail-finder outcome, including whether every mail was checked."""
 

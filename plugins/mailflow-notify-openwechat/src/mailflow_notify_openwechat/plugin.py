@@ -8,14 +8,16 @@ install; see ``gateway.py`` for the contract.
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any
 
 import httpx
 from mailflow.config import MailFlowConfig, NotifierConfig
-from mailflow.domain import ComponentKind, MailRecord
+from mailflow.domain import ComponentKind, MailRecord, NotificationImage
 from mailflow.forms import FormField
-from mailflow.notifications import DeliveryError, check_result, format_mail, targets_of
+from mailflow.message_media import ImageNotifier
+from mailflow.notifications import DeliveryError, check_http_response, format_mail, targets_of
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
@@ -24,7 +26,7 @@ from .gateway import OpenWechatProvisioner
 logger = logging.getLogger("mailflow.plugins.openwechat")
 
 
-class OpenWechatNotifier:
+class OpenWechatNotifier(ImageNotifier):
     backend_id = "openwechat"
 
     def __init__(self, config: NotifierConfig) -> None:
@@ -56,8 +58,7 @@ class OpenWechatNotifier:
         }
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(f"{self._url}/send", json=payload)
-            response.raise_for_status()
-            check_result(response.json())
+            check_http_response(response)
 
     async def notify(self, record: MailRecord) -> None:
         await self.push_text(format_mail(record))
@@ -80,6 +81,20 @@ class OpenWechatNotifier:
                     failure = exc
         if failure is not None:
             raise failure
+
+    async def push_image_to_target(self, target: str, image: NotificationImage) -> None:
+        if not self._url:
+            raise DeliveryError("configuration")
+        kind, _, name = target.partition(":")
+        kind = {"user": "contact", "group": "room"}.get(kind, kind)
+        payload = {
+            "to": {"type": kind, "name": name or target},
+            "image": base64.b64encode(image.data).decode("ascii"),
+            "content_type": image.content_type,
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(f"{self._url}/send", json=payload)
+            check_http_response(response)
 
 
 class OpenWechatPlugin:

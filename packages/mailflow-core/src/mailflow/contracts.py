@@ -23,6 +23,8 @@ from mailflow.domain import (
     MailAnalysis,
     MailMessage,
     MailRecord,
+    NotificationCapabilities,
+    NotificationMessage,
     ReplyDraft,
     TrashRecord,
     Urgency,
@@ -240,6 +242,15 @@ class TargetedNotifier(Protocol):
     ) -> None: ...
 
     async def push_to_target(self, target: str, text: str) -> None: ...
+
+
+@runtime_checkable
+class RichNotifier(Protocol):
+    """Optional rich-message extension. Existing text-only plugins remain valid."""
+
+    capabilities: NotificationCapabilities
+
+    async def send_message(self, target: str, message: NotificationMessage) -> None: ...
 
 
 class BotExporter(Protocol):

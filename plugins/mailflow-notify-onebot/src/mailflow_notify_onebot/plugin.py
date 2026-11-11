@@ -11,21 +11,23 @@ Delivery failures propagate to the runtime for visible, targeted retries.
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any
 
 import httpx
 from mailflow.config import NotifierConfig
-from mailflow.domain import ComponentKind, MailRecord
+from mailflow.domain import ComponentKind, MailRecord, NotificationImage
 from mailflow.forms import FormField
-from mailflow.notifications import DeliveryError, check_result, format_mail, targets_of
+from mailflow.message_media import ImageNotifier
+from mailflow.notifications import DeliveryError, check_http_response, format_mail, targets_of
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
 logger = logging.getLogger("mailflow.notify.onebot")
 
 
-class OneBotNotifier:
+class OneBotNotifier(ImageNotifier):
     backend_id = "onebot"
 
     def __init__(self, config: NotifierConfig) -> None:
@@ -64,6 +66,13 @@ class OneBotNotifier:
             raise failure
 
     async def push_to_target(self, target: str, text: str) -> None:
+        await self._send(target, text)
+
+    async def push_image_to_target(self, target: str, image: NotificationImage) -> None:
+        data = base64.b64encode(image.data).decode("ascii")
+        await self._send(target, [{"type": "image", "data": {"file": "base64://" + data}}])
+
+    async def _send(self, target: str, text: str | list[dict[str, Any]]) -> None:
         """Push one plain-text message to a single ``user:<id>`` or
         ``group:<id>`` target (per-chat hourly-summary delivery)."""
         if not self._url:
@@ -86,8 +95,7 @@ class OneBotNotifier:
         )
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(endpoint, json=payload, headers=headers)
-            resp.raise_for_status()
-            check_result(resp.json())
+            check_http_response(resp)
 
     async def notify(self, record: MailRecord) -> None:
         await self.push_text(format_mail(record))
