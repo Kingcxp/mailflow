@@ -1189,6 +1189,9 @@ class MailPane(Vertical):
                     }
                     if operation.arguments.get("clear_end"):
                         operation.arguments["due_end"] = None
+                    if operation.arguments.get("clear_due"):
+                        operation.arguments["due_at"] = None
+                        operation.arguments["due_end"] = None
             operations.append(operation)
         reviewed = await self._ask_screen(SmartActionReviewModal(self._service, operations))
         if reviewed is None:

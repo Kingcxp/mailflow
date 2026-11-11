@@ -229,6 +229,16 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
                 if end_raw
                 else None
             )
+            for field, raw in (("due_at", start_raw), ("due_end", end_raw)):
+                original = self._operation.arguments.get(field)
+                if original and raw == self._time_text(original):
+                    value = datetime.fromisoformat(str(original))
+                    if value.tzinfo is None:
+                        value = value.replace(tzinfo=UTC)
+                    if field == "due_at":
+                        start = value
+                    else:
+                        end = value
         except ValueError:
             error.update(self._t("tui.smart_review_invalid_time"))
             return

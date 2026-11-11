@@ -268,9 +268,14 @@ async def test_smart_query_task_crud_requires_confirmation(
                         tool_calls=[
                             ToolCall(
                                 call_id="c2",
-                                name="edit_action" if self.mode == "edit" else "delete_action",
-                                arguments={"item_id": item_id, "clear_end": True}
-                                if self.mode == "edit"
+                                name="edit_action"
+                                if self.mode in {"edit", "unschedule"}
+                                else "delete_action",
+                                arguments={
+                                    "item_id": item_id,
+                                    "clear_end" if self.mode == "edit" else "clear_due": True,
+                                }
+                                if self.mode in {"edit", "unschedule"}
                                 else {"item_id": item_id},
                             )
                         ],
@@ -284,8 +289,8 @@ async def test_smart_query_task_crud_requires_confirmation(
                             name="add_action",
                             arguments={
                                 "summary": "Project review",
-                                "due_at": "2099-10-15T14:00:00+08:00",
-                                "due_end": "2099-10-15T15:30:00+08:00",
+                                "due_at": "2099-10-15T14:00:37+08:00",
+                                "due_end": "2099-10-15T15:30:49+08:00",
                                 "location": "Room 201",
                                 "action_type": "meeting",
                             },
@@ -357,7 +362,7 @@ async def test_smart_query_task_crud_requires_confirmation(
             assert [item.summary for item in scheduled] == ["Project review"]
             assert scheduled[0].action_type == "meeting"
             assert scheduled[0].due_at is not None
-            assert "2099-10-15T06:00:00+00:00" in scheduled[0].due_at.isoformat()
+            assert "2099-10-15T06:00:37+00:00" in scheduled[0].due_at.isoformat()
             assert scheduled[0].mail_id == ""  # a plain event, not a mail import
             assert scheduled[0].origin is ActionOrigin.CUSTOM
             assert scheduled[0].due_end is not None
@@ -383,6 +388,25 @@ async def test_smart_query_task_crud_requires_confirmation(
             edited = (await service.storage.list_custom_actions())[0]
             assert edited.due_end is None and edited.location == "Office 4"
             assert edited.action_type == "meeting" and edited.item_id == scheduled[0].item_id
+            assert edited.due_at == scheduled[0].due_at
+
+            router.mode = "unschedule"
+            search.value = "清除 Project review 待办的截止时间"
+            app.query_one("#smart-action", Button).press()
+            await until(pilot, lambda: modal() is not None)
+            app.screen.query_one("#smart-review-edit-0", Button).press()
+            await until(pilot, lambda: isinstance(app.screen, SmartOperationEditModal))
+            assert app.screen.query_one("#smart-review-start", Input).value == ""
+            app.screen.query_one("#smart-review-notes", TextArea).text = "Keep without a deadline"
+            app.screen.query_one("#smart-review-save-edit", Button).press()
+            await until(pilot, lambda: isinstance(app.screen, SmartActionReviewModal))
+            app.screen.query_one("#smart-review-apply", Button).press()
+            await until(pilot, lambda: modal() is None)
+            await pilot.pause()
+            unscheduled = (await service.storage.list_custom_actions())[0]
+            assert unscheduled.due_at is None and unscheduled.due_end is None
+            assert unscheduled.notes == "Keep without a deadline"
+            assert unscheduled.location == "Office 4"
 
             router.mode = "delete"
             search.value = "删除 Project review 待办"
