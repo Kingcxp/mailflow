@@ -1328,8 +1328,8 @@
       "initial_recent": "Import recent mail",
       "initial_all": "Import all history",
       "initial_days": "Recent mail: days",
-      "catch_up_missed": "Receive mail missed while offline (without analysis)",
-      "catch_up_missed_help": "Off by default. Uses this account's saved sync position to receive missed mail silently. Analyze it manually when needed; first setup and mailbox resets still skip existing mail.",
+      "catch_up_missed": "Catch up missed mail and analyze in the background on startup",
+      "catch_up_missed_help": "Off by default. Uses this account’s saved position. Mail appears immediately and is analyzed quietly. Stopping or exiting cancels analysis without restoring old jobs. Invalid positions require an explicit sync range.",
       "include_past_actions": "Include past tasks from history",
       "preferences_hint": "Preferences for future analyses (edit or clear to remove)",
       "remember_correction": "Remember this preference for similar mail",
@@ -1401,7 +1401,8 @@
       "target": "Recipient",
       "reason": "Reason",
       "notification_images": "Include original mail and linked task images",
-      "summary_cards": "Include summary cards"
+      "summary_cards": "Include summary cards",
+      "sync_mail": "Sync mail"
     },
     "sessions": {
       "detach": "Detach",
@@ -1478,7 +1479,8 @@
       "use_settings": "Open settings to configure this item or its credentials.",
       "chat_confirm": "Proposed changes:\n{changes}\n\nReply “confirm {token}” or “cancel {token}”. In a group, mention the bot. Confirmation expires in 20 minutes.",
       "not_running": "No task is running.",
-      "operation_manage_action_plan": "Manage recurring plan"
+      "operation_manage_action_plan": "Manage recurring plan",
+      "operation_sync_account": "Change this account’s sync task"
     },
     "recurrence": {
       "category": "Category",
@@ -1502,6 +1504,27 @@
       "plans": "Recurring plans",
       "stopped": "Plan ended. Existing outstanding tasks have been kept.",
       "reminder": "Scheduled reminder: {summary} ({due})"
+    },
+    "sync": {
+      "cursor_invalid": "The mailbox sync position has changed or cannot be verified. Choose a sync range in Mail tools → Sync mail. Existing mail is kept.",
+      "help": "Resume from the saved position, or explicitly choose a new range. Existing local mail is kept. Stop cancels this account’s sync and queued analysis; it does not stop other accounts. Mail downloaded before stopping remains readable.",
+      "resume": "Continue from saved position",
+      "new": "Receive future mail only",
+      "recent": "Import recent days",
+      "all": "Import all available mail",
+      "start": "Start sync",
+      "pause": "Stop sync and analysis",
+      "summary_option": "Send one summary after catch-up (turn off for silent sync)",
+      "progress": "{account}: {state} · Received {received}/{total} · Awaiting analysis {pending}",
+      "summary": "{account}: received {count} missed/imported mail(s). Open MailFlow to read them; future task reminders follow their own settings.",
+      "state_starting": "Connecting",
+      "state_running": "Up to date",
+      "state_syncing": "Catching up",
+      "state_stopped": "Stopped",
+      "state_paused": "Stopped for this session",
+      "state_retrying": "Reconnecting",
+      "state_sync_required": "Choose a sync range",
+      "state_error": "Sync failed"
     }
   }
 }

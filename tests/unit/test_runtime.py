@@ -455,7 +455,8 @@ class TestDeduplication:
         assert {item.notes: item.item_id for item in repeated.action_items} == item_ids
         completed = [item.notes for item in repeated.action_items if item.completed_at is not None]
         assert completed == ["Client A"]
-        assert len(await runtime.action_store.read()) == 5
+        assert len(await runtime.action_store.read()) == 4
+        assert all(entry.item.completed_at is None for entry in await runtime.action_store.read())
         original = next(item for item in new_analysis.action_items if item.notes == "Client A")
         new_analysis.action_items.append(
             original.model_copy(update={"due_at": due - timedelta(days=1)})
@@ -1093,4 +1094,84 @@ async def test_retired_source_cannot_emit_after_reload() -> None:
         assert runtime.account_status("acct-1") != "running"
     finally:
         release.set()
+        await runtime.stop()
+
+
+async def test_stop_one_catch_up_keeps_raw_mail_and_other_accounts_running() -> None:
+    gate, started = asyncio.Event(), asyncio.Event()
+
+    class Source(EmittingSource):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.round = 0
+            self.sync_progress: dict[str, Any] = {
+                "sync_active": True,
+                "sync_received": 0,
+                "sync_total": 2,
+            }
+
+        async def run(self, emit: MailEmitter, stop_event: asyncio.Event) -> None:
+            self.round += 1
+            numbers = [1, 2] if self.round == 1 else [3]
+            self.sync_progress.update(sync_active=True, sync_received=0, sync_total=len(numbers))
+            for number in numbers:
+                mail = make_mail().model_copy(
+                    update={"message_id": f"catch-{number}", "ingestion": "catch_up"}
+                )
+                await emit(mail)
+                self.sync_progress["sync_received"] += 1
+            self.sync_progress["sync_active"] = False
+            await stop_event.wait()
+
+    class SlowProcessor(StaticProcessor):
+        async def process(self, mail: MailMessage, context: ProcessingContext) -> ProcessorResult:
+            if mail.account_id == "acct-1" and not gate.is_set():
+                started.set()
+                await gate.wait()
+            return await super().process(mail, context)
+
+    source = Source()
+    runtime, storage, _ = build_runtime(
+        {
+            "acct-1": source,
+            "other": EmittingSource([make_mail().model_copy(update={"message_id": "other"})]),
+        },
+        accounts=[
+            MailAccountConfig(account_id="acct-1", provider="fake"),
+            MailAccountConfig(account_id="other", provider="fake"),
+        ],
+        workers=2,
+    )
+    runtime._pipeline = PipelineEngine(  # pyright: ignore[reportPrivateUsage]
+        [
+            ProcessorBinding(
+                processor_id="p",
+                plugin_id="fake",
+                processor=SlowProcessor(MailAnalysis(summary="ok", urgency=Urgency.INFO)),
+            )
+        ]
+    )  # pyright: ignore[reportPrivateUsage]
+    await runtime.start()
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        await runtime.control_sync("acct-1", "pause")
+        assert runtime.account_status("acct-1") == "paused"
+        gate.set()
+        assert await runtime.wait_idle()
+        stored = await storage.list_mails()
+        assert len([r for r in stored if r.mail.account_id == "acct-1"]) == 2
+        assert all(r.analysis_state == "cancelled" for r in stored if r.mail.account_id == "acct-1")
+        assert all(r.analysis_state == "ready" for r in stored if r.mail.account_id == "other")
+        await runtime.control_sync("acct-1", "resume")
+        for _ in range(200):
+            if any(
+                r.mail.message_id == "catch-3" and r.analysis_state == "ready"
+                for r in await storage.list_mails()
+            ):
+                break
+            await asyncio.sleep(0.005)
+        stored = await storage.list_mails()
+        assert len([r for r in stored if r.analysis_state == "cancelled"]) == 2
+        assert any(r.mail.message_id == "catch-3" and r.analysis_state == "ready" for r in stored)
+    finally:
         await runtime.stop()

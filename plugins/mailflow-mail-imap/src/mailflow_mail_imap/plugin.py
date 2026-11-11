@@ -29,7 +29,7 @@ from email.utils import formatdate, getaddresses, make_msgid, parseaddr, parseda
 from typing import Any, cast
 
 from mailflow.config import MailAccountConfig
-from mailflow.contracts import MailEmitter
+from mailflow.contracts import MailEmitter, SyncCursorError
 from mailflow.domain import (
     MAX_ATTACHMENT_BYTES,
     Attachment,
@@ -40,6 +40,7 @@ from mailflow.domain import (
 )
 from mailflow.forms import FormField
 from mailflow.mail_body import html_to_text
+from mailflow.notifications import option_enabled
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 from mailflow.replies import ReplySourceError
@@ -348,6 +349,7 @@ class _FetchedBatch:
     baseline: int
     history_until: int = 0
     error: str = ""
+    sync_total: int = 0
 
 
 class IMAPSource:
@@ -368,6 +370,14 @@ class IMAPSource:
         self._watermark_save: Any = None
         self._history_until = 0
         self._session_history_until: int | None = None
+        self._checkpoint_invalid = False
+        self._resync_mode: str | None = None
+        self._resync_days = 30
+        self.sync_progress: dict[str, Any] = {
+            "sync_active": False,
+            "sync_total": 0,
+            "sync_received": 0,
+        }
         self._ocr_images = bool(account.options.get("ocr_images", False))
         self._username = str(account.options.get("username") or account.email)
         self._password = str(account.options.get("password") or "")
@@ -382,6 +392,16 @@ class IMAPSource:
                 ]
             ).encode()
         ).hexdigest()[:24]
+
+    def reset_sync(self, mode: str, days: int = 30) -> None:
+        if mode not in {"new", "recent", "all"}:
+            raise ValueError(mode)
+        self._resync_mode, self._resync_days = mode, max(1, days)
+        self._last_uid = None
+        self._uidvalidity = self._checkpoint_scope = ""
+        self._session_history_until = None
+        self._checkpoint_invalid = False
+        self.sync_progress.update(sync_active=False, sync_total=0, sync_received=0)
 
     def set_status_callback(self, callback: Any) -> None:
         self._status_callback = callback
@@ -402,6 +422,7 @@ class IMAPSource:
             self._uidvalidity = str(checkpoint.get("uidvalidity", ""))
             self._checkpoint_scope = str(checkpoint.get("scope", ""))
         except (TypeError, ValueError, KeyError) as exc:
+            self._checkpoint_invalid = True
             logger.warning("invalid IMAP checkpoint for %r: %s", self._account.account_id, exc)
 
     def _imap_client(self) -> imaplib.IMAP4:
@@ -478,13 +499,22 @@ class IMAPSource:
                 (self._checkpoint_scope and self._checkpoint_scope != self._scope)
                 or (self._uidvalidity and validity and validity != self._uidvalidity)
             )
-            initial_sync = self._account.options.get("initial_sync", "new")
+            initial_sync = self._resync_mode or self._account.options.get("initial_sync", "new")
             import_history = initial_sync in {"all", "recent"}
-            if changed:
-                baseline = 0 if import_history else max(uids, default=0)
-            elif self._session_history_until is None and not import_history:
+            catch_up_enabled = option_enabled(self._account.options, "catch_up_missed", False)
+            if (
+                changed
+                or self._checkpoint_invalid
+                or (
+                    catch_up_enabled
+                    and self._last_uid is not None
+                    and (not self._checkpoint_scope or not self._uidvalidity or not validity)
+                )
+            ):
+                raise SyncCursorError()
+            if self._session_history_until is None and not import_history:
                 catch_up = (
-                    self._account.options.get("catch_up_missed", False)
+                    catch_up_enabled
                     and self._last_uid is not None
                     and self._checkpoint_scope == self._scope
                     and bool(validity)
@@ -506,7 +536,11 @@ class IMAPSource:
 
                 since = (
                     datetime.now(UTC)
-                    - timedelta(days=int(self._account.options.get("initial_days", 30)))
+                    - timedelta(
+                        days=self._resync_days
+                        if self._resync_mode
+                        else int(self._account.options.get("initial_days", 30))
+                    )
                 ).strftime("%d-%b-%Y")
                 status, recent = client.uid("search", cast(Any, None), "SINCE", since)
                 if status != "OK":
@@ -530,7 +564,7 @@ class IMAPSource:
                 try:
                     mail = self._read_mail(client, uid, validity)
                     if uid <= history_until:
-                        mail.ingestion = "history"
+                        mail.ingestion = "import" if import_history else "catch_up"
                         mail.include_past_actions = bool(
                             self._account.options.get("include_past_actions", False)
                         )
@@ -541,7 +575,14 @@ class IMAPSource:
                     logger.warning("IMAP account %r UID %d: %s", self._account.account_id, uid, exc)
                     fetch_error = type(exc).__name__
                     break
-            return _FetchedBatch(messages, validity, baseline, history_until, fetch_error)
+            return _FetchedBatch(
+                messages,
+                validity,
+                baseline,
+                history_until,
+                fetch_error,
+                sum(baseline < uid <= history_until for uid in uids),
+            )
         finally:
             with contextlib.suppress(Exception):
                 client.logout()
@@ -566,6 +607,9 @@ class IMAPSource:
         batch = await asyncio.to_thread(self._fetch_once)
         self._last_poll_error = batch.error
         self._history_until = batch.history_until
+        if self._session_history_until is None:
+            self.sync_progress.update(sync_total=batch.sync_total, sync_received=0)
+        self.sync_progress["sync_active"] = batch.sync_total > 0
         if (
             self._last_uid != batch.baseline
             or self._uidvalidity != batch.uidvalidity
@@ -573,9 +617,15 @@ class IMAPSource:
         ):
             await self._commit(batch.baseline, batch.uidvalidity)
         self._session_history_until = batch.history_until
+        self._resync_mode = None
         for uid, mail in batch.messages:
             await emit(mail)
             await self._commit(uid, batch.uidvalidity)
+            if uid <= batch.history_until:
+                self.sync_progress["sync_received"] += 1
+                self.sync_progress["sync_active"] = uid < batch.history_until
+                if self._status_callback is not None:
+                    self._status_callback(True, 1, "")
         return len(batch.messages)
 
     def _fetch_history(self, limit: int, offset: int) -> list[MailMessage]:
@@ -647,16 +697,25 @@ class IMAPSource:
 
     async def run(self, emit: MailEmitter, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
+            count = 0
             try:
                 count = await self._poll_once(emit)
                 if self._status_callback is not None:
                     self._status_callback(not self._last_poll_error, count, self._last_poll_error)
             except asyncio.CancelledError:
                 raise
+            except SyncCursorError:
+                self.sync_progress["sync_active"] = False
+                if self._status_callback is not None:
+                    self._status_callback(False, 0, "sync.cursor_invalid")
+                return
             except Exception as exc:
                 if self._status_callback is not None:
                     self._status_callback(False, 0, type(exc).__name__)
                 logger.warning("IMAP account %r poll failed: %s", self._account.account_id, exc)
+            if not self._last_poll_error and count >= self._limit:
+                await asyncio.sleep(0)
+                continue
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop_event.wait(), timeout=self._interval)
 
@@ -764,6 +823,9 @@ def account_form(preset: str = "qq") -> tuple[FormField, ...]:
             kind="boolean",
             default=False,
             label_key="ux.include_past_actions",
+        ),
+        FormField(
+            "catch_up_summary", kind="boolean", default=True, label_key="sync.summary_option"
         ),
         FormField("interval_seconds", kind="number", default=300),
         FormField("limit", kind="number", default=20),

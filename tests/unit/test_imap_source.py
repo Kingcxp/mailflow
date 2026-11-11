@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 
@@ -566,3 +567,70 @@ class TestIMAPParseFallback:
         assert mail.message_id.startswith("unparseable-")
         assert mail.subject == "(unparseable mail)"
         assert mail.body_text == ""
+
+
+async def test_catch_up_resumes_acknowledged_uid_and_requires_range_after_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mailflow.config import MailAccountConfig
+    from mailflow.contracts import SyncCursorError
+    from mailflow_mail_imap.plugin import IMAPSource
+
+    class Mailbox:
+        validity = b"10"
+        uids = b"1 2"
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def login(self, *args: Any) -> None:
+            pass
+
+        def logout(self) -> None:
+            pass
+
+        def select(self, *args: Any, **kwargs: Any) -> tuple[str, list[bytes]]:
+            return "OK", []
+
+        def response(self, *args: Any) -> tuple[str, list[bytes]]:
+            return "OK", [self.validity]
+
+        def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+            if command == "search":
+                return "OK", [self.uids]
+            return "OK", [(b"1", f"From: a@b.test\r\nMessage-ID: <{args[0]}>\r\n\r\nbody".encode())]
+
+    monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", Mailbox)
+    account = MailAccountConfig(
+        account_id="a",
+        provider="imap",
+        options={"preset": "qq", "catch_up_missed": True, "limit": 1},
+    )
+    checkpoint: list[str] = []
+    source = IMAPSource(account)
+    source.set_watermark_store(lambda: None, checkpoint.append)
+    assert await poll_imap(source) == []
+    Mailbox.uids = b"1 2 3 4"
+    resumed = IMAPSource(account)
+    resumed.set_watermark_store(lambda: checkpoint[-1], checkpoint.append)
+    accepted: list[MailMessage] = []
+
+    async def interrupted(mail: MailMessage) -> None:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await resumed._poll_once(interrupted)  # pyright: ignore[reportPrivateUsage]
+    again = IMAPSource(account)
+    again.set_watermark_store(lambda: checkpoint[-1], checkpoint.append)
+    accepted += await poll_imap(again)
+    accepted += await poll_imap(again)
+    assert [mail.message_id for mail in accepted] == ["3", "4"]
+    assert all(mail.ingestion == "catch_up" for mail in accepted)
+    assert again.sync_progress["sync_received"] == again.sync_progress["sync_total"] == 2
+    before = checkpoint[-1]
+    Mailbox.validity = b"11"
+    with pytest.raises(SyncCursorError):
+        await poll_imap(again)
+    assert checkpoint[-1] == before
+    again.reset_sync("new")
+    assert await poll_imap(again) == []

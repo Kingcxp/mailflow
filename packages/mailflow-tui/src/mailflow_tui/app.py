@@ -1609,6 +1609,10 @@ class MailPane(Vertical):
             if choice == "undo_delete":
                 await self._undo_trash()
                 return
+            elif choice == "sync_mail":
+                from mailflow_tui.mail_workflows import SyncScreen
+
+                await self._ask_screen(SyncScreen(self._service, self._query.account_id))
             elif choice == "filter":
                 query = await self._ask_screen(MailFilter(self._service, self._query))
                 if query is not None:
@@ -2881,11 +2885,7 @@ class RuntimePane(Vertical):
             if c.kind.value == "mail_source"
         )
         accounts = "\n".join(
-            escape(
-                f"  {a.account_id}  {a.email}  " + service.t("ux.sync_" + a.status)
-                if a.status in {"running", "retrying"}
-                else f"  {a.account_id}  {a.email}  {a.status}"
-            )
+            escape(f"  {a.account_id}  {a.email}  " + service.t("sync.state_" + a.status))
             + "\n  "
             + escape(
                 service.t(
@@ -2898,6 +2898,21 @@ class RuntimePane(Vertical):
                     new=a.new_count,
                     pending=a.pending_count,
                 )
+            )
+            + (
+                "\n  "
+                + escape(
+                    service.t(
+                        "sync.progress",
+                        account=a.account_id,
+                        received=a.sync_received,
+                        total=a.sync_total,
+                        pending=a.pending_count,
+                        state=service.t("sync.state_" + a.status),
+                    )
+                )
+                if a.sync_active
+                else ""
             )
             + ("\n  " + escape(a.error) if a.error else "")
             for a in snapshot.accounts

@@ -89,6 +89,15 @@ SCHEMAS: dict[str, tuple[str, dict[str, Any], list[str]]] = {
         },
         ["provider", "instance_id", "action"],
     ),
+    "sync_account": (
+        "Propose resuming/stopping account sync, or explicitly selecting a new sync range. Stopping cancels queued analysis for this account and keeps mail already received.",
+        {
+            "account_id": {"type": "string"},
+            "mode": {"type": "string", "enum": ["resume", "pause", "new", "recent", "all"]},
+            "days": {"type": "integer"},
+        },
+        ["account_id", "mode"],
+    ),
 }
 
 
@@ -223,6 +232,14 @@ async def stage(
         description += (
             f"\n{args.get('provider')} · {args.get('instance_id')} · {args.get('action')}"
         )
+    elif name == "sync_account":
+        if args.get("mode") not in {"resume", "pause", "new", "recent", "all"} or not any(
+            a.account_id == args.get("account_id") for a in service.config.accounts
+        ):
+            raise translated_error(ValueError, service.t, "ux.unsupported")
+        description += f"\n{args['account_id']} · " + service.t("sync." + str(args["mode"]))
+        if args["mode"] == "recent":
+            description += f" · {int(args.get('days', 30))}"
     elif name == "update_mail":
         description += "\n" + json.dumps(args, ensure_ascii=False)
     return description, PendingOperation(
@@ -281,4 +298,8 @@ async def apply(service: MailFlowService, operation: PendingOperation) -> Any:
             return await service.gateway_shutdown(provider, identity)
         config = next(n for n in service.config.notifiers if n.notifier_id == identity)
         return await service.gateway_provision(provider, identity, dict(config.options))
+    elif operation.tool == "sync_account":
+        return await service.control_account_sync(
+            str(args["account_id"]), str(args["mode"]), int(args.get("days", 30))
+        )
     raise translated_error(ValueError, service.t, "ux.unsupported")

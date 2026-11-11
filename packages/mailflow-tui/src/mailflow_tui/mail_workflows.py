@@ -117,6 +117,7 @@ class MailMenu(WorkflowScreen):
                     for key in (
                         "undo_delete",
                         "filter",
+                        "sync_mail",
                         "load_more",
                         "read",
                         "unread",
@@ -145,6 +146,115 @@ class MailMenu(WorkflowScreen):
             if event.button.id == "workflow-apply"
             else None
         )
+
+
+class SyncScreen(WorkflowScreen):
+    def __init__(self, service: MailFlowService, account_id: str = "") -> None:
+        super().__init__(service)
+        self.account_id = account_id
+        self._busy = False
+        self._error = ""
+
+    def compose(self) -> ComposeResult:
+        accounts = self.service.snapshot().accounts
+        with Vertical():
+            yield Static(self.t("ux.sync_mail"))
+            with ScrollableContainer():
+                yield Static(self.t("sync.help"))
+                yield SafeSelect(
+                    [
+                        (account.email or account.account_id, account.account_id)
+                        for account in accounts
+                    ],
+                    value=self.account_id if self.account_id else Select.NULL,
+                    prompt=self.t("tui.entry_pick_first"),
+                    id="sync-account",
+                )
+                yield SafeSelect(
+                    [(self.t("sync." + mode), mode) for mode in ("resume", "new", "recent", "all")],
+                    value="resume",
+                    allow_blank=False,
+                    id="sync-mode",
+                )
+                yield Input(value="30", type="integer", id="sync-days", disabled=True)
+                yield Static("", id="workflow-status", markup=False)
+            with Horizontal():
+                yield Button(
+                    self.t("sync.start"),
+                    id="sync-start",
+                    variant="primary",
+                    disabled=not bool(self.account_id),
+                )
+                yield Button(
+                    self.t("sync.pause"), id="sync-stop", disabled=not bool(self.account_id)
+                )
+                yield Button(self.t("tui.btn_back"), id="sync-close")
+
+    def on_mount(self) -> None:
+        self.set_interval(1.0, self.refresh_status)
+        self.refresh_status()
+
+    def refresh_status(self) -> None:
+        selected = cast(Select[str], self.query_one("#sync-account", Select)).value
+        account = next(
+            (a for a in self.service.snapshot().accounts if a.account_id == selected), None
+        )
+        for ident in ("sync-start", "sync-stop"):
+            self.query_one("#" + ident, Button).disabled = (
+                self._busy or account is None or not account.enabled
+            )
+        if account is not None and not self._busy:
+            self.status(
+                self._error
+                or account.error
+                or self.t(
+                    "sync.progress",
+                    account=account.account_id,
+                    received=account.sync_received,
+                    total=account.sync_total,
+                    pending=account.pending_count,
+                    state=self.t("sync.state_" + account.status),
+                )
+            )
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if not self.is_mounted:
+            return
+        if event.select.id == "sync-mode":
+            self.query_one("#sync-days", Input).disabled = event.value != "recent"
+        self.refresh_status()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "sync-close":
+            self.dismiss(None)
+            return
+        if self._busy:
+            return
+        account = cast(Select[str], self.query_one("#sync-account", Select)).value
+        if account is Select.NULL:
+            return
+        self._busy = True
+        self._error = ""
+        self.refresh_status()
+        try:
+            mode = (
+                "pause"
+                if event.button.id == "sync-stop"
+                else str(cast(Select[str], self.query_one("#sync-mode", Select)).value)
+            )
+            days = int(self.query_one("#sync-days", Input).value) if mode == "recent" else 30
+            if days < 1:
+                raise ValueError
+            await self.service.control_account_sync(str(account), mode, days)
+        except Exception as exc:
+            from mailflow.errors import error_text
+
+            self._error = error_text(exc, self.t)
+            self.status(self._error)
+        finally:
+            self._busy = False
+            self.refresh_status()
 
 
 class MailFilter(WorkflowScreen):

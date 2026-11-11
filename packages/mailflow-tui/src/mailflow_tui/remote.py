@@ -355,6 +355,11 @@ class RemoteServiceAdapter:
             await self.client.set_analysis_paused(paused)
         )
 
+    async def control_account_sync(self, account_id: str, mode: str, days: int = 30) -> None:
+        self._snapshot = RuntimeSnapshot.model_validate(
+            await self.client.control_account_sync(account_id, mode, days)
+        )
+
     async def refresh_snapshot(self) -> RuntimeSnapshot:
         self._snapshot = RuntimeSnapshot.model_validate(await self.client.snapshot())
         self.config.general.timezone = self._snapshot.timezone

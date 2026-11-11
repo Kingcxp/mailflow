@@ -651,6 +651,9 @@ class AccountSnapshot(BaseModel):
     last_sync_at: datetime | None = None
     new_count: int = 0
     pending_count: int = 0
+    sync_active: bool = False
+    sync_total: int = 0
+    sync_received: int = 0
 
 
 class BatchResult(BaseModel):

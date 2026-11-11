@@ -15,6 +15,7 @@ import inspect
 import json
 from collections.abc import Callable
 from typing import Any, cast
+from urllib.parse import quote
 
 import httpx
 from mailflow.domain import ActionItem, MailMessage, MailRecord, ReplyDraft
@@ -373,6 +374,14 @@ class RemoteClient:
     async def set_mail_state(self, record_ids: list[str], **values: Any) -> dict[str, Any]:
         result: dict[str, Any] = await self._request(
             "POST", "/mails/state", {"record_ids": record_ids, **values}
+        )
+        return result
+
+    async def control_account_sync(
+        self, account_id: str, mode: str, days: int = 30
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = await self._request(
+            "POST", f"/accounts/{quote(account_id, safe='')}/sync", {"mode": mode, "days": days}
         )
         return result
 

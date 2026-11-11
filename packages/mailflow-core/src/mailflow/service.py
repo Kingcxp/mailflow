@@ -723,6 +723,10 @@ class MailFlowService:
     async def set_analysis_paused(self, paused: bool) -> None:
         await self.runtime.set_analysis_paused(paused)
 
+    @admin_operation
+    async def control_account_sync(self, account_id: str, mode: str, days: int = 30) -> None:
+        await self.runtime.control_sync(account_id, mode, days)
+
     def on(self, event: str, handler: Callable[..., Awaitable[None]]) -> Callable[[], None]:
         return self.events.subscribe(event, handler)
 

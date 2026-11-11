@@ -2217,6 +2217,7 @@ class AccountsPane(Vertical):
             yield Button(
                 self._t("tui.history_load"), id="account-history", variant="primary", disabled=True
             )
+            yield Button(self._t("ux.sync_mail"), id="account-sync", disabled=True)
         yield Static(self._t("tui.history_title"), id="history-title")
         yield Static(self._t("tui.history_select_hint"), id="history-help")
         yield SelectionTable(t=self._t, id="history-table")
@@ -2255,6 +2256,7 @@ class AccountsPane(Vertical):
                 "account-edit": "tui.btn_edit",
                 "account-delete": "tui.btn_delete",
                 "account-history": "tui.history_load",
+                "account-sync": "ux.sync_mail",
                 "history-analyze": "tui.history_analyze",
                 "history-select-all": "tui.history_select_all",
                 "history-more": "tui.history_more",
@@ -2302,6 +2304,7 @@ class AccountsPane(Vertical):
             "account-edit": bool(account_id) and not busy,
             "account-delete": bool(account_id) and not busy,
             "account-history": can_load and not busy,
+            "account-sync": bool(account_id) and not busy,
             "history-more": bool(account_id)
             and valid_count
             and account_id == self._history_account
@@ -2391,7 +2394,7 @@ class AccountsPane(Vertical):
                 escape(account.account_id),
                 escape(account.provider),
                 escape(account.email or "-"),
-                self._service.runtime.account_status(account.account_id),
+                self._t("sync.state_" + self._service.runtime.account_status(account.account_id)),
                 key=str(position),
             )
         if not accounts:
@@ -2503,6 +2506,10 @@ class AccountsPane(Vertical):
             return
         if button_id == "account-edit":
             self._open_form(index)
+        elif button_id == "account-sync":
+            from mailflow_tui.mail_workflows import SyncScreen
+
+            self.app.push_screen(SyncScreen(self._service, self._selected_account_id()))
         elif button_id == "account-delete":
             await self._mutate(
                 self._service.remove_config_entry("accounts", index), "entry_removed"

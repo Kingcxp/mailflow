@@ -1328,8 +1328,8 @@
       "initial_recent": "导入近期邮件",
       "initial_all": "导入全部历史",
       "initial_days": "近期邮件天数",
-      "catch_up_missed": "收取离线期间的邮件（暂不分析）",
-      "catch_up_missed_help": "默认关闭。按此账户保存的同步位置安静收取遗漏邮件，需要时手动分析；首次接入或邮箱标识重置时仍跳过已有邮件。",
+      "catch_up_missed": "启动时自动补收未同步邮件并后台解析",
+      "catch_up_missed_help": "默认关闭。启用后按本账户保存的同步位置补收，原邮件立即可读，后台安静解析；停止或退出后不恢复旧解析任务。游标失效时需主动选择同步范围。",
       "include_past_actions": "将历史邮件中的旧事项纳入待办",
       "preferences_hint": "今后分析邮件时参考的偏好（可编辑，清空即删除）",
       "remember_correction": "今后同类邮件也这样处理",
@@ -1401,7 +1401,8 @@
       "target": "接收目标",
       "reason": "失败原因",
       "notification_images": "附带邮件原图及待办关联图片",
-      "summary_cards": "附带摘要卡片"
+      "summary_cards": "附带摘要卡片",
+      "sync_mail": "同步邮件"
     },
     "sessions": {
       "detach": "转入后台",
@@ -1478,7 +1479,8 @@
       "use_settings": "请在设置页配置该项目或其凭据。",
       "chat_confirm": "待执行的操作：\n{changes}\n\n回复“确认 {token}”或“取消 {token}”；群聊中请 @ 机器人。确认在 20 分钟后失效。",
       "not_running": "当前没有正在执行的任务。",
-      "operation_manage_action_plan": "调整周期计划"
+      "operation_manage_action_plan": "调整周期计划",
+      "operation_sync_account": "调整此账户的同步任务"
     },
     "recurrence": {
       "category": "分类",
@@ -1502,6 +1504,27 @@
       "plans": "周期计划",
       "stopped": "计划已结束，已有未完成事项已保留。",
       "reminder": "周期待办提醒：{summary}（{due}）"
+    },
+    "sync": {
+      "cursor_invalid": "邮箱同步位置已变化或无法验证，请在“邮件工具 → 同步邮件”中选择同步范围。已有邮件不会删除。",
+      "help": "可以从保存的位置继续，也可以明确选择新的同步范围。已有本地邮件会保留。“停止”取消此账户的同步和待解析任务，不影响其他账户；停止前下载的邮件仍可阅读。",
+      "resume": "从保存的位置继续",
+      "new": "仅接收今后的新邮件",
+      "recent": "导入最近若干天",
+      "all": "导入全部可用邮件",
+      "start": "开始同步",
+      "pause": "停止同步与解析",
+      "summary_option": "补收完成后发送一次汇总（关闭后安静同步）",
+      "progress": "{account}：{state} · 已接收 {received}/{total} · 等待解析 {pending}",
+      "summary": "{account} 已接收 {count} 封补收或导入邮件，可在 MailFlow 中查看。后续待办提醒按各自设置执行。",
+      "state_starting": "正在连接",
+      "state_running": "已同步",
+      "state_syncing": "正在补收",
+      "state_stopped": "已停止",
+      "state_paused": "本次已停止",
+      "state_retrying": "正在重新连接",
+      "state_sync_required": "请选择同步范围",
+      "state_error": "同步失败"
     }
   }
 }

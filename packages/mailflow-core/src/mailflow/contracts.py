@@ -70,6 +70,21 @@ class AttachmentSource(Protocol):
     async def fetch_attachment(self, mail: MailMessage, index: int) -> bytes: ...
 
 
+class SyncCursorError(RuntimeError):
+    code = "sync.cursor_invalid"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+        self.params: dict[str, Any] = {}
+
+
+@runtime_checkable
+class SyncCapableSource(Protocol):
+    sync_progress: dict[str, Any]
+
+    def reset_sync(self, mode: str, days: int = 30) -> None: ...
+
+
 @runtime_checkable
 class ReplyPreflightSource(Protocol):
     """Optional local send-readiness check, without connecting to a provider.

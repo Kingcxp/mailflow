@@ -31,6 +31,7 @@ from mailflow.contracts import (
     Notifier,
     RichNotifier,
     StorageBackend,
+    SyncCapableSource,
     TargetedNotifier,
     TextNotifier,
 )
@@ -171,6 +172,9 @@ class MailFlowRuntime:
         self._analysis_paused = False
         self._discarding_analysis = False
         self._active_analysis: set[asyncio.Task[Any]] = set()
+        self._analysis_accounts: dict[asyncio.Task[Any], str] = {}
+        self._sync_paused: set[str] = set()
+        self._sync_summaries: dict[str, list[str]] = {}
         self._queued_mail_ids: set[str] = set()
         self._source_generation = 0
         self._processing_generation = 0
@@ -252,7 +256,7 @@ class MailFlowRuntime:
 
     def _start_source_tasks(self) -> None:
         for account in self._account_configs:
-            if not account.enabled:
+            if not account.enabled or account.account_id in self._sync_paused:
                 self._account_status[account.account_id] = "stopped"
                 continue
             self._account_status[account.account_id] = "starting"
@@ -331,8 +335,14 @@ class MailFlowRuntime:
             self._discarding_analysis = False
         await self._events.emit("mail.analysis.cancelled")
 
-    async def _settle_unfinished_analysis(self, *, all_records: bool = False) -> None:
-        owned = set(self._pending_mail_accounts)
+    async def _settle_unfinished_analysis(
+        self, *, all_records: bool = False, account_id: str = ""
+    ) -> None:
+        owned = {
+            key
+            for key, account in self._pending_mail_accounts.items()
+            if not account_id or account == account_id
+        }
         if not all_records and not owned:
             return
         async with self.write_lock:
@@ -351,7 +361,67 @@ class MailFlowRuntime:
                     await self._storage.save_mail(
                         record.model_copy(update={"analysis_state": state})
                     )
-            self._pending_mail_accounts.clear()
+            for identity in owned:
+                self._pending_mail_accounts.pop(identity, None)
+
+    async def control_sync(self, account_id: str, mode: str, days: int = 30) -> None:
+        source = self._sources.get(account_id)
+        account = next((a for a in self._account_configs if a.account_id == account_id), None)
+        if source is None or account is None:
+            raise KeyError(account_id)
+        if mode not in {"pause", "resume", "new", "recent", "all"}:
+            raise ValueError(mode)
+        if mode not in {"pause", "resume"} and not isinstance(source, SyncCapableSource):
+            raise NotImplementedError
+        async with self._lifecycle_lock:
+            self._sync_paused.add(account_id)
+            await self._stop_named_tasks(
+                lambda task: task.get_name() == f"source-{account_id}", timeout_seconds=1.0
+            )
+            workers = [
+                task
+                for task, owner in self._analysis_accounts.items()
+                if owner == account_id and task.get_name().startswith("worker-")
+            ]
+            await cancel_tasks(workers, timeout_seconds=2.0)
+            self._tasks = [task for task in self._tasks if task not in workers]
+            pending = list(self._retry_mails)
+            self._retry_mails.clear()
+            while not self._queue.empty():
+                pending.append(self._queue.get_nowait())
+            for mail in pending:
+                self._queue.task_done()
+                if mail.account_id != account_id:
+                    self._queue.put_nowait(mail)
+                else:
+                    self._queued_mail_ids.discard(mail.normalized_message_id())
+            await self._settle_unfinished_analysis(account_id=account_id)
+            self._sync_summaries.pop(account_id, None)
+            self._account_status[account_id] = "paused"
+            for task in workers:
+                if self._running and not self._analysis_paused:
+                    self._tasks.append(
+                        asyncio.create_task(
+                            self._worker(int(task.get_name().split("-")[-1])), name=task.get_name()
+                        )
+                    )
+            if mode != "pause":
+                if not account.enabled:
+                    raise ValueError(account_id)
+                if mode != "resume":
+                    assert isinstance(source, SyncCapableSource)
+                    source.reset_sync(mode, days)
+                self._sync_paused.discard(account_id)
+                self._account_status[account_id] = "starting"
+                self._account_errors[account_id] = None
+                if self._running:
+                    self._tasks.append(
+                        asyncio.create_task(
+                            self._run_source(account, source, self._source_generation),
+                            name=f"source-{account_id}",
+                        )
+                    )
+        await self._events.emit("account.sync.changed", account_id=account_id)
 
     async def stop(self) -> None:
         async with self._lifecycle_lock:
@@ -375,7 +445,12 @@ class MailFlowRuntime:
             self._tasks = []
             await asyncio.gather(*(self._close_source(source) for source in self._sources.values()))
             for account_id in self._account_status:
-                if self._account_status[account_id] in {"running", "starting", "retrying"}:
+                if self._account_status[account_id] in {
+                    "running",
+                    "starting",
+                    "retrying",
+                    "syncing",
+                }:
                     self._account_status[account_id] = "stopped"
             logger.info("runtime stopped")
 
@@ -536,7 +611,11 @@ class MailFlowRuntime:
         stop_event = self._stop_event
 
         async def emit(mail: MailMessage) -> None:
-            if generation != self._source_generation or stop_event.is_set():
+            if (
+                generation != self._source_generation
+                or stop_event.is_set()
+                or account.account_id in self._sync_paused
+            ):
                 raise asyncio.CancelledError
             mail = mail.model_copy(
                 update={
@@ -544,8 +623,14 @@ class MailFlowRuntime:
                     "provider": mail.provider or account.provider,
                 }
             )
-            automatic = mail.ingestion == "live" and not self._analysis_paused
+            automatic = (
+                mail.ingestion in {"live", "catch_up", "import"} and not self._analysis_paused
+            )
             record = await self.receive_mail(mail, queue_analysis=automatic)
+            if record is not None and mail.ingestion in {"catch_up", "import"}:
+                ids = self._sync_summaries.setdefault(account.account_id, [])
+                if record.record_id not in ids:
+                    ids.append(record.record_id)
             identity = mail.normalized_message_id()
             if (
                 automatic
@@ -625,17 +710,27 @@ class MailFlowRuntime:
                         )
                         await asyncio.sleep(1)
             finally:
-                if completed or stop_event.is_set() or self._discarding_analysis:
+                if (
+                    completed
+                    or stop_event.is_set()
+                    or self._discarding_analysis
+                    or mail.account_id in self._sync_paused
+                ):
                     self._queued_mail_ids.discard(mail.normalized_message_id())
                     self._pending_mail_accounts.pop(mail.normalized_message_id(), None)
                     queue.task_done()
                 else:
                     # Reconfiguration may continue work within this session.
                     self._retry_mails.appendleft(mail)
+            if completed:
+                await self._maybe_sync_summary(mail.account_id)
 
     def sync_info(self, account_id: str) -> dict[str, Any]:
+        progress = getattr(self._sources.get(account_id), "sync_progress", {})
         return {
             **self._sync_info.get(account_id, {}),
+            **(progress if isinstance(progress, dict) else {}),
+            **({"sync_active": False} if account_id in self._sync_paused else {}),
             "pending_count": sum(
                 value == account_id for value in self._pending_mail_accounts.values()
             ),
@@ -648,8 +743,19 @@ class MailFlowRuntime:
 
     def source_status(self, account_id: str, ok: bool, count: int = 0, error: str = "") -> None:
         info = self._sync_info.setdefault(account_id, {})
-        self._account_status[account_id] = "running" if ok else "retrying"
-        self._account_errors[account_id] = None if ok else self._rt("ux.sync_retry")
+        cursor_error = error == "sync.cursor_invalid"
+        self._account_status[account_id] = (
+            "sync_required"
+            if cursor_error
+            else "syncing"
+            if ok and self.sync_info(account_id).get("sync_active")
+            else "running"
+            if ok
+            else "retrying"
+        )
+        self._account_errors[account_id] = (
+            None if ok else self._rt("sync.cursor_invalid" if cursor_error else "ux.sync_retry")
+        )
         if ok:
             info["last_sync_at"] = datetime.now(UTC)
             info.setdefault("new_count", 0)
@@ -661,6 +767,8 @@ class MailFlowRuntime:
                         f"mail.last_sync.{account_id}", info["last_sync_at"].isoformat()
                     )
                 await self._events.emit("account.sync.changed", account_id=account_id)
+                if ok:
+                    await self._maybe_sync_summary(account_id)
             except Exception:
                 logger.exception("cannot save sync status for account %r", account_id)
 
@@ -668,6 +776,25 @@ class MailFlowRuntime:
         self._tasks.append(task)
         task.add_done_callback(
             lambda done: self._tasks.remove(done) if done in self._tasks else None
+        )
+
+    async def _maybe_sync_summary(self, account_id: str) -> None:
+        info = self.sync_info(account_id)
+        if info.get("sync_active") or info["pending_count"] or account_id in self._sync_paused:
+            return
+        ids = self._sync_summaries.pop(account_id, [])
+        account = next((a for a in self._account_configs if a.account_id == account_id), None)
+        if (
+            not ids
+            or account is None
+            or not self._config.general.mail_notifications
+            or not option_enabled(account.options, "catch_up_summary", True)
+        ):
+            return
+        key = "sync.summary." + hashlib.sha256("|".join(sorted(ids)).encode()).hexdigest()
+        text = self._rt("sync.summary", account=account_id, count=len(ids))
+        await self._deliver_notification(
+            key, text, "mail.sync.summary", option="mail_notifications"
         )
 
     async def receive_mail(
@@ -728,6 +855,7 @@ class MailFlowRuntime:
         task = cast(asyncio.Task[Any], asyncio.current_task())
         generation = self._processing_generation
         self._active_analysis.add(task)
+        self._analysis_accounts[task] = mail.account_id
         self._pending_mail_accounts[mail.normalized_message_id()] = mail.account_id
         try:
             return await self._analyse_mail(mail, _skip_dedup=_skip_dedup)
@@ -759,6 +887,7 @@ class MailFlowRuntime:
             raise
         finally:
             self._active_analysis.discard(task)
+            self._analysis_accounts.pop(task, None)
             self._pending_mail_accounts.pop(mail.normalized_message_id(), None)
 
     async def _analyse_mail(
@@ -818,7 +947,10 @@ class MailFlowRuntime:
             )
             if generation != self._processing_generation:
                 raise asyncio.CancelledError
-            if mail.ingestion == "history" and not mail.include_past_actions:
+            if (
+                mail.ingestion in {"history", "catch_up", "import"}
+                and not mail.include_past_actions
+            ):
                 analysis = analysis.model_copy(
                     update={
                         "action_items": [
@@ -2068,7 +2200,10 @@ class MailFlowRuntime:
                 if config is not None
                 else f"{getattr(notifier, 'backend_id', type(notifier).__name__)}.{index}"
             )
-            channel_kind = "daily_digest" if event.endswith("action.digest") else "task_reminders"
+            channel_kind = str(
+                payload.get("option")
+                or ("daily_digest" if event.endswith("action.digest") else "task_reminders")
+            )
             if config is not None and not option_enabled(config.options, channel_kind):
                 continue
             targeted = getattr(notifier, "push_to_target", None)
