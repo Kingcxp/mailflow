@@ -18,10 +18,8 @@ from zoneinfo import ZoneInfo
 from mailflow.domain import (
     ActionItem,
     MailRecord,
-    PendingOperation,
     ReplyDraft,
     ReplyState,
-    SmartActionResult,
     Urgency,
     looks_binary,
     to_utc,
@@ -54,6 +52,7 @@ from textual.widgets import (
     TabPane,
 )
 
+from mailflow_tui.assistant import AssistantPane
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
@@ -79,7 +78,6 @@ from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
 from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
-from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 from mailflow_tui.view_state import TableRowEvent, TableView
 from mailflow_tui.widgets import (
@@ -761,17 +759,6 @@ class MailPane(Vertical):
         self._refresh_lock = asyncio.Lock()
         self._mail_filter_generation = 0
         self._mail_matcher = SearchMatcher("")
-        # smart search: while active, the table shows ONLY the LLM-picked
-        # results; cancel restores the previous view. The snapshot is the
-        # full record list taken when the search started.
-        self._smart_action_running = False
-        self._smart_action_task: asyncio.Task[SmartActionResult] | None = None
-        self._smart_spinner_task: asyncio.Task[None] | None = None
-        self._smart_action_result: SmartActionResult | None = None
-        self._smart_review_result: SmartActionResult | None = None
-        # one-shot status line for the next mail render (e.g. what a confirmed
-        # operation applied); cleared as soon as it has been shown
-        self._pending_status_hint = ""
         # A bulk re-analysis checks _reparse_stop between mails, and the button
         # that started it becomes the stop control while its worker is alive.
         # "running" is derived from the worker (never a hand-set flag) so a
@@ -784,8 +771,6 @@ class MailPane(Vertical):
         # cannot erase feedback before the user can read it.
         self._operation_status = ""
         self._query = MailQuery()
-        self._smart_scope = "auto"
-        self._smart_retry: SmartActionResult | None = None
         self._next_offset: int | None = None
         self._page_limit = 200
         self._page_total = 0
@@ -798,15 +783,12 @@ class MailPane(Vertical):
         remote = bool(getattr(self._service, "remote", False))
         with Horizontal(id="mail-search-row"):
             yield Input(
-                placeholder=self._service.t(
-                    "tui.mail_search_placeholder" if remote else "tui.smart_action_placeholder"
-                ),
+                placeholder=self._service.t("tui.mail_search_placeholder"),
                 id="mail-search",
             )
             yield SearchToggle("regex", ident="mail-search-regex")
             yield SearchToggle("case", ident="mail-search-case")
-            yield Button(self._service.t("tui.smart_action"), id="smart-action", variant="primary")
-        yield RichLog(id="smart-action-progress", max_lines=200, wrap=True)
+            yield Button(self._service.t("assistant.handoff"), id="btn-assistant")
         yield Static("", id="mail-empty-hint")
         with Horizontal(id="mail-processing-controls"):
             yield Static("", id="mail-processing-status")
@@ -891,7 +873,6 @@ class MailPane(Vertical):
 
     async def on_unmount(self) -> None:
         self._stop_reparse()
-        await self._cancel_smart_action()
 
     def _mail_table(self) -> SelectionTable | None:
         return self.query_one_optional("#mail-table", SelectionTable)
@@ -956,16 +937,9 @@ class MailPane(Vertical):
                 )
             },
         )
-        self._set_smart_label(
-            "tui.smart_action_cancel" if self._smart_action_running else "tui.smart_action"
-        )
         search = self.query_one_optional("#mail-search", Input)
         if search is not None:
-            search.placeholder = self._service.t(
-                "tui.mail_search_placeholder"
-                if getattr(self._service, "remote", False)
-                else "tui.smart_action_placeholder"
-            )
+            search.placeholder = self._service.t("tui.mail_search_placeholder")
         self._urgency_suppress = True
         try:
             _apply_options(self, "#urgency-select", self._urgency_options())
@@ -977,32 +951,11 @@ class MailPane(Vertical):
         await self.refresh_mail()
 
     async def refresh_mail(self, *, reload: bool = True) -> None:
-        if getattr(self, "_smart_action_running", False):
-            # An active smart search owns the table: a re-read here would
-            # replace results or previews with the full mailbox mid-search.
-            return
         async with self._refresh_lock:
-            if getattr(self, "_smart_action_running", False):
-                return
             try:
-                if self._smart_action_result is not None:
-                    if reload or self._mail_cache is None:
-                        self._mail_cache = await self._service.list_mails()
-                        self._expired_cache = None
-                    current = {r.record_id: r for r in self._mail_cache}
-                    table = self._mail_table()
-                    if table is not None:
-                        table.retain_checks(set(current))
-                    self._smart_action_result.records = [
-                        current[r.record_id]
-                        for r in self._smart_action_result.records
-                        if r.record_id in current
-                    ]
-                    await self._render_smart_action_result(self._smart_action_result)
-                else:
-                    await self._refresh_mail_unlocked(reload=reload)
+                await self._refresh_mail_unlocked(reload=reload)
             except Exception as exc:
-                if self._smart_action_result is None and self._mail_cache is not None:
+                if self._mail_cache is not None:
                     with contextlib.suppress(Exception):
                         await self._refresh_mail_unlocked(reload=False)
                 self._set_static("#mail-empty-hint", _load_error(self._service, exc))
@@ -1111,213 +1064,8 @@ class MailPane(Vertical):
             RichText(record.mail.sender.display),
         )
 
-    async def _render_smart_action_result(self, result: SmartActionResult) -> None:
-        """Render what the instruction produced, by content rather than intent.
-
-        The model decides what to do, so the host renders whatever came back:
-        matched mail into the table, its own summary and the executed steps as
-        a hint, and any staged change as one confirmation dialog. Nothing a
-        mutating tool staged has happened yet.
-        """
-        self._records = result.records
-        hints: list[str] = [self._pending_status_hint] if self._pending_status_hint else []
-        if result.actions:
-            hints.append(self._service.t("ux.query_tasks_hint", count=len(result.actions)))
-        if result.records:
-            hints.append(self._service.t("tui.smart_action_found", count=len(result.records)))
-        if result.final_text:
-            hints.append(result.final_text)
-        if result.failure_reasons and not result.failed_mails:
-            hints.extend(result.failure_reasons)
-        if result.failed_mails:
-            key = "tui.smart_action_partial" if result.records else "tui.smart_action_incomplete"
-            hints.append(
-                self._service.t(
-                    key,
-                    failed=result.failed_mails,
-                    reasons="; ".join(result.failure_reasons) or "?",
-                )
-            )
-        status_hint = f"[yellow]{escape('; '.join(hints))}[/yellow]" if hints else ""
-        await self._render_records(
-            result.records,
-            empty_hint_key="tui.mail_no_match",
-            status_hint=status_hint,
-        )
-        if result.pending and self._smart_review_result is not result:
-            self._smart_review_result = result
-            self._ask_pending_operations(result)
-
-    def _ask_pending_operations(self, result: SmartActionResult) -> None:
-        async def _review() -> None:
-            await self._prepare_and_review_pending(result)
-
-        self.run_worker(
-            cast(Any, _review),
-            exclusive=True,
-            group="smart-review",
-            exit_on_error=False,
-        )
-
-    async def _prepare_and_review_pending(self, result: SmartActionResult) -> None:
-        """Show one editable confirmation for all proposed changes."""
-        action_map = {item.item_id: item for item in await self._service.list_actions_all()}
-        operations: list[PendingOperation] = []
-        for pending in result.pending:
-            operation = pending.model_copy(deep=True)
-            if operation.tool == "delete_mail":
-                subjects: list[str] = []
-                for record_id in operation.record_ids:
-                    record = await self._service.get_mail(record_id)
-                    if record is not None:
-                        subjects.append(record.mail.subject)
-                operation.arguments["subjects"] = subjects
-            if operation.tool in {"edit_action", "delete_action"}:
-                item = action_map.get(str(operation.arguments.get("item_id") or ""))
-                if item is not None:
-                    operation.arguments = {
-                        "item_id": item.item_id,
-                        "summary": item.summary,
-                        "due_at": item.due_at.isoformat() if item.due_at else None,
-                        "due_end": item.due_end.isoformat() if item.due_end else None,
-                        "action_type": item.action_type,
-                        "notes": item.notes,
-                        "location": item.location,
-                        "url": item.url,
-                        "origin": item.origin.value,
-                        **operation.arguments,
-                    }
-                    if operation.arguments.get("clear_end"):
-                        operation.arguments["due_end"] = None
-                    if operation.arguments.get("clear_due"):
-                        operation.arguments["due_at"] = None
-                        operation.arguments["due_end"] = None
-            operations.append(operation)
-        reviewed = await self._ask_screen(SmartActionReviewModal(self._service, operations))
-        if reviewed is None:
-            result.pending.clear()
-            self._smart_retry = None
-            self._pending_status_hint = self._service.t("tui.smart_changes_cancelled")
-            await self.refresh_mail()
-            return
-        await self._apply_pending_unlocked(result, cast(list[PendingOperation], reviewed))
-
-    async def _apply_pending_unlocked(
-        self,
-        result: SmartActionResult,
-        operations: list[PendingOperation] | None = None,
-    ) -> None:
-        """Apply confirmed changes once and show failures without aborting the batch."""
-        applied = failed = deleted = 0
-        selected = list(operations if operations is not None else result.pending)
-        errors: list[str] = []
-        if result.plan_id:
-            try:
-                outcome = await self._service.apply_smart_plan(result.plan_id, selected)
-            except Exception as exc:
-                logger.warning("smart plan confirmation failed (%s)", type(exc).__name__)
-                result.pending = selected
-                self._smart_retry = result
-                self._smart_action_result = self._smart_review_result = result
-                self._pending_status_hint = error_text(exc, self._service.t)
-                await self.refresh_mail()
-                return
-            applied = int(outcome["applied"])
-            failed = len(outcome["failed"])
-            deleted = len(outcome["deleted"])
-            self._undo_trash_ids = list(outcome["deleted"]) or self._undo_trash_ids
-            result.pending = list(outcome["failed"])
-            self._smart_retry = result if failed else None
-            errors.extend(str(detail) for detail in outcome["errors"])
-        else:
-            result.pending.clear()
-            for operation in selected:
-                try:
-                    changed = await self._apply_operation(operation.tool, operation.arguments)
-                    applied += changed
-                    if operation.tool == "delete_mail":
-                        deleted += changed
-                except Exception as exc:
-                    failed += 1
-                    logger.warning("staged %r failed (%s)", operation.tool, type(exc).__name__)
-                    errors.append(error_text(exc, self._service.t))
-        result.deleted = deleted
-        self._smart_action_result = result
-        self._smart_review_result = result
-        key = "tui.agent_applied" if not failed else "tui.agent_applied_partial"
-        self._pending_status_hint = self._service.t(key, applied=applied, failed=failed)
-        if errors:
-            self._pending_status_hint += "; " + "; ".join(errors)
-        await self.refresh_mail()
-        cast(MailFlowApp, self.app).schedule_reload()  # pyright: ignore[reportUnknownMemberType]
-
-    async def _apply_operation(self, tool: str, arguments: dict[str, Any]) -> int:
-        """Apply one confirmed operation through the permission-aware service."""
-        from datetime import datetime as _datetime
-
-        if tool == "delete_mail":
-            return await self._service.delete_mails(
-                cast("list[str]", arguments.get("record_ids", []))
-            )
-        if tool == "add_action":
-            end_raw = arguments.get("due_end")
-            await self._service.add_action(
-                str(arguments.get("summary") or ""),
-                _datetime.fromisoformat(str(arguments["due_at"]))
-                if arguments.get("due_at")
-                else None,
-                action_type=str(arguments.get("action_type") or "errand"),
-                due_end=_datetime.fromisoformat(str(end_raw)) if end_raw else None,
-                notes=str(arguments.get("notes") or ""),
-                location=str(arguments.get("location") or ""),
-                url=str(arguments.get("url") or ""),
-            )
-            return 1
-        if tool == "edit_action":
-            due_raw = arguments.get("due_at")
-            end_raw = arguments.get("due_end")
-            await self._service.edit_action(
-                str(arguments["item_id"]),
-                summary=str(arguments["summary"]) if "summary" in arguments else None,
-                due_at=_datetime.fromisoformat(str(due_raw)) if due_raw else None,
-                action_type=str(arguments["action_type"]) if "action_type" in arguments else None,
-                notes=str(arguments["notes"]) if "notes" in arguments else None,
-                due_end=_datetime.fromisoformat(str(end_raw)) if end_raw else None,
-                clear_end=bool(arguments.get("clear_end", False)),
-                location=str(arguments["location"]) if "location" in arguments else None,
-                url=str(arguments["url"]) if "url" in arguments else None,
-            )
-            return 1
-        if tool == "delete_action":
-            return int(await self._service.delete_action(str(arguments["item_id"])))
-        raise ValueError(self._service.t("tui.smart_action_failed"))
-
-    async def _preview_matches(self, match_ids: set[str]) -> None:
-        """Fetch preview records missing from the cache from storage and
-        stream them into the table (the search may complete while this
-        reads — appending is still correct, _render_records re-renders)."""
-        records = [r for r in await self._service.list_mails() if r.record_id in match_ids]
-        if records and self._smart_action_running:
-            await self._append_records(records)
-
-    async def _append_records(self, records: list[MailRecord]) -> None:
-        """Append rows to the mail table live, while a smart search is
-        streaming its per-batch matches. Idempotent: a record already in
-        the table is skipped (batch previews can re-deliver)."""
-        table = self._mail_table()
-        if table is None:
-            return
-        self._ensure_columns()
-        existing = {str(row_key.value or "") for row_key in table.rows}
-        ordered = sorted(records, key=lambda record: record.mail.received_at, reverse=True)
-        for record in ordered:
-            if record.record_id in existing:
-                continue
-            table.add_row(*self._mail_cells(record), key=record.record_id)
-            existing.add(record.record_id)
-
     async def _refresh_mail_unlocked(self, *, reload: bool = True) -> None:
-        if self._smart_action_running or self._mail_table() is None:
+        if self._mail_table() is None:
             return
         if reload or self._mail_cache is None:
             search_input = self.query_one_optional("#mail-search", Input)
@@ -1356,8 +1104,6 @@ class MailPane(Vertical):
                 ]
             self._expired_cache = None
         records = [record for record in self._mail_cache or [] if self._query.matches(record)]
-        if self._smart_action_running:
-            return
         has_records = bool(records)
         table = self._mail_table()
         if table is not None:
@@ -1398,7 +1144,7 @@ class MailPane(Vertical):
         records = sorted(records, key=lambda r: r.mail.received_at, reverse=True)
         if self._select_value("#mail-sort") == "urgency":
             records.sort(key=lambda r: r.effective_urgency.rank, reverse=True)
-        status = self._pending_status_hint
+        status = ""
         if self._next_offset is not None:
             status += " " + self._service.t(
                 "ux.loaded_mail", shown=len(records), total=self._page_total
@@ -1517,18 +1263,11 @@ class MailPane(Vertical):
 
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "mail-search":
-            # Editing a new request never cancels a running agent or discards its result.
-            if self._smart_action_running or self._smart_action_result is not None:
-                return
             self._page_limit = 200
             self._schedule_mail_filter()
 
     def on_search_toggle_toggled(self, event: SearchToggle.Toggled) -> None:
         if event.toggle.id in {"mail-search-regex", "mail-search-case"}:
-            if self._smart_action_running:
-                return
-            self._clear_smart_progress()
-            self._clear_smart_action_result()
             self._schedule_mail_filter()
 
     async def on_data_table_row_selected(self, event: TableRowEvent) -> None:
@@ -1551,12 +1290,7 @@ class MailPane(Vertical):
         """Cursor movement (arrow keys) highlights rows without selecting;
         the detail pane must follow the highlight so what the user looks at
         is what the right side shows."""
-        if (
-            event.data_table.id != "mail-table"
-            or self._rendering
-            or event.row_key.value is None
-            or getattr(self, "_smart_action_running", False)
-        ):
+        if event.data_table.id != "mail-table" or self._rendering or event.row_key.value is None:
             return
         self._selected_id = event.row_key.value
         record = next((r for r in self._records if r.record_id == self._selected_id), None)
@@ -1564,202 +1298,6 @@ class MailPane(Vertical):
             self._sync_urgency_select(record)
         await self._show_selected(cached=True)
         self._sync_selection_controls()
-
-    def _smart_button(self) -> Button | None:
-        return self.query_one_optional("#smart-action", Button)
-
-    def _set_smart_label(self, key: str) -> None:
-        button = self._smart_button()
-        if button is not None:
-            button.label = self._service.t(key)
-            # while searching the button is the only visible sign that
-            # something is running: make it shout (red) so cancel is
-            # impossible to miss; back to primary when idle
-            button.variant = "error" if key == "tui.smart_action_cancel" else "primary"
-
-    def _clear_smart_action_result(self) -> None:
-        """Return to the ordinary mailbox view after an explicit user action."""
-        self._pending_status_hint = ""
-        self._smart_review_result = None
-        if self._smart_action_result is not None:
-            self._smart_action_result = None
-            # Do not apply a literal text filter to the ranked subset while a
-            # background cache reread is pending; load the full mailbox first.
-            self._records = []
-
-    async def _stop_smart_spinner(self) -> None:
-        task = self._smart_spinner_task
-        self._smart_spinner_task = None
-        if task is None:
-            return
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-    async def _toggle_smart_action(self) -> None:
-        search = self.query_one_optional("#mail-search", Input)
-        query = search.value.strip() if search is not None else ""
-        if self._smart_action_running:
-            # Cancellation restores the full mailbox rather than a stale
-            # pre-search cache, so mail arriving during the search remains visible.
-            await self._cancel_smart_action()
-            await self.refresh_mail()
-            return
-        if not query:
-            return
-        table = self._mail_table()
-        scope: dict[str, Any] = {}
-        mode = self._smart_scope
-        if mode == "selected" or (mode == "auto" and table is not None and table.checked_keys):
-            scope["record_ids"] = self._mail_targets()
-        elif mode == "results":
-            scope["record_ids"] = [r.record_id for r in self._records]
-        elif mode == "account" or (mode == "auto" and self._query.account_id):
-            scope["account_id"] = self._query.account_id or next(
-                (r.mail.account_id for r in self._records if r.record_id == self._selected_id), ""
-            )
-            if not scope["account_id"]:
-                self._set_operation_status(self._service.t("ux.choose_account"))
-                return
-        self._clear_smart_action_result()
-        self._mail_filter_generation += 1
-        self._smart_action_running = True
-        hint = self.query_one_optional("#mail-empty-hint", Static)
-        progress_log = self.query_one_optional("#smart-action-progress", RichLog)
-        if progress_log is not None:
-            progress_log.clear()
-            progress_log.display = True
-        table = self._mail_table()
-        SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-        spinner_state: dict[str, Any] = {
-            "frame": 0,
-            "running": True,
-            "message": self._service.t("tui.smart_action_working"),
-        }
-
-        async def _spin() -> None:
-            while bool(spinner_state["running"]):
-                if hint is not None and self._smart_action_running:
-                    frame = SPINNER[int(spinner_state["frame"]) % len(SPINNER)]
-                    spinner_state["frame"] = int(spinner_state["frame"]) + 1
-                    # keep animating through the WHOLE run: the first stage
-                    # callback now fires within milliseconds (run_agent
-                    # reports before each LLM round trip), so hiding the
-                    # spinner once stages start left no visible animation at
-                    # all — instead the hint carries the latest stage text
-                    # and the RichLog below keeps the full history
-                    hint.update(RichText(f"{frame} {spinner_state['message']}"))
-                    hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
-                await asyncio.sleep(0.12)
-
-        record_map: dict[str, MailRecord] = {record.record_id: record for record in self._records}
-        self._smart_spinner_task = asyncio.create_task(_spin())
-
-        def _show_progress(
-            stage: str, done: int, total: int, detail: str | tuple[str, dict[str, Any]]
-        ) -> None:
-            if not self._smart_action_running or self._smart_action_task is not task:
-                return
-            detail_key = ""
-            detail_params: dict[str, Any] = {}
-            if isinstance(detail, tuple):
-                detail_key, detail_params = detail
-                if detail_key in {"smart_tool", "smart_tool_done"}:
-                    detail_params = {
-                        **detail_params,
-                        "tool": self._service.t(f"tui.smart_tool_{detail_params.get('tool', '')}"),
-                    }
-                detail_text = self._service.t(f"tui.{detail_key}", **detail_params)
-            else:
-                detail_text = detail
-            message = self._service.t(
-                "tui.smart_scan_progress"
-                if stage in {"match", "warmup"}
-                else "tui.smart_action_progress",
-                stage=self._service.t(f"tui.smart_stage_{stage}"),
-                done=done,
-                total=total,
-                detail=detail_text,
-            )
-            if progress_log is not None:
-                progress_log.write(message)
-            # the hint line keeps spinning with this message (see _spin);
-            # hiding it here killed the animation because the first stage
-            # callback fires before the spinner's first frame
-            spinner_state["message"] = message
-            if detail_key == "smart_batch" and table is not None:
-                match_ids = set(detail_params.get("mails") or [])
-                known = [
-                    record_map[record_id] for record_id in match_ids if record_id in record_map
-                ]
-                if known:
-                    self.run_worker(
-                        self._append_records(known), exclusive=False, group="smart-preview"
-                    )
-                missing = match_ids - set(record_map)
-                if missing:
-                    self.run_worker(
-                        self._preview_matches(missing), exclusive=False, group="smart-preview"
-                    )
-
-        if table is not None:
-            table.clear()
-
-        async def _run() -> SmartActionResult:
-            return await self._service.smart_action(query, progress=_show_progress, **scope)
-
-        task = asyncio.create_task(_run())
-        self._smart_action_task = task
-        try:
-            result = await task
-        except asyncio.CancelledError:
-            if self._smart_action_task is task:
-                await self._cancel_smart_action()
-                await self.refresh_mail()
-            return  # the cancellation path above restored the ordinary view
-        except Exception as exc:
-            if self._smart_action_task is not task:
-                return
-            self._smart_action_task = None
-            self._smart_action_running = False
-            await self._stop_smart_spinner()
-            self._clear_smart_progress()
-            self._clear_smart_action_result()
-            self._set_smart_label("tui.smart_action")
-            await self.refresh_mail()
-            if hint is not None:
-                hint.update(f"[red]{escape(error_text(exc, self._service.t))}[/red]")
-                hint.display = "block"  # pyright: ignore[reportUnknownMemberType]
-            return
-        if self._smart_action_task is not task:
-            return
-        self._smart_action_task = None
-        self._smart_action_running = False
-        await self._stop_smart_spinner()
-        self._clear_smart_progress()
-        self._set_smart_label("tui.smart_action")
-        self._smart_action_result = result
-        async with self._refresh_lock:
-            await self._render_smart_action_result(result)
-
-    async def _cancel_smart_action(self) -> None:
-        self._mail_filter_generation += 1
-        self._smart_action_running = False
-        task = self._smart_action_task
-        self._smart_action_task = None
-        if task is not None and not task.done():
-            task.cancel()
-        self.workers.cancel_group(self, "smart-preview")  # pyright: ignore[reportUnknownMemberType]
-        await self._stop_smart_spinner()
-        self._clear_smart_progress()
-        self._clear_smart_action_result()
-        self._set_smart_label("tui.smart_action")
-
-    def _clear_smart_progress(self) -> None:
-        progress = self.query_one_optional("#smart-action-progress", RichLog)
-        if progress is not None:
-            progress.clear()
-            progress.display = False
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         try:
@@ -1975,12 +1513,9 @@ class MailPane(Vertical):
         if button_id == "analysis-toggle":
             self.run_worker(self._toggle_analysis(), group="analysis-control", exit_on_error=False)
             return
-        if button_id == "smart-action":
-            # The search itself awaits network I/O. Keep the message handler
-            # free so a second press can cancel it and progress updates can be
-            # rendered while the model is working.
+        if button_id == "btn-assistant":
             self.run_worker(
-                cast(Any, self._toggle_smart_action), exclusive=False, group="smart-action"
+                self._handoff_assistant(), group="assistant-context", exit_on_error=False
             )
             return
         if button_id == "btn-more":
@@ -1989,7 +1524,6 @@ class MailPane(Vertical):
             )
             return
         if button_id == "btn-refresh":
-            self._clear_smart_action_result()
             await self.refresh_mail()
             return
         if button_id == "btn-purge-expired":
@@ -2041,6 +1575,30 @@ class MailPane(Vertical):
                     ReplyModal(self._service, record)
                 )
 
+    async def _handoff_assistant(self) -> None:
+        from mailflow_tui.mail_workflows import SmartScopeScreen
+
+        mode = await self._ask_screen(SmartScopeScreen(self._service, "auto"))
+        if mode is None:
+            return
+        table = self._mail_table()
+        scope: dict[str, Any]
+        if mode == "selected" or (mode == "auto" and table is not None and table.checked_keys):
+            scope = {"record_ids": self._mail_targets()}
+        elif mode == "account" or (mode == "auto" and self._query.account_id):
+            account = self._query.account_id or next(
+                (r.mail.account_id for r in self._records if r.record_id == self._selected_id), ""
+            )
+            if not account:
+                self._set_operation_status(self._service.t("ux.choose_account"))
+                return
+            scope = {"account_id": account}
+        elif mode == "results":
+            scope = {"record_ids": [r.record_id for r in self._records]}
+        else:
+            scope = {}
+        cast(MailFlowApp, self.app).open_assistant(scope, self._service.t("ux.scope_" + str(mode)))  # pyright: ignore[reportUnknownMemberType]
+
     async def _mail_tools(self) -> None:
         from mailflow_tui.mail_workflows import TrashScreen
 
@@ -2048,47 +1606,14 @@ class MailPane(Vertical):
         if not choice:
             return
         try:
-            if choice == "plain_search":
-                await self._cancel_smart_action()
-            elif choice == "smart_scope":
-                from mailflow_tui.mail_workflows import SmartScopeScreen
-
-                selected_scope = await self._ask_screen(
-                    SmartScopeScreen(self._service, self._smart_scope)
-                )
-                if selected_scope:
-                    self._smart_scope = str(selected_scope)
-                    self._set_operation_status(
-                        self._service.t(
-                            "ux.scope_active",
-                            scope=self._service.t("ux.scope_" + self._smart_scope),
-                        )
-                    )
-                return
-            elif choice == "retry_changes":
-                if self._smart_retry is not None:
-                    await self._prepare_and_review_pending(self._smart_retry)
-                return
-            elif choice == "undo_delete":
+            if choice == "undo_delete":
                 await self._undo_trash()
-                return
-            elif choice == "query_tasks":
-                from mailflow_tui.mail_workflows import QueryTasksScreen
-
-                query_result = self._smart_action_result
-                if query_result is not None and query_result.actions:
-                    item = await self._ask_screen(
-                        QueryTasksScreen(self._service, query_result.actions)
-                    )
-                    if item:
-                        await self._ask_screen(TodoEditModal(self._service, item))
                 return
             elif choice == "filter":
                 query = await self._ask_screen(MailFilter(self._service, self._query))
                 if query is not None:
                     self._query = query
                     self._page_limit = 200
-                    self._clear_smart_action_result()
             elif choice == "load_more":
                 if self._next_offset is not None:
                     self._page_limit += 200
@@ -2531,7 +2056,6 @@ class MailPane(Vertical):
             table = self._mail_table()
             if table is not None:
                 table.set_checks(set(errors))
-            self._clear_smart_action_result()
             await self.refresh_mail()
             message = self._service.t("tui.mail_delete_done", count=len(moved))
             if errors:
@@ -2655,7 +2179,6 @@ class MailPane(Vertical):
             raise
 
     def select_mail(self, mail_id: str) -> None:
-        self._clear_smart_action_result()
         search = self.query_one_optional("#mail-search", Input)
         if search is not None:
             search.value = ""
@@ -2728,6 +2251,7 @@ class ActionsPane(Vertical):
                 variant="error",
                 disabled=True,
             )
+        yield Button(self._service.t("assistant.handoff"), id="actions-assistant")
         yield Static(self._service.t("tui.empty"), id="actions-hint")
 
     async def on_mount(self) -> None:
@@ -3048,6 +2572,18 @@ class ActionsPane(Vertical):
             self.query_one("#actions-hint", Static).update(message)
 
     async def _handle_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "actions-assistant":
+            table = self._actions_table()
+            ids = list(table.checked_keys) if table is not None and table.checked_keys else []
+            item = self._selected_item()
+            if not ids and item is not None:
+                ids = [item.item_id]
+            cast(MailFlowApp, self.app).open_assistant(  # pyright: ignore[reportUnknownMemberType]
+                {"action_ids": ids or [a.item_id for a in self._items]},
+                self._service.t("assistant.task_scope"),
+            )
+            return
+
         if event.button.id == "actions-status":
             if self._delete_busy:
                 return
@@ -4697,6 +4233,27 @@ class MailFlowApp(App[None]):
             )
         return None
 
+    def open_assistant(self, scope: dict[str, Any], name: str) -> None:
+        self.query_one(TabbedContent).active = "tab-assistant"
+        if not self.query_one(AssistantPane).set_scope(scope, name):
+            self.notify(self._service.t("assistant.busy"))
+
+    async def on_assistant_pane_open_result(self, event: AssistantPane.OpenResult) -> None:
+        if event.kind == "mail":
+            record = await self._service.get_mail(event.identity)
+            if record is not None:
+                self.push_screen(MailReader(self._service, record))
+        elif event.kind == "action":
+            item = next(
+                (a for a in await self._service.list_actions_all() if a.item_id == event.identity),
+                None,
+            )
+            if item is not None:
+                self.push_screen(TodoEditModal(self._service, item))
+        elif event.kind == "plugin" and not self._remote:
+            self.query_one(TabbedContent).active = "tab-runtime"
+            self.query_one(RuntimePane)._open_plugin_detail(event.identity)  # pyright: ignore[reportPrivateUsage]
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with TabbedContent(initial="tab-mail"):
@@ -4704,6 +4261,8 @@ class MailFlowApp(App[None]):
                 yield MailPane(self._service)
             with TabPane(self._service.t("tui.tab_actions"), id="tab-actions"):
                 yield ActionsPane(self._service)
+            with TabPane(self._service.t("assistant.tab"), id="tab-assistant"):
+                yield AssistantPane(self._service)
             if not self._remote:
                 # mailbox forms and history browsing need the local service
                 with TabPane(self._service.t("tui.tab_mailboxes"), id="tab-mailboxes"):
@@ -4824,6 +4383,7 @@ class MailFlowApp(App[None]):
             "tab-mail": (MailPane, "tui.tab_mail"),
             "tab-mailboxes": (AccountsPane, "tui.tab_mailboxes"),
             "tab-actions": (ActionsPane, "tui.tab_actions"),
+            "tab-assistant": (AssistantPane, "assistant.tab"),
             "tab-llms": (LLMPane, "tui.tab_llms"),
             "tab-runtime": (RuntimePane, "tui.tab_runtime"),
             "tab-notifications": (NotificationsPane, "tui.tab_notifications"),
@@ -4871,6 +4431,7 @@ class MailFlowApp(App[None]):
                 (
                     MailPane,
                     ActionsPane,
+                    AssistantPane,
                     RuntimePane,
                     AccountsPane,
                     LLMPane,

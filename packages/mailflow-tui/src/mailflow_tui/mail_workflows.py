@@ -115,10 +115,6 @@ class MailMenu(WorkflowScreen):
                 [
                     (self.t("ux." + key), key)
                     for key in (
-                        "plain_search",
-                        "smart_scope",
-                        "query_tasks",
-                        "retry_changes",
                         "undo_delete",
                         "filter",
                         "load_more",

@@ -343,6 +343,8 @@ def create_app(service: MailFlowService) -> FastAPI:
                     str(body.get("instruction", "")),
                     record_ids=body.get("record_ids"),
                     account_id=str(body.get("account_id", "")),
+                    conversation=body.get("conversation"),
+                    action_ids=body.get("action_ids"),
                     progress=progress,
                 ),
                 name=f"smart-operation-{job_id}",

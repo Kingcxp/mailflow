@@ -146,6 +146,7 @@ class BotServer(OwnedListener):
                         provider=str(payload.get("provider") or ""),
                         instance_id=instance,
                         request_id=str(payload.get("request_id") or ""),
+                        mentioned=payload.get("mentioned") is True,
                     ):
                         writer.write(
                             json.dumps({"reply": self._service.chat_reply_chunks(reply)}).encode()
@@ -160,6 +161,7 @@ class BotServer(OwnedListener):
                     chat_type=str(payload.get("chat_type") or ""),
                     provider=str(payload.get("provider") or ""),
                     instance_id=instance,
+                    mentioned=payload.get("mentioned") is True,
                 )
                 if reply:
                     logger.info(

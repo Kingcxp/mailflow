@@ -44,6 +44,8 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
 
     def _description(self, index: int, operation: PendingOperation) -> str:
         args = operation.arguments
+        if operation.summary_key == "assistant.preview":
+            return self._t(operation.summary_key, **operation.summary_params)
         if operation.tool == "delete_mail":
             count = len(args.get("record_ids", []))
             subjects = " · ".join(args.get("subjects", []))

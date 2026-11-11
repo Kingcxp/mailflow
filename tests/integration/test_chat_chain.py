@@ -11,7 +11,7 @@ import json
 from typing import Any, cast
 
 import pytest
-from mailflow.config import MailFlowConfig
+from mailflow.config import MailFlowConfig, NotifierConfig
 from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.pipeline import PipelineEngine
@@ -447,3 +447,55 @@ async def test_streaming_bridge_receives_progress_and_final_result() -> None:
         assert replies == [[service.t("chat.accepted", prefix="#")], ["Finished"]]
     finally:
         await server.stop()
+
+
+async def test_natural_chat_uses_admin_identity_and_one_owner_confirmation() -> None:
+    from unittest.mock import AsyncMock
+
+    from mailflow.domain import PendingOperation, SmartActionResult
+
+    from mailflow_test_support.commands import commands_service
+
+    service = commands_service()
+    service.config.notifiers = [
+        NotifierConfig(notifier_id="one", provider="telegram", options={"admins": ["admin"]})
+    ]
+    query = AsyncMock(
+        return_value=SmartActionResult(
+            final_text="Proposed",
+            plan_id="plan",
+            pending=[
+                PendingOperation(
+                    tool="delete_mail",
+                    arguments={"record_ids": ["a"]},
+                    summary_key="assistant.done",
+                )
+            ],
+        )
+    )
+    apply = AsyncMock(return_value={"applied": 1, "failed": [], "errors": []})
+    service.smart_action = query
+    service.apply_smart_plan = apply
+    identity: dict[str, Any] = dict(
+        provider="telegram", instance_id="one", chat_id="room", chat_type="group", sender="admin"
+    )
+    assert await service.command_dispatch("remove this", **identity) is None
+    assert await service.command_dispatch("/anotherbot go", mentioned=True, **identity) is None
+    denied = await service.command_dispatch(
+        "remove this", mentioned=True, **dict(identity, sender="reader")
+    )
+    assert denied == service.t("permission.denied")
+    query.assert_not_awaited()
+    await service.command_dispatch("remove this", mentioned=True, **identity)
+    actor = service._chat_actor("telegram", "one", "room", "admin")  # pyright: ignore[reportPrivateUsage]
+    token = service._assistant_confirmations[actor][0]  # pyright: ignore[reportPrivateUsage]
+    wrong = await service.command_dispatch(
+        f"confirm {token}", mentioned=True, **dict(identity, chat_id="other")
+    )
+    assert wrong == service.t("ux.plan_expired")
+    apply.assert_not_awaited()
+    await service.command_dispatch(f"confirm {token}", mentioned=True, **identity)
+    await service.command_dispatch(f"confirm {token}", mentioned=True, **identity)
+    apply.assert_awaited_once()
+    assert apply.await_args is not None and apply.await_args.args[0] == "plan"
+    assert apply.await_args.args[1][0].arguments == {"record_ids": ["a"]}

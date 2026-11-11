@@ -110,17 +110,21 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
     elif text.startswith("mailflow "):
         line = text[len("mailflow "):].strip()
     else:
-        return
+        line = None
     sender = str(event.get_user_id())
     group_id = str(getattr(event, "group_id", "") or "")
+    mentioned = event.is_tome()
+    if line is None and group_id and not mentioned:
+        return
     async for reply in _service.chat_command_stream(
-        _service.command_prefix() + "mailflow " + line,
+        _service.command_prefix() + "mailflow " + line if line is not None else text,
         sender=sender,
         provider=bot.adapter.get_name(),
         instance_id=str(bot.self_id),
         chat_id=group_id or sender,
         chat_type="group" if group_id else "private",
         request_id=str(getattr(event, "message_id", "") or ""),
+        mentioned=mentioned,
     ):
         pages = _service.chat_reply_chunks(reply)
         for page in pages if isinstance(pages, list) else [pages]:

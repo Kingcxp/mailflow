@@ -181,6 +181,7 @@ class TestNonebotExporter:
                 get_plaintext=lambda: "/mailflow clean records",
                 get_user_id=lambda: "reader",
                 group_id="chat-1",
+                is_tome=lambda: False,
             )
             matcher.send = AsyncMock()
             service.clear_all_records = AsyncMock(return_value=(0, 0))
@@ -222,7 +223,9 @@ class TestAstrbotExporter:
         event_module = ModuleType("astrbot.api.event")
         event_module.__dict__.update(
             AstrMessageEvent=object,
-            filter=SimpleNamespace(command=command),
+            filter=SimpleNamespace(
+                event_message_type=command, EventMessageType=SimpleNamespace(ALL="all")
+            ),
         )
         star_module = ModuleType("astrbot.api.star")
         star_module.__dict__.update(Context=object, Star=object)
@@ -230,6 +233,9 @@ class TestAstrbotExporter:
         monkeypatch.setitem(sys.modules, "astrbot.api", ModuleType("astrbot.api"))
         monkeypatch.setitem(sys.modules, "astrbot.api.event", event_module)
         monkeypatch.setitem(sys.modules, "astrbot.api.star", star_module)
+        components = ModuleType("astrbot.api.message_components")
+        components.__dict__["At"] = type("At", (), {})
+        monkeypatch.setitem(sys.modules, "astrbot.api.message_components", components)
         export_astrbot(_context(tmp_path))
         spec = importlib.util.spec_from_file_location("fake_astrbot_plugin", tmp_path / "main.py")
         assert spec is not None and spec.loader is not None
@@ -248,6 +254,8 @@ class TestAstrbotExporter:
             message_str="/mailflow clean records",
             get_sender_id=lambda: "reader",
             get_group_id=lambda: "chat-1",
+            get_messages=lambda: list[object](),
+            message_obj=SimpleNamespace(self_id="bot-1"),
             platform_meta=SimpleNamespace(name="telegram", id="bot-1"),
             plain_result=plain_result,
         )

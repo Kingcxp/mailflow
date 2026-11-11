@@ -452,6 +452,8 @@ class MailFlowService:
         self._chat_tasks: dict[str, asyncio.Task[str | list[str] | None]] = {}
         self._chat_running: dict[str, set[asyncio.Task[str | list[str] | None]]] = {}
         self._chat_results: dict[str, dict[str, Any]] | None = None
+        self._assistant_chats: dict[str, list[dict[str, str]]] = {}
+        self._assistant_confirmations: dict[str, tuple[str, SmartActionResult]] = {}
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -1952,6 +1954,8 @@ Return every candidate in this batch."""
         progress: Any = None,
         record_ids: list[str] | None = None,
         account_id: str = "",
+        conversation: list[dict[str, str]] | None = None,
+        action_ids: list[str] | None = None,
     ) -> SmartActionResult:
         """Carry out one free-form instruction by letting the model call tools.
 
@@ -1978,7 +1982,15 @@ Return every candidate in this batch."""
                 if (selected is None or r.record_id in selected)
                 and (not account_id or r.mail.account_id == account_id)
             ]
-        result = await run_agent(self, self.router, text, progress=progress, records=scoped)
+        result = await run_agent(
+            self,
+            self.router,
+            text,
+            progress=progress,
+            records=scoped,
+            conversation=conversation,
+            action_ids=action_ids,
+        )
         if result.pending:
             self._smart_plans = {
                 key: value for key, value in self._smart_plans.items() if value[1] > utcnow()
@@ -1992,6 +2004,13 @@ Return every candidate in this batch."""
                 [operation.model_copy(deep=True) for operation in result.pending],
             )
         return result
+
+    async def assistant_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> tuple[str, PendingOperation | None]:
+        from mailflow.assistant_operations import stage
+
+        return await stage(self, name, arguments)
 
     @admin_operation
     async def apply_smart_plan(
@@ -2011,6 +2030,11 @@ Return every candidate in this batch."""
                         candidate
                         for candidate in remaining
                         if candidate.tool == operation.tool
+                        and (
+                            candidate.tool
+                            in {"add_action", "edit_action", "delete_action", "delete_mail"}
+                            or candidate.arguments == operation.arguments
+                        )
                         and (
                             candidate.tool == "add_action"
                             or candidate.arguments.get("item_id")
@@ -2098,7 +2122,9 @@ Return every candidate in this batch."""
                             if not await self.delete_action(str(arguments["item_id"])):
                                 continue
                         else:
-                            raise translated_error(ValueError, self.t, "ux.unsupported")
+                            from mailflow.assistant_operations import apply
+
+                            await apply(self, operation)
                         result["applied"] += 1
                 except Exception as exc:
                     remaining.append(original)
@@ -3189,10 +3215,14 @@ Return every candidate in this batch."""
         chat_id: str = "",
         chat_type: str = "",
         request_id: str = "",
+        mentioned: bool = False,
     ) -> AsyncIterator[str | list[str] | None]:
         """Stream acknowledgement and result using the service's owned command tasks."""
         word = text.removeprefix(self.command_prefix()).strip().partition(" ")[0]
-        if word.split("@", 1)[0].casefold() != "mailflow":
+        natural = (mentioned or chat_type == "private") and not text.startswith(
+            self.command_prefix()
+        )
+        if word.split("@", 1)[0].casefold() != "mailflow" and not natural:
             yield await self.command_dispatch(
                 text,
                 sender=sender,
@@ -3200,6 +3230,7 @@ Return every candidate in this batch."""
                 instance_id=instance_id,
                 chat_id=chat_id,
                 chat_type=chat_type,
+                mentioned=mentioned,
             )
             return
         actor = self._chat_actor(provider, instance_id, chat_id, sender)
@@ -3237,6 +3268,7 @@ Return every candidate in this batch."""
                                 instance_id=instance_id,
                                 chat_id=chat_id,
                                 chat_type=chat_type,
+                                mentioned=mentioned,
                             )
                         except asyncio.CancelledError:
                             reply = self.t("chat.cancelled")
@@ -3295,6 +3327,7 @@ Return every candidate in this batch."""
         provider: str = "",
         instance_id: str = "",
         context: PermissionContext | None = None,
+        mentioned: bool = False,
     ) -> str | list[str] | None:
         """Handle one chat-platform message.
 
@@ -3309,6 +3342,21 @@ Return every candidate in this batch."""
         """
         prefix = self.command_prefix()
         if not text.startswith(prefix):
+            if (
+                text.strip()
+                and text.split()[:1] != ["mailflow"]
+                and (mentioned or chat_type == "private")
+            ):
+                identity = context or self.permission_context(
+                    sender=sender, provider=provider, instance_id=instance_id, chat_id=chat_id
+                )
+                try:
+                    with permission_scope(identity):
+                        require_admin(self.t)
+                        return await self._assistant_chat(text.strip(), identity)
+                except Exception as exc:
+                    logger.warning("assistant chat failed (%s)", type(exc).__name__)
+                    return error_text(exc, self.t)
             # The bare word ("mailflow unsubscribe" without the prefix)
             # previously returned None — the bridge sent no reply at all
             # and the user could not tell executed from ignored. Reply
@@ -3334,6 +3382,84 @@ Return every candidate in this batch."""
                     instance_id=identity.instance_id,
                 )
         return None
+
+    async def _assistant_chat(self, text: str, identity: PermissionContext) -> str:
+        actor = self._chat_actor(
+            identity.provider, identity.instance_id, identity.chat_id, identity.sender
+        )
+        words = text.split()
+        action = words[0].casefold()
+        if action in {"确认", "confirm", "取消", "cancel"} and len(words) >= 2:
+            confirmation = self._assistant_confirmations.get(actor)
+            if confirmation is None or not secrets.compare_digest(words[1], confirmation[0]):
+                return self.t("ux.plan_expired")
+            self._assistant_confirmations.pop(actor, None)
+            result = confirmation[1]
+            if action in {"取消", "cancel"}:
+                self._smart_plans.pop(result.plan_id, None)
+                return self.t("tui.smart_changes_cancelled")
+            outcome = await self.apply_smart_plan(result.plan_id, result.pending)
+            result.pending = list(outcome["failed"])
+            reply = self.t(
+                "tui.agent_applied_partial" if result.pending else "tui.agent_applied",
+                applied=outcome["applied"],
+                failed=len(result.pending),
+            )
+            if outcome["errors"]:
+                reply += "\n" + "\n".join(outcome["errors"])
+            self._assistant_chats.setdefault(actor, []).append(
+                {"role": "assistant", "content": reply}
+            )
+            if result.pending:
+                reply += "\n" + self._chat_confirmation(actor, result)
+            return reply
+        if action in {"停止", "stop", "取消", "cancel"}:
+            tasks = [
+                task
+                for task in self._chat_running.get(actor, set())
+                if task is not asyncio.current_task() and task.get_name() != "chat-send"
+            ]
+            for task in tasks:
+                task.cancel()
+            return self.t("chat.cancel_requested" if tasks else "chat.cancel_idle")
+        if any(
+            task is not asyncio.current_task() and not task.done()
+            for task in self._chat_running.get(actor, set())
+        ):
+            return self.t("assistant.busy")
+        previous = self._assistant_confirmations.pop(actor, None)
+        if previous is not None:
+            self._smart_plans.pop(previous[1].plan_id, None)
+        history = self._assistant_chats.setdefault(actor, [])
+        result = await self.smart_action(text, conversation=history[-12:])
+        references = "\n".join(
+            [f"mail {r.record_id}: {r.mail.subject}" for r in result.records]
+            + [f"task {a.item_id}: {a.summary}" for a in result.actions]
+        )
+        history.extend(
+            [
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": result.final_text + "\n" + references},
+            ]
+        )
+        self._assistant_chats[actor] = history[-12:]
+        if len(self._assistant_chats) > 128:
+            oldest = next(iter(self._assistant_chats))
+            self._assistant_chats.pop(oldest)
+            self._assistant_confirmations.pop(oldest, None)
+        reply = result.final_text or self.t("assistant.done")
+        if result.pending:
+            reply += "\n\n" + self._chat_confirmation(actor, result)
+        return reply
+
+    def _chat_confirmation(self, actor: str, result: SmartActionResult) -> str:
+        token = secrets.token_hex(3)
+        self._assistant_confirmations[actor] = (token, result)
+        changes = "\n".join(
+            f"{i}. {self.t(op.summary_key, **op.summary_params)}"
+            for i, op in enumerate(result.pending, 1)
+        )
+        return self.t("assistant.chat_confirm", changes=changes, token=token)
 
     # commands that need the chat context (subscriptions) or special
     # rendering (help/example); everything else delegates to CommandRouter

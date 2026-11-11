@@ -351,11 +351,15 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         assert keys(table) == ["target"]
         smart = AsyncMock(return_value=SmartActionResult(records=[target]))
         monkeypatch.setattr(view, "smart_action", smart)
-        pane._smart_scope = "results"  # pyright: ignore[reportPrivateUsage]
-        app.query_one("#smart-action", Button).press()
+        app.open_assistant({"record_ids": keys(table)}, "Current results")
+        app.query_one("#assistant-input", Input).value = "Find matching mail"
+        await pilot.pause()
+        app.query_one("#assistant-send", Button).press()
         await settle(pilot)
         assert smart.await_args is not None
         assert smart.await_args.kwargs["record_ids"] == keys(table) == ["target"]
+        app.query_one(TabbedContent).active = "tab-mail"
+        await pilot.pause()
         regex.press()
         app.query_one("#btn-refresh", Button).press()
         search.value = "no matching mail"
@@ -581,7 +585,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
             assert "offline" not in text(app, ident)
         assert not app.query("#btn-reparse")
-        assert app.query("#smart-action, #btn-ask-correct, #btn-profile")
+        assert app.query("#assistant-send, #btn-ask-correct, #btn-profile")
         assert not app.query("#tab-mailboxes, #tab-llms, #tab-notifications, #tab-market")
         app.query_one("#btn-reply", Button).press()
         await until(

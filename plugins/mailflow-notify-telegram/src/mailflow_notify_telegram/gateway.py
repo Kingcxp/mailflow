@@ -194,6 +194,25 @@ class TelegramBridge:
         if bot_id and sender_id == bot_id:
             return
         chat_type = "group" if as_text(chat.get("type")) in {"group", "supergroup"} else "private"
+        username = as_text(self.identity.get("username")).casefold()
+        mentioned = False
+        encoded = text.encode("utf-16-le")
+        removals: list[tuple[int, int]] = []
+        for raw_entity in cast(list[Any], message.get("entities") or []):
+            entity = as_object(raw_entity)
+            start, length = int(entity.get("offset") or 0), int(entity.get("length") or 0)
+            token = encoded[start * 2 : (start + length) * 2].decode("utf-16-le")
+            if (entity.get("type") == "mention" and token.casefold() == f"@{username}") or (
+                entity.get("type") == "text_mention"
+                and as_text(as_object(entity.get("user")).get("id")) == bot_id
+            ):
+                mentioned = True
+                removals.append((start * 2, (start + length) * 2))
+        for start, end in sorted(removals, reverse=True):
+            encoded = encoded[:start] + encoded[end:]
+        text = encoded.decode("utf-16-le").strip()
+        if not text:
+            return
         command_name = text.split()[0]
         if (
             "@" in command_name
@@ -211,6 +230,7 @@ class TelegramBridge:
                 "provider": "telegram",
                 "instance_id": self._instance_id,
                 "request_id": str(raw_id or ""),
+                "mentioned": mentioned,
             },
         ):
             for page in reply:

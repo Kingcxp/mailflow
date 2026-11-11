@@ -522,8 +522,10 @@ class _OneBotEventBridge(OwnedListener):
     @staticmethod
     def _extract_text(event: dict[str, Any]) -> str:
         raw = event.get("raw_message")
-        if raw:
-            return str(raw)
+        if raw or not isinstance(event.get("message"), list):
+            return re.sub(
+                r"\[CQ:at,qq=[^\]]+\]", "", str(raw or event.get("message") or "")
+            ).strip()
         parts: list[str] = []
         message: list[Any] = event.get("message") or []
         for seg in message:
@@ -546,6 +548,16 @@ class _OneBotEventBridge(OwnedListener):
         if not text or user_id is None:
             return
         chat_id = str(group_id) if message_type == "group" else str(user_id)
+        segments: list[Any] = (
+            cast(list[Any], event.get("message")) if isinstance(event.get("message"), list) else []
+        )
+        mentioned = any(
+            isinstance(segment, dict)
+            and cast(dict[str, Any], segment).get("type") == "at"
+            and str(cast(dict[str, Any], segment).get("data", {}).get("qq", ""))
+            == str(event.get("self_id", ""))
+            for segment in segments
+        ) or f"[CQ:at,qq={event.get('self_id')}]" in str(event.get("raw_message", ""))
         async for chunks in command_replies(
             self._bot_url,
             {
@@ -556,6 +568,7 @@ class _OneBotEventBridge(OwnedListener):
                 "provider": "napcat",
                 "instance_id": self._instance_id,
                 "request_id": str(event.get("message_id") or ""),
+                "mentioned": mentioned,
             },
         ):
             if len(chunks) > 1 and await self._send_forward(chunks, message_type, chat_id, user_id):

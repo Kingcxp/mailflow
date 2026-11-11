@@ -1438,6 +1438,38 @@
       "sender": "发件人：{sender}",
       "mail_ref": "邮件编号：{id}",
       "attachments": "附件：{names}"
+    },
+    "assistant": {
+      "tab": "智能助手",
+      "placeholder": "输入你希望完成的事情…",
+      "send": "发送",
+      "stop": "停止",
+      "review": "确认操作",
+      "all": "全部邮件和待办",
+      "handoff": "交给智能助手",
+      "scope": "作用范围：{scope}",
+      "task_scope": "选中的待办",
+      "ready": "输入需求；修改和外发会先请你确认。",
+      "working": "正在处理…",
+      "done": "处理完成",
+      "cancelled": "已停止",
+      "review_needed": "请检查并确认待执行的操作。",
+      "kind": "类型",
+      "result": "结果（选中可打开）",
+      "plugin": "插件",
+      "busy": "有任务正在执行，请先停止再切换范围。",
+      "preview": "{description}",
+      "operation_manage_plugin": "调整插件",
+      "plugin_dependencies": "安装时包含依赖；启用或卸载插件可能重载受影响的服务。",
+      "operation_write_reply": "回复邮件",
+      "send_mail": "发送这封回复",
+      "save_draft": "保存为草稿",
+      "operation_update_setting": "修改设置",
+      "operation_update_mail": "调整邮件状态",
+      "operation_manage_gateway": "调整机器人连接",
+      "use_settings": "请在设置页配置该项目或其凭据。",
+      "chat_confirm": "待执行的操作：\n{changes}\n\n回复“确认 {token}”或“取消 {token}”；群聊中请 @ 机器人。确认在 20 分钟后失效。",
+      "not_running": "当前没有正在执行的任务。"
     }
   }
 }

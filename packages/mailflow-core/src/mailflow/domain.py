@@ -471,6 +471,7 @@ class SmartActionResult(BaseModel):
 
     plan_id: str = ""
     actions: list[ActionItem] = Field(default_factory=lambda: [])
+    plugins: list[dict[str, Any]] = Field(default_factory=lambda: [])
     records: list[MailRecord] = Field(default_factory=lambda: [])
     total_mails: int = 0
     failed_mails: int = 0

@@ -49,6 +49,7 @@ from typing import Any
 
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
+from astrbot.api.message_components import At
 
 logger = logging.getLogger("astrbot.plugin.mailflow")
 
@@ -87,7 +88,7 @@ class Main(Star):
             _service = None
             _router = None
 
-    @filter.command("mailflow")
+    @filter.event_message_type(filter.EventMessageType.ALL)
     async def mailflow(self, event: AstrMessageEvent):
         """Dispatch ``/mailflow <line>`` chat messages to the shared router."""
         if _router is None:
@@ -100,16 +101,23 @@ class Main(Star):
             line = line[len("/mailflow"):].strip()
         elif line.startswith("mailflow "):
             line = line[len("mailflow "):].strip()
+        else:
+            line = None
         sender = str(event.get_sender_id())
         group_id = str(event.get_group_id() or "")
+        mentioned = any(isinstance(part, At) and str(part.qq) == str(event.message_obj.self_id)
+                        for part in event.get_messages())
+        if line is None and group_id and not mentioned:
+            return
         async for reply in _service.chat_command_stream(
-            _service.command_prefix() + "mailflow " + line,
+            _service.command_prefix() + "mailflow " + line if line is not None else event.message_str.strip(),
             sender=sender,
             provider=str(event.platform_meta.name),
             instance_id=str(event.platform_meta.id),
             chat_id=group_id or sender,
             chat_type="group" if group_id else "private",
             request_id=str(getattr(getattr(event, "message_obj", None), "message_id", "") or ""),
+            mentioned=mentioned,
         ):
             pages = _service.chat_reply_chunks(reply)
             for page in pages if isinstance(pages, list) else [pages]:

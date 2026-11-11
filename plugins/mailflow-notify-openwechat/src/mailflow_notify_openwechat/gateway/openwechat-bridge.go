@@ -86,6 +86,7 @@ func dispatchChatCommand(msg *openwechat.Message, text string) {
 		"sender":      sender,
 		"chat_id":     chatID,
 		"chat_type":   chatType,
+		"mentioned":   msg.IsAt(),
 		"provider":    os.Getenv("MAILFLOW_PROVIDER"),
 		"instance_id": os.Getenv("MAILFLOW_INSTANCE"),
 	})

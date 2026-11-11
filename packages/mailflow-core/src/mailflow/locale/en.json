@@ -1438,6 +1438,38 @@
       "sender": "From: {sender}",
       "mail_ref": "Mail ID: {id}",
       "attachments": "Attachments: {names}"
+    },
+    "assistant": {
+      "tab": "Assistant",
+      "placeholder": "Describe what you want to do…",
+      "send": "Send",
+      "stop": "Stop",
+      "review": "Review changes",
+      "all": "All mail and tasks",
+      "handoff": "Ask assistant",
+      "scope": "Scope: {scope}",
+      "task_scope": "Selected tasks",
+      "ready": "Describe your request. Changes require your confirmation.",
+      "working": "Working…",
+      "done": "Finished",
+      "cancelled": "Stopped",
+      "review_needed": "Review the proposed changes before applying them.",
+      "kind": "Type",
+      "result": "Result — select to open",
+      "plugin": "Plugin",
+      "busy": "A request is running. Stop it before changing its scope.",
+      "preview": "{description}",
+      "operation_manage_plugin": "Change plugin",
+      "plugin_dependencies": "Installs dependencies; enabling or removing a plugin may reload affected services.",
+      "operation_write_reply": "Reply to mail",
+      "send_mail": "Send this reply",
+      "save_draft": "Save as draft",
+      "operation_update_setting": "Change setting",
+      "operation_update_mail": "Update mail state",
+      "operation_manage_gateway": "Change bot connection",
+      "use_settings": "Open settings to configure this item or its credentials.",
+      "chat_confirm": "Proposed changes:\n{changes}\n\nReply “confirm {token}” or “cancel {token}”. In a group, mention the bot. Confirmation expires in 20 minutes.",
+      "not_running": "No task is running."
     }
   }
 }

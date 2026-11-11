@@ -86,7 +86,7 @@ async function sendText(chatId, text) {
   await sock.sendMessage(chatId, { text })
 }
 
-async function dispatch(text, sender, chatId, chatType, requestId) {
+async function dispatch(text, sender, chatId, chatType, requestId, mentioned = false) {
   if (!BOT_URL) return
   try {
     const response = await fetch(BOT_URL, {
@@ -100,6 +100,7 @@ async function dispatch(text, sender, chatId, chatType, requestId) {
         provider: PROVIDER,
         instance_id: INSTANCE,
         request_id: requestId || "",
+        mentioned,
         stream: true,
       }),
     })
@@ -145,7 +146,11 @@ function handleMessages(event) {
     if (!text) continue
     const isGroup = chatId.endsWith('@g.us')
     const sender = isGroup ? (message.key && message.key.participant) || chatId : chatId
-    dispatch(text, sender, chatId, isGroup ? 'group' : 'private', message.key && message.key.id).catch((err) => {
+    const context = message.message.extendedTextMessage?.contextInfo || {}
+    const ownId = (sock?.user?.id || '').replace(/:\d+@/, '@')
+    const mentioned = (context.mentionedJid || []).some(id => id.replace(/:\d+@/, '@') === ownId)
+    const instruction = mentioned ? text.replace(/@\d+/g, '').trim() : text
+    dispatch(instruction, sender, chatId, isGroup ? 'group' : 'private', message.key && message.key.id, mentioned).catch((err) => {
       log(`dispatch failed: ${err && err.message ? err.message : err}`)
     })
   }

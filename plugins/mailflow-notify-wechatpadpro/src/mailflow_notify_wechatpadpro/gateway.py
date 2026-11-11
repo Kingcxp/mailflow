@@ -695,6 +695,9 @@ class _WebhookBridge(OwnedListener):
                 "provider": "wechatpadpro",
                 "instance_id": self.instance_id,
                 "request_id": str(data.get("MsgId") or data.get("NewMsgId") or ""),
+                "mentioned": bool(data.get("ToUserName"))
+                and str(data["ToUserName"])
+                in str(data.get("AtUserList") or data.get("MsgSource") or ""),
             },
         ):
             if not pages:
