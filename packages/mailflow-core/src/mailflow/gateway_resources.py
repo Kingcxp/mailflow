@@ -16,6 +16,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -189,6 +190,9 @@ async def run_command(
     def terminate(process: subprocess.Popen[Any]) -> None:
         terminate_process(process, tree=True)
 
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
     process = await launch_owned(
         lambda: subprocess.Popen(
             command,
@@ -196,7 +200,7 @@ async def run_command(
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            creationflags=creationflags,
             start_new_session=os.name != "nt",
         ),
         terminate=terminate,

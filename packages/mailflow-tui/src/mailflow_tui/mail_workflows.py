@@ -301,7 +301,7 @@ class AttachmentsScreen(WorkflowScreen):
         self.saved: Path | None = None
         self.busy = False
         self._opener: str | None = None
-        if os.name == "nt":
+        if sys.platform == "win32":
             self._opener = "startfile"
         elif sys.platform == "darwin":
             self._opener = shutil.which("open")
@@ -380,7 +380,7 @@ class AttachmentsScreen(WorkflowScreen):
     async def _open(self) -> None:
         try:
             if self.saved is not None and self._opener:
-                if self._opener == "startfile":
+                if sys.platform == "win32":
                     await asyncio.to_thread(os.startfile, str(self.saved))
                 else:
                     process = await asyncio.create_subprocess_exec(

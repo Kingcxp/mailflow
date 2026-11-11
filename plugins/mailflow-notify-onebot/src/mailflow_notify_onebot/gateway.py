@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -1425,13 +1426,16 @@ class NapCatProvisioner(GatewayFiles):
                     if quick_uin.isdigit():
                         command += ["-q", quick_uin]
                     cwd = str(run_target.resolve())
+                creationflags = 0
+                if sys.platform == "win32":
+                    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
                 return subprocess.Popen(
                     command,
                     cwd=cwd,
                     env={**os.environ, **env},
                     stdout=handle,
                     stderr=subprocess.STDOUT,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                    creationflags=creationflags,
                     start_new_session=os.name != "nt",
                 )
 

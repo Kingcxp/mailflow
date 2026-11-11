@@ -253,7 +253,9 @@ def _spawn(info: SessionInfo) -> subprocess.Popen[bytes]:
         command = [sys.executable, "--_mailflow-tui-host", info.id]
     else:
         command = [sys.executable, "-X", "utf8", "-B", "-m", "mailflow_tui.sessions", info.id]
-    windows_subprocess = cast(Any, subprocess)
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     with os.fdopen(os.open(info.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "ab") as log:
         return subprocess.Popen(
             command,
@@ -262,10 +264,7 @@ def _spawn(info: SessionInfo) -> subprocess.Popen[bytes]:
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=log,
-            creationflags=windows_subprocess.CREATE_NO_WINDOW
-            | windows_subprocess.CREATE_NEW_PROCESS_GROUP
-            if os.name == "nt"
-            else 0,
+            creationflags=creationflags,
             start_new_session=os.name != "nt",
         )
 
