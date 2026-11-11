@@ -193,6 +193,12 @@ async def test_remote_smart_task_is_reviewed_and_applied_once(
     result = await remote.smart_action("Add a task to buy paper, no deadline", progress=on_progress)
     assert result.pending and result.plan_id and progress
     assert not await service.list_actions()
+    other_session = RemoteClient("http://fake", "admin", "test-secret")
+    with pytest.raises(RemoteError):
+        await other_session.apply_smart_plan(
+            result.plan_id, [operation.model_dump(mode="json") for operation in result.pending]
+        )
+    assert not await service.list_actions()
     applied = await remote.apply_smart_plan(result.plan_id, result.pending)
     assert applied["applied"] == 1 and not applied["failed"]
     assert (await remote.list_actions())[0].due_at is None
@@ -225,7 +231,11 @@ async def test_remote_smart_task_is_reviewed_and_applied_once(
     monkeypatch.setattr("mailflow_server.app._SMART_JOB_IDLE_SECONDS", 0.05)
     entered.clear()
     stopped.clear()
-    async with httpx.AsyncClient(base_url="http://fake", auth=("admin", "test-secret")) as http:
+    async with httpx.AsyncClient(
+        base_url="http://fake",
+        auth=("admin", "test-secret"),
+        headers={"X-MailFlow-Session": "idle-client"},
+    ) as http:
         started = await http.post("/smart/jobs", json={"instruction": "Find messages"})
         await asyncio.wait_for(entered.wait(), 1)
         await asyncio.wait_for(stopped.wait(), 1)

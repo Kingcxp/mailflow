@@ -1178,7 +1178,7 @@
       "hourly_no_target": "当前聊天不是推送目标，请先订阅",
       "hourly_effective_off": "每小时摘要未生效：{reason}。",
       "help_read": "MailFlow · 查看邮件与待办\n{p} mail list [关键词]\n{p} mail show <编号|#序号>\n{p} mail search <查找需求>\n{p} action list [--state open|all]\n{p} action show <编号|#序号>\n{p} status · {p} hourly\n可使用通知或列表中的固定编号；序号对应你在当前聊天最近一次查询的结果。",
-      "help_admin": "管理邮件与待办\n{p} mail delete <编号|#序号> · mail urgency <编号|#序号> <级别|auto>\n{p} action add <内容> [--due \"年-月-日 时:分\"]\n{p} action edit <编号|#序号> --summary <内容> [--due <时间|none>] [--reminder on|off] [--snooze <时间|none>]\n{p} action complete <编号|#序号> · action reopen <编号|#序号> · action delete <编号|#序号>\n{p} reply create <邮件编号|#序号> → reply show <草稿> → reply edit <草稿> \"<主题>\" \"<正文>\" → reply prepare <草稿> → reply confirm <草稿> <token>\n{p} subscribe · {p} unsubscribe · {p} hourly on|off\n{p} help 查看详细用法；{p} cancel 终止正在执行的查询。\n周期计划：{p} action plans · {p} action stop-plan <计划编号>。完成会永久移除当期待办；周期计划继续运行。",
+      "help_admin": "管理邮件与待办\n{p} mail delete <编号|#序号> · mail urgency <编号|#序号> <级别|auto>\n{p} action add <内容> [--due \"年-月-日 时:分\"]\n{p} action edit <编号|#序号> --summary <内容> [--due <时间|none>] [--reminder on|off] [--snooze <时间|none>]\n{p} action complete <编号|#序号> · action delete <编号|#序号>\n{p} reply create <邮件编号|#序号> → reply show <草稿> → reply edit <草稿> \"<主题>\" \"<正文>\" → reply prepare <草稿> → reply confirm <草稿> <token>\n{p} subscribe · {p} unsubscribe · {p} hourly on|off\n{p} help 查看详细用法；{p} cancel 终止正在执行的查询。\n周期计划：{p} action plans · {p} action stop-plan <计划编号>。完成会永久移除当期待办；周期计划继续运行。",
       "accepted": "正在处理你的请求。可使用 {prefix}mailflow cancel 终止。",
       "cancelled": "请求已终止，已经完成的操作已保留。",
       "cancel_requested": "已请求终止。",
@@ -1483,7 +1483,8 @@
       "operation_manage_action_plan": "调整周期计划",
       "operation_sync_account": "调整此账户的同步任务",
       "configure_model": "配置模型",
-      "remote_model_setup": "请在服务端的本地设置中配置模型，完成后即可使用此助手。"
+      "remote_model_setup": "请在服务端的本地设置中配置模型，完成后即可使用此助手。",
+      "session_required": "请使用新版 MailFlow 客户端重新连接，再执行或确认助手任务。"
     },
     "recurrence": {
       "category": "分类",

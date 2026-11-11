@@ -1483,7 +1483,8 @@
       "operation_manage_action_plan": "Manage recurring plan",
       "operation_sync_account": "Change this account’s sync task",
       "configure_model": "Configure a model",
-      "remote_model_setup": "Configure a model in the server’s local settings, then return to the assistant."
+      "remote_model_setup": "Configure a model in the server’s local settings, then return to the assistant.",
+      "session_required": "Reconnect using a current MailFlow client before starting or confirming an assistant task."
     },
     "recurrence": {
       "category": "Category",

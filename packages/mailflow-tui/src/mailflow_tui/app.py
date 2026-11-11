@@ -2680,8 +2680,8 @@ class ActionsPane(Vertical):
         if not choice:
             return
         values: dict[str, Any] = {}
-        if choice in {"complete_tasks", "reopen_tasks"}:
-            values["completed"] = choice == "complete_tasks"
+        if choice == "complete_tasks":
+            values["completed"] = True
         elif choice in {"mute_tasks", "enable_tasks"}:
             values["reminder_enabled"] = choice == "enable_tasks"
         else:

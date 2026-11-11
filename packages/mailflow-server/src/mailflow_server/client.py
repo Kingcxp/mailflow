@@ -13,6 +13,7 @@ import base64
 import contextlib
 import inspect
 import json
+import secrets
 from collections.abc import Callable
 from typing import Any, cast
 from urllib.parse import quote
@@ -77,6 +78,7 @@ class RemoteClient:
     def __init__(self, base_url: str, username: str, password: str) -> None:
         self.base_url = base_url.rstrip("/")
         self._auth = _basic(username, password)
+        self._auth["X-MailFlow-Session"] = secrets.token_urlsafe(24)
         self._event_handlers: dict[str, list[Callable[..., Any]]] = {}
         self._ws_task: asyncio.Task[Any] | None = None
         self.log_queue: asyncio.Queue[str] = asyncio.Queue()

@@ -193,7 +193,16 @@ def create_app(service: MailFlowService) -> FastAPI:
                 },
                 headers={"WWW-Authenticate": "Basic"},
             ) from None
-        return PermissionContext(sender=username, provider="server", is_admin=True)
+        session = connection.headers.get("X-MailFlow-Session", "")
+        if connection.url.path.startswith("/smart/") and not session:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "assistant.session_required",
+                    "message": service.t("assistant.session_required"),
+                },
+            )
+        return PermissionContext(sender=username, provider="server", chat_id=session, is_admin=True)
 
     identity_dependency = Depends(authenticate)
 

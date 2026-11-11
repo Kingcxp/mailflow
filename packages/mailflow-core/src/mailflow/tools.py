@@ -698,6 +698,12 @@ class ToolRegistry:
                 + (f" notes={_snippet(item.notes)}" if item.notes else "")
                 + (f" location={item.location}" if item.location else "")
                 + (f" url={item.url}" if item.url else "")
+                + (f" category={item.category}" if item.category else "")
+                + (f" tags={','.join(item.tags)}" if item.tags else "")
+                + (f" plan_id={item.plan_id}" if item.plan_id else "")
+                + (f" repeat={item.repeat.frequency}" if item.repeat else "")
+                + f" reminder_enabled={str(item.reminder_enabled).lower()}"
+                + (f" snoozed_until={item.snoozed_until.isoformat()}" if item.snoozed_until else "")
             )
         if offset + len(page) < len(items):
             lines.append(

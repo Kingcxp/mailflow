@@ -25,12 +25,10 @@ start (entry-point discovery).
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
 import shutil
-import subprocess
 import sys
 import urllib.request
 from dataclasses import dataclass, field
@@ -40,6 +38,8 @@ from typing import Any, cast
 from urllib.error import URLError
 
 from pydantic import BaseModel, Field
+
+from mailflow.gateway_resources import run_command
 
 logger = logging.getLogger("mailflow.market")
 
@@ -450,13 +450,7 @@ class PluginMarket:
             raise RuntimeError("uv executable not found on PATH; cannot install plugins")
         command = [uv, "pip", "install", "--python", sys.executable, plugin.source]
         logger.info("installing plugin %r via %s", plugin.id, " ".join(command))
-        result = await asyncio.to_thread(
-            subprocess.run,
-            command,
-            capture_output=True,
-            text=True,
-            timeout=_UV_TIMEOUT,
-        )
+        result = await run_command(command, timeout_seconds=_UV_TIMEOUT)
         if result.returncode != 0:
             raise RuntimeError(
                 f"plugin {plugin.id!r}: uv pip install failed: {(result.stderr or result.stdout).strip()[:500]}"
@@ -472,13 +466,7 @@ class PluginMarket:
             raise RuntimeError("uv executable not found on PATH; cannot uninstall plugins")
         command = [uv, "pip", "uninstall", "--python", sys.executable, "-q", plugin.package]
         logger.info("uninstalling plugin %r via %s", plugin.id, " ".join(command))
-        result = await asyncio.to_thread(
-            subprocess.run,
-            command,
-            capture_output=True,
-            text=True,
-            timeout=_UV_TIMEOUT,
-        )
+        result = await run_command(command, timeout_seconds=_UV_TIMEOUT)
         if result.returncode != 0:
             raise RuntimeError(
                 f"plugin {plugin.id!r}: uv pip uninstall failed: {(result.stderr or result.stdout).strip()[:500]}"
