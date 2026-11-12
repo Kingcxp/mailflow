@@ -24,7 +24,7 @@ from typing import Any
 
 import httpx
 from mailflow.config import MailFlowConfig, NotifierConfig
-from mailflow.domain import ComponentKind, MailRecord, NotificationImage
+from mailflow.domain import ComponentKind, MailRecord, NotificationCapabilities, NotificationImage
 from mailflow.forms import FormField
 from mailflow.message_media import ImageNotifier
 from mailflow.notifications import DeliveryError, check_http_response, format_mail, targets_of
@@ -54,6 +54,7 @@ def format_message(record: MailRecord) -> str:
 
 
 class WhatsappNotifier(ImageNotifier):
+    capabilities = NotificationCapabilities(images=True, files=True)
     backend_id = "whatsapp"
 
     def __init__(self, config: NotifierConfig) -> None:
@@ -122,6 +123,20 @@ class WhatsappNotifier(ImageNotifier):
             "to": {"type": "group" if kind == "group" else "contact", "name": name or target},
             "image": base64.b64encode(image.data).decode("ascii"),
             "content_type": image.content_type,
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(f"{self._url}/send", json=payload)
+            check_http_response(response)
+
+    async def push_file_to_target(self, target: str, file: NotificationImage) -> None:
+        if not self._url:
+            raise DeliveryError("configuration")
+        kind, _, name = target.partition(":")
+        payload = {
+            "to": {"type": "group" if kind == "group" else "contact", "name": name or target},
+            "file": base64.b64encode(file.data).decode("ascii"),
+            "content_type": file.content_type,
+            "filename": file.filename,
         }
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(f"{self._url}/send", json=payload)

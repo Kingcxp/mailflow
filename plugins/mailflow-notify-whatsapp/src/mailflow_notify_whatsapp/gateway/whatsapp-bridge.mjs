@@ -290,7 +290,7 @@ async function handleSend(req, res) {
   }
   const body = parsed && typeof parsed === 'object' ? parsed : {}
   const text = typeof body.text === 'string' ? body.text : ''
-  if (!text && !body.image) {
+  if (!text && !body.image && !body.file) {
     writeJSON(res, 400, { ok: false, error: 'text required' })
     return
   }
@@ -304,7 +304,10 @@ async function handleSend(req, res) {
     return
   }
   try {
-    if (body.image) {
+    if (body.file) {
+      if (!sock) throw new Error('not logged in')
+      await sock.sendMessage(jid, { document: Buffer.from(body.file, 'base64'), fileName: body.filename || 'attachment', mimetype: body.content_type || 'application/octet-stream' })
+    } else if (body.image) {
       if (!sock) throw new Error('not logged in')
       await sock.sendMessage(jid, { image: Buffer.from(body.image, 'base64'), mimetype: body.content_type || 'image/png' })
     } else {

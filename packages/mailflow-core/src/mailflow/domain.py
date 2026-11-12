@@ -458,10 +458,12 @@ class NotificationImage(BaseModel):
 class NotificationMessage(BaseModel):
     text: str = ""
     images: list[NotificationImage] = Field(default_factory=lambda: [])
+    files: list[NotificationImage] = Field(default_factory=lambda: [])
 
 
 class NotificationCapabilities(BaseModel):
     images: bool = False
+    files: bool = False
     edit_messages: bool = False
 
 

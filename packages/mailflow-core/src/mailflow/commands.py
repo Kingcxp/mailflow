@@ -62,6 +62,8 @@ _STYLE_ACCENT = "magenta"
 _TOPICS = (
     "assistant",
     "notifications",
+    "files",
+    "backup",
     "mail",
     "action",
     "plugin",
@@ -250,6 +252,8 @@ class CommandRouter:
         self._handlers: dict[str, Callable[[list[str]], Awaitable[CommandResponse]]] = {
             "assistant": self._cmd_assistant,
             "notifications": self._cmd_notifications,
+            "files": self._cmd_files,
+            "backup": self._cmd_backup,
             "help": self._cmd_help,
             "mail": self._cmd_mail,
             "action": self._cmd_action,
@@ -782,6 +786,77 @@ class CommandRouter:
             self._t("mail.wipe_done", mails=moved, trash=purged)
             + f"\n({self._t('plugin.applies_now')})"
         )
+
+    async def _cmd_files(self, args: list[str]) -> CommandResponse:
+        import base64
+
+        positionals, flags = _split_flags(args)
+        operation = positionals[0] if positionals else "list"
+        if operation == "saved":
+            rows = await self.service.workspace_call("files")
+            return self._ok(
+                "\n".join(f"[{r['file_id']}] {r['filename']} ({r['size']})" for r in rows)
+                or self._t("tui.empty")
+            )
+        if operation == "send" and len(positionals) == 2:
+            await self.service.workspace_call("send_file", {"file_id": positionals[1]})
+            return self._ok(self._t("experience.file_sent"))
+        if operation == "get" and len(positionals) == 2:
+            mail_id, separator, index = positionals[1].rpartition(":")
+            if not separator:
+                return self._err(self._t("files.usage"))
+            downloaded = await self.service.workspace_call(
+                "attachment_download", {"record_id": mail_id, "index": int(index)}
+            )
+            if current_context().provider == "local":
+                path = await asyncio.to_thread(
+                    lambda: Path(
+                        flags.get("path", str(Path.home() / "Downloads" / downloaded["filename"]))
+                    ).expanduser()
+                )
+                if path.exists():
+                    return self._err(self._t("ux.overwrite_file", path=str(path)))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(path.write_bytes, base64.b64decode(downloaded["data"]))
+                return self._ok(self._t("ux.backup_saved", path=str(path)))
+            await self.service.workspace_call("send_file", {"file_id": downloaded["file_id"]})
+            return self._ok(self._t("experience.file_sent"))
+        if operation != "list":
+            return self._err(self._t("files.usage"))
+        rows = await self.service.workspace_call("attachments", flags)
+        selected, _, _ = _paginate(rows, _page_number(flags))
+        return self._ok(
+            "\n".join(
+                f"[{r['record_id']}:{r['index']}] {r['filename']} · {r['account_id']} · {self._t('experience.cached' if r['cached'] else 'experience.source_required')}"
+                for r in selected
+            )
+            or self._t("tui.empty")
+        )
+
+    async def _cmd_backup(self, args: list[str]) -> CommandResponse:
+
+        if args == ["create"]:
+            exported = await self.service.workspace_call("backup_export")
+            uploaded = await self.service.workspace_call(
+                "upload", {**exported, "content_type": "application/zip"}
+            )
+            await self.service.workspace_call("send_file", uploaded)
+            return self._ok(self._t("experience.file_sent"))
+        if len(args) >= 2 and args[0] in {"preview", "restore"}:
+            file = await self.service.workspace_call("file_download", {"file_id": args[1]})
+            preview = await self.service.workspace_call("backup_preview", file)
+            summary = self._t(
+                "experience.backup_preview",
+                accounts=len(preview["accounts"]),
+                mails=preview["mails"],
+                tasks=preview["custom_actions"],
+                files=preview["files"],
+            )
+            if args[0] == "preview" or args[-1] != "CONFIRM":
+                return self._ok(summary + "\n" + self._t("backup.usage"))
+            recovery = await self.service.workspace_call("backup_restore", file)
+            return self._ok(self._t("ux.restore_done", path=recovery))
+        return self._err(self._t("backup.usage"))
 
     async def _cmd_notifications(self, args: list[str]) -> CommandResponse:
         values: dict[str, Any] = {}

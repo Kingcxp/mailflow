@@ -9,9 +9,11 @@ import json
 import tempfile
 import tomllib
 import zipfile
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from mailflow import __version__
 from mailflow.config import config_text, parse_config, write_config
@@ -74,12 +76,67 @@ async def create_backup(
     return str(path)
 
 
-async def restore_backup(service: MailFlowService, source: str) -> str:
+async def export_backup(service: MailFlowService) -> bytes:
+    async with service.runtime.action_store.lock, service.runtime.write_lock:
+        database: bytes = await _capability(service, "export_backup")()
+        return _pack(config_text(service.config), database)
+
+
+async def preview_backup(service: MailFlowService, payload: bytes) -> dict[str, Any]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            if manifest["format"] != 1:
+                raise ValueError("unknown backup format")
+            updated = parse_config(tomllib.loads(archive.read("config.toml").decode("utf-8")))
+            database = archive.read("mailflow.sqlite")
+        counts: dict[str, Any] = await _capability(service, "inspect_backup")(database)
+    except Exception as exc:
+        raise translated_error(ValueError, service.t, "ux.backup_invalid") from exc
+    return {
+        **counts,
+        "accounts": [a.account_id for a in updated.accounts],
+        "created_at": manifest.get("created_at", ""),
+    }
+
+
+async def run_auto_backup(service: MailFlowService, now: datetime | None = None) -> str:
+    config = service.config.general
+    if not config.auto_backup:
+        return ""
+    local = (now or datetime.now(UTC)).astimezone(ZoneInfo(config.timezone))
+    day = local.date() - timedelta(days=int(local.time() < time.fromisoformat(config.backup_time)))
+    async with service._backup_lock:  # pyright: ignore[reportPrivateUsage]
+        if await service.storage.get_preference("backup.last_auto") == day.isoformat():
+            return ""
+        directory = await asyncio.to_thread(lambda: Path(config.backup_directory).expanduser())
+        if not directory.is_absolute():
+            directory = (
+                service.config_path.parent if service.config_path else Path.cwd()
+            ) / directory
+        path = directory / f"auto-{day.isoformat()}-{uuid4().hex[:8]}.zip"
+        result = await create_backup(service, str(path))
+        await service.storage.set_preference("backup.last_auto", day.isoformat())
+
+        def prune() -> None:
+            for old in sorted(
+                directory.glob("auto-*.zip"), key=lambda p: p.stat().st_mtime, reverse=True
+            )[config.backup_keep :]:
+                old.unlink()
+
+        await asyncio.to_thread(prune)
+        await service.events.emit("backup.created", path=result)
+        return result
+
+
+async def restore_backup(
+    service: MailFlowService, source: str, *, payload: bytes | None = None
+) -> str:
     path = await asyncio.to_thread(lambda: Path(source).expanduser().resolve())
     validate = _capability(service, "validate_backup")
     restore = _capability(service, "restore_backup")
     try:
-        payload = await asyncio.to_thread(path.read_bytes)
+        payload = payload if payload is not None else await asyncio.to_thread(path.read_bytes)
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             if json.loads(archive.read("manifest.json"))["format"] != 1:
                 raise ValueError("unknown backup format")

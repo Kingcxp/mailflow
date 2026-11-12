@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import re
 import shutil
@@ -28,7 +29,7 @@ from mailflow_tui.view_state import TableView
 from mailflow_tui.widgets import Input, SafeSelect, SelectionTable, TextArea
 
 
-def _save_attachment(target: Path, data: bytes) -> None:
+def save_attachment(target: Path, data: bytes) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -118,7 +119,14 @@ class MailMenu(WorkflowScreen):
                             (
                                 "experience."
                                 if key
-                                in {"saved_filters", "compose", "thread", "reply_all", "forward"}
+                                in {
+                                    "saved_filters",
+                                    "compose",
+                                    "thread",
+                                    "reply_all",
+                                    "forward",
+                                    "attachment_library",
+                                }
                                 else "ux."
                             )
                             + key
@@ -129,6 +137,7 @@ class MailMenu(WorkflowScreen):
                         "undo_delete",
                         "filter",
                         "saved_filters",
+                        "attachment_library",
                         "compose",
                         "thread",
                         "reply_all",
@@ -555,7 +564,7 @@ class AttachmentsScreen(WorkflowScreen):
                 self.status(self.t("ux.cancelled"))
                 return
             data = await self.service.fetch_attachment(self.record.record_id, index)
-            await asyncio.to_thread(_save_attachment, target, data)
+            await asyncio.to_thread(save_attachment, target, data)
             self.saved = target
             self.status(self.t("ux.downloaded", path=str(target)))
         except Exception as exc:
@@ -1047,13 +1056,32 @@ class DataManagementScreen(WorkflowScreen):
                 ):
                     return
                 self.status(self.t("ux.backup_running"))
-                saved = await self.service.create_backup(path, overwrite=exists)
+                exported = await self.service.workspace_call("backup_export")
+                await asyncio.to_thread(
+                    save_attachment,
+                    await asyncio.to_thread(lambda: Path(path).expanduser()),
+                    base64.b64decode(exported["data"]),
+                )
+                saved = path
                 self.status(self.t("ux.backup_saved", path=saved))
             else:
-                if not await self.ask(self.confirmation(self.t("ux.restore_confirm"))):
+                payload = base64.b64encode(
+                    await asyncio.to_thread(lambda: Path(path).expanduser().read_bytes())
+                ).decode("ascii")
+                preview = await self.service.workspace_call("backup_preview", {"data": payload})
+                summary = self.t(
+                    "experience.backup_preview",
+                    accounts=len(preview["accounts"]),
+                    mails=preview["mails"],
+                    tasks=preview["custom_actions"],
+                    files=preview["files"],
+                )
+                if not await self.ask(
+                    self.confirmation(summary + "\n\n" + self.t("ux.restore_confirm"))
+                ):
                     return
                 self.status(self.t("ux.restore_running"))
-                recovery = await self.service.restore_backup(path)
+                recovery = await self.service.workspace_call("backup_restore", {"data": payload})
                 self.status(self.t("ux.restore_done", path=recovery))
         except Exception as exc:
             self.status(error_text(exc, self.service.t))

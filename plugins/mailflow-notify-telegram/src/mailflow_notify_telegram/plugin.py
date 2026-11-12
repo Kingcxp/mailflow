@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 from mailflow.config import MailFlowConfig, NotifierConfig
-from mailflow.domain import ComponentKind, MailRecord, NotificationImage
+from mailflow.domain import ComponentKind, MailRecord, NotificationCapabilities, NotificationImage
 from mailflow.forms import FormField
 from mailflow.message_media import ImageNotifier
 from mailflow.notifications import DeliveryError, check_http_response, format_mail, targets_of
@@ -59,6 +59,7 @@ _TELEGRAM_FIELDS: tuple[FormField, ...] = (
 
 
 class TelegramNotifier(ImageNotifier):
+    capabilities = NotificationCapabilities(images=True, files=True)
     backend_id = "telegram"
 
     def __init__(self, config: NotifierConfig) -> None:
@@ -115,6 +116,18 @@ class TelegramNotifier(ImageNotifier):
                 f"{self._api_base}/bot{self._token}/sendPhoto",
                 data={"chat_id": chat_id},
                 files={"photo": (image.filename, image.data, image.content_type)},
+            )
+            check_http_response(response)
+
+    async def push_file_to_target(self, target: str, file: NotificationImage) -> None:
+        if not self._token:
+            raise DeliveryError("configuration")
+        chat_id = target.partition(":")[2].strip() or target.strip()
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{self._api_base}/bot{self._token}/sendDocument",
+                data={"chat_id": chat_id},
+                files={"document": (file.filename, file.data, file.content_type)},
             )
             check_http_response(response)
 

@@ -25,6 +25,13 @@ class ImageNotifier(ABC):
             await self.push_to_target(target, message.text)
         for image in message.images:
             await self.push_image_to_target(target, image)
+        for file in message.files:
+            await self.push_file_to_target(target, file)
+
+    async def push_file_to_target(self, target: str, file: NotificationImage) -> None:
+        from mailflow.notifications import DeliveryError
+
+        raise DeliveryError("unsupported")
 
 
 def summary_card(text: str, language: str) -> NotificationImage | None:

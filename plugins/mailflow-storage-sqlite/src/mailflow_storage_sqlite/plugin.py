@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 import tempfile
@@ -171,6 +172,23 @@ class SQLiteStorage:
 
     async def validate_backup(self, payload: bytes) -> None:
         self._backup_connection(payload).close()
+
+    async def inspect_backup(self, payload: bytes) -> dict[str, Any]:
+        snapshot = self._backup_connection(payload)
+        try:
+            counts = {
+                table: snapshot.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("mails", "trash_records", "drafts", "custom_actions")
+            }
+            files = 0
+            for key, value in snapshot.execute(
+                "SELECT key, value FROM preferences WHERE key LIKE 'files.%' OR key LIKE 'attachment.cache.%'"
+            ):
+                files += len(json.loads(value)) if key.startswith("files.") else 1
+            counts["files"] = files
+            return counts
+        finally:
+            snapshot.close()
 
     async def restore_backup(self, payload: bytes) -> None:
         snapshot = self._backup_connection(payload)

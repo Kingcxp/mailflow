@@ -116,7 +116,7 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
     mentioned = event.is_tome()
     if line is None and group_id and not mentioned:
         return
-    from mailflow.chat_files import framework_files, receive_files
+    from mailflow.chat_files import framework_files, receive_files, file_sender_scope, framework_send_file
     from mailflow.errors import error_text
 
     payload = {"text": text, "sender": sender, "provider": bot.adapter.get_name(), "instance_id": str(bot.self_id), "chat_id": group_id or sender, "request_id": str(getattr(event, "message_id", "") or "")}
@@ -126,21 +126,24 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
     except Exception as exc:
         await _mailflow_matcher.send(error_text(exc, _service.t))
         return
-    async for reply in _service.chat_command_stream(
-        _service.command_prefix() + "mailflow " + line if line is not None else payload["text"],
-        sender=sender,
-        provider=bot.adapter.get_name(),
-        instance_id=str(bot.self_id),
-        chat_id=group_id or sender,
-        chat_type="group" if group_id else "private",
-        request_id=str(getattr(event, "message_id", "") or ""),
-        mentioned=mentioned,
-    ):
-        pages = _service.chat_reply_chunks(reply)
-        for page in pages if isinstance(pages, list) else [pages]:
-            if page:
-                await _service.pace_bot(bot.adapter.get_name(), str(bot.self_id))
-                await _mailflow_matcher.send(page)
+    async def send_managed(file):
+        await framework_send_file(file, bot=bot, group_id=group_id, sender=sender)
+    with file_sender_scope(send_managed):
+        async for reply in _service.chat_command_stream(
+            _service.command_prefix() + "mailflow " + line if line is not None else payload["text"],
+            sender=sender,
+            provider=bot.adapter.get_name(),
+            instance_id=str(bot.self_id),
+            chat_id=group_id or sender,
+            chat_type="group" if group_id else "private",
+            request_id=str(getattr(event, "message_id", "") or ""),
+            mentioned=mentioned,
+        ):
+            pages = _service.chat_reply_chunks(reply)
+            for page in pages if isinstance(pages, list) else [pages]:
+                if page:
+                    await _service.pace_bot(bot.adapter.get_name(), str(bot.self_id))
+                    await _mailflow_matcher.send(page)
 
 
 '''

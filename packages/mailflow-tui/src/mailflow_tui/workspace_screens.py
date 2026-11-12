@@ -16,8 +16,130 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Button, Checkbox, Select, Static
 
-from mailflow_tui.mail_workflows import WorkflowScreen
-from mailflow_tui.widgets import Input, SafeSelect, TextArea
+from mailflow_tui.mail_workflows import WorkflowScreen, save_attachment
+from mailflow_tui.widgets import Input, SafeSelect, SelectionTable, TextArea
+
+
+class AttachmentLibraryScreen(WorkflowScreen):
+    def __init__(self, service: MailFlowService, account_id: str = "") -> None:
+        super().__init__(service)
+        self.account_id = account_id
+        self.rows: list[dict[str, Any]] = []
+        self.busy = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self.t("experience.attachment_library"))
+            yield Input(placeholder=self.t("experience.filename"), id="library-name")
+            yield Input(placeholder=self.t("experience.file_type"), id="library-type")
+            yield Input(
+                self.account_id,
+                placeholder=self.t("experience.account_filter"),
+                id="library-account",
+            )
+            yield Input(placeholder=self.t("experience.after_date"), id="library-after")
+            yield Input(placeholder=self.t("experience.before_date"), id="library-before")
+            yield Input(
+                str(Path.home() / "Downloads"),
+                placeholder=self.t("ux.download_path"),
+                id="library-path",
+            )
+            yield SelectionTable(t=self.t, id="library-table")
+            yield Static("", id="workflow-status", markup=False)
+            with Horizontal():
+                yield Button(self.t("experience.search"), id="library-search")
+                yield Button(
+                    self.t("experience.download_selected"), id="library-download", disabled=True
+                )
+                yield Button(self.t("experience.source"), id="library-source", disabled=True)
+                yield Button(self.t("tui.btn_back"), id="library-back")
+
+    async def on_mount(self) -> None:
+        table = self.query_one("#library-table", SelectionTable)
+        table.add_columns(
+            "[ ]",
+            self.t("experience.filename"),
+            self.t("experience.file_type"),
+            self.t("experience.account_filter"),
+            self.t("experience.cache_state"),
+        )
+        await self.reload_rows()
+
+    async def reload_rows(self) -> None:
+        values: dict[str, Any] = {
+            "filename": self.query_one("#library-name", Input).value,
+            "content_type": self.query_one("#library-type", Input).value,
+            "account_id": self.query_one("#library-account", Input).value.strip(),
+        }
+        for key in ("after", "before"):
+            raw = self.query_one("#library-" + key, Input).value.strip()
+            if raw:
+                values[key] = raw
+        self.rows = await self.service.workspace_call("attachments", values)
+        table = self.query_one("#library-table", SelectionTable)
+        table.clear()
+        table.retain_checks(set())
+        for index, row in enumerate(self.rows):
+            table.add_row(
+                "[ ]",
+                row["filename"],
+                row["content_type"],
+                row["account_id"],
+                self.t("experience.cached" if row["cached"] else "experience.source_required"),
+                key=str(index),
+            )
+        for ident in ("download", "source"):
+            self.query_one("#library-" + ident, Button).disabled = not self.rows
+        if not self.rows:
+            self.status(self.t("tui.empty"))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if self.busy:
+            return
+        if event.button.id == "library-back":
+            self.dismiss(None)
+            return
+        self.busy = True
+        self.run_worker(self.operate(str(event.button.id)), exclusive=True, exit_on_error=False)
+
+    async def operate(self, ident: str) -> None:
+        try:
+            if ident == "library-search":
+                await self.reload_rows()
+                return
+            table = self.query_one("#library-table", SelectionTable)
+            if not self.rows:
+                return
+            selected = sorted(table.checked_keys, key=int) or [str(table.cursor_row)]
+            if ident == "library-source":
+                self.dismiss(self.rows[int(selected[0])]["record_id"])
+                return
+            raw_directory = self.query_one("#library-path", Input).value
+            directory = await asyncio.to_thread(lambda: Path(raw_directory).expanduser())
+            success, failed = 0, 0
+            for key in selected:
+                row = self.rows[int(key)]
+                target = directory / row["filename"].replace("\\", "/").split("/")[-1]
+                if target.exists() and not await self.ask(
+                    self.confirmation(self.t("ux.overwrite_file", path=str(target)))
+                ):
+                    continue
+                try:
+                    downloaded = await self.service.workspace_call("attachment_download", row)
+                    await asyncio.to_thread(
+                        save_attachment, target, base64.b64decode(downloaded["data"])
+                    )
+                    success += 1
+                    table.checked_keys.discard(key)
+                except Exception as exc:
+                    failed += 1
+                    self.status(error_text(exc, self.t))
+            self.status(self.t("experience.download_result", success=success, failed=failed))
+        except Exception as exc:
+            self.status(error_text(exc, self.t))
+        finally:
+            self.busy = False
 
 
 class NotificationPreferencesScreen(WorkflowScreen):
@@ -123,13 +245,13 @@ class NotificationPreferencesScreen(WorkflowScreen):
         finally:
             for button in buttons:
                 button.disabled = False
-            self.query_one("#notification-settings", Button).disabled = (
-                self.query_one("#connection-setting", Select).value == Select.BLANK
+            self.query_one("#notification-settings", Button).disabled = not isinstance(
+                cast(Select[str], self.query_one("#connection-setting", Select)).value, str
             )
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "connection-setting":
-            self.query_one("#notification-settings", Button).disabled = event.value == Select.BLANK
+            self.query_one("#notification-settings", Button).disabled = event.value is Select.BLANK
 
 
 class AssistantHistoryScreen(WorkflowScreen):
@@ -199,7 +321,7 @@ class AssistantHistoryScreen(WorkflowScreen):
                     [(r["title"], r["kind"] + ":" + r["id"]) for r in row["references"]]
                 )
         elif event.select.id == "history-ref":
-            self.query_one("#history-open", Button).disabled = event.value == Select.BLANK
+            self.query_one("#history-open", Button).disabled = event.value is Select.BLANK
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()

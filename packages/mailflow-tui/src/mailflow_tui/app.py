@@ -1613,6 +1613,15 @@ class MailPane(Vertical):
                 from mailflow_tui.mail_workflows import SyncScreen
 
                 await self._ask_screen(SyncScreen(self._service, self._query.account_id))
+            elif choice == "attachment_library":
+                from mailflow_tui.workspace_screens import AttachmentLibraryScreen
+
+                chosen = await self._ask_screen(
+                    AttachmentLibraryScreen(self._service, self._query.account_id)
+                )
+                if chosen:
+                    self._selected_id = str(chosen)
+                    await self._show_selected()
             elif choice in {"compose", "forward", "reply_all"}:
                 from mailflow_tui.workspace_screens import ComposeScreen
 

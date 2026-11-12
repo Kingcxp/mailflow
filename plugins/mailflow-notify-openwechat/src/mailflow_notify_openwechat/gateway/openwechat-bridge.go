@@ -311,12 +311,14 @@ func main() {
 			} `json:"to"`
 			Text string `json:"text"`
 			Image string `json:"image"`
+			File string `json:"file"`
+			Filename string `json:"filename"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "bad json"})
 			return
 		}
-		if body.Text == "" && body.Image == "" {
+		if body.Text == "" && body.Image == "" && body.File == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "text required"})
 			return
 		}
@@ -328,6 +330,11 @@ func main() {
 		image, decodeErr := base64.StdEncoding.DecodeString(body.Image)
 		if decodeErr != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "bad image"})
+			return
+		}
+		fileData, fileErr := base64.StdEncoding.DecodeString(body.File)
+		if fileErr != nil || len(fileData) > 4*1024*1024 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "bad file"})
 			return
 		}
 		var sendErr error
@@ -344,7 +351,9 @@ func main() {
 				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no room named " + body.To.Name})
 				return
 			}
-			if body.Image != "" {
+			if body.File != "" {
+				_, sendErr = target.SendFile(bytes.NewReader(fileData))
+			} else if body.Image != "" {
 				_, sendErr = target.SendImage(bytes.NewReader(image))
 			} else {
 				_, sendErr = target.SendText(body.Text)
@@ -362,7 +371,9 @@ func main() {
 				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no contact named " + body.To.Name})
 				return
 			}
-			if body.Image != "" {
+			if body.File != "" {
+				_, sendErr = target.SendFile(bytes.NewReader(fileData))
+			} else if body.Image != "" {
 				_, sendErr = target.SendImage(bytes.NewReader(image))
 			} else {
 				_, sendErr = target.SendText(body.Text)

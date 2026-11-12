@@ -149,6 +149,10 @@ class GeneralConfig(BaseModel):
     quiet_enabled: bool = False
     quiet_start: str = "22:00"
     quiet_end: str = "08:00"
+    auto_backup: bool = False
+    backup_directory: str = "backups"
+    backup_time: str = "04:30"
+    backup_keep: int = Field(default=7, ge=1)
     task_reminders: bool = Field(default=True, description="Send task reminders")
     daily_digest: bool = Field(default=True, description="Send a daily unfinished-task digest")
     daily_digest_hour: int | None = Field(
@@ -214,6 +218,7 @@ class GeneralConfig(BaseModel):
 
         time.fromisoformat(self.quiet_start)
         time.fromisoformat(self.quiet_end)
+        time.fromisoformat(self.backup_time)
         try:
             ZoneInfo(self.timezone)
         except ZoneInfoNotFoundError as exc:

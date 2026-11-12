@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 from mailflow.config import NotifierConfig
-from mailflow.domain import ComponentKind, MailRecord, NotificationImage
+from mailflow.domain import ComponentKind, MailRecord, NotificationCapabilities, NotificationImage
 from mailflow.forms import FormField
 from mailflow.message_media import ImageNotifier
 from mailflow.notifications import DeliveryError, check_http_response, format_mail, targets_of
@@ -29,6 +29,7 @@ logger = logging.getLogger("mailflow.notify.onebot")
 
 class OneBotNotifier(ImageNotifier):
     backend_id = "onebot"
+    capabilities = NotificationCapabilities(images=True, files=True)
 
     def __init__(self, config: NotifierConfig) -> None:
         self._url = str(config.options.get("http_url", "")).rstrip("/")
@@ -67,6 +68,20 @@ class OneBotNotifier(ImageNotifier):
 
     async def push_to_target(self, target: str, text: str) -> None:
         await self._send(target, text)
+
+    async def push_file_to_target(self, target: str, file: NotificationImage) -> None:
+        await self._send(
+            target,
+            [
+                {
+                    "type": "file",
+                    "data": {
+                        "file": "base64://" + base64.b64encode(file.data).decode("ascii"),
+                        "name": file.filename,
+                    },
+                }
+            ],
+        )
 
     async def push_image_to_target(self, target: str, image: NotificationImage) -> None:
         data = base64.b64encode(image.data).decode("ascii")

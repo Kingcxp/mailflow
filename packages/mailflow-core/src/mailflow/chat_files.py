@@ -6,6 +6,9 @@ import asyncio
 import base64
 import inspect
 import mimetypes
+from collections.abc import Awaitable, Callable, Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -13,10 +16,90 @@ import httpx
 
 from mailflow.domain import MAX_ATTACHMENT_BYTES
 from mailflow.errors import translated_error
-from mailflow.permissions import permission_scope, require_admin
+from mailflow.permissions import current_context, permission_scope, require_admin
 
 if TYPE_CHECKING:
     from mailflow.service import MailFlowService
+
+
+FileSender = Callable[[dict[str, Any]], Awaitable[None]]
+_file_sender: ContextVar[FileSender | None] = ContextVar("mailflow_file_sender", default=None)
+
+
+@contextmanager
+def file_sender_scope(sender: FileSender) -> Generator[None]:
+    token = _file_sender.set(sender)
+    try:
+        yield
+    finally:
+        _file_sender.reset(token)
+
+
+async def send_file(service: MailFlowService, values: dict[str, Any]) -> bool:
+    from mailflow.contracts import RichNotifier
+    from mailflow.domain import NotificationImage
+
+    require_admin(service.t)
+    file = await service.workflows.file_download(values)
+    sender = _file_sender.get()
+    if sender:
+        await sender(file)
+        return True
+    identity = current_context()
+    config = service._chat_notifier(identity.provider, identity.instance_id)  # pyright: ignore[reportPrivateUsage]
+    notifier = next(
+        (
+            n
+            for n, c in service.runtime.notification_channels()
+            if config and c.notifier_id == config.notifier_id
+        ),
+        None,
+    )
+    operation = getattr(notifier, "push_file_to_target", None)
+    if (
+        not config
+        or not isinstance(notifier, RichNotifier)
+        or not notifier.capabilities.files
+        or not callable(operation)
+    ):
+        raise translated_error(NotImplementedError, service.t, "experience.file_send_unsupported")
+    kind = "user" if identity.chat_id == identity.sender else "group"
+    target = kind + ":" + identity.chat_id
+    await service.pace_bot(identity.provider, identity.instance_id)
+    await cast(Callable[[str, NotificationImage], Awaitable[None]], operation)(
+        target,
+        NotificationImage(
+            filename=file["filename"],
+            content_type=file["content_type"],
+            data=base64.b64decode(file["data"]),
+        ),
+    )
+    return True
+
+
+async def framework_send_file(
+    file: dict[str, Any],
+    *,
+    bot: Any = None,
+    event: Any = None,
+    group_id: str = "",
+    sender: str = "",
+) -> None:
+    """Adapters get only a temporary copy of the already-authorized managed file."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="mailflow-file-") as directory:
+        path = Path(directory) / str(file["filename"]).replace("\\", "/").split("/")[-1]
+        await asyncio.to_thread(path.write_bytes, base64.b64decode(file["data"]))
+        if bot is not None:
+            operation = "upload_group_file" if group_id else "upload_private_file"
+            target = {"group_id": int(group_id)} if group_id else {"user_id": int(sender)}
+            await bot.call_api(operation, **target, file=str(path), name=path.name)
+        elif event is not None:
+            from importlib import import_module
+
+            components = import_module("astrbot.api.message_components")
+            await event.send(event.chain_result([components.File(name=path.name, file=str(path))]))
 
 
 async def download_file(url: str, *, headers: dict[str, str] | None = None) -> bytes:

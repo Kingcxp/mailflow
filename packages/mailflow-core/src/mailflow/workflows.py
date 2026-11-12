@@ -81,6 +81,35 @@ class UserWorkflows:
             return await preferences(self.service, values)
         if action == "connection_check":
             return await check_connections(self.service, values)
+        if action == "send_file":
+            from mailflow.chat_files import send_file
+
+            return await send_file(self.service, values)
+        if action.startswith("backup_"):
+            from pathlib import Path
+
+            from mailflow.backup import export_backup, preview_backup, restore_backup
+
+            require_admin(self.service.t)
+            if action == "backup_export":
+                async with self.service._backup_lock:  # pyright: ignore[reportPrivateUsage]
+                    payload = await export_backup(self.service)
+                return {
+                    "filename": "mailflow-backup.zip",
+                    "data": base64.b64encode(payload).decode("ascii"),
+                }
+            if action in {"backup_preview", "backup_restore"}:
+                payload = base64.b64decode(str(values.get("data", "")), validate=True)
+                preview = await preview_backup(self.service, payload)
+                if action == "backup_preview":
+                    return preview
+                directory = (
+                    self.service.config_path.parent if self.service.config_path else Path.cwd()
+                )
+                async with self.service._backup_lock:  # pyright: ignore[reportPrivateUsage]
+                    return await restore_backup(
+                        self.service, str(directory / "backups" / "uploaded.zip"), payload=payload
+                    )
         handlers = {
             "filters": self.filters,
             "save_filter": self.save_filter,
@@ -89,6 +118,9 @@ class UserWorkflows:
             "compose": self.compose,
             "upload": self.upload,
             "files": self.files,
+            "attachments": self.attachments,
+            "attachment_download": self.attachment_download,
+            "file_download": self.file_download,
             "edit_message": self.edit_message,
             "actions": self.actions,
             "plan_control": self.plan_control,
@@ -262,6 +294,65 @@ class UserWorkflows:
         if row is None:
             raise self.error("experience.file_unavailable")
         return FileReference.model_validate(row), base64.b64decode(row["data"])
+
+    async def file_download(self, values: dict[str, Any]) -> dict[str, Any]:
+        require_admin(self.service.t)
+        reference, data = await self.file(str(values.get("file_id", "")))
+        return {**reference.model_dump(), "data": base64.b64encode(data).decode("ascii")}
+
+    async def attachments(self, values: dict[str, Any]) -> list[dict[str, Any]]:
+        query = MailQuery.model_validate(
+            {key: values[key] for key in ("account_id", "after", "before") if key in values}
+        )
+        query.state = "all"
+        records: list[Any] = []
+        while True:
+            page = await self.service.query_mails(query)
+            records.extend(page.records)
+            if page.next_offset is None:
+                break
+            query.offset = page.next_offset
+        rows: list[dict[str, Any]] = []
+        for record in records:
+            for index, attachment in enumerate(record.mail.attachments):
+                if (
+                    str(values.get("filename", "")).casefold() not in attachment.filename.casefold()
+                    or str(values.get("content_type", "")).casefold()
+                    not in attachment.content_type.casefold()
+                ):
+                    continue
+                cached = await self.read_value(f"attachment.cache.{record.record_id}.{index}")
+                rows.append(
+                    {
+                        "record_id": record.record_id,
+                        "index": index,
+                        "filename": attachment.filename,
+                        "content_type": attachment.content_type,
+                        "size": attachment.size,
+                        "account_id": record.mail.account_id,
+                        "date": record.mail.date.isoformat(),
+                        "subject": record.mail.subject,
+                        "cached": attachment.data is not None or bool(cached),
+                    }
+                )
+        return rows
+
+    async def attachment_download(self, values: dict[str, Any]) -> dict[str, Any]:
+        require_admin(self.service.t)
+        record_id, index = str(values.get("record_id", "")), int(values.get("index", 0))
+        record = await self.service.get_mail(record_id)
+        if record is None or not 0 <= index < len(record.mail.attachments):
+            raise self.error("ux.attachment_missing")
+        attachment = record.mail.attachments[index]
+        data = await self.service.fetch_attachment(record_id, index)
+        reference = await self.upload(
+            {
+                "filename": attachment.filename,
+                "content_type": attachment.content_type,
+                "data": base64.b64encode(data).decode("ascii"),
+            }
+        )
+        return {**reference, "data": base64.b64encode(data).decode("ascii"), "record_id": record_id}
 
     async def compose(self, values: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
         require_admin(self.service.t)

@@ -1504,8 +1504,8 @@ class SettingsPane(Vertical):
             )
             yield SearchToggle("regex", ident="settings-search-regex")
             yield SearchToggle("case", ident="settings-search-case")
+            yield Button(self._t("ux.backup_title"), id="settings-backup")
             if not getattr(self._service, "remote", False):
-                yield Button(self._t("ux.backup_title"), id="settings-backup")
                 yield Button(self._t("ux.remote_connection"), id="settings-connection")
         with Horizontal(id="settings-body"):
             with Vertical(id="settings-sidebar"):

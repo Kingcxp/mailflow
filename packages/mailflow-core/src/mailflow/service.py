@@ -378,6 +378,7 @@ class MailFlowService:
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
+        self._maintenance_task: asyncio.Task[Any] | None = None
         self._expiry_task: asyncio.Task[Any] | None = None
         self._storage_watch_task: asyncio.Task[Any] | None = None
         self.bot_server: Any | None = None
@@ -427,6 +428,9 @@ class MailFlowService:
                 await self.bot_server.start()
                 await self.gateways.start()
                 self._update_task = asyncio.create_task(self._update_loop(), name="updates")
+                self._maintenance_task = asyncio.create_task(
+                    self._maintenance_loop(), name="maintenance"
+                )
                 self._expiry_task = asyncio.create_task(
                     self._schedule_expiry_loop(), name="schedule-expiry"
                 )
@@ -459,7 +463,12 @@ class MailFlowService:
         self._stopped_event.set()
         tasks = [
             task
-            for task in (self._update_task, self._expiry_task, self._storage_watch_task)
+            for task in (
+                self._update_task,
+                self._expiry_task,
+                self._storage_watch_task,
+                self._maintenance_task,
+            )
             if task is not None
         ]
         await cancel_tasks(
@@ -473,6 +482,7 @@ class MailFlowService:
         self._update_task = None
         self._expiry_task = None
         self._storage_watch_task = None
+        self._maintenance_task = None
         # User-triggered analysis is temporary too, even in a host that never
         # started background receiving. Cancel it before slow gateway teardown.
         closed = await self._stop_component(
@@ -531,6 +541,18 @@ class MailFlowService:
                     await self.events.emit("mail.external.changed")
             except Exception:
                 logger.exception("cannot check external storage changes")
+
+    async def _maintenance_loop(self) -> None:
+        from mailflow.backup import run_auto_backup
+
+        while not self._stopped_event.is_set():
+            try:
+                await run_auto_backup(self)
+            except Exception:
+                logger.exception("automatic backup failed")
+                await self.events.emit("backup.failed", code="errors.operation")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stopped_event.wait(), 60)
 
     async def _rebuild_notifiers(self) -> None:
         """Hot-swap only the notifier components (targets changed). Keeps
@@ -768,6 +790,8 @@ class MailFlowService:
         )
 
     async def fetch_attachment(self, record_id: str, index: int) -> bytes:
+        import base64
+
         from mailflow.contracts import AttachmentSource
 
         record = await self.storage.get_mail(record_id)
@@ -776,13 +800,24 @@ class MailFlowService:
         if not 0 <= index < len(record.mail.attachments):
             raise translated_error(ValueError, self.t, "ux.attachment_missing")
         attachment = record.mail.attachments[index]
+        cached = await self.storage.get_preference(f"attachment.cache.{record_id}.{index}")
+        if cached:
+            return base64.b64decode(cached)
         if attachment.data is not None:
+            await self.storage.set_preference(
+                f"attachment.cache.{record_id}.{index}",
+                base64.b64encode(attachment.data).decode("ascii"),
+            )
             return attachment.data
         source = self.sources.get(record.mail.account_id)
         if not isinstance(source, AttachmentSource):
             raise translated_error(RuntimeError, self.t, "ux.attachment_unavailable")
         try:
-            return await source.fetch_attachment(record.mail, index)
+            data = await source.fetch_attachment(record.mail, index)
+            await self.storage.set_preference(
+                f"attachment.cache.{record_id}.{index}", base64.b64encode(data).decode("ascii")
+            )
+            return data
         except Exception as exc:
             logger.warning("attachment download for %s: %s", record_id, exc)
             raise translated_error(RuntimeError, self.t, "ux.attachment_failed") from None
@@ -2585,6 +2620,10 @@ Return every candidate in this batch."""
             # config itself was persisted (panes re-read it regardless)
             try:
                 notification_fields = {
+                    "auto_backup",
+                    "backup_directory",
+                    "backup_time",
+                    "backup_keep",
                     "quiet_enabled",
                     "quiet_start",
                     "quiet_end",

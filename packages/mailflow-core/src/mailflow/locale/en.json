@@ -1558,7 +1558,7 @@
       "upload_path": "Path to a file on this computer",
       "add_file": "Add attachment",
       "choose_files": "Choose or remove attachments",
-      "filename": "Filename",
+      "filename": "File name",
       "saved": "Saved.",
       "empty": "No records.",
       "file_invalid": "Invalid file. Upload it again.",
@@ -1610,10 +1610,30 @@
       "delivery_incomplete": "Delivery not ready; check switches, credentials and targets.",
       "checking": "Checking without sending messages or starting gateways.",
       "check_complete": "Check finished; unverified capabilities marked.",
-      "connection_settings": "Open connection settings"
+      "connection_settings": "Open connection settings",
+      "attachment_library": "Attachments",
+      "file_type": "Type, e.g. image/ or pdf",
+      "account_filter": "Source account (empty for all)",
+      "after_date": "From date (e.g. 2028-01-01)",
+      "before_date": "Before date (exclusive)",
+      "cache_state": "Download state",
+      "cached": "Cached; included in backups",
+      "source_required": "Fetch from source mailbox",
+      "search": "Search",
+      "download_selected": "Download selected",
+      "download_result": "Downloaded {success}; failed {failed}.",
+      "backup_preview": "Restore {accounts} accounts, {mails} messages, {tasks} tasks and {files} cached/uploaded files. Uncached attachments still require the mailbox.",
+      "file_send_unsupported": "This channel cannot deliver files; use the terminal attachment library.",
+      "file_sent": "File sent to this conversation."
     },
     "notifications": {
       "usage": "notifications <status|instant|important|tasks|quiet on/off [22:00 08:00]|check>"
+    },
+    "files": {
+      "usage": "files <list [--filename NAME] [--content_type TYPE] [--account_id ACCOUNT] [--after DATE] [--before DATE]|get MAIL_ID:INDEX [--path PATH]|saved|send FILE_ID>"
+    },
+    "backup": {
+      "usage": "backup <create|preview FILE_ID|restore FILE_ID CONFIRM>"
     }
   }
 }

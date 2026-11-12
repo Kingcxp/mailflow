@@ -1610,10 +1610,30 @@
       "delivery_incomplete": "投递未就绪，请检查开关、凭据和目标。",
       "checking": "正在检查，不发送消息或启动网关。",
       "check_complete": "检查完成，未验证能力已标明。",
-      "connection_settings": "打开对应设置"
+      "connection_settings": "打开对应设置",
+      "attachment_library": "附件中心",
+      "file_type": "类型，例如 image/ 或 pdf",
+      "account_filter": "来源账户（留空为全部）",
+      "after_date": "起始日期（例如 2028-01-01）",
+      "before_date": "结束日期（不含当天）",
+      "cache_state": "获取状态",
+      "cached": "已缓存，备份包含文件",
+      "source_required": "需从原邮箱获取",
+      "search": "查找",
+      "download_selected": "下载所选",
+      "download_result": "已下载 {success} 项，失败 {failed} 项。",
+      "backup_preview": "将恢复 {accounts} 个账户、{mails} 封邮件、{tasks} 项待办和 {files} 个缓存或上传文件。未下载的附件仍需原邮箱。",
+      "file_send_unsupported": "该渠道暂不支持文件投递，请在终端附件中心下载。",
+      "file_sent": "文件已发送到当前会话。"
     },
     "notifications": {
       "usage": "notifications <status|instant|important|tasks|quiet on/off [22:00 08:00]|check>"
+    },
+    "files": {
+      "usage": "files <list [--filename NAME] [--content_type TYPE] [--account_id ACCOUNT] [--after DATE] [--before DATE]|get MAIL_ID:INDEX [--path PATH]|saved|send FILE_ID>"
+    },
+    "backup": {
+      "usage": "backup <create|preview FILE_ID|restore FILE_ID CONFIRM>"
     }
   }
 }

@@ -499,6 +499,13 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     service: MailFlowService,
     tmp_path: Path,
 ) -> None:
+    import base64
+
+    from mailflow.backup import preview_backup, run_auto_backup
+
+    uploaded = await service.workspace_call(
+        "upload", {"filename": "saved.txt", "data": base64.b64encode(b"portable file").decode()}
+    )
     await service.storage.save_mail(make_record("saved"))
     task = await service.add_action("Unscheduled task")
     completed = await service.add_action("Completed task")
@@ -511,6 +518,8 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     if os.name == "posix":
         assert (await asyncio.to_thread(Path(path).stat)).st_mode & 0o777 == 0o600
     saved_backup = await asyncio.to_thread(Path(path).read_bytes)
+    preview = await preview_backup(service, saved_backup)
+    assert preview["files"] == 1 and preview["mails"] == 1 and preview["custom_actions"] == 1
     with pytest.raises(FileExistsError):
         await service.create_backup(path)
     assert await asyncio.to_thread(Path(path).read_bytes) == saved_backup
@@ -524,6 +533,8 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     assert await service.get_language() == service.config.general.language == "zh-CN"
     assert service.runtime.analysis_language == "zh-CN"
     assert await service.storage.get_mail("saved") is not None
+    restored_file = await service.workspace_call("file_download", uploaded)
+    assert base64.b64decode(restored_file["data"]) == b"portable file"
     assert [record.record_id for record in await service.list_failed_mails()] == ["saved"]
     restored_tasks = await service.list_actions_all()
     assert len(restored_tasks) == 1 and restored_tasks[0].item_id == task.item_id
@@ -532,6 +543,11 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     broken.write_bytes(b"not a backup")
     with pytest.raises(ValueError):
         await service.restore_backup(str(broken))
+    assert await run_auto_backup(service) == ""
+    service.config.general.auto_backup = True
+    service.config.general.backup_directory = str(tmp_path / "automatic")
+    assert await run_auto_backup(service, datetime(2028, 1, 10, 12, tzinfo=UTC))
+    assert not await run_auto_backup(service, datetime(2028, 1, 10, 13, tzinfo=UTC))
     assert await service.storage.get_mail("saved") is not None
     assert len(await service.list_actions_all()) == 1
     assert await service.get_language() == "zh-CN"
@@ -954,6 +970,7 @@ async def test_composition_keeps_private_files_and_invalidates_old_confirmation(
 ) -> None:
     import base64
 
+    from mailflow.chat_files import file_sender_scope
     from mailflow.config import MailAccountConfig
     from mailflow.domain import ReplyDraft, ReplyState
     from mailflow.permissions import PermissionContext, permission_scope
@@ -972,6 +989,14 @@ async def test_composition_keeps_private_files_and_invalidates_old_confirmation(
     uploaded = await service.workspace_call(
         "upload", {"filename": "note.txt", "data": base64.b64encode(b"my file").decode()}
     )
+    delivered_files: list[dict[str, Any]] = []
+
+    async def send_file(file: dict[str, Any]) -> None:
+        delivered_files.append(file)
+
+    with file_sender_scope(send_file):
+        await service.workspace_call("send_file", uploaded)
+    assert len(delivered_files) == 1 and base64.b64decode(delivered_files[0]["data"]) == b"my file"
     draft = await service.workspace_call(
         "compose",
         {
