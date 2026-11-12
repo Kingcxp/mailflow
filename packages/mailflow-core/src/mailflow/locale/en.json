@@ -1410,7 +1410,8 @@
       "notification_images": "Include original mail and linked task images",
       "summary_cards": "Include summary cards",
       "sync_mail": "Sync mail",
-      "view_read": "Read"
+      "view_read": "Read",
+      "delivery_deferred": "Quiet-hours summary"
     },
     "sessions": {
       "detach": "Detach",
@@ -1587,7 +1588,32 @@
       "resume": "Resume plan",
       "skip": "Skip current occurrence",
       "paused": "Paused",
-      "record_missing": "This record was deleted or expired."
+      "record_missing": "This record was deleted or expired.",
+      "notification_preferences": "Notification preferences and quiet hours",
+      "preset_instant": "Instant notifications",
+      "preset_important": "Important mail and tasks",
+      "preset_tasks": "Tasks only",
+      "preset_custom": "Custom",
+      "quiet_hours": "Quiet hours (configured timezone)",
+      "quiet_state": "Quiet hours: {enabled}, {start}–{end}",
+      "channel_disabled": "Channel or notification type disabled",
+      "global_disabled": "Global mail notifications disabled",
+      "enabled": "Active",
+      "deferred_mail": "Quiet hours ended: {count} messages",
+      "connection_check": "Check connections",
+      "connection_unverified": "Connection unverified; test in corresponding settings.",
+      "receiving": "{name} receiving",
+      "sending": "{name} sending",
+      "send_configured": "Sending configured; no test mail sent.",
+      "send_unavailable": "Sending unavailable or incomplete; edit account.",
+      "delivery_configured": "Delivery configured; test sending is separate.",
+      "delivery_incomplete": "Delivery not ready; check switches, credentials and targets.",
+      "checking": "Checking without sending messages or starting gateways.",
+      "check_complete": "Check finished; unverified capabilities marked.",
+      "connection_settings": "Open connection settings"
+    },
+    "notifications": {
+      "usage": "notifications <status|instant|important|tasks|quiet on/off [22:00 08:00]|check>"
     }
   }
 }

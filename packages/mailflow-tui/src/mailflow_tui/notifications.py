@@ -185,6 +185,7 @@ class NotificationsPane(Vertical):
             )
             yield Button(self._service.t("ux.failed_deliveries"), id="notif-failed")
         yield Static("", id="notifications-status")
+        yield Button(self._service.t("experience.notification_preferences"), id="notif-preferences")
 
     # -- data -----------------------------------------------------------------
 
@@ -279,6 +280,9 @@ class NotificationsPane(Vertical):
         self._timer = self.set_interval(self._PROBE_INTERVAL, self._periodic_check)
 
     async def relabel(self) -> None:
+        self.query_one("#notif-preferences", Button).label = self._service.t(
+            "experience.notification_preferences"
+        )
         relabel_buttons(
             self,
             {
@@ -404,6 +408,13 @@ class NotificationsPane(Vertical):
 
     async def _button_action(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
+        if button_id == "notif-preferences":
+            from mailflow_tui.workspace_screens import NotificationPreferencesScreen
+
+            self.app.push_screen(
+                NotificationPreferencesScreen(self._service), lambda _: self.refresh_data()
+            )
+            return
         if button_id == "notif-failed":
             from mailflow_tui.mail_workflows import DeliveriesScreen
 

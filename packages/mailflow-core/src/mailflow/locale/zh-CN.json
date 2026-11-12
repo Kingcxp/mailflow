@@ -1410,7 +1410,8 @@
       "notification_images": "附带邮件原图及待办关联图片",
       "summary_cards": "附带摘要卡片",
       "sync_mail": "同步邮件",
-      "view_read": "已读"
+      "view_read": "已读",
+      "delivery_deferred": "免打扰汇总"
     },
     "sessions": {
       "detach": "转入后台",
@@ -1587,7 +1588,32 @@
       "resume": "恢复计划",
       "skip": "跳过本期",
       "paused": "已暂停",
-      "record_missing": "记录已删除或过期。"
+      "record_missing": "记录已删除或过期。",
+      "notification_preferences": "通知方式与免打扰",
+      "preset_instant": "即时通知",
+      "preset_important": "重要邮件与待办",
+      "preset_tasks": "仅待办",
+      "preset_custom": "自定义",
+      "quiet_hours": "开启免打扰（配置时区）",
+      "quiet_state": "免打扰：{enabled}，{start}—{end}",
+      "channel_disabled": "渠道或该类通知已关闭",
+      "global_disabled": "全局邮件通知已关闭",
+      "enabled": "已生效",
+      "deferred_mail": "免打扰结束，共 {count} 封邮件",
+      "connection_check": "连接自查",
+      "connection_unverified": "连接尚未验证，请在对应设置中测试。",
+      "receiving": "{name} 接收",
+      "sending": "{name} 发送",
+      "send_configured": "发送配置就绪，未发送测试邮件。",
+      "send_unavailable": "不支持发送或配置不完整，请编辑账户。",
+      "delivery_configured": "投递配置就绪，测试发送需要单独操作。",
+      "delivery_incomplete": "投递未就绪，请检查开关、凭据和目标。",
+      "checking": "正在检查，不发送消息或启动网关。",
+      "check_complete": "检查完成，未验证能力已标明。",
+      "connection_settings": "打开对应设置"
+    },
+    "notifications": {
+      "usage": "notifications <status|instant|important|tasks|quiet on/off [22:00 08:00]|check>"
     }
   }
 }

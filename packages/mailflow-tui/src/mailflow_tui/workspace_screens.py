@@ -14,10 +14,122 @@ from mailflow.mail_query import MailQuery
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.widgets import Button, Select, Static
+from textual.widgets import Button, Checkbox, Select, Static
 
 from mailflow_tui.mail_workflows import WorkflowScreen
 from mailflow_tui.widgets import Input, SafeSelect, TextArea
+
+
+class NotificationPreferencesScreen(WorkflowScreen):
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self.t("experience.notification_preferences"))
+            yield SafeSelect(
+                [
+                    (self.t("experience.preset_" + p), p)
+                    for p in ("custom", "instant", "important", "tasks")
+                ],
+                id="notification-preset",
+                allow_blank=False,
+            )
+            yield Checkbox(self.t("experience.quiet_hours"), id="quiet-enabled")
+            yield Input("22:00", id="quiet-start")
+            yield Input("08:00", id="quiet-end")
+            yield TextArea("", id="notification-state", read_only=True)
+            yield SafeSelect(
+                [], id="connection-setting", prompt=self.t("experience.connection_settings")
+            )
+            yield Static("", id="workflow-status", markup=False)
+            with Horizontal():
+                yield Button(self.t("tui.btn_save"), id="notification-save")
+                yield Button(self.t("experience.connection_check"), id="notification-check")
+                yield Button(
+                    self.t("experience.connection_settings"),
+                    id="notification-settings",
+                    disabled=True,
+                )
+                yield Button(self.t("tui.btn_back"), id="notification-back")
+
+    async def on_mount(self) -> None:
+        state = await self.service.workspace_call("notification_preferences")
+        self.query_one("#notification-preset", Select).value = state["preset"]
+        self.query_one("#quiet-enabled", Checkbox).value = state["quiet_enabled"]
+        self.query_one("#quiet-start", Input).value = state["quiet_start"]
+        self.query_one("#quiet-end", Input).value = state["quiet_end"]
+        self.query_one("#notification-state", TextArea).load_text(
+            "\n".join(
+                c["id"] + ": " + (c["reason"] or self.t("experience.enabled"))
+                for c in state["channels"]
+            )
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "notification-back":
+            self.dismiss(None)
+        else:
+            self.run_worker(self.operate(str(event.button.id)), exclusive=True, exit_on_error=False)
+
+    async def operate(self, ident: str) -> None:
+        buttons = list(self.query(Button))
+        for button in buttons:
+            button.disabled = True
+        try:
+            if ident == "notification-save":
+                await self.service.workspace_call(
+                    "notification_preferences",
+                    {
+                        "preset": str(
+                            cast(Select[str], self.query_one("#notification-preset", Select)).value
+                        ),
+                        "quiet_enabled": self.query_one("#quiet-enabled", Checkbox).value,
+                        "quiet_start": self.query_one("#quiet-start", Input).value,
+                        "quiet_end": self.query_one("#quiet-end", Input).value,
+                    },
+                )
+                self.status(self.t("experience.saved"))
+                await self.on_mount()
+            elif ident == "notification-settings":
+                from mailflow_tui.settings import EntryFormScreen
+
+                key = str(cast(Select[str], self.query_one("#connection-setting", Select)).value)
+                group, raw_index = key.rstrip("]").split("[")
+                index = int(raw_index)
+                entries: list[Any] = getattr(self.service.config, group)
+
+                async def save(values: dict[str, Any]) -> bool:
+                    await self.service.update_config_entry(group, index, values)
+                    return True
+
+                await self.ask(
+                    EntryFormScreen(
+                        self.service, group, values=entries[index].model_dump(), on_save=save
+                    )
+                )
+            else:
+                self.status(self.t("experience.checking"))
+                rows = await self.service.workspace_call("connection_check")
+                cast(Select[str], self.query_one("#connection-setting", Select)).set_options(
+                    [(r["name"], r["settings"]) for r in rows]
+                )
+                self.query_one("#notification-state", TextArea).load_text(
+                    "\n\n".join(
+                        r["name"] + ": " + r["message"] + "\n" + r["settings"] for r in rows
+                    )
+                )
+                self.status(self.t("experience.check_complete"))
+        except Exception as exc:
+            self.status(error_text(exc, self.t))
+        finally:
+            for button in buttons:
+                button.disabled = False
+            self.query_one("#notification-settings", Button).disabled = (
+                self.query_one("#connection-setting", Select).value == Select.BLANK
+            )
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "connection-setting":
+            self.query_one("#notification-settings", Button).disabled = event.value == Select.BLANK
 
 
 class AssistantHistoryScreen(WorkflowScreen):

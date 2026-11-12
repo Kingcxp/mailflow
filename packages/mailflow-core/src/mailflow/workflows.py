@@ -74,6 +74,13 @@ class UserWorkflows:
         return translated_error(ValueError, self.service.t, key, **params)
 
     async def call(self, action: str, values: dict[str, Any]) -> Any:
+        from mailflow.connection_check import check_connections
+        from mailflow.notification_policy import preferences
+
+        if action == "notification_preferences":
+            return await preferences(self.service, values)
+        if action == "connection_check":
+            return await check_connections(self.service, values)
         handlers = {
             "filters": self.filters,
             "save_filter": self.save_filter,

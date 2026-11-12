@@ -146,6 +146,9 @@ class GeneralConfig(BaseModel):
         description="How often the reminder scheduler checks due action items",
     )
     mail_notifications: bool = Field(default=True, description="Notify when new mail arrives")
+    quiet_enabled: bool = False
+    quiet_start: str = "22:00"
+    quiet_end: str = "08:00"
     task_reminders: bool = Field(default=True, description="Send task reminders")
     daily_digest: bool = Field(default=True, description="Send a daily unfinished-task digest")
     daily_digest_hour: int | None = Field(
@@ -207,6 +210,10 @@ class GeneralConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_timezone(self) -> GeneralConfig:
+        from datetime import time
+
+        time.fromisoformat(self.quiet_start)
+        time.fromisoformat(self.quiet_end)
         try:
             ZoneInfo(self.timezone)
         except ZoneInfoNotFoundError as exc:

@@ -61,6 +61,7 @@ _STYLE_ACCENT = "magenta"
 
 _TOPICS = (
     "assistant",
+    "notifications",
     "mail",
     "action",
     "plugin",
@@ -248,6 +249,7 @@ class CommandRouter:
         service.commands = self
         self._handlers: dict[str, Callable[[list[str]], Awaitable[CommandResponse]]] = {
             "assistant": self._cmd_assistant,
+            "notifications": self._cmd_notifications,
             "help": self._cmd_help,
             "mail": self._cmd_mail,
             "action": self._cmd_action,
@@ -779,6 +781,38 @@ class CommandRouter:
         return self._ok(
             self._t("mail.wipe_done", mails=moved, trash=purged)
             + f"\n({self._t('plugin.applies_now')})"
+        )
+
+    async def _cmd_notifications(self, args: list[str]) -> CommandResponse:
+        values: dict[str, Any] = {}
+        if args and args[0] == "check":
+            rows = await self.service.workspace_call("connection_check")
+            return self._ok(
+                "\n".join(r["name"] + ": " + r["message"] + " · " + r["settings"] for r in rows)
+            )
+        if args and args[0] in {"instant", "important", "tasks"}:
+            values["preset"] = args[0]
+        elif args and args[0] == "quiet" and len(args) >= 2:
+            values["quiet_enabled"] = args[1] == "on"
+            if len(args) == 4:
+                values.update(quiet_start=args[2], quiet_end=args[3])
+        elif args and args[0] != "status":
+            return self._err(self._t("notifications.usage"))
+        state = await self.service.workspace_call("notification_preferences", values)
+        return self._ok(
+            self._t("experience.preset_" + state["preset"])
+            + "\n"
+            + self._t(
+                "experience.quiet_state",
+                enabled=self._t("common.on" if state["quiet_enabled"] else "common.off"),
+                start=state["quiet_start"],
+                end=state["quiet_end"],
+            )
+            + "\n"
+            + "\n".join(
+                c["id"] + ": " + (c["reason"] or self._t("experience.enabled"))
+                for c in state["channels"]
+            )
         )
 
     async def _cmd_assistant(self, args: list[str]) -> CommandResponse:

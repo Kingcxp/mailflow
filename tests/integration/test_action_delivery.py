@@ -81,6 +81,58 @@ async def schedule(storage: MemoryStorage) -> ActionItem:
     return item
 
 
+async def test_quiet_hours_merge_mail_and_retry_only_the_failed_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mailflow.notification_policy as policy
+
+    clock = datetime(2028, 2, 1, 6, tzinfo=UTC)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return clock.astimezone(tz)
+
+    monkeypatch.setattr(policy, "datetime", Clock)
+
+    class Targets(FakeNotifier):
+        def __init__(self) -> None:
+            super().__init__()
+            self.destinations: list[str] = []
+            self.fail = True
+
+        async def notify(self, record: Any) -> None:
+            raise AssertionError("Expected merged chat delivery")
+
+        async def notify_to_target(self, target: str, record: Any, *, text: str = "") -> None:
+            await self.push_to_target(target, text)
+
+        async def push_to_target(self, target: str, text: str) -> None:
+            if target == "user:b" and self.fail:
+                raise OSError("offline")
+            self.destinations.append(target)
+            self.sent.append(text)
+
+    notifier = Targets()
+    service = make_service(MemoryStorage(), notifier)
+    service.config.general.quiet_enabled = True
+    config = service.runtime.notification_channels()[0][1]
+    config.options["targets"] = ["user:a", "user:b"]
+    for ident in ("first", "second"):
+        record = make_record().model_copy(update={"record_id": ident})
+        await service.storage.save_mail(record)
+        await service.runtime._notify(record)  # pyright: ignore[reportPrivateUsage]
+    assert not notifier.sent and not await service.failed_deliveries()
+    clock = clock.replace(hour=9)
+    await service.runtime.run_reminder_tick()
+    assert notifier.destinations == ["user:a"]
+    failures = await service.failed_deliveries()
+    assert len(failures) == 1 and failures[0]["target"] == "user:b"
+    notifier.fail = False
+    assert await service.retry_deliveries([failures[0]["delivery_id"]]) == 1
+    assert notifier.destinations == ["user:a", "user:b"] and not await service.failed_deliveries()
+
+
 async def test_deleted_mail_action_disappears_from_search_reminders_and_digest() -> None:
     storage = MemoryStorage()
     item = await schedule(storage)

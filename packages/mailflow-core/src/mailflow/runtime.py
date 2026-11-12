@@ -55,6 +55,7 @@ from mailflow.events import EventBus
 from mailflow.i18n import I18n
 from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.message_media import summary_card
+from mailflow.notification_policy import defer_mail, flush_mail, in_quiet_hours
 from mailflow.notifications import DeliveryError, format_mail, option_enabled, targets_of
 from mailflow.outbound import defer, pace, split_text
 from mailflow.pipeline import PipelineEngine
@@ -195,6 +196,20 @@ class MailFlowRuntime:
         self._stored_watermarks: dict[str, str] = {}
 
     # -- lifecycle --------------------------------------------------------------
+
+    @property
+    def storage(self) -> StorageBackend:
+        return self._storage
+
+    @property
+    def config(self) -> MailFlowConfig:
+        return self._config
+
+    def notification_channels(self) -> list[tuple[Notifier, NotifierConfig]]:
+        return list(zip(self._notifiers, self._notifier_configs, strict=True))
+
+    def translate(self, key: str, **params: Any) -> str:
+        return self._rt(key, **params)
 
     async def start(self) -> None:
         async with self._lifecycle_lock:
@@ -1377,6 +1392,9 @@ class MailFlowRuntime:
     ) -> None:
         if not self._config.general.mail_notifications:
             return
+        if in_quiet_hours(self._config.general):
+            await defer_mail(self, record)
+            return
         for notifier, config in zip(self._notifiers, self._notifier_configs, strict=True):
             if only and config.notifier_id != only:
                 continue
@@ -1501,7 +1519,12 @@ class MailFlowRuntime:
         return active
 
     async def retry_deliveries(self, delivery_ids: list[str]) -> int:
+        if in_quiet_hours(self._config.general):
+            return 0
         rows = {row["delivery_id"]: row for row in await self.failed_deliveries()}
+        if any(rows.get(ident, {}).get("kind") == "deferred" for ident in delivery_ids):
+            async with self._notifier_lock:
+                await flush_mail(self)
         for receipt in delivery_ids:
             row = rows.get(receipt)
             if row and row.get("kind") == "mail":
@@ -1706,6 +1729,10 @@ class MailFlowRuntime:
         async with self._reminder_lock:
             now = datetime.now(UTC)
             config = self._config.general
+            if in_quiet_hours(config, now):
+                return 0
+            async with self._notifier_lock:
+                await flush_mail(self)
             fired = 0
             async with self.action_store.lock:
                 await self._fire_daily_digest(now, config)
@@ -2219,6 +2246,8 @@ class MailFlowRuntime:
         The scheduler holds its lock across this call. A partial failure only
         retries failed targets, including after a normal service restart.
         """
+        if in_quiet_hours(self._config.general):
+            return False
         skip_destinations = payload.pop("_skip_destinations", set())
         destinations = 0
         complete = True

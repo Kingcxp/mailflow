@@ -2585,6 +2585,9 @@ Return every candidate in this batch."""
             # config itself was persisted (panes re-read it regardless)
             try:
                 notification_fields = {
+                    "quiet_enabled",
+                    "quiet_start",
+                    "quiet_end",
                     "mail_notifications",
                     "task_reminders",
                     "daily_digest",
