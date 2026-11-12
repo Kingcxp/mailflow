@@ -29,6 +29,7 @@ SCHEMAS: dict[str, tuple[str, dict[str, Any], list[str]]] = {
                     "gateways",
                     "settings",
                     "plans",
+                    "files",
                 ],
             },
             "query": {"type": "string"},
@@ -50,6 +51,18 @@ SCHEMAS: dict[str, tuple[str, dict[str, Any], list[str]]] = {
             **{key: {"type": "boolean"} for key in ("is_read", "starred", "archived")},
         },
         ["record_ids"],
+    ),
+    "write_message": (
+        "Propose composing new mail, forwarding or replying to all. Discover uploaded file IDs with inspect_app resource files. Sends only after review.",
+        {
+            "kind": {"enum": ["new", "forward", "reply_all"]},
+            "account_id": {"type": "string"},
+            "mail_id": {"type": "string"},
+            **{k: {"type": "string"} for k in ("to", "cc", "bcc", "subject", "body")},
+            "file_ids": {"type": "array", "items": {"type": "string"}},
+            "send": {"type": "boolean"},
+        },
+        ["kind", "body"],
     ),
     "write_reply": (
         "Propose a reply to one mail. send=false saves a draft; send=true sends only after user review. Give the complete reply body.",
@@ -135,6 +148,8 @@ async def stage(
                     for row in rows
                     if query.casefold() in json.dumps(row, ensure_ascii=False).casefold()
                 ]
+        elif resource == "files":
+            rows = await service.workspace_call("files")
         elif resource == "plans":
             rows = [plan.model_dump(mode="json") for plan in await service.action_plans()]
         elif resource == "accounts":
@@ -190,6 +205,26 @@ async def stage(
         else:
             await service._require_known_plugin(identity)  # pyright: ignore[reportPrivateUsage]
             description += f"\n{identity} · {action}"
+    elif name == "write_message":
+        preview = await service.workflows.compose(args, persist=False)
+        values["preview"] = preview
+        description += (
+            service.t(
+                "experience.send_preview",
+                account=preview["account_id"],
+                to=", ".join(a["address"] for a in (preview["recipients"] or [preview["to"]])),
+                cc=str(args.get("cc", "")),
+                bcc=str(args.get("bcc", "")),
+                files=", ".join(f["filename"] for f in preview["attachments"]),
+            )
+            + "\n"
+            + preview["subject"]
+            + "\n"
+            + preview["body"]
+        )
+        description += "\n" + service.t(
+            "assistant.send_mail" if args.get("send") else "assistant.save_draft"
+        )
     elif name == "write_reply":
         record = await service.get_mail(str(args.get("record_id", "")))
         if record is None or not str(args.get("body", "")).strip():
@@ -272,6 +307,21 @@ async def apply(service: MailFlowService, operation: PendingOperation) -> Any:
         if result.failed:
             raise translated_error(RuntimeError, service.t, "errors.operation")
         return result
+    elif operation.tool == "write_message":
+        from mailflow.domain import ReplyDraft
+
+        draft = await service.get_draft(str(args["_draft_id"])) if args.get("_draft_id") else None
+        if draft is None:
+            draft = ReplyDraft.model_validate(args["preview"])
+            draft.token = draft.token_expires_at = None
+            await service.storage.save_draft(draft)
+            args["_draft_id"] = draft.draft_id
+        if draft.state == ReplyState.SENT:
+            return draft
+        if args.get("send"):
+            prepared = await service.prepare_reply(draft.draft_id)
+            return await service.confirm_reply(prepared.draft_id, prepared.token or "")
+        return draft
     elif operation.tool == "write_reply":
         draft = await service.get_draft(str(args["_draft_id"])) if args.get("_draft_id") else None
         if draft is None:

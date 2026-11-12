@@ -35,3 +35,7 @@ class ReplySourceError(ValueError):
     def __init__(self, option: str) -> None:
         super().__init__(option)
         self.option = option
+
+
+class ReplyDeliveryUncertain(RuntimeError):
+    """Transport disconnected after delivery may already have happened."""

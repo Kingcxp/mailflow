@@ -491,7 +491,10 @@ class _OneBotEventBridge(OwnedListener):
                 # clients that close the connection to delimit the body)
                 body = await asyncio.wait_for(reader.read(-1), timeout=20.0)
             payload = json.loads(body.decode("utf-8", "replace") or "{}")
-            if payload.get("post_type") == "message":
+            if payload.get("post_type") == "message" or payload.get("notice_type") in {
+                "group_upload",
+                "offline_file",
+            }:
                 # ACK FIRST, then dispatch: NapCat's quick-operation client
                 # times out around 15s and retries; a multi-chunk reply
                 # (help/example, paced fallback segments) can exceed that —
@@ -539,13 +542,19 @@ class _OneBotEventBridge(OwnedListener):
         return "".join(parts)
 
     async def _dispatch(self, event: dict[str, Any]) -> None:
+        if event.get("notice_type") in {"group_upload", "offline_file"}:
+            event = {
+                **event,
+                "message_type": "group" if event.get("group_id") else "private",
+                "message": [{"type": "file", "data": event.get("file") or {}}],
+            }
         message_type = event.get("message_type")
         if message_type not in ("group", "private"):
             return
         user_id = event.get("user_id")
         group_id = event.get("group_id")
         text = self._extract_text(event)
-        if not text or user_id is None:
+        if user_id is None:
             return
         chat_id = str(group_id) if message_type == "group" else str(user_id)
         segments: list[Any] = (
@@ -558,10 +567,47 @@ class _OneBotEventBridge(OwnedListener):
             == str(event.get("self_id", ""))
             for segment in segments
         ) or f"[CQ:at,qq={event.get('self_id')}]" in str(event.get("raw_message", ""))
+        files: list[dict[str, str]] = []
+        file_error = False
+        from mailflow.chat_files import download_file, encoded_file
+
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+            part = cast(dict[str, Any], segment)
+            if part.get("type") not in {"file", "image"}:
+                continue
+            data = cast(dict[str, Any], part.get("data") or {})
+            try:
+                url = str(data.get("url") or "")
+                if not url:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        headers = {"Authorization": "Bearer " + self._token} if self._token else {}
+                        response = await client.post(
+                            self._onebot_url + "/get_file",
+                            json={
+                                "file_id": data.get("file_id") or data.get("id") or data.get("file")
+                            },
+                            headers=headers,
+                        )
+                        response.raise_for_status()
+                        check_result(response.json())
+                        url = str(response.json().get("data", {}).get("url") or "")
+                files.append(
+                    encoded_file(
+                        str(data.get("name") or data.get("file_name") or "attachment"),
+                        await download_file(url),
+                    )
+                )
+            except Exception:
+                file_error = True
+        if not text and not files and not file_error:
+            return
         async for chunks in command_replies(
             self._bot_url,
             {
                 "text": text,
+                **({"files": files, "file_error": file_error} if files or file_error else {}),
                 "sender": str(user_id),
                 "chat_id": chat_id,
                 "chat_type": message_type,

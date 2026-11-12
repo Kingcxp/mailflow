@@ -292,6 +292,10 @@ def create_app(service: MailFlowService) -> FastAPI:
     async def create_reply(record_id: str, resume: bool = False, _: None = Depends(guard)) -> Any:
         return await reply_result(service.create_reply(record_id, resume=resume))
 
+    @app.post("/workspace/{action}")
+    async def workspace(action: str, body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return _jsonable(await service.workspace_call(action, body))
+
     @app.get("/drafts/{draft_id}")
     async def get_draft(draft_id: str, _: None = Depends(guard)) -> Any:
         draft = await service.get_draft(draft_id)

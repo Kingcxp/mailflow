@@ -235,6 +235,7 @@ class SQLiteStorage:
             "inbox": "COALESCE(json_extract(record_json, '$.archived'), 0) = 0",
             "archived": "json_extract(record_json, '$.archived') = 1",
             "unread": "COALESCE(json_extract(record_json, '$.is_read'), 0) = 0",
+            "read": "json_extract(record_json, '$.is_read') = 1",
             "starred": "json_extract(record_json, '$.starred') = 1",
             "pending": "json_extract(record_json, '$.analysis_state') IN ('pending', 'analysing')",
             "failed": "json_extract(record_json, '$.analysis_state') = 'failed'",

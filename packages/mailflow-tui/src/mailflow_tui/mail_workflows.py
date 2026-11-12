@@ -113,10 +113,26 @@ class MailMenu(WorkflowScreen):
             yield Static(self.t("ux.local_trash"))
             yield SafeSelect(
                 [
-                    (self.t("ux." + key), key)
+                    (
+                        self.t(
+                            (
+                                "experience."
+                                if key
+                                in {"saved_filters", "compose", "thread", "reply_all", "forward"}
+                                else "ux."
+                            )
+                            + key
+                        ),
+                        key,
+                    )
                     for key in (
                         "undo_delete",
                         "filter",
+                        "saved_filters",
+                        "compose",
+                        "thread",
+                        "reply_all",
+                        "forward",
                         "sync_mail",
                         "load_more",
                         "read",
@@ -312,6 +328,7 @@ class MailFilter(WorkflowScreen):
                             "inbox",
                             "all",
                             "unread",
+                            "read",
                             "starred",
                             "archived",
                             "pending",
@@ -321,6 +338,12 @@ class MailFilter(WorkflowScreen):
                     value=self.mail_query.state,
                     id="filter-state",
                     allow_blank=False,
+                )
+                yield Static(self.t("experience.relative_days"))
+                yield Input(
+                    value=str(self.mail_query.relative_days or ""),
+                    type="integer",
+                    id="filter-relative",
                 )
                 yield Static("", id="workflow-status", markup=False)
             with Horizontal():
@@ -353,6 +376,11 @@ class MailFilter(WorkflowScreen):
                         ),
                         sender=self.query_one("#filter-sender", Input).value.strip(),
                         state=str(cast(Select[str], self.query_one("#filter-state", Select)).value),
+                        relative_days=int(self.query_one("#filter-relative", Input).value)
+                        if self.query_one("#filter-relative", Input).value.strip()
+                        else None,
+                        text=self.mail_query.text,
+                        urgency=self.mail_query.urgency,
                         after=dates["after"],
                         before=dates["before"],
                     )

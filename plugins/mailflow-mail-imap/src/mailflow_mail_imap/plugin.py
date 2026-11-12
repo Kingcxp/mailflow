@@ -738,6 +738,9 @@ class IMAPSource:
         await self.check_reply_ready()
         await asyncio.to_thread(self._send_smtp, draft)
 
+    async def send_message(self, draft: ReplyDraft) -> None:
+        await self.send_reply(draft.mail_id, draft)
+
     def _send_smtp(self, draft: ReplyDraft) -> None:
         host = str(self._settings.get("smtp_host", ""))
         port = int(self._settings.get("smtp_port", 465))
@@ -745,10 +748,13 @@ class IMAPSource:
             raise ValueError(f"account {self._account.account_id!r}: no smtp_host configured")
         message = EmailMessage()
         message["From"] = self._account.email or self._username
-        message["To"] = draft.to.address
+        if draft.to_addresses:
+            message["To"] = ", ".join(a.display for a in draft.to_addresses)
+        if draft.cc:
+            message["Cc"] = ", ".join(a.display for a in draft.cc)
         message["Subject"] = draft.subject
         message["Date"] = formatdate(localtime=True)
-        message["Message-ID"] = make_msgid()
+        message["Message-ID"] = draft.message_id or make_msgid()
         if draft.in_reply_to:
             message["In-Reply-To"] = draft.in_reply_to
         if draft.references:
@@ -765,6 +771,14 @@ class IMAPSource:
             message.add_alternative(body, subtype="html")
         else:
             message.set_content(body)
+        for attachment in draft.outgoing_files:
+            main, _, subtype = attachment.content_type.partition("/")
+            message.add_attachment(
+                attachment.data or b"",
+                maintype=main or "application",
+                subtype=subtype or "octet-stream",
+                filename=attachment.filename,
+            )
         use_ssl = bool(self._settings.get("smtp_ssl", port == 465))
         if use_ssl:
             client: Any = smtplib.SMTP_SSL(host, port, timeout=30)
@@ -773,7 +787,24 @@ class IMAPSource:
             client.starttls()
         try:
             client.login(self._username, self._password)
-            client.send_message(message)
+            try:
+                targets = list(
+                    dict.fromkeys(a.address for a in [*draft.to_addresses, *draft.cc, *draft.bcc])
+                )
+                refused = (
+                    client.send_message(message, to_addrs=targets)
+                    if draft.recipients or draft.cc or draft.bcc
+                    else client.send_message(message)
+                )
+                if refused:
+                    # Some recipients were accepted. Never retry the whole draft.
+                    from mailflow.replies import ReplyDeliveryUncertain
+
+                    raise ReplyDeliveryUncertain()
+            except (smtplib.SMTPServerDisconnected, TimeoutError, OSError) as exc:
+                from mailflow.replies import ReplyDeliveryUncertain
+
+                raise ReplyDeliveryUncertain() from exc
         finally:
             # A failed QUIT after SMTP accepted the message is not a failed
             # delivery; surfacing it as one would invite a duplicate retry.

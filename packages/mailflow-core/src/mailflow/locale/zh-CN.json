@@ -269,7 +269,7 @@
       "urgency_reset": "邮件 {mail_id} 的紧急度已重置为自动（{urgency}）",
       "urgency_updated": "邮件 {mail_id} 的紧急度已设为 {urgency}",
       "urgency_usage": "mail urgency <邮件id> <ad|info|important|urgent|auto>",
-      "usage": "mail <list|search <需求>|show <#|id>|urgency <#|id> <级别>|delete <#|id>>",
+      "usage": "mail <list|search <需求>|show <#|id>|urgency <#|id> <级别>|delete <#|id>>\nmail thread <mail> | mail filters [save <name> --account <id> --days 7 --query <text> | open <name> | delete <name>]",
       "wipe_confirm_hint": "执行请输入：`mail wipe CONFIRM`",
       "wipe_done": "已清空 {mails} 封活动邮件与 {trash} 条回收站记录，去重状态已重置——超出拉取上限的旧邮件可在重启后通过邮箱浏览器重新解析。",
       "wipe_warn_body": "所有解析结果都会被清除；之后的轮询只重新拉取新收到的邮件。仍显示在邮箱历史浏览器中的邮件可逐批强制重新解析。",
@@ -366,7 +366,7 @@
       "sent": "已通过草稿 {draft_id} 发送回复",
       "show_title": "草稿 {draft_id}",
       "template_unknown": "未知信件模板 {language!r}；请使用 cn 或 en",
-      "usage": "reply <create <mail_id>|compose <mail_id> <cn|en>|show <draft_id>|edit <draft_id> <主题> <正文>|prepare <draft_id>|confirm <draft_id> <令牌>|cancel <draft_id>>",
+      "usage": "reply <create <mail_id>|compose <mail_id> <cn|en>|show <draft_id>|edit <draft_id> <主题> <正文>|prepare <draft_id>|confirm <draft_id> <令牌>|cancel <draft_id>>\nreply new <account> --to <addresses> --subject <subject> --body <body> [--cc <addresses>] [--bcc <addresses>]\nreply forward|all <mail> | reply recipients <draft> --to <addresses> [--cc <addresses>] [--bcc <addresses>]\nreply files | reply attach <draft> [file-id ...]\nreply upload <local-file>",
       "state_draft": "草稿",
       "state_prepared": "待确认",
       "state_sending": "发送中／结果待确认",
@@ -1409,7 +1409,8 @@
       "reason": "失败原因",
       "notification_images": "附带邮件原图及待办关联图片",
       "summary_cards": "附带摘要卡片",
-      "sync_mail": "同步邮件"
+      "sync_mail": "同步邮件",
+      "view_read": "已读"
     },
     "sessions": {
       "detach": "转入后台",
@@ -1490,7 +1491,8 @@
       "operation_sync_account": "调整此账户的同步任务",
       "configure_model": "配置模型",
       "remote_model_setup": "请在服务端的本地设置中配置模型，完成后即可使用此助手。",
-      "session_required": "请使用新版 MailFlow 客户端重新连接，再执行或确认助手任务。"
+      "session_required": "请使用新版 MailFlow 客户端重新连接，再执行或确认助手任务。",
+      "operation_write_message": "写信"
     },
     "recurrence": {
       "category": "分类",
@@ -1535,6 +1537,39 @@
       "state_retrying": "正在重新连接",
       "state_sync_required": "请选择同步范围",
       "state_error": "同步失败"
+    },
+    "experience": {
+      "saved_filters": "常用筛选",
+      "filter_name": "保存当前条件，输入名称",
+      "name_required": "请输入名称。",
+      "filter_account_missing": "来源账户已移除，请修改条件。",
+      "filter_missing": "找不到该筛选。",
+      "relative_days": "最近多少天（留空使用指定日期）",
+      "thread": "查看往来",
+      "compose": "写新邮件",
+      "reply_all": "回复全部",
+      "forward": "转发",
+      "to": "收件人",
+      "cc": "抄送",
+      "bcc": "密送",
+      "subject": "主题",
+      "upload_path": "附件在本机的文件路径",
+      "add_file": "添加附件",
+      "choose_files": "选择或移除附件",
+      "filename": "文件名",
+      "saved": "已保存。",
+      "empty": "暂无记录。",
+      "file_invalid": "文件内容无效，请重新上传。",
+      "file_too_large": "附件超过 4 MB，请选择更小的文件。",
+      "file_unavailable": "附件不存在或不属于当前用户和会话，请重新上传。",
+      "draft_unavailable": "该草稿不属于当前用户和会话。",
+      "account_unavailable": "请选择有效且已启用的发件账户。",
+      "compose_unsupported": "此邮件源仅支持普通回复，不支持完整写信或附件。",
+      "recipient_required": "请填写有效的收件人地址。",
+      "send_preview": "发件账户：{account}\n收件人：{to}\n抄送：{cc}\n密送：{bcc}\n附件：{files}\n请核对正文，然后确认发送。",
+      "file_download_failed": "附件未能获取，请重传文件，或在终端添加附件。",
+      "private_send": "包含密送地址的草稿请在私聊或终端中操作。",
+      "upload_in_chat": "请直接在当前聊天中上传文件，再通过 reply files 选择附件。"
     }
   }
 }

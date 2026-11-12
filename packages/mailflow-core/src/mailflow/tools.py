@@ -509,6 +509,8 @@ class ToolRegistry:
             if name == "update_mail"
             else [arguments["record_id"]]
             if name == "write_reply"
+            else [arguments["mail_id"]]
+            if name == "write_message" and arguments.get("mail_id")
             else []
         )
         if self._allowed_ids is not None and any(rid not in self._allowed_ids for rid in ids):

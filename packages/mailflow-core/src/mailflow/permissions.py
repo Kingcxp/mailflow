@@ -69,7 +69,7 @@ def authorize_command(command: str, args: list[str], translate: Callable[..., st
         "example": None,
         "status": None,
         "runtime": None,
-        "mail": {"", "list", "show", "search"},
+        "mail": {"", "list", "show", "search", "thread", "filters"},
         "action": {"", "list", "show", "plans"},
         "reply": {"show"},
         "trash": {"", "list"},

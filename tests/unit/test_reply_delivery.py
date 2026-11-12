@@ -266,7 +266,7 @@ async def test_smtp_quit_failure_does_not_turn_accepted_reply_into_retry(
     confirmed = await service.confirm_reply(draft.draft_id, prepared.token or "")
     assert confirmed.state is ReplyState.SENT and len(sent) == 1
     assert "Accepted body" in str(sent[0])
-    assert sent[0]["To"] == "support@example.com"
+    assert sent[0]["To"].addresses[0].addr_spec == "support@example.com"
     assert sent[0]["In-Reply-To"] == "<parent@example.com>"
     assert sent[0]["References"] == "<root@example.com> <parent@example.com>"
     assert sent[0]["Message-ID"]

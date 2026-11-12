@@ -494,6 +494,9 @@ class RemoteClient:
         result: dict[str, Any] = await self._request("POST", f"/mails/{mail_id}/replies{suffix}")
         return result
 
+    async def workspace_call(self, action: str, values: dict[str, Any] | None = None) -> Any:
+        return await self._request("POST", "/workspace/" + action, values or {})
+
     async def get_draft(self, draft_id: str) -> dict[str, Any] | None:
         try:
             result: dict[str, Any] = await self._request("GET", f"/drafts/{draft_id}")

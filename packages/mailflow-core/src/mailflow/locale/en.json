@@ -269,7 +269,7 @@
       "urgency_reset": "Urgency of {mail_id} reset to automatic ({urgency})",
       "urgency_updated": "Urgency of {mail_id} set to {urgency}",
       "urgency_usage": "mail urgency <mail_id> <ad|info|important|urgent|auto>",
-      "usage": "mail <list|search <need>|show <#|id>|urgency <#|id> <level>|delete <#|id>>",
+      "usage": "mail <list|search <need>|show <#|id>|urgency <#|id> <level>|delete <#|id>>\nmail thread <mail> | mail filters [save <name> --account <id> --days 7 --query <text> | open <name> | delete <name>]",
       "wipe_confirm_hint": "Run `mail wipe CONFIRM` to execute.",
       "wipe_done": "Wiped {mails} active mail(s) and {trash} trash record(s). Dedup state cleared — restart or use the mailbox browser to re-ingest older mail beyond the fetch limit.",
       "wipe_warn_body": " All analyses are erased; new polls re-ingest only newly received mail. Mails still listed in the Mailboxes history browser can be force re-analyzed individually.",
@@ -366,7 +366,7 @@
       "sent": "Reply sent from draft {draft_id}",
       "show_title": "Draft {draft_id}",
       "template_unknown": "unknown letter template {language!r}; use cn or en",
-      "usage": "reply <create <mail_id>|compose <mail_id> <cn|en>|show <draft_id>|edit <draft_id> <subject> <body>|prepare <draft_id>|confirm <draft_id> <token>|cancel <draft_id>>",
+      "usage": "reply <create <mail_id>|compose <mail_id> <cn|en>|show <draft_id>|edit <draft_id> <subject> <body>|prepare <draft_id>|confirm <draft_id> <token>|cancel <draft_id>>\nreply new <account> --to <addresses> --subject <subject> --body <body> [--cc <addresses>] [--bcc <addresses>]\nreply forward|all <mail> | reply recipients <draft> --to <addresses> [--cc <addresses>] [--bcc <addresses>]\nreply files | reply attach <draft> [file-id ...]\nreply upload <local-file>",
       "state_draft": "Draft",
       "state_prepared": "Awaiting confirmation",
       "state_sending": "Sending / awaiting delivery result",
@@ -1409,7 +1409,8 @@
       "reason": "Reason",
       "notification_images": "Include original mail and linked task images",
       "summary_cards": "Include summary cards",
-      "sync_mail": "Sync mail"
+      "sync_mail": "Sync mail",
+      "view_read": "Read"
     },
     "sessions": {
       "detach": "Detach",
@@ -1490,7 +1491,8 @@
       "operation_sync_account": "Change this account’s sync task",
       "configure_model": "Configure a model",
       "remote_model_setup": "Configure a model in the server’s local settings, then return to the assistant.",
-      "session_required": "Reconnect using a current MailFlow client before starting or confirming an assistant task."
+      "session_required": "Reconnect using a current MailFlow client before starting or confirming an assistant task.",
+      "operation_write_message": "Compose mail"
     },
     "recurrence": {
       "category": "Category",
@@ -1535,6 +1537,39 @@
       "state_retrying": "Reconnecting",
       "state_sync_required": "Choose a sync range",
       "state_error": "Sync failed"
+    },
+    "experience": {
+      "saved_filters": "Saved filters",
+      "filter_name": "Name for the current filter",
+      "name_required": "Enter a name.",
+      "filter_account_missing": "The account was removed. Edit the filter.",
+      "filter_missing": "Filter not found.",
+      "relative_days": "Recent days (blank uses the dates above)",
+      "thread": "View conversation",
+      "compose": "Compose mail",
+      "reply_all": "Reply all",
+      "forward": "Forward",
+      "to": "To",
+      "cc": "Cc",
+      "bcc": "Bcc",
+      "subject": "Subject",
+      "upload_path": "Path to a file on this computer",
+      "add_file": "Add attachment",
+      "choose_files": "Choose or remove attachments",
+      "filename": "Filename",
+      "saved": "Saved.",
+      "empty": "No records.",
+      "file_invalid": "Invalid file. Upload it again.",
+      "file_too_large": "The attachment exceeds 4 MB. Choose a smaller file.",
+      "file_unavailable": "The file is missing or belongs to another user or session. Upload it here.",
+      "draft_unavailable": "This draft belongs to another user or session.",
+      "account_unavailable": "Choose an available, enabled sending account.",
+      "compose_unsupported": "This source supports basic replies only, not full composition or attachments.",
+      "recipient_required": "Enter valid recipient addresses.",
+      "send_preview": "Sending account: {account}\nTo: {to}\nCc: {cc}\nBcc: {bcc}\nAttachments: {files}\nReview the body, then confirm sending.",
+      "file_download_failed": "The attachment could not be retrieved. Upload it again or add it in the terminal.",
+      "private_send": "Use a private chat or terminal for drafts with Bcc recipients.",
+      "upload_in_chat": "Upload the file in this chat, then select it with reply files."
     }
   }
 }

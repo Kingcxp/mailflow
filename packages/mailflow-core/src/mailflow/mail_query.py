@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +20,15 @@ class MailQuery(BaseModel):
     urgency: str = ""
     offset: int = 0
     limit: int = 200
+    relative_days: int | None = None
+
+    def resolved(self, now: datetime) -> MailQuery:
+        if self.relative_days is None:
+            return self
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return self.model_copy(
+            update={"after": start - timedelta(days=max(1, self.relative_days) - 1), "before": None}
+        )
 
     def matches(self, record: MailRecord) -> bool:
         mail = record.mail
@@ -37,6 +46,7 @@ class MailQuery(BaseModel):
             "inbox": not record.archived,
             "archived": record.archived,
             "unread": not record.is_read,
+            "read": record.is_read,
             "starred": record.starred,
             "pending": record.analysis_state in {"pending", "analysing"},
             "failed": record.analysis_state == "failed",

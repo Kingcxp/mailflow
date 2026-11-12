@@ -109,8 +109,18 @@ class Main(Star):
                         for part in event.get_messages())
         if line is None and group_id and not mentioned:
             return
+        from mailflow.chat_files import framework_files, receive_files
+        from mailflow.errors import error_text
+
+        payload = {"text": event.message_str.strip(), "sender": sender, "provider": str(event.platform_meta.name), "instance_id": str(event.platform_meta.id), "chat_id": group_id or sender, "request_id": str(getattr(event.message_obj, "message_id", "") or "")}
+        try:
+            payload["files"] = await framework_files(event.get_messages())
+            await receive_files(_service, payload)
+        except Exception as exc:
+            yield event.plain_result(error_text(exc, _service.t))
+            return
         async for reply in _service.chat_command_stream(
-            _service.command_prefix() + "mailflow " + line if line is not None else event.message_str.strip(),
+            _service.command_prefix() + "mailflow " + line if line is not None else payload["text"],
             sender=sender,
             provider=str(event.platform_meta.name),
             instance_id=str(event.platform_meta.id),

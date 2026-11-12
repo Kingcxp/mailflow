@@ -79,8 +79,24 @@ func dispatchChatCommand(msg *openwechat.Message, text string) {
 	if senderInGroup, err := msg.SenderInGroup(); err == nil && senderInGroup != nil {
 		sender = senderInGroup.UserName
 	}
+	files := []map[string]string{}
+	fileError := false
+	if msg.HasFile() {
+		response, err := msg.GetFile()
+		if err != nil { fileError = true } else {
+			data, readErr := io.ReadAll(io.LimitReader(response.Body, 4000001))
+			response.Body.Close()
+			if readErr != nil || len(data) > 4000000 { fileError = true } else {
+				name := msg.FileName
+				if name == "" { name = "attachment" }
+				files = append(files, map[string]string{"filename": name, "content_type": response.Header.Get("Content-Type"), "data": base64.StdEncoding.EncodeToString(data)})
+			}
+		}
+	}
 	payload, err := json.Marshal(map[string]any{
 		"text":        text,
+        "files": files,
+        "file_error": fileError,
 		"stream":      true,
 		"request_id":  fmt.Sprint(msg.MsgId),
 		"sender":      sender,
@@ -165,10 +181,12 @@ func main() {
 		if msg.IsSendBySelf() {
 			return
 		}
-		if !msg.IsText() {
+		if !msg.IsText() && !msg.HasFile() {
 			return
 		}
-		go dispatchChatCommand(msg, msg.Content)
+		text := ""
+        if msg.IsText() { text = msg.Content }
+        go dispatchChatCommand(msg, text)
 	}
 
 	go func() {

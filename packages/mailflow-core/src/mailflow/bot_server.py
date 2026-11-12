@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 _HOST = "127.0.0.1"
 _PORT = 18789
-_MAX_REQUEST_BYTES = 1 << 20
+_MAX_REQUEST_BYTES = 24 << 20
 
 
 class BotServer(OwnedListener):
@@ -129,8 +129,16 @@ class BotServer(OwnedListener):
             path = parts[1]
             body = await asyncio.wait_for(self._read_request_body(reader), timeout=20.0)
             payload = json.loads(body.decode("utf-8", "replace") or "{}")
-            text = str(payload.get("text") or "")
             if path == "/bot/message":
+                from mailflow.chat_files import receive_files
+                from mailflow.errors import error_text
+
+                try:
+                    await receive_files(self._service, payload)
+                except Exception as exc:
+                    await self._respond(writer, 200, {"reply": error_text(exc, self._service.t)})
+                    return
+                text = str(payload.get("text") or "")
                 instance = str(payload.get("instance_id") or "")
                 chat_id = str(payload.get("chat_id") or "")
                 if payload.get("stream"):

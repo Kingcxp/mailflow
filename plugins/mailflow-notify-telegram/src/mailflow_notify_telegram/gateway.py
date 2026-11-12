@@ -183,8 +183,12 @@ class TelegramBridge:
         if not isinstance(raw_message, dict):
             return
         message = as_object(raw_message)
-        text = as_text(message.get("text"))
-        if not text.strip():
+        text = as_text(message.get("text") or message.get("caption"))
+        media = as_object(message.get("document"))
+        photos = cast(list[Any], message.get("photo") or [])
+        if not media and photos:
+            media = as_object(photos[-1])
+        if not text.strip() and not media:
             return
         chat = as_object(message.get("chat"))
         chat_id = as_text(chat.get("id"))
@@ -212,20 +216,37 @@ class TelegramBridge:
         for start, end in sorted(removals, reverse=True):
             encoded = encoded[:start] + encoded[end:]
         text = encoded.decode("utf-16-le").strip()
-        if not text:
-            return
-        command_name = text.split()[0]
+        command_name = text.split()[0] if text else ""
         if (
             "@" in command_name
             and command_name.split("@", 1)[1].casefold()
             != as_text(self.identity.get("username")).casefold()
         ):
             return
+        files: list[dict[str, str]] = []
+        file_error = False
+        if media:
+            from mailflow.chat_files import download_file, encoded_file
+
+            try:
+                result = await self._request("getFile", {"file_id": media.get("file_id")})
+                path = as_text(as_object(result.get("result")).get("file_path"))
+                data = await download_file(f"{self._api_base}/file/bot{self._token}/{path}")
+                files.append(
+                    encoded_file(
+                        as_text(media.get("file_name")) or path.rsplit("/", 1)[-1],
+                        data,
+                        as_text(media.get("mime_type")) or "application/octet-stream",
+                    )
+                )
+            except Exception:
+                file_error = True
         progress_id: int | None = None
         async for reply in command_replies(
             self._bot_url,
             {
                 "text": text,
+                **({"files": files, "file_error": file_error} if media else {}),
                 "sender": sender_id,
                 "chat_id": chat_id,
                 "chat_type": chat_type,

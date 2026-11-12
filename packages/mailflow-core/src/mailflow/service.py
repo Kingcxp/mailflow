@@ -55,6 +55,7 @@ from mailflow.domain import (
     BatchResult,
     ComponentKind,
     LLMSnapshot,
+    MailAddress,
     MailMessage,
     MailRecord,
     PendingOperation,
@@ -105,7 +106,7 @@ from mailflow.processors import LLMImportanceProcessor as _BUILTIN_LLM_IMPORTANC
 from mailflow.processors import register_builtin_processors
 from mailflow.prompts import prompt_context
 from mailflow.registry import ComponentRegistry
-from mailflow.replies import ReplyError, ReplySourceError
+from mailflow.replies import ReplyDeliveryUncertain, ReplyError, ReplySourceError
 from mailflow.runtime import MailFlowRuntime
 from mailflow.settings import (
     LIVE_CONFIG_GROUPS,
@@ -368,6 +369,9 @@ class MailFlowService:
         self._needs_rebuild = False
         self._lifecycle_lock = asyncio.Lock()
         self._backup_lock = asyncio.Lock()
+        from mailflow.workflows import UserWorkflows
+
+        self.workflows = UserWorkflows(self)
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
@@ -737,7 +741,11 @@ class MailFlowService:
         store = self.runtime.action_store
         return store.mail_view([record], await store.read(records=[record]))[0]
 
+    async def workspace_call(self, action: str, values: dict[str, Any] | None = None) -> Any:
+        return await self.workflows.call(action, values or {})
+
     async def query_mails(self, query: MailQuery) -> MailPage:
+        query = self.workflows.resolve_query(query)
         query = query.model_copy(
             update={"limit": min(500, max(1, query.limit)), "offset": max(0, query.offset)}
         )
@@ -786,7 +794,16 @@ class MailFlowService:
                 for record in await self.storage.list_mails()
                 for draft in await self.storage.list_drafts(record.record_id)
             ]
-        return [draft for draft in drafts if not state or draft.state.value == state]
+        return [
+            draft
+            for draft in drafts
+            if (not state or draft.state.value == state)
+            and (
+                not draft.owner
+                or draft.owner == self.workflows_actor()
+                or current_context().provider in {"local", "server"}
+            )
+        ]
 
     async def failed_deliveries(self) -> list[dict[str, Any]]:
         return await self.runtime.failed_deliveries()
@@ -3935,6 +3952,8 @@ Return every candidate in this batch."""
         draft = ReplyDraft(
             draft_id=uuid4().hex[:16],
             mail_id=mail_id,
+            owner=self.workflows_actor(),
+            message_id=f"<{uuid4().hex}@mailflow.local>",
             account_id=record.mail.account_id,
             to=record.mail.reply_to or record.mail.sender,
             subject=f"Re: {record.mail.subject}",
@@ -3975,6 +3994,8 @@ Return every candidate in this batch."""
         draft = ReplyDraft(
             draft_id=uuid4().hex[:16],
             mail_id=mail_id,
+            owner=self.workflows_actor(),
+            message_id=f"<{uuid4().hex}@mailflow.local>",
             account_id=record.mail.account_id,
             to=record.mail.reply_to or record.mail.sender,
             subject=f"Re: {record.mail.subject}",
@@ -3984,11 +4005,23 @@ Return every candidate in this batch."""
         await self.events.emit("reply.created", draft_id=draft.draft_id, mail_id=mail_id)
         return draft.model_copy(deep=True)
 
+    def workflows_actor(self) -> str:
+        from mailflow.workflows import actor_key
+
+        return actor_key()
+
     async def get_draft(self, draft_id: str) -> ReplyDraft | None:
         try:
             draft = await self.storage.get_draft(draft_id)
         except Exception:
             raise self._reply_error("reply.storage_failed") from None
+        if (
+            draft is not None
+            and draft.owner
+            and draft.owner != self.workflows_actor()
+            and current_context().provider not in {"local", "server"}
+        ):
+            raise self._reply_error("experience.draft_unavailable")
         return draft.model_copy(deep=True) if draft is not None else None
 
     def _reply_error(self, code: str, **params: Any) -> ReplyError:
@@ -4018,12 +4051,13 @@ Return every candidate in this batch."""
         return record
 
     async def _reply_source(self, draft: ReplyDraft) -> MailSource:
-        record = await self._reply_record(draft.mail_id)
+        record = await self._reply_record(draft.mail_id) if draft.mail_id else None
         from mailflow.replies import reply_thread
 
-        draft.in_reply_to, draft.references = reply_thread(record.mail)
+        if record is not None and draft.kind != "forward":
+            draft.in_reply_to, draft.references = reply_thread(record.mail)
         account = next((a for a in self.config.accounts if a.account_id == draft.account_id), None)
-        if account is None or record.mail.account_id != draft.account_id:
+        if account is None or (record is not None and record.mail.account_id != draft.account_id):
             raise self._reply_error("reply.account_missing", account_id=draft.account_id)
         if not account.enabled:
             raise self._reply_error("reply.account_disabled", account_id=draft.account_id)
@@ -4032,6 +4066,17 @@ Return every candidate in this batch."""
             raise self._reply_error("reply.source_missing", account_id=draft.account_id)
         if getattr(source, "supports_reply", True) is False:
             raise self._reply_error("reply.source_read_only", account_id=draft.account_id)
+        from mailflow.contracts import MessageSource
+
+        if (
+            draft.kind != "reply" or draft.recipients or draft.cc or draft.bcc or draft.attachments
+        ) and not isinstance(source, MessageSource):
+            raise self._reply_error("experience.compose_unsupported")
+        if not (draft.to_addresses or draft.cc or draft.bcc):
+            raise self._reply_error("experience.recipient_required")
+        for address in [*draft.to_addresses, *draft.cc, *draft.bcc]:
+            if "@" not in address.address or any(c in address.address for c in "\r\n"):
+                raise self._reply_error("experience.recipient_required")
         if isinstance(source, ReplyPreflightSource):
             try:
                 await source.check_reply_ready()
@@ -4046,11 +4091,36 @@ Return every candidate in this batch."""
         return source
 
     @admin_operation
-    async def edit_draft(self, draft_id: str, subject: str, body: str) -> ReplyDraft:
+    async def edit_draft(
+        self,
+        draft_id: str,
+        subject: str,
+        body: str,
+        *,
+        recipients: list[MailAddress] | None = None,
+        cc: list[MailAddress] | None = None,
+        bcc: list[MailAddress] | None = None,
+        file_ids: list[str] | None = None,
+    ) -> ReplyDraft:
         async with self._reply_locks.for_draft(draft_id):
             draft = await self._require_draft(draft_id)
             self._require_editable_reply(draft)
+            files = None
+            if file_ids is not None:
+                files = [
+                    (await self.workflows.file(file_id))[0] for file_id in dict.fromkeys(file_ids)
+                ]
             draft.subject, draft.body = subject, body
+            if recipients is not None:
+                draft.recipients = recipients
+                draft.to = next(iter(recipients), MailAddress(address=""))
+            if cc is not None:
+                draft.cc = cc
+            if bcc is not None:
+                self.workflows.check_private_recipients(bcc)
+                draft.bcc = bcc
+            if files is not None:
+                draft.attachments = files
             draft.state = ReplyState.DRAFT
             draft.token = draft.token_expires_at = None
             draft.error_code = ""
@@ -4065,6 +4135,7 @@ Return every candidate in this batch."""
             draft = await self._require_draft(draft_id)
             self._require_editable_reply(draft)
             await self._reply_source(draft)
+            await self.workflows.outgoing(draft)
             draft.token = secrets.token_urlsafe(16)
             draft.token_expires_at = utcnow() + _REPLY_TOKEN_TTL
             draft.state = ReplyState.PREPARED
@@ -4098,8 +4169,16 @@ Return every candidate in this batch."""
         await self._save_reply_draft(draft)
         await self.events.emit("reply.changed", draft_id=draft_id)
         try:
-            await source.send_reply(draft.mail_id, draft.model_copy(deep=True))
-        except asyncio.CancelledError:
+            from mailflow.contracts import MessageSource
+
+            outgoing = draft.model_copy(deep=True)
+            outgoing.outgoing_files = await self.workflows.outgoing(draft)
+            if isinstance(source, MessageSource):
+                await source.send_message(outgoing)
+            else:
+                await source.send_reply(draft.mail_id, outgoing)
+            draft.sent_copy_error = outgoing.sent_copy_error
+        except (asyncio.CancelledError, ReplyDeliveryUncertain):
             # Delivery may already have reached the provider. SENDING prevents
             # an uncertain attempt from being automatically sent again.
             raise self._reply_error("reply.send_uncertain") from None

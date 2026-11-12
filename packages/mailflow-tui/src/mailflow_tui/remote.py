@@ -513,6 +513,9 @@ class RemoteServiceAdapter:
             await self._reply_call(self.client.create_reply(mail_id, resume=resume))
         )
 
+    async def workspace_call(self, action: str, values: dict[str, Any] | None = None) -> Any:
+        return await self.client.workspace_call(action, values)
+
     async def get_draft(self, draft_id: str) -> ReplyDraft | None:
         data = await self._reply_call(self.client.get_draft(draft_id))
         return ReplyDraft.model_validate(data) if data is not None else None

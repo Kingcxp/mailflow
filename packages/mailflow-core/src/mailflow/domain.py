@@ -255,7 +255,7 @@ class ActionItem(BaseModel):
     source_subject: str = ""
     reply_task: bool = False
     category: str = ""
-    tags: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=lambda: [])
     plan_id: str = ""
     repeat: RepeatSchedule | None = None
     preview: bool = False
@@ -581,6 +581,13 @@ class ReplyState(StrEnum):
     CANCELLED = "cancelled"
 
 
+class FileReference(BaseModel):
+    file_id: str
+    filename: str
+    content_type: str = "application/octet-stream"
+    size: int = 0
+
+
 class ReplyDraft(BaseModel):
     """Editable reply; confirm() requires a short-lived prepared token."""
 
@@ -598,6 +605,19 @@ class ReplyDraft(BaseModel):
     token: str | None = None
     token_expires_at: datetime | None = None
     error_code: str = ""
+    kind: Literal["reply", "reply_all", "new", "forward"] = "reply"
+    recipients: list[MailAddress] = Field(default_factory=lambda: [])
+    cc: list[MailAddress] = Field(default_factory=lambda: [])
+    bcc: list[MailAddress] = Field(default_factory=lambda: [])
+    attachments: list[FileReference] = Field(default_factory=lambda: [])
+    outgoing_files: list[Attachment] = Field(default_factory=lambda: [], exclude=True)
+    owner: str = ""
+    message_id: str = ""
+    sent_copy_error: bool = False
+
+    @property
+    def to_addresses(self) -> list[MailAddress]:
+        return self.recipients or ([self.to] if self.to.address else [])
 
     def is_confirmation_valid(self, token: str, now: datetime | None = None) -> bool:
         if self.state != ReplyState.PREPARED or self.token is None or self.token_expires_at is None:
@@ -657,8 +677,8 @@ class AccountSnapshot(BaseModel):
 
 
 class BatchResult(BaseModel):
-    succeeded: list[str] = Field(default_factory=list)
-    skipped: list[str] = Field(default_factory=list)
+    succeeded: list[str] = Field(default_factory=lambda: [])
+    skipped: list[str] = Field(default_factory=lambda: [])
     failed: dict[str, str] = Field(default_factory=dict)
 
     @property

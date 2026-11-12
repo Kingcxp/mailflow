@@ -1613,6 +1613,41 @@ class MailPane(Vertical):
                 from mailflow_tui.mail_workflows import SyncScreen
 
                 await self._ask_screen(SyncScreen(self._service, self._query.account_id))
+            elif choice in {"compose", "forward", "reply_all"}:
+                from mailflow_tui.workspace_screens import ComposeScreen
+
+                await self._ask_screen(
+                    ComposeScreen(
+                        self._service,
+                        kind="new" if choice == "compose" else choice,
+                        mail_id=self._selected_id or "",
+                    )
+                )
+            elif choice == "thread":
+                from mailflow_tui.workspace_screens import ThreadScreen
+
+                chosen = await self._ask_screen(
+                    ThreadScreen(self._service, self._selected_id or "")
+                )
+                if chosen:
+                    self.select_mail(chosen)
+            elif choice == "saved_filters":
+                from mailflow_tui.workspace_screens import SavedFiltersScreen
+
+                current = self._query.model_copy(
+                    update={
+                        "text": self.query_one("#mail-search", Input).value,
+                        "urgency": self._select_value("#mail-urgency-filter")
+                        if self._select_value("#mail-urgency-filter") not in {"all", "expired"}
+                        else "",
+                    }
+                )
+                query = await self._ask_screen(SavedFiltersScreen(self._service, current))
+                if query is not None:
+                    self._query = query
+                    self.query_one("#mail-search", Input).value = query.text
+                    self.query_one("#mail-urgency-filter", Select).value = query.urgency or "all"
+                    self._page_limit = 200
             elif choice == "filter":
                 query = await self._ask_screen(MailFilter(self._service, self._query))
                 if query is not None:
@@ -1651,7 +1686,17 @@ class MailPane(Vertical):
                 draft = await self._ask_screen(DraftsScreen(self._service))
                 if draft is not None:
                     record = await self._service.get_mail(draft.mail_id)
-                    if record is not None:
+                    if (
+                        draft.kind != "reply"
+                        or draft.recipients
+                        or draft.cc
+                        or draft.bcc
+                        or draft.attachments
+                    ):
+                        from mailflow_tui.workspace_screens import ComposeScreen
+
+                        await self._ask_screen(ComposeScreen(self._service, draft=draft))
+                    elif record is not None:
                         await self._ask_screen(ReplyModal(self._service, record, draft=draft))
                     else:
                         self._set_operation_status(

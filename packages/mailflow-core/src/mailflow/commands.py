@@ -382,6 +382,63 @@ class CommandRouter:
                     query = query or positionals[0].strip().lower()
             return await self._mail_list(page=page, query=query)
         sub, rest = args[0], args[1:]
+        if sub == "thread" and rest:
+            record = await self._find_mail(rest[0])
+            if record is None:
+                return self._err(self._t("mail.not_found", mail_id=rest[0]))
+            thread = await self.service.workspace_call("thread", {"record_id": record.record_id})
+            return self._ok(
+                "\n\n".join(f"{r['at']} · {r['subject']}\n{r['body']}" for r in thread["messages"])
+            )
+        if sub == "filters":
+            positional, flags = _split_flags(rest)
+            operation = positional[0] if positional else "list"
+            name = positional[1] if len(positional) > 1 else ""
+            if operation == "save":
+                from mailflow.mail_query import MailQuery
+
+                saved_query = MailQuery(
+                    account_id=flags.get("account", ""),
+                    text=flags.get("query", ""),
+                    sender=flags.get("sender", ""),
+                    state=flags.get("state", "inbox"),
+                    urgency=flags.get("urgency", ""),
+                    relative_days=int(flags["days"]) if "days" in flags else None,
+                )
+                await self.service.workspace_call(
+                    "save_filter", {"name": name, "query": saved_query.model_dump(mode="json")}
+                )
+                return self._ok(self._t("experience.saved"))
+            rows = await self.service.workspace_call("filters")
+            if operation == "delete":
+                await self.service.workspace_call("delete_filter", {"name": name})
+                return self._ok(self._t("experience.saved"))
+            if operation == "open":
+                from mailflow.mail_query import MailQuery
+
+                row = next((r for r in rows if r["name"] == name), None)
+                if row is None:
+                    return self._err(self._t("experience.filter_missing"))
+                filter_page = await self.service.query_mails(MailQuery.model_validate(row["query"]))
+                await self._remember_selection("mail", [r.record_id for r in filter_page.records])
+                return self._ok(
+                    "\n".join(
+                        f"{i}. {r.mail.subject} [{r.record_id}]"
+                        for i, r in enumerate(filter_page.records, 1)
+                    )
+                )
+            return self._ok(
+                "\n".join(
+                    r["name"]
+                    + (
+                        ""
+                        if r["available"]
+                        else " · " + self._t("experience.filter_account_missing")
+                    )
+                    for r in rows
+                )
+                or self._t("experience.empty")
+            )
         if sub == "search":
             return await self._mail_smart_search(rest)
         if sub == "show":
@@ -1464,6 +1521,72 @@ class CommandRouter:
         if not args:
             return self._err(self._t("reply.usage"))
         sub, rest = args[0], args[1:]
+        if sub in {"new", "forward", "all"} and rest:
+            positional, flags = _split_flags(rest)
+            values: dict[str, Any] = {
+                "kind": {"new": "new", "forward": "forward", "all": "reply_all"}[sub],
+                **flags,
+            }
+            if sub == "new":
+                values["account_id"] = positional[0]
+            else:
+                record = await self._find_mail(positional[0])
+                if record is None:
+                    return self._err(self._t("mail.not_found", mail_id=positional[0]))
+                values["mail_id"] = record.record_id
+            new_message = ReplyDraft.model_validate(
+                await self.service.workspace_call("compose", values)
+            )
+            return self._render_draft(new_message)
+        if sub == "upload" and len(rest) == 1:
+            if current_context().provider != "local":
+                return self._err(self._t("experience.upload_in_chat"))
+            import base64
+            import mimetypes
+            from pathlib import Path
+
+            from mailflow.domain import MAX_ATTACHMENT_BYTES
+
+            path = Path(rest[0])
+
+            def read_upload() -> bytes:
+                with path.open("rb") as handle:
+                    return handle.read(MAX_ATTACHMENT_BYTES + 1)
+
+            data = await asyncio.to_thread(read_upload)
+            uploaded = await self.service.workspace_call(
+                "upload",
+                {
+                    "filename": path.name,
+                    "content_type": mimetypes.guess_type(path.name)[0]
+                    or "application/octet-stream",
+                    "data": base64.b64encode(data).decode("ascii"),
+                },
+            )
+            return self._ok(f"{uploaded['filename']} · {uploaded['file_id']}")
+        if sub == "files":
+            rows = await self.service.workspace_call("files")
+            return self._ok(
+                "\n".join(f"{r['file_id']} · {r['filename']} ({r['size']} B)" for r in rows)
+                or self._t("experience.empty")
+            )
+        if sub in {"attach", "recipients"} and rest:
+            draft = await self.service.get_draft(rest[0])
+            if draft is None:
+                return self._err(self._t("reply.draft_not_found", draft_id=rest[0]))
+            _, flags = _split_flags(rest[1:])
+            values = {
+                "draft_id": draft.draft_id,
+                "subject": draft.subject,
+                "body": draft.body,
+                **flags,
+            }
+            if sub == "attach":
+                values["file_ids"] = rest[1:]
+            updated = ReplyDraft.model_validate(
+                await self.service.workspace_call("edit_message", values)
+            )
+            return self._render_draft(updated)
         if sub == "create" and len(rest) == 1:
             record = await self._find_mail(rest[0])
             if record is None:
@@ -1506,7 +1629,9 @@ class CommandRouter:
             return CommandResponse.rich(
                 [
                     (
-                        self._t(
+                        self._render_draft(draft).text
+                        + "\n"
+                        + self._t(
                             "reply.prepared",
                             draft_id=draft.draft_id,
                             token=draft.token or "",
@@ -1530,7 +1655,9 @@ class CommandRouter:
                 text=self._t("reply.show_title", draft_id=draft.draft_id), style=_STYLE_TITLE
             ),
             StyleSpan(text=f"\n{self._t('reply.field_mail')}: {draft.mail_id}"),
-            StyleSpan(text=f"\n{self._t('reply.field_to')}: {draft.to.display}"),
+            StyleSpan(
+                text=f"\n{self._t('reply.field_to')}: {', '.join(a.display for a in draft.to_addresses)}"
+            ),
             StyleSpan(text=f"\n{self._t('reply.field_subject')}: {draft.subject}"),
             StyleSpan(
                 text=f"\n{self._t('reply.field_state')}: {self._t(f'reply.state_{draft.state.value}')}"
@@ -1540,6 +1667,19 @@ class CommandRouter:
                 style=_STYLE_MUTED,
             ),
         ]
+        spans.extend(
+            [
+                StyleSpan(
+                    text=f"\n{self._t('experience.cc')}: {', '.join(a.display for a in draft.cc)}"
+                ),
+                StyleSpan(
+                    text=f"\n{self._t('experience.bcc')}: {', '.join(a.display for a in draft.bcc)}"
+                ),
+                StyleSpan(
+                    text=f"\n{self._t('experience.choose_files')}: {', '.join(a.filename for a in draft.attachments)}"
+                ),
+            ]
+        )
         if draft.error_code:
             spans.insert(
                 -1,

@@ -70,6 +70,13 @@ class AttachmentSource(Protocol):
     async def fetch_attachment(self, mail: MailMessage, index: int) -> bytes: ...
 
 
+@runtime_checkable
+class MessageSource(Protocol):
+    """Optional full composition; legacy sources keep their reply contract."""
+
+    async def send_message(self, draft: ReplyDraft) -> None: ...
+
+
 class SyncCursorError(RuntimeError):
     code = "sync.cursor_invalid"
 

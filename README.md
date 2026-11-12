@@ -1,5 +1,8 @@
 # MailFlow
 
+
+Saved filters, account-isolated conversations, and full mail composition (To/Cc/Bcc, forwarding, reply-all and managed attachments) are available from the mail tools menu and shared chat/CLI commands. Chat uploads stay with their sender and session.
+
 [简体中文](README.zh-CN.md)
 
 MailFlow brings multiple mail accounts into one inbox. It combines local storage,

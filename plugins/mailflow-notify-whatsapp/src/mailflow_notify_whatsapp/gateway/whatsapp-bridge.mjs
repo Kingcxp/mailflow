@@ -20,7 +20,7 @@
 
 import http from 'node:http'
 
-import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys'
+import makeWASocket, { DisconnectReason, useMultiFileAuthState, downloadMediaMessage } from '@whiskeysockets/baileys'
 import pino from 'pino'
 import QRCode from 'qrcode'
 
@@ -78,7 +78,7 @@ function extractText(message) {
   if (inner.extendedTextMessage && typeof inner.extendedTextMessage.text === 'string') {
     return inner.extendedTextMessage.text
   }
-  return ''
+  return inner.documentMessage?.caption || inner.imageMessage?.caption || ''
 }
 
 async function sendText(chatId, text) {
@@ -86,7 +86,7 @@ async function sendText(chatId, text) {
   await sock.sendMessage(chatId, { text })
 }
 
-async function dispatch(text, sender, chatId, chatType, requestId, mentioned = false) {
+async function dispatch(text, sender, chatId, chatType, requestId, mentioned = false, files = [], fileError = false) {
   if (!BOT_URL) return
   try {
     const response = await fetch(BOT_URL, {
@@ -101,6 +101,8 @@ async function dispatch(text, sender, chatId, chatType, requestId, mentioned = f
         instance_id: INSTANCE,
         request_id: requestId || "",
         mentioned,
+        files,
+        file_error: fileError,
         stream: true,
       }),
     })
@@ -135,7 +137,7 @@ async function dispatch(text, sender, chatId, chatType, requestId, mentioned = f
   }
 }
 
-function handleMessages(event) {
+async function handleMessages(event) {
   if (event.type !== 'notify') return
   for (const message of event.messages || []) {
     if (!message || !message.message) continue
@@ -143,14 +145,31 @@ function handleMessages(event) {
     const chatId = (message.key && message.key.remoteJid) || ''
     if (!chatId) continue
     const text = extractText(message.message)
-    if (!text) continue
+    const inner = unwrap(message.message)
+    const media = inner?.documentMessage || inner?.imageMessage
+    if (!text && !media) continue
     const isGroup = chatId.endsWith('@g.us')
     const sender = isGroup ? (message.key && message.key.participant) || chatId : chatId
     const context = message.message.extendedTextMessage?.contextInfo || {}
     const ownId = (sock?.user?.id || '').replace(/:\d+@/, '@')
     const mentioned = (context.mentionedJid || []).some(id => id.replace(/:\d+@/, '@') === ownId)
     const instruction = mentioned ? text.replace(/@\d+/g, '').trim() : text
-    dispatch(instruction, sender, chatId, isGroup ? 'group' : 'private', message.key && message.key.id, mentioned).catch((err) => {
+    const files = []
+    let fileError = false
+    if (media) {
+      try {
+        const stream = await downloadMediaMessage(message, 'stream', {}, { logger, reuploadRequest: sock.updateMediaMessage })
+        const chunks = []
+        let size = 0
+        for await (const chunk of stream) {
+          size += chunk.length
+          if (size > 4000000) { stream.destroy(); throw new Error('attachment too large') }
+          chunks.push(chunk)
+        }
+        files.push({filename: media.fileName || 'image.jpg', content_type: media.mimetype || 'application/octet-stream', data: Buffer.concat(chunks).toString('base64')})
+      } catch { fileError = true }
+    }
+    dispatch(instruction, sender, chatId, isGroup ? 'group' : 'private', message.key && message.key.id, mentioned, files, fileError).catch((err) => {
       log(`dispatch failed: ${err && err.message ? err.message : err}`)
     })
   }

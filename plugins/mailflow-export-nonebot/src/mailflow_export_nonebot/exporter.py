@@ -116,8 +116,18 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
     mentioned = event.is_tome()
     if line is None and group_id and not mentioned:
         return
+    from mailflow.chat_files import framework_files, receive_files
+    from mailflow.errors import error_text
+
+    payload = {"text": text, "sender": sender, "provider": bot.adapter.get_name(), "instance_id": str(bot.self_id), "chat_id": group_id or sender, "request_id": str(getattr(event, "message_id", "") or "")}
+    try:
+        payload["files"] = await framework_files(getattr(event, "get_message", lambda: [])(), bot)
+        await receive_files(_service, payload)
+    except Exception as exc:
+        await _mailflow_matcher.send(error_text(exc, _service.t))
+        return
     async for reply in _service.chat_command_stream(
-        _service.command_prefix() + "mailflow " + line if line is not None else text,
+        _service.command_prefix() + "mailflow " + line if line is not None else payload["text"],
         sender=sender,
         provider=bot.adapter.get_name(),
         instance_id=str(bot.self_id),

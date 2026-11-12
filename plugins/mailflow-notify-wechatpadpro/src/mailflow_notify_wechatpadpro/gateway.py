@@ -678,17 +678,46 @@ class _WebhookBridge(OwnedListener):
         # Group messages arrive as "wxid:\ncontent" — strip the sender prefix.
         if ":@" in from_user or (from_user.endswith("@chatroom") and ":\n" in content):
             _, _, content = content.partition(":\n")
-        if not content or push_type not in (None, 1, "1"):
+        has_file = push_type in (3, "3", 49, "49")
+        if not has_file and (not content or push_type not in (None, 1, "1")):
             return
         chat_type = "group" if from_user.endswith("@chatroom") else "private"
         sender = str(data.get("SenderUserName") or from_user)
         original = str(data.get("Content") or "")
         if chat_type == "group" and ":\n" in original and not data.get("SenderUserName"):
             sender = original.partition(":\n")[0]
+        files: list[dict[str, str]] = []
+        file_error = False
+        if has_file:
+            from mailflow.chat_files import download_file, encoded_file
+
+            content = str(data.get("Caption") or "")
+            try:
+                encoded = str(data.get("FileData") or "")
+                if encoded:
+                    files.append(
+                        {
+                            "filename": str(data.get("FileName") or "attachment"),
+                            "content_type": str(
+                                data.get("ContentType") or "application/octet-stream"
+                            ),
+                            "data": encoded,
+                        }
+                    )
+                else:
+                    url = str(data.get("FileUrl") or data.get("ImageUrl") or "")
+                    files.append(
+                        encoded_file(
+                            str(data.get("FileName") or "attachment"), await download_file(url)
+                        )
+                    )
+            except Exception:
+                file_error = True
         async for pages in command_replies(
             self.bot_url,
             {
                 "text": content,
+                **({"files": files, "file_error": file_error} if has_file else {}),
                 "sender": sender,
                 "chat_id": from_user,
                 "chat_type": chat_type,

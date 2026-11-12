@@ -879,3 +879,131 @@ async def test_recurring_tasks_keep_current_occurrence_and_preview_without_compl
     assert future.preview and future.due_at is not None and future.due_at.weekday() == 3
     assert all(item.item_id != future.item_id for item in await service.list_actions())
     assert await service.stop_action_plan(future.plan_id)
+
+
+async def test_saved_filters_roll_forward_and_threads_ignore_subject_collisions(
+    service: MailFlowService,
+) -> None:
+    from mailflow.config import MailAccountConfig
+
+    service.config.accounts = [MailAccountConfig(account_id="acct-1", provider="fake")]
+    child, parent, unrelated = [make_record(key) for key in ("child", "parent", "unrelated")]
+    child.mail.headers = {"Message-ID": "<child@example.com>", "References": "<parent@example.com>"}
+    parent.mail.headers = {"Message-ID": "<parent@example.com>"}
+    unrelated.mail.account_id = "another"
+    unrelated.mail.headers = parent.mail.headers.copy()
+    for record in (child, parent, unrelated):
+        await service.storage.save_mail(record)
+    thread = await service.workspace_call("thread", {"record_id": "child"})
+    assert {row["id"] for row in thread["messages"]} == {"parent", "child"}
+    query = MailQuery(account_id="acct-1", relative_days=7, state="all")
+    await service.workspace_call(
+        "save_filter", {"name": "Week", "query": query.model_dump(mode="json")}
+    )
+    saved = (await service.workspace_call("filters"))[0]
+    assert saved["available"] and saved["query"]["relative_days"] == 7
+    assert query.resolved(datetime(2028, 2, 1, tzinfo=UTC)).after == datetime(
+        2028, 1, 26, tzinfo=UTC
+    )
+    service.config.accounts = []
+    assert not (await service.workspace_call("filters"))[0]["available"]
+
+
+async def test_composition_keeps_private_files_and_invalidates_old_confirmation(
+    service: MailFlowService,
+) -> None:
+    import base64
+
+    from mailflow.config import MailAccountConfig
+    from mailflow.domain import ReplyDraft, ReplyState
+    from mailflow.permissions import PermissionContext, permission_scope
+
+    from mailflow_test_support.service import RecordingSource
+
+    class Source(RecordingSource):
+        async def send_message(self, draft: ReplyDraft) -> None:
+            await self.send_reply(draft.mail_id, draft)
+
+    source = Source()
+    service.config.accounts = [
+        MailAccountConfig(account_id="acct-1", provider="fake", email="me@example.com")
+    ]
+    service.sources["acct-1"] = source
+    uploaded = await service.workspace_call(
+        "upload", {"filename": "note.txt", "data": base64.b64encode(b"my file").decode()}
+    )
+    draft = await service.workspace_call(
+        "compose",
+        {
+            "account_id": "acct-1",
+            "to": "first@example.com, second@example.com",
+            "bcc": "private@example.com",
+            "subject": "Hello",
+            "body": "Body",
+        },
+    )
+    draft = await service.workspace_call(
+        "edit_message",
+        {**draft, "to": "first@example.com, second@example.com", "file_ids": [uploaded["file_id"]]},
+    )
+    with permission_scope(
+        PermissionContext(sender="other", provider="telegram", chat_id="group", is_admin=True)
+    ):
+        with pytest.raises(ValueError):
+            await service.workspace_call(
+                "edit_message", {"draft_id": draft["draft_id"], "file_ids": [uploaded["file_id"]]}
+            )
+        assert not await service.workspace_call("files")
+    first = await service.prepare_reply(draft["draft_id"])
+    await service.edit_draft(first.draft_id, first.subject, "Changed")
+    with pytest.raises(PermissionError):
+        await service.confirm_reply(first.draft_id, first.token or "")
+    ready = await service.prepare_reply(first.draft_id)
+    sent = await service.confirm_reply(first.draft_id, ready.token or "")
+    assert sent.state == ReplyState.SENT and len(source.sent) == 1
+    assert len(source.sent[0][1].to_addresses) == 2
+    assert source.sent[0][1].outgoing_files[0].data == b"my file"
+    with pytest.raises(PermissionError):
+        await service.confirm_reply(first.draft_id, ready.token or "")
+
+
+async def test_compose_dialog_preserves_input_and_requires_a_fresh_review(
+    service: MailFlowService,
+) -> None:
+    from mailflow.config import MailAccountConfig
+    from mailflow.domain import ReplyDraft
+    from mailflow_tui.widgets import TextArea
+    from mailflow_tui.workspace_screens import ComposeScreen
+
+    from mailflow_test_support.service import RecordingSource
+
+    class Source(RecordingSource):
+        async def send_message(self, draft: ReplyDraft) -> None:
+            await self.send_reply(draft.mail_id, draft)
+
+    service.config.accounts = [MailAccountConfig(account_id="acct-1", provider="fake")]
+    service.sources["acct-1"] = Source()
+    app: App[None] = App()
+    async with app.run_test(size=(100, 38)) as pilot:
+        screen = ComposeScreen(service)
+        app.push_screen(screen)
+        await pilot.pause()
+        assert screen.query_one("#compose-prepare", Button).disabled
+        screen.query_one("#compose-account", Select).value = "acct-1"
+        screen.query_one("#compose-to", Input).value = "friend@example.com"
+        screen.query_one("#compose-subject", Input).value = "My subject"
+        screen.query_one("#compose-body", TextArea).load_text("My draft")
+        await until(pilot, lambda: not screen.query_one("#compose-prepare", Button).disabled)
+        screen.query_one("#compose-prepare", Button).press()
+        await until(pilot, lambda: not screen.query_one("#compose-confirm", Button).disabled)
+        screen.query_one("#compose-body", TextArea).load_text("Edited draft")
+        await pilot.pause()
+        assert screen.query_one("#compose-confirm", Button).disabled
+        screen.query_one("#compose-path", Input).value = "missing-file-for-test"
+        screen.query_one("#compose-upload", Button).press()
+        await until(
+            pilot,
+            lambda: bool(screen.draft and screen.draft.body == "Edited draft") and not screen.busy,
+        )
+        assert screen.query_one("#compose-body", TextArea).text == "Edited draft"
+        assert screen.draft and screen.draft.body == "Edited draft"
