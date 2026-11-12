@@ -35,7 +35,7 @@ async def storage(tmp_path: Path):
 def make_record(record_id: str = "r1", *, urgency: Urgency = Urgency.IMPORTANT) -> MailRecord:
     return MailRecord(
         record_id=record_id,
-        mail=make_mail(message_id=record_id, subject=f"Subject {record_id}"),
+        mail=make_mail(message_id=record_id, subject=f"Subject {record_id}", received_at=utcnow()),
         auto_urgency=urgency,
     )
 
@@ -78,6 +78,13 @@ async def test_existing_database_rows_survive_initialize_and_reopen(tmp_path: Pa
         await backend.initialize()
         for term in ("résumé", "Update", "合同.pdf", "旧邮件"):
             assert (await backend.query_mails(MailQuery(text=term))).total == 1
+        source_time = record.mail.received_at
+        page = await backend.query_mails(
+            MailQuery(
+                after=source_time - timedelta(seconds=1), before=source_time + timedelta(seconds=1)
+            )
+        )
+        assert [row.record_id for row in page.records] == [record.record_id]
         if _ == 0:
             with sqlite3.connect(":memory:") as old_backup:
                 old_backup.deserialize(await backend.export_backup())
@@ -109,7 +116,7 @@ class TestSQLiteStorage:
 
     async def test_list_orders_by_recency(self, storage: SQLiteStorage) -> None:
         old = make_record("old")
-        old.received_at = utcnow() - timedelta(days=5)
+        old.mail.received_at = utcnow() - timedelta(days=5)
         new = make_record("new")
         await storage.save_mail(old)
         await storage.save_mail(new)
@@ -212,7 +219,7 @@ class TestSQLiteStorage:
     async def test_purge_compares_trash_timestamp_not_receipt(self, storage: SQLiteStorage) -> None:
         old_receipt = utcnow() - timedelta(days=60)
         record = make_record("ancient")
-        record.received_at = old_receipt
+        record.mail.received_at = old_receipt
         await storage.save_mail(record)
         await storage.delete_mail("ancient")  # deleted just now
         # purge based on receipt age would remove it; trash age must keep it
@@ -226,7 +233,7 @@ class TestSQLiteStorage:
 
     async def test_cleanup_moves_old_active_mail(self, storage: SQLiteStorage) -> None:
         old = make_record("old")
-        old.received_at = utcnow() - timedelta(days=40)
+        old.mail.received_at = utcnow() - timedelta(days=40)
         fresh = make_record("fresh")
         await storage.save_mail(old)
         await storage.save_mail(fresh)
@@ -238,7 +245,7 @@ class TestSQLiteStorage:
 
     async def test_retrash_preserves_first_deletion_time(self, storage: SQLiteStorage) -> None:
         record = make_record("r1")
-        record.received_at = utcnow() - timedelta(days=40)
+        record.mail.received_at = utcnow() - timedelta(days=40)
         await storage.save_mail(record)
         moved = await storage.cleanup_mail(utcnow() - timedelta(days=30))
         assert moved == 1

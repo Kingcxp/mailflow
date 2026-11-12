@@ -107,6 +107,26 @@ class SQLiteStorage:
                             for key, raw in batch
                         ],
                     )
+            if conn.execute(
+                "SELECT value FROM preferences WHERE key = 'schema.mail_received_index'"
+            ).fetchone() != ("1",):
+                rows = conn.execute("SELECT record_id, record_json FROM mails")
+                while batch := rows.fetchmany(200):
+                    conn.executemany(
+                        "UPDATE mails SET received_ts = ? WHERE record_id = ?",
+                        [
+                            (
+                                to_utc(
+                                    MailRecord.model_validate_json(raw).mail.received_at
+                                ).timestamp(),
+                                key,
+                            )
+                            for key, raw in batch
+                        ],
+                    )
+                conn.execute(
+                    "INSERT OR REPLACE INTO preferences VALUES('schema.mail_received_index', '1')"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS mails_received ON mails(received_ts DESC, record_id)"
             )
@@ -216,7 +236,7 @@ class SQLiteStorage:
                 (
                     record.record_id,
                     stored.model_dump_json(),
-                    record.received_at.timestamp(),
+                    to_utc(record.mail.received_at).timestamp(),
                     searchable_record_text(stored).casefold(),
                 ),
             )
@@ -513,7 +533,7 @@ class SQLiteStorage:
                 (
                     record.record_id,
                     stored.model_dump_json(),
-                    record.received_at.timestamp(),
+                    to_utc(record.mail.received_at).timestamp(),
                     searchable_record_text(stored).casefold(),
                 ),
             )
