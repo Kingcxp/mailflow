@@ -155,13 +155,22 @@ class UserWorkflows:
             from mailflow.backup import export_backup, preview_backup, restore_backup
 
             require_admin(self.service.t)
-            if action == "backup_export":
+            identity = current_context()
+            if identity.provider not in {"local", "server"} and identity.chat_id != identity.sender:
+                raise self.error("experience.backup_private")
+            if action in {"backup_export", "backup_send"}:
                 async with self.service._backup_lock:  # pyright: ignore[reportPrivateUsage]
                     payload = await export_backup(self.service)
-                return {
+                file = {
                     "filename": "mailflow-backup.zip",
+                    "content_type": "application/zip",
                     "data": base64.b64encode(payload).decode("ascii"),
                 }
+                if action == "backup_send":
+                    from mailflow.chat_files import deliver_file
+
+                    return await deliver_file(self.service, file)
+                return file
             if action in {"backup_preview", "backup_restore"}:
                 payload = base64.b64decode(str(values.get("data", "")), validate=True)
                 preview = await preview_backup(self.service, payload)

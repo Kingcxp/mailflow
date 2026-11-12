@@ -36,11 +36,15 @@ def file_sender_scope(sender: FileSender) -> Generator[None]:
 
 
 async def send_file(service: MailFlowService, values: dict[str, Any]) -> bool:
+    return await deliver_file(service, await service.workflows.file_download(values))
+
+
+async def deliver_file(service: MailFlowService, file: dict[str, Any]) -> bool:
+    """Send a verified managed file or an in-memory export without storing a second copy."""
     from mailflow.contracts import RichNotifier
     from mailflow.domain import NotificationImage
 
     require_admin(service.t)
-    file = await service.workflows.file_download(values)
     identity = current_context()
     await service.pace_bot(identity.provider, identity.instance_id)
     sender = _file_sender.get()

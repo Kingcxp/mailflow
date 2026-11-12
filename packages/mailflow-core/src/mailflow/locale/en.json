@@ -1669,6 +1669,7 @@
       "capability_error": "Detection incomplete",
       "history_pending": "Awaiting confirmation; changes have not been executed.",
       "history_expired": "The previous confirmation has expired. Start a new request to make further changes.",
+      "backup_private": "Backups include full configuration and local data. Use a private chat or terminal.",
       "history_applied": "Completed {count} operation(s).",
       "history_save_failed": "This result could not be saved to history. Current results and operations remain available.",
       "sent_check": "Check send result",

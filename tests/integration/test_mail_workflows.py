@@ -578,6 +578,7 @@ async def test_mail_read_download_and_trash_recovery(
 async def test_backup_restores_configuration_mail_and_tasks_without_accepting_invalid_data(
     service: MailFlowService,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import base64
 
@@ -600,6 +601,42 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     saved_backup = await asyncio.to_thread(Path(path).read_bytes)
     preview = await preview_backup(service, saved_backup)
     assert preview["files"] == 1 and preview["mails"] == 1 and preview["custom_actions"] == 1
+    from mailflow.chat_files import file_sender_scope
+    from mailflow.permissions import PermissionContext, permission_scope
+
+    with (
+        permission_scope(
+            PermissionContext(sender="admin", provider="telegram", chat_id="group", is_admin=True)
+        ),
+        pytest.raises(ValueError),
+    ):
+        await service.workspace_call("backup_export")
+    delivered: list[bytes] = []
+
+    async def deliver(file: dict[str, Any]) -> None:
+        delivered.append(base64.b64decode(file["data"]))
+
+    with (
+        permission_scope(
+            PermissionContext(sender="admin", provider="telegram", chat_id="admin", is_admin=True)
+        ),
+        file_sender_scope(deliver),
+    ):
+        await service.workspace_call("backup_send")
+        await service.workspace_call("backup_send")
+        assert not await service.workspace_call("files")
+        assert (await preview_backup(service, delivered[-1]))["files"] == 1
+        import mailflow.backup as backup_module
+
+        large_backup = b"x" * 4_000_001
+
+        async def export_large(_: Any) -> bytes:
+            return large_backup
+
+        with monkeypatch.context() as patch:
+            patch.setattr(backup_module, "export_backup", export_large)
+            await service.workspace_call("backup_send")
+        assert delivered[-1] == large_backup
     with pytest.raises(FileExistsError):
         await service.create_backup(path)
     assert await asyncio.to_thread(Path(path).read_bytes) == saved_backup

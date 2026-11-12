@@ -910,11 +910,7 @@ class CommandRouter:
     async def _cmd_backup(self, args: list[str]) -> CommandResponse:
 
         if args == ["create"]:
-            exported = await self.service.workspace_call("backup_export")
-            uploaded = await self.service.workspace_call(
-                "upload", {**exported, "content_type": "application/zip"}
-            )
-            await self.service.workspace_call("send_file", uploaded)
+            await self.service.workspace_call("backup_send")
             return self._ok(self._t("experience.file_sent"))
         if len(args) >= 2 and args[0] in {"preview", "restore"}:
             file = await self.service.workspace_call("file_download", {"file_id": args[1]})
