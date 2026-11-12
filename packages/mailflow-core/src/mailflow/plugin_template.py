@@ -60,38 +60,47 @@ _DESCRIPTION = {
     "gateway": "MailFlow gateway provisioner: installs/start/supervises a chat-platform bot runtime",
 }
 
-# plugin.json readme shown in the marketplace; the <<SPAN_COLOR>> placeholder
-# demonstrates the `<span style="color:...">` rich-text support.
+# Usage guidance for a newly generated development scaffold.
 _README_TEMPLATE = """# <<NAME>>
 
 <<DESCRIPTION>>
 
-A MailFlow <<LABEL>> plugin scaffolded from the template. Replace this readme
-with your plugin's documentation.
+A MailFlow <<LABEL>> development scaffold. Registration is provided, but the
+generated component is not a finished integration. Implement its behavior and
+replace this guide with its actual options and limitations before publishing.
 
-### Supported syntax
+## Document the plugin
 
-- **bold**, *italic*, ~~strikethrough~~ and `inline code`
-- <span style="color:#ff5500">colored text via span tags</span>
-- headings, lists, quotes and fenced code blocks
+Describe its purpose, registered provider ID, required options, one configuration
+example and failure/recovery behavior. Declare only capabilities implemented by
+the component. Keep credentials in environment references, not examples.
 
-### Localization
+## Localize and validate
 
 Add translations under `descriptions` / `readmes` in `plugin.json`; MailFlow
-picks the translation matching the active app language automatically.
+picks the translation matching the active app language automatically. Provide
+English and Chinese usage content together.
 
 - `descriptions`: locale code -> one-line summary (e.g. `"zh-CN"`)
 - `readmes`: locale code -> translated markdown readme
 
-### Development environment
+Implement against `mailflow-core` contracts in the paired MailFlow development
+environment. Put every runtime dependency and entry point in `pyproject.toml`.
+The main repository's plugin guide and the marketplace validation guide describe
+offline contract checks; do not connect real services in automated tests.
 
-```bash
-# uv is the only tool you need; install it when missing (skipped if present)
-curl -LsSf https://astral.sh/uv/install.sh | sh       # Linux / macOS
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"   # Windows
-uv sync --group dev      # creates .venv with pytest/ruff/mypy
-uv run pytest            # run your tests
-```
+In the plugin repository, edit `plugin.json`, regenerate the README with
+`python tools/gen_plugin_readmes.py`, then run offline validation against the
+matching core. A successful import alone does not prove the integration works.
+
+## 简体中文
+
+这是开发骨架，提供注册入口，不代表已经实现可用集成。
+完成组件行为后，填写用途、组件标识、必要配置、一份示例和实际限制；
+只声明已实现能力，凭据使用环境变量。中英文说明在元数据中同步维护。
+
+使用配套核心接口和开发环境，声明所有依赖。发布前生成 README 并运行离线契约验证，
+不要把导入成功当成真实平台测试，也不要在自动测试中连接外部服务。
 """
 
 

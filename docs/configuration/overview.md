@@ -72,8 +72,11 @@ blindly repeated. Local permanent deletion never purges the source mailbox.
 ## Models, analysis and language
 
 Add a model in settings or `[[llms]]`. The provider is a registered component ID,
-not the Python package name. The list order supplies the primary/fallback chain;
-without a usable model, rule processing remains available. The assistant needs
+not the Python package name. An explicit processor `llm` / `fallback_llms` binding
+is preserved while valid. Without one, `default = true` selects the primary model,
+falling back to the first entry when no default is marked; unspecified fallbacks
+are filled from the remaining list. The TUI model controls update these bindings.
+Without a usable model, rule processing remains available. The assistant needs
 a model supporting the requested tools. Optional request fields are documented
 by each backend in the [plugin repository](https://github.com/Kingcxp/mailflow-repo/tree/dev/llm_backend).
 
@@ -107,6 +110,9 @@ a task permanently removes that occurrence; it cannot be reopened from a
 completed-history view. Daily/weekly/monthly plans keep generating future
 occurrences unless paused or ended. Future terminal previews are not reminders.
 Snoozed, muted, deleted and completed items are excluded from applicable reminders.
+The terminal previews the next 30 days. Monthly plans use month-end when their
+chosen day is absent. Resuming a plan creates only the current occurrence rather
+than every missed one, while existing unfinished occurrences remain available.
 
 Choose a notification preset in settings or adjust the existing switches:
 
@@ -164,6 +170,13 @@ TUI actions. Protect non-local access with HTTPS at a reverse proxy and network
 access controls; the server uses shared administrator permissions.
 
 ## Data, backup and cleanup
+
+The attachment library searches filenames, types, dates and source accounts and
+can return to the originating mail. Downloaded/managed file references belong
+to their user/session. Remote upload reads a client file; a model cannot invent
+a path to upload. Managed files currently have a per-file limit of 4,000,000
+bytes; platform limits may be lower. Backup export uses a separate archive path
+and is not constrained by the ordinary managed-upload limit.
 
 SQLite defaults to `data/mailflow.db`; logs default to `logs/mailflow.log`.
 Mail is kept indefinitely (`general.mail_retention_days = 0`), trash for 7 days.
@@ -244,7 +257,9 @@ for safe issue reports.
 ### 模型与语言
 
 在界面或 `[[llms]]` 中添加模型，`provider` 是组件标识，不是安装包名。
-模型列表顺序决定主模型与后备；没有可用模型时保留规则处理。
+处理器有效的 `llm`、`fallback_llms` 显式绑定优先保留；未指定时使用标为
+`default = true` 的主模型，没有默认项则取首项，未配置的后备由剩余列表补齐。
+界面模型操作会同步绑定，仅手改列表顺序不一定覆盖已有绑定。没有可用模型时保留规则处理。
 智能助手需要支持相应工具调用的模型，额外选项见对应插件说明。
 
 通过界面或命令 `lang set zh-CN` 切换语言。总结、分析和摘要跟随当前界面语言；
@@ -260,6 +275,8 @@ for safe issue reports.
 待办允许没有截止时间，逾期后仍保留。完成会永久删除当期，不提供完成历史或重新打开；
 周期计划继续运行，暂停和结束计划是独立操作。未来预览不进入提醒。
 已推迟、关闭提醒、删除或完成的事项遵守统一的提醒过滤规则。
+终端默认预览未来 30 天；月份没有指定日期时按月底处理。
+恢复计划只生成当前一期，不补出停用期间全部事项，已有未完成事项仍保留。
 
 通知预设复用现有开关，不改变凭据、管理员、订阅或网关。
 全局、渠道及适用的聊天开关共同决定是否投递，每小时摘要需全局和渠道同时开启。
@@ -286,6 +303,11 @@ for safe issue reports.
 不要把真实凭据放入公开示例或问题报告。
 
 ### 数据与恢复
+
+附件库按文件名、类型、日期和账户查找，可返回来源邮件。
+文件引用属于发起人和会话，远程上传读取客户端文件，模型不能凭空引用本地路径。
+当前受管文件单个上限为 4,000,000 字节，平台可能有更小限制；备份导出走独立归档流程，
+不受普通受管上传上限限制。
 
 默认数据库为 `data/mailflow.db`，日志为 `logs/mailflow.log`。
 邮件默认长期保留，回收站默认 7 天；主动开启按天数清理后，默认在配置时区 04:00 执行，

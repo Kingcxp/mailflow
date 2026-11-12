@@ -42,12 +42,14 @@ Python 3.11 and 3.12; it uses simulated external services.
 | `make mypy` | `uv run --all-packages mypy packages plugins tools` |
 | `make pyright` | `uv run --all-packages python -m pyright --pythonpath .venv/bin/python` (Windows: `.venv/Scripts/python.exe`) |
 | `make check` | Tests, plugin validation, lint, format check and both type checkers |
-| `make build` | `uv run --all-packages python tools/build_all.py --offline` after dependencies are installed |
+| `make build` | `uv run --all-packages python tools/build_all.py` |
 | `make clean` | `uv run --all-packages python tools/clean.py`; removes development output, not user data |
 
 Use `make help` for all targets. Coverage output goes to `build/reports` and
 wheels to `dist/wheels`; both are ignored. Data-modifying `clean-*` targets are
 not quality checks and must not run against someone else's configuration.
+For a build using only cached build dependencies, pass `--offline` explicitly
+to `tools/build_all.py`; it is not the default of `make build`.
 
 ## Test boundaries
 
@@ -113,7 +115,9 @@ uv run mailflow export --framework astrbot --output dist/astrbot_plugin_mailflow
 ```
 
 The generated framework host owns startup/shutdown and permissions. Install it
-in that framework's environment and configure administrators there. Its copied
+in that framework's environment. Configure administrators in the exported
+MailFlow notifier binding as described by its generated README; framework-wide
+administrator flags are not imported automatically. Its copied
 configuration can contain credentials; keep the output private.
 
 The [release workflow](../../.github/workflows/release.yml) runs on `v*` tags,
@@ -153,7 +157,8 @@ CI 覆盖 Windows/Linux 和 Python 3.11/3.12。测试分为组件隔离、真实
 
 构建命令见上表；冻结程序先构建并试运行 standalone，再构建 onefile。
 额外插件需要纳入构建，工具下载需显式开启。NoneBot/AstrBot 导出不启动邮件运行时，
-导出内容可能包含凭据。发布工作流由 `v*` 标签触发，检查核心版本并读取更新记录，
+导出内容可能包含凭据；管理员按导出说明配置匹配的 MailFlow 通知器，框架管理员不会自动导入。
+发布工作流由 `v*` 标签触发，检查核心版本并读取更新记录，
 生成安装产物后发布预览版本。真实登录、文件投递和终端效果仍需单独实测。
 
 `make clean` 保留用户数据；其他 `clean-*` 目标可能修改数据，不能当作开发检查运行。

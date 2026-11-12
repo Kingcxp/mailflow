@@ -19,6 +19,13 @@ reminder_minute = 0
 reminder_interval_seconds = 60  # how often the reminder scheduler checks (a reminder also fires at 00:00 on the due date)
 queue_size = 500                # bounded inbound queue
 workers = 2                     # concurrent pipeline workers
+# quiet_enabled = false        # optional quiet hours in the configured timezone
+# quiet_start = "22:00"
+# quiet_end = "08:00"
+# auto_backup = false          # opt in; one-shot CLI commands do not run backup loops
+# backup_directory = "backups"
+# backup_time = "04:30"
+# backup_keep = 7
 
 [logging]
 level = "INFO"                  # mailflow logger level
@@ -53,13 +60,19 @@ path = "data/mailflow.db"
 # provider = "imap"
 # email = "you@example.com"
 # enabled = true
+# state_sync = false            # opt in to supported source state changes
 # [accounts.options]
 # preset = "qq"                  # or imap_host / imap_port / imap_ssl
 # username = "you@qq.com"
 # password = "${MAIL_PASSWORD}"  # QQ/163: an authorization code, not the password
 # imap_folder = "INBOX"
 # interval_seconds = 300
-# limit = 20                     # newest mails ingested on the first poll
+# limit = 20                     # batch size, not a startup history import
+# initial_sync = "new"           # new | recent | all; history import must be explicit
+# initial_days = 30              # used for recent history
+# catch_up_missed = false        # receive offline mail using a valid saved cursor
+# catch_up_summary = true        # summarize catch-up instead of individual notifications
+# include_past_actions = false   # opt in to past tasks from imported mail
 
 # --- LLMs -------------------------------------------------------------------
 # provider selects the backend adapter component (`openai-compatible` and
@@ -92,7 +105,7 @@ priority = 10
 retries = 0
 [processors.options]
 advertising_keywords = ["unsubscribe", "sale", "promotion", "discount", "limited offer"]
-# important_senders = ["registrar@university.example"]
+# important_senders = ["team@example.com"]
 
 # [[processors]]
 # processor_id = "llm-importance"
