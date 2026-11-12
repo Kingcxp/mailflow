@@ -40,7 +40,7 @@ class AssistantPane(Vertical):
         self._service = service
         self._scope: dict[str, Any] = {}
         self._scope_name = ""
-        self._task: asyncio.Task[Any] | None = None
+        self._query_task: asyncio.Task[Any] | None = None
         self._result: SmartActionResult | None = None
         self._history: list[dict[str, str]] = []
         self._busy = False
@@ -131,7 +131,9 @@ class AssistantPane(Vertical):
         self.query_one("#assistant-send", Button).disabled = self._busy or not bool(
             self.query_one("#assistant-input", Input).value.strip()
         )
-        self.query_one("#assistant-stop", Button).disabled = self._task is None or self._task.done()
+        self.query_one("#assistant-stop", Button).disabled = (
+            self._query_task is None or self._query_task.done()
+        )
         self.query_one("#assistant-all", Button).disabled = self._busy
         self.query_one("#assistant-review", Button).disabled = self._busy or not bool(
             self._result and self._result.pending
@@ -192,7 +194,7 @@ class AssistantPane(Vertical):
             ),
             name="assistant-query",
         )
-        self._task = task
+        self._query_task = task
         self._sync_controls()
         try:
             result = await task
@@ -214,14 +216,14 @@ class AssistantPane(Vertical):
         except Exception as exc:
             self._show_error(exc)
         finally:
-            self._task = None
+            self._query_task = None
             self._busy = False
             progress.clear()
             progress.display = False
             self._sync_controls()
 
     async def stop(self) -> None:
-        task = self._task
+        task = self._query_task
         if task is not None and not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -297,7 +299,7 @@ class AssistantPane(Vertical):
             task = asyncio.create_task(
                 self._service.apply_smart_plan(result.plan_id, selected), name="assistant-apply"
             )
-            self._task = task
+            self._query_task = task
             self._sync_controls()
             outcome = await task
             result.pending = list(outcome["failed"])
@@ -307,6 +309,11 @@ class AssistantPane(Vertical):
                 failed=len(result.pending),
             )
             self._status_extra = "\n" + "\n".join(outcome["errors"]) if outcome["errors"] else ""
+            self._status_extra += "".join(
+                "\n" + ident + ": " + state["message"]
+                for ident, state in outcome.get("source_results", {}).items()
+                if state["state"] != "synced"
+            )
             result.records = [
                 record for record in result.records if record.record_id not in outcome["deleted"]
             ]
@@ -337,6 +344,6 @@ class AssistantPane(Vertical):
         except Exception as exc:
             self._show_error(exc)
         finally:
-            self._task = None
+            self._query_task = None
             self._busy = False
             self._sync_controls()
