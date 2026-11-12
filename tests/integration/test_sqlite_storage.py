@@ -163,10 +163,12 @@ class TestSQLiteStorage:
 
     async def test_restore_recovers_identical_record(self, storage: SQLiteStorage) -> None:
         record = make_record()
+        record.ingestion = "import"
         record.manual_urgency = Urgency.AD
         record.processor_notes = []  # keep simple
         await storage.save_mail(record)
         await storage.delete_mail("r1")
+        assert (await storage.list_trash())[0].to_mail_record().ingestion == "import"
         restored = await storage.restore_from_trash("r1")
         assert restored is not None
         assert restored.record_id == "r1"

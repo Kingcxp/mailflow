@@ -513,6 +513,7 @@ class SQLiteStorage:
                     archived=record.archived,
                     analysis_state=record.analysis_state,
                     analysis_error_code=record.analysis_error_code,
+                    ingestion=record.ingestion,
                 )
             )
         return trash

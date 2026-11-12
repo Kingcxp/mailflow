@@ -571,6 +571,7 @@ class TrashRecord(BaseModel):
     archived: bool = False
     analysis_state: str = "ready"
     analysis_error_code: str = ""
+    ingestion: str = "live"
     deleted_at: datetime
     expires_at: datetime  # the deletion timestamp the backend stored
 
@@ -588,6 +589,7 @@ class TrashRecord(BaseModel):
             archived=self.archived,
             analysis_state=self.analysis_state,
             analysis_error_code=self.analysis_error_code,
+            ingestion=self.ingestion,
         )
 
 
