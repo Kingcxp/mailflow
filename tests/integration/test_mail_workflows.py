@@ -1078,6 +1078,12 @@ async def test_assistant_history_is_private_searchable_and_can_be_disabled(
 
     key = "assistant.history." + actor_key()
     rows = await service.workflows.read_value(key)
+    rows[0].pop("needs_confirmation")
+    rows[0]["outcome"] = I18n("zh-CN").t("experience.history_pending")
+    await service.workflows.write_value(key, rows)
+    legacy = await service.workspace_call("assistant_history")
+    assert service.t("experience.history_expired") in legacy["records"][0]["answer"]
+    assert rows[0]["references"][0]["quote"] == "Total: 20"
     rows[0]["at"] = (datetime.now(UTC) - timedelta(days=31)).isoformat()
     await service.workflows.write_value(key, rows)
     await service.assistant_history.prune()

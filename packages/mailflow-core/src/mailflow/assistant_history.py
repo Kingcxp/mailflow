@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -17,6 +18,11 @@ class AssistantHistory:
     def __init__(self, service: MailFlowService) -> None:
         self.service = service
         self.pruned_on: date | None = None
+        catalog = copy(service.i18n)
+        self.legacy_pending: set[str] = set()
+        for language in catalog.available_codes():
+            catalog.set_language(language)
+            self.legacy_pending.add(catalog.t("experience.history_pending"))
 
     async def prune(self) -> None:
         now = datetime.now(UTC)
@@ -54,7 +60,11 @@ class AssistantHistory:
         records: list[dict[str, Any]] = []
         for row in reversed(kept):
             outcome = row.get("outcome", "")
-            if row.get("needs_confirmation"):
+            needs_confirmation = row.get("needs_confirmation")
+            # Older records stored the confirmation state as translated text.
+            if needs_confirmation is None and outcome in self.legacy_pending:
+                needs_confirmation, outcome = True, ""
+            if needs_confirmation:
                 outcome = "\n".join(
                     filter(
                         None,
@@ -76,6 +86,7 @@ class AssistantHistory:
             records.append(
                 {
                     **row,
+                    "needs_confirmation": bool(needs_confirmation),
                     "outcome": outcome,
                     "answer": row["answer"] + ("\n\n" + outcome if outcome else ""),
                 }
