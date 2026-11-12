@@ -121,8 +121,8 @@
         "accounts[].options": "邮件源专属选项：imap 可设置 preset（qq/163/outlook/gmail）或 imap_host、imap_port，以及 username 与 password。",
         "accounts[].provider": "处理该邮箱的邮件源组件 id（内置：imap、fake）。",
         "general.auto_update": "允许每天检查并自动安装 MailFlow 和插件更新。默认关闭；开启后会自动改变运行环境。",
-        "general.browser_mode": "TUI 打开外部网页的方式：system 用系统浏览器；graphical 在终端内通过 Carbonyl 渲染服务显示；disabled 关闭。",
-        "general.browser_render_url": "Carbonyl 兼容终端渲染服务地址（如 http://127.0.0.1:8080），browser_mode=graphical 时必填。",
+        "general.browser_mode": "外部链接打开方式：system 使用运行服务的电脑上的浏览器；disabled 由用户复制后打开。当前界面暂不支持 graphical 方式。",
+        "general.browser_render_url": "为终端浏览器集成保留的服务地址，当前界面暂不能显示该服务。",
         "general.cleanup_hour": "每日清理执行的本地时间小时（0-23）。",
         "general.cleanup_minute": "每日清理执行的本地时间分钟（0-59）。",
         "general.command_prefix": "聊天平台消息的命令前缀（如 /mail list）；不以它开头的消息会被忽略。",
@@ -403,6 +403,11 @@
       "not_found": "回收站中的邮件 {record_id} 不存在。"
     },
     "tui": {
+      "browser_disabled": "已关闭外部链接打开功能，可复制链接自行打开。",
+      "browser_render_missing": "尚未配置终端浏览器服务，可复制链接或在设置中选择系统浏览器。",
+      "browser_graphical_unavailable": "当前界面暂不支持显示终端浏览器，可复制链接或在设置中选择系统浏览器。",
+      "browser_system_open": "已在系统浏览器中打开链接。",
+      "browser_failed": "无法在这台电脑上打开浏览器，请复制链接后在自己的设备上打开。",
       "sudo_prompt_label": "sudo 密码：",
       "detail_attachments": "附件",
       "detail_binary_body": "（该邮件正文为二进制附件内容（如 PDF 发票），请到原邮箱查看）",
@@ -1238,6 +1243,7 @@
       "model_failed": "模型请求失败，已找到的结果仍会保留，请重试。"
     },
     "ux": {
+      "plan_expired": "此次确认无效、已过期或已使用，请重新提出需求并确认当前操作。",
       "unsupported": "当前连接或存储不支持此操作。",
       "no_due": "无截止时间",
       "saved": "已保存并生效。",

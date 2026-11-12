@@ -121,8 +121,8 @@
         "accounts[].options": "Provider options: for imap set preset (qq/163/outlook/gmail) or imap_host and imap_port, plus username and password.",
         "accounts[].provider": "Mail source component id handling this mailbox (built in: imap, fake).",
         "general.auto_update": "Allow daily checks and automatic installation of MailFlow and plugin updates. Off by default; enable only if you want the running environment updated automatically.",
-        "general.browser_mode": "How the TUI opens external web links: system uses the system browser; graphical renders inside the terminal via a Carbonyl service; disabled turns it off.",
-        "general.browser_render_url": "Base URL of a Carbonyl-compatible terminal render service (e.g. http://127.0.0.1:8080); required when browser_mode = graphical.",
+        "general.browser_mode": "How MailFlow opens links: system uses a browser on the service computer; disabled leaves links for manual opening. The graphical option is unavailable in the current interface.",
+        "general.browser_render_url": "Reserved address for terminal browser integration; the current interface cannot display this service yet.",
         "general.cleanup_hour": "Local-time hour (0-23) at which the daily retention cleanup runs.",
         "general.cleanup_minute": "Local-time minute (0-59) at which the daily retention cleanup runs.",
         "general.command_prefix": "Command prefix for chat-platform messages (e.g. /mail list); messages without it are ignored.",
@@ -403,6 +403,11 @@
       "not_found": "Trash record {record_id} does not exist."
     },
     "tui": {
+      "browser_disabled": "Opening external links is disabled. Copy the link to open it yourself.",
+      "browser_render_missing": "No terminal browser service is configured. Copy the link or choose the system browser in settings.",
+      "browser_graphical_unavailable": "This interface cannot display the terminal browser yet. Copy the link or choose the system browser in settings.",
+      "browser_system_open": "Opened the link in the system browser.",
+      "browser_failed": "A browser could not be opened on this computer. Copy the link and open it on your device.",
       "sudo_prompt_label": "sudo password:",
       "detail_attachments": "Attachments",
       "detail_binary_body": "(this mail's body is binary attachment content, e.g. a PDF invoice — see the original mailbox)",
@@ -1238,6 +1243,7 @@
       "model_failed": "The model request failed. Results already found are retained; try again."
     },
     "ux": {
+      "plan_expired": "This confirmation is invalid, expired or already used. Run the request again to review the current changes.",
       "unsupported": "This operation is not supported by this connection or storage.",
       "no_due": "No deadline",
       "saved": "Saved and active.",

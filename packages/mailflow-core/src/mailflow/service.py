@@ -2472,8 +2472,8 @@ Return every candidate in this batch."""
 
         Respects ``general.browser_mode``: ``system`` opens the system
         browser (webbrowser module — works on desktop hosts), ``graphical``
-        renders inside the terminal via a Carbonyl-compatible service
-        (browser_render_url), ``disabled`` returns an explanation instead.
+        reports the current terminal viewer limitation, and ``disabled``
+        returns an explanation instead.
         Returns a human-readable status line for the caller to show.
         """
         mode = self.config.general.browser_mode
@@ -2483,16 +2483,15 @@ Return every candidate in this batch."""
             render_url = self.config.general.browser_render_url.strip().rstrip("/")
             if not render_url:
                 return self.t("tui.browser_render_missing")
-            # carbonyl-style: GET {render}/{url} returns a terminal-renderable
-            # page (sixel/kitty or ANSI text); the TUI opens it in a viewer
-            self._pending_graphical_url = f"{render_url}/{url}"
-            return self.t("tui.browser_graphical_open")
+            return self.t("tui.browser_graphical_unavailable")
         import webbrowser
 
         try:
-            webbrowser.open(url)
-        except Exception as exc:
-            return f"{type(exc).__name__}: {exc}"
+            if not webbrowser.open(url):
+                return self.t("tui.browser_failed")
+        except Exception:
+            logger.warning("cannot open the system browser", exc_info=True)
+            return self.t("tui.browser_failed")
         return self.t("tui.browser_system_open")
 
     def display_text(self, text: str | None) -> str:

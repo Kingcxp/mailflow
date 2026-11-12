@@ -482,6 +482,7 @@ async def test_natural_chat_uses_admin_identity_and_one_owner_confirmation() -> 
         f"confirm {token}", mentioned=True, **dict(identity, chat_id="other")
     )
     assert wrong == service.t("ux.plan_expired")
+    assert wrong != "ux.plan_expired"
     apply.assert_not_awaited()
     await service.command_dispatch(f"confirm {token}", mentioned=True, **identity)
     await service.command_dispatch(f"confirm {token}", mentioned=True, **identity)
