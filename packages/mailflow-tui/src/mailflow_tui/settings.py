@@ -1583,25 +1583,23 @@ class SettingsPane(Vertical):
                 self._set_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
                 return
         self._sections = self._service.settings_sections()
-        # the sidebar ListView may not exist yet when reload is triggered by
-        # on_mount or an event handler racing compose — wait briefly instead
-        # of raising MountError
         listing = self.query_one_optional("#settings-sections", ListView)
-        for _ in range(100):
-            if listing is not None or not self.is_mounted:
-                break
-            await asyncio.sleep(0.02)
-            listing = self.query_one_optional("#settings-sections", ListView)
-        if listing is None or not self._sections:
+        if listing is None or not listing.is_attached or not self._sections:
             return
         ids = {section.section_id for section in self._sections}
         if self._active not in ids:
             self._active = self._sections[0].section_id
         await listing.clear()
-        for index, section in enumerate(self._sections):
-            await listing.append(ListItem(Static(self._section_title(section))))
-            if section.section_id == self._active:
-                listing.index = index
+        if not listing.is_attached:
+            return
+        await listing.extend(ListItem(Static(self._section_title(s))) for s in self._sections)
+        if not listing.is_attached:
+            return
+        listing.index = next(
+            index
+            for index, section in enumerate(self._sections)
+            if section.section_id == self._active
+        )
         await self._render_options()
 
     def _current_matcher(self) -> SearchMatcher:
@@ -1632,7 +1630,7 @@ class SettingsPane(Vertical):
         self._settings_matcher = matcher
         async with self._render_lock:
             container = self.query_one_optional("#settings-options", ScrollableContainer)
-            if container is None:
+            if container is None or not container.is_attached:
                 return
             scroll_offset = (container.scroll_x, container.scroll_y)
             for card in container.query(OptionCard):
@@ -1652,12 +1650,16 @@ class SettingsPane(Vertical):
             self._saved_keys.clear()
             options = self._visible_options(matcher)
             await container.remove_children()
+            if not container.is_attached:
+                return
             if not options:
                 await container.mount(
                     Static(self._t("tui.settings_no_matches"), classes="settings-empty")
                 )
                 return
             for offset in range(0, len(options), 50):
+                if not container.is_attached:
+                    return
                 batch = [
                     OptionCard(self._service, spec, self._describe(spec))
                     for spec in options[offset : offset + 50]

@@ -24,7 +24,7 @@ from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.remote import LoginScreen
 from mailflow_tui.settings import EntryFormScreen, ListEditScreen, LLMPane, SettingsPane
 from textual.app import App, ComposeResult
-from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
+from textual.widgets import Button, DataTable, Input, ListView, Select, Static, TextArea
 from textual.worker import WorkerCancelled
 
 from mailflow_test_support.commands import commands_service
@@ -644,6 +644,17 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         assert service.t("errors.storage") in rendered(pane, "#settings-status")
         assert "read only" not in rendered(pane, "#settings-status")
         assert not pane.query_one("#save-general-workers", Button).disabled
+
+        listing = pane.query_one("#settings-sections", ListView)
+        clear = listing.clear
+
+        async def close_during_refresh() -> None:
+            await clear()
+            await pane.remove()
+
+        monkeypatch.setattr(listing, "clear", close_during_refresh)
+        await pane.relabel()
+        assert not pane.is_attached
 
 
 async def test_mapping_editor_keeps_edits_after_save_failure() -> None:
