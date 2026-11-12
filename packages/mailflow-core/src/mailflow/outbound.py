@@ -9,6 +9,69 @@ from weakref import WeakKeyDictionary
 from mailflow.config import NotifierConfig
 from mailflow.permissions import normalize_provider
 
+MAX_TEXT_UTF8_BYTES = 1_600
+MAX_TEXT_UTF16_UNITS = 1_600
+
+
+def text_size(text: str) -> tuple[int, int]:
+    """Return UTF-8 bytes and UTF-16 code units without allocating encodings."""
+    utf8_bytes = 0
+    utf16_units = 0
+    for char in text:
+        codepoint = ord(char)
+        utf8_bytes += (
+            1 if codepoint <= 0x7F else 2 if codepoint <= 0x7FF else 3 if codepoint <= 0xFFFF else 4
+        )
+        utf16_units += 1 if codepoint <= 0xFFFF else 2
+    return utf8_bytes, utf16_units
+
+
+def split_text(
+    text: str,
+    *,
+    max_utf8_bytes: int = MAX_TEXT_UTF8_BYTES,
+    max_utf16_units: int = MAX_TEXT_UTF16_UNITS,
+) -> list[str]:
+    """Fit chat and notification text to portable pages without dropping content."""
+    if not text:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    length = len(text)
+    while start < length:
+        end = start
+        last_boundary = start
+        utf8_bytes = 0
+        utf16_units = 0
+        while end < length:
+            codepoint = ord(text[end])
+            byte_cost = (
+                1
+                if codepoint <= 0x7F
+                else 2
+                if codepoint <= 0x7FF
+                else 3
+                if codepoint <= 0xFFFF
+                else 4
+            )
+            unit_cost = 1 if codepoint <= 0xFFFF else 2
+            if utf8_bytes + byte_cost > max_utf8_bytes or utf16_units + unit_cost > max_utf16_units:
+                break
+            utf8_bytes += byte_cost
+            utf16_units += unit_cost
+            end += 1
+            if text[end - 1].isspace():
+                last_boundary = end
+        if end == length:
+            chunks.append(text[start:end])
+            break
+        if end == start:
+            end += 1
+        split_at = last_boundary if last_boundary > start else end
+        chunks.append(text[start:split_at])
+        start = split_at
+    return chunks
+
 
 @dataclass
 class _Slot:

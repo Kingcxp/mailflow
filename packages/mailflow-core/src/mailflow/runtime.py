@@ -56,7 +56,7 @@ from mailflow.i18n import I18n
 from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.message_media import summary_card
 from mailflow.notifications import DeliveryError, format_mail, option_enabled, targets_of
-from mailflow.outbound import defer, pace
+from mailflow.outbound import defer, pace, split_text
 from mailflow.pipeline import PipelineEngine
 from mailflow.prompts import prompt_context
 
@@ -1237,13 +1237,6 @@ class MailFlowRuntime:
         else:
             await cast(TargetedNotifier, notifier).push_to_target(target, text)
 
-    async def _send_batch_text(
-        self, notifier: Notifier, target: str | None, receipts: list[str], text: str
-    ) -> None:
-        await self._send_text(notifier, target, text)
-        for receipt in receipts:
-            await self._storage.set_preference(receipt + ".text", "delivered")
-
     async def _send_content(
         self,
         notifier: Notifier,
@@ -1255,6 +1248,7 @@ class MailFlowRuntime:
         *,
         records: list[MailRecord] | None = None,
         items: list[ActionItem] | None = None,
+        text_receipts: list[str] | None = None,
     ) -> None:
         options = config.options if config is not None else {}
         want_images = option_enabled(options, "notification_images", False)
@@ -1285,7 +1279,15 @@ class MailFlowRuntime:
                 raise
             await self._storage.set_preference(key, "delivered")
 
-        await part(receipt + ".text", lambda: send_text(text))
+        if not await self._storage.get_preference(receipt + ".text"):
+            # Legacy record-only notifiers cannot accept individual text pages.
+            pages = split_text(text) if target is not None or not records else [text]
+            for index, page in enumerate(pages):
+                key = receipt + ".text" + (f".{index}" if len(pages) > 1 else "")
+                await part(key, partial(send_text, page))
+            await self._storage.set_preference(receipt + ".text", "delivered")
+        for alias in text_receipts or []:
+            await self._storage.set_preference(alias + ".text", "delivered")
         if not rich:
             return
         rich_notifier = cast(RichNotifier, notifier)
@@ -2053,18 +2055,28 @@ class MailFlowRuntime:
                     and not await self._storage.get_preference(f"{key}.delivered.{identity}.text")
                     and not await self._storage.get_preference(f"{key}.delivered.{identity}")
                 ]
-                for offset in range(0, len(unsent), 8):
-                    group = unsent[offset : offset + 8]
+                groups: list[list[tuple[str, str, ActionItem]]] = [[]]
+                footer = "\n" + self._rt("delivery.text_fallback")
+                footer += "\n" + self._rt("delivery.card_font_missing")
+                for entry in unsent:
+                    group = groups[-1]
+                    combined = "\n\n".join(value for _, value, _ in [*group, entry])
+                    if group and (len(group) == 8 or len(split_text(combined + footer)) > 1):
+                        groups.append([])
+                    groups[-1].append(entry)
+                for group in groups:
                     if len(group) < 2:
                         continue
                     receipts = [f"{key}.delivered.{identity}" for key, _, _ in group]
                     text = "\n\n".join(value for _, value, _ in group)
-                    send = partial(self._send_batch_text, notifier, target, receipts)
+                    send = partial(self._send_text, notifier, target)
                     batch_key = (
                         "reminder.batch." + hashlib.sha256("|".join(receipts).encode()).hexdigest()
                     )
                     try:
-                        await self._send_content(notifier, config, target, batch_key, text, send)
+                        await self._send_content(
+                            notifier, config, target, batch_key, text, send, text_receipts=receipts
+                        )
                     except Exception as exc:
                         for receipt, (key, value, item) in zip(receipts, group, strict=True):
                             blocked.add(receipt)

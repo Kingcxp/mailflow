@@ -484,10 +484,16 @@ async def test_image_retry_keeps_successful_text_images_and_targets() -> None:
         def __init__(self) -> None:
             super().__init__()
             self.images: list[tuple[str, bytes]] = []
+            self.texts: list[tuple[str, str]] = []
             self.fail_image = True
+            self.fail_text = False
 
         async def push_to_target(self, target: str, text: str) -> None:
+            assert len(text.encode("utf-8")) <= 1600
+            if target == "group:2" and self.fail_text and any(t == target for t, _ in self.texts):
+                raise OSError("text page temporarily unavailable")
             self.sent.append(target)
+            self.texts.append((target, text))
 
         async def send_message(self, target: str, message: NotificationMessage) -> None:
             if target == "group:2" and self.fail_image:
@@ -495,7 +501,7 @@ async def test_image_retry_keeps_successful_text_images_and_targets() -> None:
             self.images.extend((target, image.data) for image in message.images)
 
     storage = MemoryStorage()
-    await schedule(storage)
+    item = await schedule(storage)
     storage.mails["m1"].mail.attachments = [
         Attachment(filename="photo.png", content_type="image/png", size=5, data=b"image")
     ]
@@ -521,3 +527,21 @@ async def test_image_retry_keeps_successful_text_images_and_targets() -> None:
 
     card = summary_card("Summary\nMeeting at noon", "en")
     assert card is not None and card.data.startswith(b"\x89PNG")
+
+    summary = "Start of reminder " + "内容 😀 " * 500 + " end of reminder"
+    await storage.save_custom_action(
+        item.model_copy(update={"item_id": "long", "mail_id": "", "summary": summary})
+    )
+    notifier.texts.clear()
+    notifier.fail_text = True
+    assert await service.runtime.run_reminder_tick() == 0
+    first = [text for target, text in notifier.texts if target == "group:1"]
+    second = [text for target, text in notifier.texts if target == "group:2"]
+    assert len(first) > 1 and len(second) == 1
+    failures = await service.runtime.failed_deliveries()
+    assert len(failures) == 1 and failures[0]["target"] == "group:2"
+    notifier.fail_text = False
+    assert await service.runtime.retry_deliveries([failures[0]["delivery_id"]]) == 1
+    assert [text for target, text in notifier.texts if target == "group:1"] == first
+    assert [text for target, text in notifier.texts if target == "group:2"] == first
+    assert summary in "".join(first)

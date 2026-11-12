@@ -80,6 +80,10 @@ from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.llm import LLMRouterImpl
 from mailflow.logging import LoggingRuntime, configure_logging
 from mailflow.mail_query import MailPage, MailQuery
+from mailflow.outbound import MAX_TEXT_UTF8_BYTES as _CHAT_REPLY_MAX_UTF8_BYTES
+from mailflow.outbound import MAX_TEXT_UTF16_UNITS as _CHAT_REPLY_MAX_UTF16_UNITS
+from mailflow.outbound import split_text as _split_chat_text
+from mailflow.outbound import text_size as _text_size
 from mailflow.permissions import (
     PermissionContext,
     admin_operation,
@@ -125,77 +129,6 @@ _LANGUAGE_PREFERENCE = "language"
 _REPLY_TOKEN_TTL = timedelta(minutes=10)
 _LIVE_GROUPS = LIVE_CONFIG_GROUPS
 """Config groups whose changes hot-apply to the running runtime."""
-
-_CHAT_REPLY_MAX_UTF8_BYTES = 1_600
-_CHAT_REPLY_MAX_UTF16_UNITS = 1_600
-
-
-def _text_size(text: str) -> tuple[int, int]:
-    """Return UTF-8 bytes and UTF-16 code units without allocating encodings."""
-    utf8_bytes = 0
-    utf16_units = 0
-    for char in text:
-        codepoint = ord(char)
-        utf8_bytes += (
-            1 if codepoint <= 0x7F else 2 if codepoint <= 0x7FF else 3 if codepoint <= 0xFFFF else 4
-        )
-        utf16_units += 1 if codepoint <= 0xFFFF else 2
-    return utf8_bytes, utf16_units
-
-
-def _split_chat_text(
-    text: str,
-    *,
-    max_utf8_bytes: int = _CHAT_REPLY_MAX_UTF8_BYTES,
-    max_utf16_units: int = _CHAT_REPLY_MAX_UTF16_UNITS,
-) -> list[str]:
-    """Split text at a whitespace boundary without dropping any content.
-
-    Chat APIs disagree about whether their ceiling is bytes, code points, or
-    UTF-16 units.  Staying under both conservative ceilings makes the bridge
-    response portable; an oversized response is delivered as ordered pages,
-    never silently clipped by a provider.
-    """
-    if not text:
-        return [text]
-    chunks: list[str] = []
-    start = 0
-    length = len(text)
-    while start < length:
-        end = start
-        last_boundary = start
-        utf8_bytes = 0
-        utf16_units = 0
-        while end < length:
-            codepoint = ord(text[end])
-            byte_cost = (
-                1
-                if codepoint <= 0x7F
-                else 2
-                if codepoint <= 0x7FF
-                else 3
-                if codepoint <= 0xFFFF
-                else 4
-            )
-            unit_cost = 1 if codepoint <= 0xFFFF else 2
-            if utf8_bytes + byte_cost > max_utf8_bytes or utf16_units + unit_cost > max_utf16_units:
-                break
-            utf8_bytes += byte_cost
-            utf16_units += unit_cost
-            end += 1
-            if text[end - 1].isspace():
-                last_boundary = end
-        if end == length:
-            chunks.append(text[start:end])
-            break
-        # Prefer a complete word/line, but a long unbroken URL or token still
-        # has to move forward rather than being truncated or looping forever.
-        if end == start:
-            end += 1
-        split_at = last_boundary if last_boundary > start else end
-        chunks.append(text[start:split_at])
-        start = split_at
-    return chunks
 
 
 def _extract_json_typed(
