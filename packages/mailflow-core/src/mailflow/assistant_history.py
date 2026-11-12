@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -16,6 +16,23 @@ if TYPE_CHECKING:
 class AssistantHistory:
     def __init__(self, service: MailFlowService) -> None:
         self.service = service
+        self.pruned_on: date | None = None
+
+    async def prune(self) -> None:
+        now = datetime.now(UTC)
+        if self.pruned_on == now.date():
+            return
+        workflows = self.service.workflows
+        async with workflows.lock:
+            keys = await workflows.read_value("assistant.history.index", [])
+            for key in keys:
+                days = await workflows.read_value(key + ".days", 30)
+                cutoff = (now - timedelta(days=max(0, int(days)))).isoformat()
+                rows = await workflows.read_value(key, [])
+                kept = [r for r in rows if days and r["at"] >= cutoff]
+                if len(kept) != len(rows):
+                    await workflows.write_value(key, kept)
+        self.pruned_on = now.date()
 
     async def read(self, values: dict[str, Any]) -> dict[str, Any]:
         workflows = self.service.workflows
@@ -31,9 +48,11 @@ class AssistantHistory:
         return {
             "retention_days": days,
             "records": [
-                r
+                {**r, "answer": r["answer"] + ("\n\n" + r["outcome"] if r.get("outcome") else "")}
                 for r in reversed(kept)
-                if not query or query in (r["request"] + "\n" + r["answer"]).casefold()
+                if not query
+                or query
+                in (r["request"] + "\n" + r["answer"] + "\n" + r.get("outcome", "")).casefold()
             ],
         }
 
@@ -51,10 +70,10 @@ class AssistantHistory:
             await workflows.write_value(key, rows)
         return await self.read({})
 
-    async def add(self, request: str, result: SmartActionResult) -> None:
+    async def add(self, request: str, result: SmartActionResult) -> str:
         state = await self.read({})
         if not state["retention_days"]:
-            return
+            return ""
         references: list[dict[str, Any]] = list(result.evidence)
         seen = {(r["kind"], r["id"]) for r in references}
         for kind, rows in [
@@ -72,12 +91,34 @@ class AssistantHistory:
             "request": request,
             "answer": result.final_text,
             "references": references,
+            "outcome": self.service.t("experience.history_pending") if result.pending else "",
+            "applied": 0,
         }
         workflows = self.service.workflows
         async with workflows.lock:
             key = "assistant.history." + actor_key()
             if not await workflows.read_value(key + ".days", 30):
-                return
+                return ""
             rows = await workflows.read_value(key, [])
             rows.append(row)
+            await workflows.write_value(key, rows)
+            keys = await workflows.read_value("assistant.history.index", [])
+            if key not in keys:
+                await workflows.write_value("assistant.history.index", [*keys, key])
+        return str(row["id"])
+
+    async def finish(self, record_id: str, result: dict[str, Any]) -> None:
+        if not record_id:
+            return
+        workflows = self.service.workflows
+        async with workflows.lock:
+            key = "assistant.history." + actor_key()
+            rows = await workflows.read_value(key, [])
+            row = next((r for r in rows if r["id"] == record_id), None)
+            if row is None:
+                return
+            row["applied"] = row.get("applied", 0) + int(result.get("applied", 0))
+            row["outcome"] = self.service.t("experience.history_applied", count=row["applied"])
+            if result.get("errors"):
+                row["outcome"] += "\n" + "\n".join(result["errors"])
             await workflows.write_value(key, rows)

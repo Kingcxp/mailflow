@@ -763,6 +763,11 @@ class IMAPSource:
     async def send_message(self, draft: ReplyDraft) -> None:
         await self.send_reply(draft.mail_id, draft)
 
+    async def check_sent_message(self, draft: ReplyDraft) -> bool | None:
+        from mailflow_mail_imap.state_sync import IMAPState
+
+        return await asyncio.to_thread(IMAPState(self).sent, draft.message_id)
+
     def _send_smtp(self, draft: ReplyDraft) -> None:
         host = str(self._settings.get("smtp_host", ""))
         port = int(self._settings.get("smtp_port", 465))
@@ -776,7 +781,8 @@ class IMAPSource:
             message["Cc"] = ", ".join(a.display for a in draft.cc)
         message["Subject"] = draft.subject
         message["Date"] = formatdate(localtime=True)
-        message["Message-ID"] = draft.message_id or make_msgid()
+        draft.message_id = draft.message_id or make_msgid()
+        message["Message-ID"] = draft.message_id
         if draft.in_reply_to:
             message["In-Reply-To"] = draft.in_reply_to
         if draft.references:
@@ -833,7 +839,18 @@ class IMAPSource:
             try:
                 client.quit()
             except (OSError, smtplib.SMTPException):
-                client.close()
+                with contextlib.suppress(Exception):
+                    client.close()
+        # SMTP has accepted the message. A copy failure must never become a send retry.
+        from mailflow_mail_imap.state_sync import IMAPState
+
+        try:
+            draft.sent_copy_error = (
+                IMAPState(self).sent(draft.message_id, message.as_bytes()) is not True
+            )
+        except Exception:
+            draft.sent_copy_error = True
+            logger.warning("sent copy could not be saved for account %s", self._account.account_id)
 
     async def close(self) -> None:
         self._session_history_until = None

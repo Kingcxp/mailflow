@@ -41,11 +41,12 @@ async def send_file(service: MailFlowService, values: dict[str, Any]) -> bool:
 
     require_admin(service.t)
     file = await service.workflows.file_download(values)
+    identity = current_context()
+    await service.pace_bot(identity.provider, identity.instance_id)
     sender = _file_sender.get()
     if sender:
         await sender(file)
         return True
-    identity = current_context()
     config = service._chat_notifier(identity.provider, identity.instance_id)  # pyright: ignore[reportPrivateUsage]
     notifier = next(
         (
@@ -65,7 +66,6 @@ async def send_file(service: MailFlowService, values: dict[str, Any]) -> bool:
         raise translated_error(NotImplementedError, service.t, "experience.file_send_unsupported")
     kind = "user" if identity.chat_id == identity.sender else "group"
     target = kind + ":" + identity.chat_id
-    await service.pace_bot(identity.provider, identity.instance_id)
     await cast(Callable[[str, NotificationImage], Awaitable[None]], operation)(
         target,
         NotificationImage(
@@ -88,18 +88,32 @@ async def framework_send_file(
     """Adapters get only a temporary copy of the already-authorized managed file."""
     import tempfile
 
+    if bot is not None:
+        operation = "upload_group_file" if group_id else "upload_private_file"
+        target = {"group_id": int(group_id)} if group_id else {"user_id": int(sender)}
+        result = await bot.call_api(
+            operation, **target, file="base64://" + str(file["data"]), name=file["filename"]
+        )
+        if result:
+            from mailflow.notifications import check_result
+
+            check_result(result)
+        return
+
     with tempfile.TemporaryDirectory(prefix="mailflow-file-") as directory:
         path = Path(directory) / str(file["filename"]).replace("\\", "/").split("/")[-1]
         await asyncio.to_thread(path.write_bytes, base64.b64decode(file["data"]))
-        if bot is not None:
-            operation = "upload_group_file" if group_id else "upload_private_file"
-            target = {"group_id": int(group_id)} if group_id else {"user_id": int(sender)}
-            await bot.call_api(operation, **target, file=str(path), name=path.name)
-        elif event is not None:
+        if event is not None:
             from importlib import import_module
 
             components = import_module("astrbot.api.message_components")
-            await event.send(event.chain_result([components.File(name=path.name, file=str(path))]))
+            result = await event.send(
+                event.chain_result([components.File(name=path.name, file=str(path))])
+            )
+            if result is False:
+                from mailflow.notifications import DeliveryError
+
+                raise DeliveryError("rejected")
 
 
 async def download_file(url: str, *, headers: dict[str, str] | None = None) -> bytes:
@@ -131,12 +145,13 @@ async def framework_files(parts: Any, bot: Any = None) -> list[dict[str, str]]:
     """Use the framework's resolved media, never a path supplied by the model."""
     files: list[dict[str, str]] = []
     for part in parts:
-        kind = str(getattr(part, "type", type(part).__name__)).casefold()
+        raw_kind = getattr(part, "type", type(part).__name__)
+        kind = str(getattr(raw_kind, "value", raw_kind)).casefold()
         if kind not in {"file", "image"}:
             continue
         data = getattr(part, "data", {}) or {}
         name = str(data.get("name") or getattr(part, "name", "") or "attachment")
-        getter = getattr(part, "get_file", None)
+        getter = getattr(part, "get_file", None) or getattr(part, "convert_to_file_path", None)
         if getter is not None:
             resolved = getter()
             path = await resolved if inspect.isawaitable(resolved) else resolved
@@ -146,10 +161,14 @@ async def framework_files(parts: Any, bot: Any = None) -> list[dict[str, str]]:
                     return handle.read(MAX_ATTACHMENT_BYTES + 1)
 
             content = await asyncio.to_thread(read)
+            if name == "attachment":
+                name = Path(str(path)).name
         else:
-            url = str(data.get("url") or "")
+            url = str(data.get("url") or getattr(part, "url", "") or "")
             if not url and bot is not None:
-                result = await bot.get_file(file_id=data.get("file_id") or data.get("file"))
+                result = await bot.call_api(
+                    "get_file", file=data.get("file_id") or data.get("file")
+                )
                 url = str(result.get("url") or "")
             content = await download_file(url)
         if len(content) > MAX_ATTACHMENT_BYTES:
@@ -158,6 +177,32 @@ async def framework_files(parts: Any, bot: Any = None) -> list[dict[str, str]]:
             encoded_file(name, content, mimetypes.guess_type(name)[0] or "application/octet-stream")
         )
     return files
+
+
+async def framework_notice_files(event: Any, bot: Any) -> list[dict[str, str]]:
+    """Resolve OneBot upload notices through the platform, not a host filesystem path."""
+    file = getattr(event, "file", None)
+    data: dict[str, Any] = {}
+    if isinstance(file, dict):
+        data = cast(dict[str, Any], file)
+    elif file is not None:
+        dump = getattr(file, "model_dump", None) or getattr(file, "dict", None)
+        if dump:
+            data = dump()
+    group_id = str(getattr(event, "group_id", "") or "")
+    params: dict[str, Any] = {"file_id": data.get("id") or data.get("file_id")}
+    if group_id:
+        params.update(group_id=int(group_id), busid=data.get("busid", 0))
+    else:
+        params.update(user_id=int(event.user_id))
+    result = await bot.call_api(
+        "get_group_file_url" if group_id else "get_private_file_url", **params
+    )
+    content = await download_file(str(result.get("url") or ""))
+    name = str(data.get("name") or "attachment")
+    return [
+        encoded_file(name, content, mimetypes.guess_type(name)[0] or "application/octet-stream")
+    ]
 
 
 async def receive_files(service: MailFlowService, payload: dict[str, Any]) -> None:

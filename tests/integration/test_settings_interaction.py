@@ -490,6 +490,7 @@ async def test_remote_login_can_cancel_recover_and_retry_session_write(
 
     monkeypatch.setattr(remote, "AsyncClient", make_client)
     monkeypatch.setattr(remote, "_SESSION_FILE", tmp_path / "session.json")
+    monkeypatch.setattr(remote.credentials, "delete_password", Mock())
     saved: list[Any] = []
     form = LoginScreen({})
     app = App[None]()
@@ -523,6 +524,9 @@ async def test_remote_login_can_cancel_recover_and_retry_session_write(
         await settle(pilot)
         assert saved == [{"url": "http://fake", "username": "admin", "password": "secret"}]
         assert "secret" not in (tmp_path / "session.json").read_text(encoding="utf-8")
+        session = remote.load_session()
+        remote.save_session({"url": "http://fake", "username": "admin", "autologin": False})
+        assert remote.load_session()["session_id"] == session["session_id"]
 
 
 @pytest.mark.parametrize("phase", ["install", "login", "endpoint"])

@@ -24,7 +24,7 @@ from mailflow.domain import (
 from mailflow.errors import translated_error
 from mailflow.mail_body import mail_body_text
 from mailflow.mail_query import MailQuery
-from mailflow.permissions import current_context, require_admin
+from mailflow.permissions import current_context, normalize_provider, require_admin
 
 if TYPE_CHECKING:
     from mailflow.service import MailFlowService
@@ -34,7 +34,12 @@ def actor_key() -> str:
     context = current_context()
     return hashlib.sha256(
         json.dumps(
-            [context.provider, context.instance_id, context.chat_id, context.sender]
+            [
+                normalize_provider(context.provider),
+                context.instance_id,
+                context.chat_id,
+                context.sender,
+            ]
         ).encode()
     ).hexdigest()
 
@@ -85,6 +90,10 @@ class UserWorkflows:
             from mailflow.chat_files import send_file
 
             return await send_file(self.service, values)
+        if action == "reply_reconcile":
+            return (await self.service.reconcile_reply(str(values.get("draft_id", "")))).model_dump(
+                mode="json"
+            )
         if action == "source_status":
             return await self.service.source_sync.status(values)
         if action == "source_refresh":
@@ -281,6 +290,7 @@ class UserWorkflows:
                 ]
             )
         selected = root(record.record_id)
+        entries = await self.service.runtime.action_store.read(deduplicate=False)
         result: list[dict[str, Any]] = []
         for row in mails:
             if root(row.record_id) == selected:
@@ -292,7 +302,12 @@ class UserWorkflows:
                         "at": row.mail.date.isoformat(),
                         "sender": row.mail.sender.display,
                         "body": mail_body_text(row.mail),
-                        "tasks": [a.model_dump(mode="json") for a in row.action_items],
+                        "tasks": [
+                            entry.item.model_dump(mode="json")
+                            for entry in entries
+                            if (entry.record.record_id if entry.record else entry.item.mail_id)
+                            == row.record_id
+                        ],
                     }
                 )
         for draft in drafts:
@@ -507,7 +522,8 @@ class UserWorkflows:
         plan_id = str(values.get("plan_id", ""))
         recurring = self.service.runtime.action_store.recurring
         if operation in {"pause", "resume"}:
-            result = await recurring.control(plan_id, paused=operation == "pause")
+            async with self.service.runtime.action_store.lock:
+                result = await recurring.control(plan_id, paused=operation == "pause")
         elif operation == "skip":
             item_id = str(values.get("item_id", ""))
             item = next(
@@ -545,4 +561,12 @@ class UserWorkflows:
         return result
 
     def resolve_query(self, query: MailQuery) -> MailQuery:
-        return query.resolved(datetime.now(ZoneInfo(self.service.config.general.timezone)))
+        zone = ZoneInfo(self.service.config.general.timezone)
+        query = query.model_copy(
+            update={
+                key: value.replace(tzinfo=zone)
+                for key in ("after", "before")
+                if (value := getattr(query, key)) is not None and value.tzinfo is None
+            }
+        )
+        return query.resolved(datetime.now(zone))

@@ -195,6 +195,7 @@ async def stage(
     if name not in SCHEMAS:
         raise translated_error(ValueError, service.t, "ux.unsupported")
     values = dict(args)
+    values.pop("_draft_id", None)
     description = service.t(f"assistant.operation_{name}")
     if name == "source_mail":
         pending = await service.workspace_call("source_preview", args)

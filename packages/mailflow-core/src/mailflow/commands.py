@@ -830,23 +830,35 @@ class CommandRouter:
                 "source_refresh" if args and args[0] == "refresh" else "source_status",
                 {"detect": bool(args and args[0] == "detect")},
             )
-            return self._ok(
-                "\n".join(
-                    r["account_id"]
+            lines: list[str] = []
+            for account in state["accounts"]:
+                lines.append(
+                    account["account_id"]
                     + ": "
                     + self._t(
-                        "experience.source_synced" if r["enabled"] else "experience.source_off"
+                        "experience.source_enabled"
+                        if account["enabled"]
+                        else "experience.source_off"
                     )
-                    + "\n"
-                    + json.dumps(r["capabilities"], ensure_ascii=False)
-                    for r in state["accounts"]
                 )
-                + "\n"
-                + "\n".join(
-                    r["id"] + ": " + r["record_id"] + " · " + self._t("experience.source_pending")
-                    for r in state["operations"]
-                )
+                for key, value in account["capabilities"].items():
+                    if key == "folders":
+                        lines.extend(
+                            self._t("experience.folder_" + role) + ": " + name
+                            for role, name in value.items()
+                        )
+                    else:
+                        text = (
+                            self._t("common.yes" if value else "common.no")
+                            if isinstance(value, bool)
+                            else str(value)
+                        )
+                        lines.append(self._t("experience.capability_" + key) + ": " + text)
+            lines.extend(
+                row["id"] + ": " + row["record_id"] + " · " + self._t("experience.source_pending")
+                for row in state["operations"]
             )
+            return self._ok("\n".join(lines))
         return self._err(self._t("source.usage"))
 
     async def _cmd_files(self, args: list[str]) -> CommandResponse:
@@ -1074,18 +1086,18 @@ class CommandRouter:
             with contextlib.suppress(ValueError):
                 page = int(positionals[0])
         items = await self.service.list_actions()
-        items = [
-            item
-            for item in items
-            if (not flags.get("category") or item.category == flags["category"])
-            and (not flags.get("tag") or flags["tag"] in item.tags)
-        ]
         if flags.get("state") in {"completed", "all"}:
             items = [
                 item
                 for item in await self.service.list_actions(include_completed=True)
                 if flags["state"] == "all" or item.completed_at is not None
             ]
+        items = [
+            item
+            for item in items
+            if (not flags.get("category") or item.category == flags["category"])
+            and (not flags.get("tag") or flags["tag"] in item.tags)
+        ]
         await self._remember_selection("action", [item.item_id for item in items])
         page_items, pages, page = _paginate(items, page)
         spans: list[StyleSpan] = [
@@ -1868,7 +1880,15 @@ class CommandRouter:
             )
         if sub == "confirm" and len(rest) == 2:
             draft = await self.service.confirm_reply(rest[0], rest[1])
-            return self._ok(self._t("reply.sent", draft_id=draft.draft_id))
+            return self._ok(
+                self._t("reply.sent", draft_id=draft.draft_id)
+                + ("\n" + self._t("experience.sent_copy_failed") if draft.sent_copy_error else "")
+            )
+        if sub == "check" and len(rest) == 1:
+            draft = ReplyDraft.model_validate(
+                await self.service.workspace_call("reply_reconcile", {"draft_id": rest[0]})
+            )
+            return self._render_draft(draft)
         if sub == "cancel" and rest:
             draft = await self.service.cancel_reply(rest[0])
             return self._ok(self._t("reply.cancelled", draft_id=draft.draft_id))
@@ -1892,6 +1912,8 @@ class CommandRouter:
                 style=_STYLE_MUTED,
             ),
         ]
+        if draft.sent_copy_error:
+            spans.append(StyleSpan(text="\n" + self._t("experience.sent_copy_failed")))
         spans.extend(
             [
                 StyleSpan(

@@ -1,8 +1,5 @@
 # MailFlow
 
-
-Saved filters, account-isolated conversations, and full mail composition (To/Cc/Bcc, forwarding, reply-all and managed attachments) are available from the mail tools menu and shared chat/CLI commands. Chat uploads stay with their sender and session.
-
 [简体中文](README.zh-CN.md)
 
 MailFlow brings multiple mail accounts into one inbox. It combines local storage,
@@ -29,25 +26,29 @@ without one, deterministic rules remain available.
 
 | Area | Available behavior |
 |---|---|
-| Mail | Read originals before background analysis; account/date/sender filters, read/star/archive states, full text, attachments and OCR search |
+| Mail | Read originals before background analysis; saved rolling filters, account-isolated conversations, read/star/archive states, full text and OCR search |
 | Batch actions | Check rows, Shift-select a range, Ctrl+A for visible results, delete expired mail and undo the last deletion |
 | Tasks | Optional deadlines, overdue items, categories/tags, recurring plans, pause/skip, mute or snooze reminders; completion removes the occurrence |
-| Replies | Search drafts and sent replies; prepare and confirm before sending; failed sends remain retryable |
-| Notifications | Configure chat-platform instances and notification targets; export NoneBot or AstrBot plugins |
+| Writing | New mail, forwarding, reply-all, To/Cc/Bcc and attachments; shared drafts, preview and confirmation; uncertain sends can be checked before retrying |
+| Assistant | Confirm changes, revisit or search private session history, and open the referenced mail or task; history defaults to 30 days and can be disabled |
+| Notifications | Notification presets, optional quiet hours, connection checks and platform targets; export NoneBot or AstrBot plugins |
+| Files and backups | Search attachments across mail, download selections and exchange managed files through supported bots; portable backups and optional daily backups |
 | Plugins | Install, enable or disable mail sources, model backends, processors, notifiers, storage and gateways |
 | Language | English and Simplified Chinese; additional JSON language packs |
 
-Deletion moves mail to MailFlow trash and leaves the source mailbox unchanged. Restore,
+Deletion defaults to MailFlow trash and leaves the source mailbox unchanged. Restore,
 search and permanent deletion are available in Mail → More. Mail is kept indefinitely by
 default; automatic cleanup is opt-in and protects starred, important and unfinished-task
 mail. Trash is kept for 7 days. Backup and restore are under Settings. Automatic updates
-are disabled by default; existing retention settings are preserved.
+are disabled by default; existing retention settings are preserved. Optional mailbox synchronization
+is enabled per account, with detected capabilities and explicit confirmation for source trash/restore.
+It never permanently deletes source mail. Uncertain source operations are checked before manual retry.
 
 The independent Assistant tab finds or deletes mail, manages tasks and shows live progress. Changes
 require confirmation and can be excluded individually. Select the scope from Mail → More.
 Long messages are checked in chunks; incomplete searches are reported. Remote TUI supports
-mail, tasks, replies, smart query and conversational correction. Plugin/process management
-and backup/restore run locally.
+mail, tasks, writing, assistant history, files and backup/restore; uploaded files come from the
+client and remain private to their sender and session. Plugin/process management runs locally.
 
 ## Other entry points
 

@@ -391,6 +391,7 @@ class MailFlowService:
             str, tuple[PermissionContext, datetime, list[PendingOperation]]
         ] = {}
         self._smart_plan_lock = asyncio.Lock()
+        self._smart_history: dict[str, str] = {}
         self._reply_create_lock = asyncio.Lock()
         self._subscription_lock = asyncio.Lock()
         self._language_lock = asyncio.Lock()
@@ -559,6 +560,10 @@ class MailFlowService:
             except Exception:
                 logger.exception("mailbox state synchronization failed")
                 await self.events.emit("mail.source.failed", code="errors.operation")
+            try:
+                await self.assistant_history.prune()
+            except Exception:
+                logger.exception("assistant history cleanup failed")
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stopped_event.wait(), 60)
 
@@ -2129,7 +2134,17 @@ Return every candidate in this batch."""
                 utcnow() + timedelta(minutes=20),
                 [operation.model_copy(deep=True) for operation in result.pending],
             )
-        await self.assistant_history.add(text, result)
+        history_id = ""
+        try:
+            history_id = await self.assistant_history.add(text, result)
+        except Exception:
+            logger.exception("cannot save assistant history")
+            result.failure_reasons.append(self.t("experience.history_save_failed"))
+        self._smart_history = {
+            key: value for key, value in self._smart_history.items() if key in self._smart_plans
+        }
+        if result.plan_id and history_id:
+            self._smart_history[result.plan_id] = history_id
         return result
 
     async def assistant_tool(
@@ -2289,11 +2304,11 @@ Return every candidate in this batch."""
                         else:
                             from mailflow.assistant_operations import apply
 
-                            await apply(self, operation)
+                            await apply(self, original)
                         result["applied"] += 1
                 except Exception as exc:
                     remaining.append(original)
-                    result["failed"].append(operation)
+                    result["failed"].append(original.model_copy(deep=True))
                     result["errors"].append(error_text(exc, self.t))
             # Unchecked operations are cancelled; only failed operations can be retried.
             retries: list[PendingOperation] = result["failed"]
@@ -2301,6 +2316,13 @@ Return every candidate in this batch."""
                 self._smart_plans[plan_id] = (plan[0], plan[1], retries)
             else:
                 self._smart_plans.pop(plan_id, None)
+            try:
+                await self.assistant_history.finish(self._smart_history.get(plan_id, ""), result)
+            except Exception:
+                logger.exception("cannot update assistant history")
+                result["errors"].append(self.t("experience.history_save_failed"))
+            if not retries:
+                self._smart_history.pop(plan_id, None)
             return result
 
     def prepare_operations(self, operations: list[PendingOperation]) -> SmartActionResult:
@@ -4183,6 +4205,10 @@ Return every candidate in this batch."""
         return record
 
     async def _reply_source(self, draft: ReplyDraft) -> MailSource:
+        if not draft.message_id:
+            from email.utils import make_msgid
+
+            draft.message_id = make_msgid()
         record = await self._reply_record(draft.mail_id) if draft.mail_id else None
         from mailflow.replies import reply_thread
 
@@ -4335,6 +4361,29 @@ Return every candidate in this batch."""
             raise self._reply_error("reply.send_unrecorded") from None
         await self.events.emit("reply.sent", draft_id=draft_id, mail_id=draft.mail_id)
         return draft
+
+    @admin_operation
+    async def reconcile_reply(self, draft_id: str) -> ReplyDraft:
+        from mailflow.contracts import SentMessageSource
+
+        async with self._reply_locks.for_draft(draft_id):
+            draft = await self._require_draft(draft_id)
+            if draft.state != ReplyState.SENDING:
+                return draft
+            source = self.sources.get(draft.account_id)
+            if not isinstance(source, SentMessageSource):
+                raise self._reply_error("experience.sent_check_unsupported")
+            try:
+                found = await asyncio.wait_for(source.check_sent_message(draft), 30)
+            except Exception:
+                raise self._reply_error("reply.send_uncertain") from None
+            if found:
+                draft.state = ReplyState.SENT
+                draft.error_code = ""
+                draft.updated_at = utcnow()
+                await self._save_reply_draft(draft)
+                await self.events.emit("reply.sent", draft_id=draft_id, mail_id=draft.mail_id)
+            return draft
 
     @admin_operation
     async def cancel_reply(self, draft_id: str) -> ReplyDraft:

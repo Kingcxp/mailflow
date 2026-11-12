@@ -70,18 +70,19 @@ class OneBotNotifier(ImageNotifier):
         await self._send(target, text)
 
     async def push_file_to_target(self, target: str, file: NotificationImage) -> None:
-        await self._send(
-            target,
-            [
-                {
-                    "type": "file",
-                    "data": {
-                        "file": "base64://" + base64.b64encode(file.data).decode("ascii"),
-                        "name": file.filename,
-                    },
-                }
-            ],
-        )
+        if not self._url:
+            raise DeliveryError("configuration")
+        kind, _, identifier = target.partition(":")
+        operation = "upload_group_file" if kind == "group" else "upload_private_file"
+        payload = {
+            "group_id" if kind == "group" else "user_id": int(identifier or target),
+            "file": "base64://" + base64.b64encode(file.data).decode("ascii"),
+            "name": file.filename,
+        }
+        headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(f"{self._url}/{operation}", json=payload, headers=headers)
+            check_http_response(response)
 
     async def push_image_to_target(self, target: str, image: NotificationImage) -> None:
         data = base64.b64encode(image.data).decode("ascii")

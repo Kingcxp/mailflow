@@ -713,6 +713,15 @@ class ToolRegistry:
         page = items[offset : offset + limit]
         lines = [f"{len(items)} task(s); offset={offset}; showing {len(page)}:"]
         for item in page:
+            self.evidence.append(
+                {
+                    "kind": "action",
+                    "id": item.item_id,
+                    "title": item.summary,
+                    "quote": (item.summary + "\n" + item.notes)[:240],
+                    "verified": True,
+                }
+            )
             lines.append(
                 f"- id={item.item_id} at={item.due_at.isoformat() if item.due_at else 'none'} "
                 f"type={item.action_type} summary={item.summary}"

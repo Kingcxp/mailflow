@@ -223,7 +223,13 @@ async def _run_remote() -> None:
         "username": str(session["username"]),
         "password": str(session["saved_password"]),
     }
-    client = RemoteClient(final_creds["url"], final_creds["username"], final_creds["password"])
+    session = load_session()
+    client = RemoteClient(
+        final_creds["url"],
+        final_creds["username"],
+        final_creds["password"],
+        session_id=str(session.get("session_id") or ""),
+    )
     i18n = I18n(language=str(snapshot.get("language") or "en"))
     adapter = RemoteServiceAdapter(client, cast_snapshot(snapshot), i18n)
     log_queue: queue_module.Queue[Any] = queue_module.Queue()

@@ -80,6 +80,13 @@ class MessageSource(Protocol):
 
 
 @runtime_checkable
+class SentMessageSource(Protocol):
+    """Look for a sent copy without issuing another send."""
+
+    async def check_sent_message(self, draft: ReplyDraft) -> bool | None: ...
+
+
+@runtime_checkable
 class StateSyncSource(Protocol):
     async def source_capabilities(self) -> SourceCapabilities: ...
 

@@ -173,6 +173,48 @@ class IMAPState:
             with contextlib.suppress(Exception):
                 client.logout()
 
+    def sent(self, message_id: str, payload: bytes | None = None) -> bool | None:
+        if not message_id:
+            return None
+        client = self.connect()
+        try:
+            _, roles = self.folders(client)
+            folder = roles.get("sent")
+            if not folder:
+                return None
+            self.select(client, folder)
+            status, rows = client.uid(
+                "SEARCH", cast(Any, None), "HEADER", "Message-ID", quote(message_id)
+            )
+            if status != "OK":
+                raise OSError("IMAP sent lookup failed")
+            uids: list[bytes] = rows[0].split() if rows and rows[0] else []
+            for uid in uids:
+                status, headers = client.uid(
+                    "FETCH", uid.decode(), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
+                )
+                if status != "OK":
+                    raise OSError("IMAP sent identity lookup failed")
+                header = b"".join(
+                    row[1]
+                    for row in headers or []
+                    if isinstance(row, tuple) and isinstance(row[1], bytes)
+                )
+                if (
+                    str(BytesHeaderParser().parsebytes(header).get("Message-ID", "")).strip()
+                    == message_id.strip()
+                ):
+                    return True
+            if payload is not None:
+                status, _ = client.append(quote(folder), "(\\Seen)", None, payload)
+                if status != "OK":
+                    raise OSError("IMAP sent copy rejected")
+                return True
+            return False
+        finally:
+            with contextlib.suppress(Exception):
+                client.logout()
+
     def change(self, mail: MailMessage, changes: dict[str, Any]) -> SourceMailState:
         client = self.connect()
         try:

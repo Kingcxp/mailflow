@@ -89,6 +89,38 @@ class TestIMAPMailSource:
                 pass
 
         monkeypatch.setattr("mailflow_mail_imap.plugin.smtplib.SMTP_SSL", FakeSMTP)
+
+        class SentFolder:
+            reject_copy = False
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def login(self, *args: Any) -> None:
+                pass
+
+            def logout(self) -> None:
+                pass
+
+            def select(self, *args: Any, **kwargs: Any) -> tuple[str, list[bytes]]:
+                return "OK", []
+
+            def response(self, *args: Any) -> tuple[str, list[bytes]]:
+                return "OK", [b"1"]
+
+            def list(self) -> tuple[str, list[bytes]]:
+                return "OK", [b'(\\Sent) "/" "Sent"']
+
+            def uid(self, *args: Any) -> tuple[str, list[bytes]]:
+                return "OK", [b""]
+
+            def append(
+                self, folder: str, flags: str, when: Any, payload: bytes
+            ) -> tuple[str, list[bytes]]:
+                sent[-1]["copy"] = payload
+                return ("NO" if self.reject_copy else "OK"), []
+
+        monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", SentFolder)
         account = MailAccountConfig(
             account_id="acct-1",
             provider="imap",
@@ -110,6 +142,10 @@ class TestIMAPMailSource:
         assert sent and sent[0]["login"] == ("me@qq.com", "secret")
         assert sent[0]["mail"]["To"] == "them@example.com"
         assert "Dear them" in str(sent[0]["mail"].get_body())
+        assert not draft.sent_copy_error and b"Message-ID:" in sent[0]["copy"]
+        SentFolder.reject_copy = True
+        await source.send_reply("m1", draft)
+        assert draft.sent_copy_error and len(sent) == 2
 
     async def test_fetch_once_polls_inbox(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from mailflow.config import MailAccountConfig

@@ -40,6 +40,20 @@ async def test_failed_send_preserves_body_and_requires_a_new_token(
     assert retry.token and retry.token != prepared.token
     sent = await service.confirm_reply(draft.draft_id, retry.token)
     assert sent.state is ReplyState.SENT and len(source.sent) == 1
+    source.fail_send = True
+    _, operation = await service.assistant_tool(
+        "write_reply",
+        {"record_id": "m1", "body": "Assistant retry", "send": True, "_draft_id": draft.draft_id},
+    )
+    assert operation is not None
+    plan = service.prepare_operations([operation])
+    attempt = await service.apply_smart_plan(plan.plan_id, plan.pending)
+    assert attempt["failed"]
+    drafts = await service.list_drafts()
+    source.fail_send = False
+    retried = await service.apply_smart_plan(plan.plan_id, attempt["failed"])
+    assert retried["applied"] == 1 and not retried["failed"]
+    assert len(await service.list_drafts()) == len(drafts) and len(source.sent) == 2
 
 
 @pytest.mark.parametrize("missing", ["account", "disabled", "source", "read_only", "smtp"])
@@ -164,6 +178,17 @@ async def test_failed_final_save_does_not_allow_a_duplicate_send(
         await service.prepare_reply(draft.draft_id)
     stored = await service.get_draft(draft.draft_id)
     assert stored is not None and stored.state is ReplyState.SENDING
+    assert len(cast(RecordingSource, service.sources["acct-1"]).sent) == 1
+    monkeypatch.setattr(service.storage, "save_draft", original_save)
+    found = False
+
+    async def check_sent(draft: ReplyDraft) -> bool:
+        return found
+
+    monkeypatch.setattr(service.sources["acct-1"], "check_sent_message", check_sent, raising=False)
+    assert (await service.reconcile_reply(draft.draft_id)).state == ReplyState.SENDING
+    found = True
+    assert (await service.reconcile_reply(draft.draft_id)).state == ReplyState.SENT
     assert len(cast(RecordingSource, service.sources["acct-1"]).sent) == 1
 
 

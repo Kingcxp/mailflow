@@ -51,7 +51,7 @@ class WorkflowScreen(ModalScreen[Any]):
     WorkflowScreen DataTable { height: 1fr; }
     WorkflowScreen TextArea { height: 1fr; }
     WorkflowScreen Horizontal { height: auto; }
-    WorkflowScreen Button { margin: 0 1 0 0; }
+    WorkflowScreen Button { margin: 0 1 0 0; min-width: 0; width: 1fr; }
     """
 
     def __init__(self, service: MailFlowService) -> None:

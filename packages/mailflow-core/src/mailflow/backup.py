@@ -167,6 +167,7 @@ async def restore_backup(
             await restore(database)
             await service.runtime.reset_after_restore()
             service._smart_plans.clear()  # pyright: ignore[reportPrivateUsage]
+            service._smart_history.clear()  # pyright: ignore[reportPrivateUsage]
             service.config = updated
             if service.config_path is not None:
                 write_config(updated, service.config_path)

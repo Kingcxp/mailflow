@@ -924,14 +924,26 @@ async def test_assistant_history_is_private_searchable_and_can_be_disabled(
             }
         ],
     )
-    await service.assistant_history.add("Find invoice", result)
+    history_id = await service.assistant_history.add("Find invoice", result)
+    await service.assistant_history.finish(history_id, {"applied": 1})
     state = await service.workspace_call("assistant_history", {"query": "invoice"})
     assert (
         len(state["records"]) == 1 and state["records"][0]["references"][0]["quote"] == "Total: 20"
     )
     assert not ({"token", "pending", "task"} & state["records"][0].keys())
+    assert state["records"][0]["applied"] == 1 and state["records"][0]["outcome"]
     with permission_scope(PermissionContext(sender="other", provider="telegram", chat_id="room")):
         assert not (await service.workspace_call("assistant_history"))["records"]
+    from datetime import timedelta
+
+    from mailflow.workflows import actor_key
+
+    key = "assistant.history." + actor_key()
+    rows = await service.workflows.read_value(key)
+    rows[0]["at"] = (datetime.now(UTC) - timedelta(days=31)).isoformat()
+    await service.workflows.write_value(key, rows)
+    await service.assistant_history.prune()
+    assert await service.workflows.read_value(key) == []
     await service.workspace_call("assistant_history_change", {"retention_days": 0})
     await service.assistant_history.add("Find invoice", result)
     assert not (await service.workspace_call("assistant_history"))["records"]
@@ -939,6 +951,7 @@ async def test_assistant_history_is_private_searchable_and_can_be_disabled(
 
 async def test_source_sync_protects_pending_edits_and_does_not_replay_unknown_delete(
     service: MailFlowService,
+    tmp_path: Path,
 ) -> None:
     from mailflow.config import MailAccountConfig
     from mailflow.domain import SourceCapabilities, SourceMailState
@@ -1015,6 +1028,22 @@ async def test_source_sync_protects_pending_edits_and_does_not_replay_unknown_de
     await service.batch_mail([record.record_id])
     await service.source_sync.refresh()
     assert await service.get_mail(record.record_id) is None
+    from mailflow_tui.workspace_screens import SourceSyncScreen
+    from textual.widgets import Checkbox
+
+    service.config_path = tmp_path / "config.toml"
+    app: App[None] = App()
+    async with app.run_test(size=(80, 24)) as pilot:
+        screen = SourceSyncScreen(service)
+        app.push_screen(screen)
+        await pilot.pause()
+        assert screen.query_one("#source-save", Button).disabled
+        screen.query_one("#source-account", Select).value = record.mail.account_id
+        await until(pilot, lambda: not screen.query_one("#source-save", Button).disabled)
+        screen.query_one("#source-enabled", Checkbox).value = False
+        screen.query_one("#source-save", Button).press()
+        await until(pilot, lambda: not service.config.accounts[0].state_sync and not screen.busy)
+        assert source.calls == calls
 
 
 async def test_saved_filters_roll_forward_and_threads_ignore_subject_collisions(
@@ -1032,6 +1061,14 @@ async def test_saved_filters_roll_forward_and_threads_ignore_subject_collisions(
         await service.storage.save_mail(record)
     thread = await service.workspace_call("thread", {"record_id": "child"})
     assert {row["id"] for row in thread["messages"]} == {"parent", "child"}
+    task = await service.add_action("Follow up", mail_id="parent")
+    thread = await service.workspace_call("thread", {"record_id": "child"})
+    assert any(row["tasks"] for row in thread["messages"])
+    await service.delete_action(task.item_id)
+    assert not any(
+        row["tasks"]
+        for row in (await service.workspace_call("thread", {"record_id": "child"}))["messages"]
+    )
     query = MailQuery(account_id="acct-1", relative_days=7, state="all")
     await service.workspace_call(
         "save_filter", {"name": "Week", "query": query.model_dump(mode="json")}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import mimetypes
 from pathlib import Path
 from typing import Any, cast
@@ -21,6 +22,8 @@ from mailflow_tui.widgets import Input, SafeSelect, SelectionTable, TextArea
 
 
 class SourceSyncScreen(WorkflowScreen):
+    DEFAULT_CSS = "SourceSyncScreen #source-status { height: 10; min-height: 6; }"
+
     def __init__(self, service: MailFlowService, record_ids: list[str] | None = None) -> None:
         super().__init__(service)
         self.record_ids = list(record_ids or [])
@@ -31,33 +34,36 @@ class SourceSyncScreen(WorkflowScreen):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.t("experience.source_sync"))
-            yield Static(self.t("experience.source_confirmation"), markup=False)
-            yield SafeSelect(
-                [(a.account_id, a.account_id) for a in self.service.config.accounts],
-                id="source-account",
-                prompt=self.t("tui.entry_pick_first"),
-            )
-            yield Checkbox(self.t("experience.source_enabled"), id="source-enabled")
-            for role in ("archive", "trash", "sent"):
-                yield Input(placeholder=self.t("experience.folder_" + role), id="source-" + role)
-            yield TextArea("", id="source-status", read_only=True)
+            with ScrollableContainer():
+                yield Static(self.t("experience.source_confirmation"), markup=False)
+                yield SafeSelect(
+                    [(a.account_id, a.account_id) for a in self.service.config.accounts],
+                    id="source-account",
+                    prompt=self.t("tui.entry_pick_first"),
+                )
+                yield Checkbox(self.t("experience.source_enabled"), id="source-enabled")
+                for role in ("archive", "trash", "sent"):
+                    yield Static(self.t("experience.folder_" + role))
+                    yield Input(id="source-" + role)
+                yield TextArea("", id="source-status", read_only=True)
             yield SafeSelect([], id="source-pending", prompt=self.t("experience.source_pending"))
             yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
-                for op, key in [
-                    ("save", "saved"),
-                    ("detect", "source_detect"),
-                    ("refresh", "source_refresh"),
+            for row in [
+                [("save", "saved"), ("detect", "source_detect"), ("refresh", "source_refresh")],
+                [
                     ("retry", "source_retry"),
                     ("delete", "source_delete"),
                     ("restore", "source_restore"),
                     ("back", "back"),
-                ]:
-                    yield Button(
-                        self.t("experience." + key) if op != "save" else self.t("tui.btn_save"),
-                        id="source-" + op,
-                        disabled=op != "back",
-                    )
+                ],
+            ]:
+                with Horizontal():
+                    for op, key in row:
+                        yield Button(
+                            self.t("experience." + key) if op != "save" else self.t("tui.btn_save"),
+                            id="source-" + op,
+                            disabled=op != "back",
+                        )
 
     async def on_mount(self) -> None:
         await self.render_state(await self.service.workspace_call("source_status"))
@@ -367,7 +373,17 @@ class NotificationPreferencesScreen(WorkflowScreen):
         self.query_one("#quiet-end", Input).value = state["quiet_end"]
         self.query_one("#notification-state", TextArea).load_text(
             "\n".join(
-                c["id"] + ": " + (c["reason"] or self.t("experience.enabled"))
+                c["id"]
+                + "\n"
+                + self.t(
+                    "experience.channel_mail_state",
+                    state=c["reason"] or self.t("experience.enabled"),
+                )
+                + "\n"
+                + self.t(
+                    "experience.channel_task_state",
+                    state=c["task_reason"] or self.t("experience.enabled"),
+                )
                 for c in state["channels"]
             )
         )
@@ -455,19 +471,17 @@ class AssistantHistoryScreen(WorkflowScreen):
             yield TextArea("", id="history-text", read_only=True)
             yield SafeSelect([], id="history-ref", prompt=self.t("experience.source"))
             yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
-                for name, key in [
-                    ("open", "source"),
-                    ("delete", "delete"),
-                    ("clear", "clear"),
-                    ("toggle", "history_toggle"),
-                    ("close", "back"),
-                ]:
-                    yield Button(
-                        self.t("experience." + key),
-                        id="history-" + name,
-                        disabled=name in {"open", "delete"},
-                    )
+            for row in [
+                [("open", "source"), ("delete", "delete"), ("clear", "clear")],
+                [("toggle", "history_toggle"), ("close", "back")],
+            ]:
+                with Horizontal():
+                    for name, key in row:
+                        yield Button(
+                            self.t("experience." + key),
+                            id="history-" + name,
+                            disabled=name in {"open", "delete"},
+                        )
 
     async def on_mount(self) -> None:
         await self.reload_rows()
@@ -788,6 +802,7 @@ class ComposeScreen(WorkflowScreen):
                     disabled=True,
                 )
                 yield Button(self.t("tui.reply_confirm"), id="compose-confirm", disabled=True)
+                yield Button(self.t("experience.sent_check"), id="compose-check", disabled=True)
                 yield Button(self.t("tui.btn_back"), id="compose-close")
 
     async def on_mount(self) -> None:
@@ -853,6 +868,15 @@ class ComposeScreen(WorkflowScreen):
             and self.unchanged()
             and self.draft.is_confirmation_valid(self.draft.token or "")
         )
+        self.query_one("#compose-check", Button).disabled = self.busy or not (
+            self.draft and self.draft.state == ReplyState.SENDING
+        )
+        self.query_one("#compose-check", Button).display = bool(
+            self.draft and self.draft.state == ReplyState.SENDING
+        )
+        for name in ("to", "cc", "bcc", "subject"):
+            self.query_one("#compose-" + name, Input).disabled = self.busy or locked
+        self.query_one("#compose-body", TextArea).read_only = self.busy or locked
         self.query_one("#compose-account", Select).disabled = self.busy or self.draft is not None
         self.query_one("#compose-files", Static).update(
             "\n".join(f"{f.filename} ({f.size} B)" for f in self.draft.attachments)
@@ -895,6 +919,8 @@ class ComposeScreen(WorkflowScreen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         if not self.busy and not event.button.disabled:
+            self.busy = True
+            self.sync_controls()
             self.run_worker(
                 self.operate(event.button.id or ""), exclusive=True, exit_on_error=False
             )
@@ -918,7 +944,26 @@ class ComposeScreen(WorkflowScreen):
                     self.draft = await self.service.confirm_reply(
                         self.draft.draft_id, self.draft.token or ""
                     )
-                    self.status(self.t("reply.sent", draft_id=self.draft.draft_id))
+                    self.status(
+                        self.t("reply.sent", draft_id=self.draft.draft_id)
+                        + (
+                            "\n" + self.t("experience.sent_copy_failed")
+                            if self.draft.sent_copy_error
+                            else ""
+                        )
+                    )
+                return
+            if action == "compose-check" and self.draft:
+                self.draft = ReplyDraft.model_validate(
+                    await self.service.workspace_call(
+                        "reply_reconcile", {"draft_id": self.draft.draft_id}
+                    )
+                )
+                self.status(
+                    self.t("reply.sent", draft_id=self.draft.draft_id)
+                    if self.draft.state == ReplyState.SENT
+                    else self.t("reply.send_uncertain")
+                )
                 return
             await self.save()
             assert self.draft is not None
@@ -979,6 +1024,9 @@ class ComposeScreen(WorkflowScreen):
                 if action == "compose-close":
                     self.dismiss(None)
         except Exception as exc:
+            if action in {"compose-confirm", "compose-check"} and self.draft:
+                with contextlib.suppress(Exception):
+                    self.draft = await self.service.get_draft(self.draft.draft_id)
             self.status(error_text(exc, self.t))
         finally:
             self.busy = False

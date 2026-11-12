@@ -59,7 +59,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from nonebot import get_driver, on_message
+from nonebot import get_driver, on_message, on_notice
 from nonebot.adapters import Bot, Event
 
 driver = get_driver()
@@ -97,6 +97,36 @@ async def _stop_mailflow() -> None:
 
 
 _mailflow_matcher = on_message(priority=10, block=False)
+_mailflow_file_matcher = on_notice(priority=10, block=False)
+
+
+@_mailflow_file_matcher.handle()
+async def _handle_mailflow_file(bot: Bot, event: Event) -> None:
+    if _service is None or getattr(event, "notice_type", "") not in {"group_upload", "offline_file"}:
+        return
+    sender = str(getattr(event, "user_id", "") or "")
+    group_id = str(getattr(event, "group_id", "") or "")
+    context = _service.permission_context(sender=sender, provider=bot.adapter.get_name(), instance_id=str(bot.self_id), chat_id=group_id or sender)
+    if not context.is_admin:
+        return
+    from mailflow.chat_files import framework_notice_files, receive_files
+    from mailflow.errors import error_text
+    from mailflow.permissions import permission_scope
+    file = getattr(event, "file", None)
+    identity = str(file.get("id", "") if isinstance(file, dict) else getattr(file, "id", ""))
+    payload = {"text": "", "sender": sender, "provider": bot.adapter.get_name(), "instance_id": str(bot.self_id), "chat_id": group_id or sender, "request_id": identity}
+    try:
+        with permission_scope(context):
+            payload["files"] = await framework_notice_files(event, bot)
+            await receive_files(_service, payload)
+        async for reply in _service.chat_command_stream(payload["text"], sender=sender, provider=bot.adapter.get_name(), instance_id=str(bot.self_id), chat_id=group_id or sender, request_id=identity):
+            pages = _service.chat_reply_chunks(reply)
+            for page in pages if isinstance(pages, list) else [pages]:
+                if page:
+                    await _service.pace_bot(bot.adapter.get_name(), str(bot.self_id))
+                    await _mailflow_file_matcher.send(page)
+    except Exception as exc:
+        await _mailflow_file_matcher.send(error_text(exc, _service.t))
 
 
 @_mailflow_matcher.handle()

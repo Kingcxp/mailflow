@@ -311,6 +311,7 @@ class ReplyModal(ModalScreen[Any]):
                     variant="success",
                     disabled=True,
                 )
+                yield Button(self._t("experience.sent_check"), id="reply-check", disabled=True)
                 yield Button(self._t("tui.reply_cancel"), id="reply-cancel", variant="error")
             yield Static(self._t("tui.reply_confirm_hint"), id="reply-status")
 
@@ -331,6 +332,8 @@ class ReplyModal(ModalScreen[Any]):
         )
         if self._draft.state is ReplyState.SENDING:
             self._set_status(self._t("reply.send_uncertain"))
+        elif self._draft.sent_copy_error:
+            self._set_status(self._t("experience.sent_copy_failed"))
         elif self._draft.state is ReplyState.PREPARED and not self._draft.is_confirmation_valid(
             self._draft.token or ""
         ):
@@ -354,8 +357,12 @@ class ReplyModal(ModalScreen[Any]):
             or not draft.is_confirmation_valid(draft.token or "")
             or self.query_one("#reply-body", TextArea).text != draft.body
         )
+        check = self.query_one("#reply-check", Button)
+        check.display = draft is not None and draft.state == ReplyState.SENDING
+        check.disabled = self._reply_busy or not check.display
         if not self._reply_busy and (
-            draft is None or draft.state in (ReplyState.SENT, ReplyState.CANCELLED)
+            draft is None
+            or draft.state in (ReplyState.SENDING, ReplyState.SENT, ReplyState.CANCELLED)
         ):
             self.query_one("#reply-cancel", Button).disabled = False
             self.query_one("#reply-cancel", Button).label = self._t("tui.btn_close")
@@ -505,7 +512,11 @@ class ReplyModal(ModalScreen[Any]):
         if self._reply_busy:
             return
         if button_id == "reply-cancel":
-            if self._draft is None or self._draft.state in (ReplyState.SENT, ReplyState.CANCELLED):
+            if self._draft is None or self._draft.state in (
+                ReplyState.SENDING,
+                ReplyState.SENT,
+                ReplyState.CANCELLED,
+            ):
                 self.dismiss(None)
                 return
             self._reply_busy = True
@@ -515,6 +526,16 @@ class ReplyModal(ModalScreen[Any]):
             )
             return
         if self._draft is None:
+            return
+        if button_id == "reply-check":
+            self._reply_busy = True
+            self._sync_reply_controls()
+            self.run_worker(
+                self._check_reply(self._draft.draft_id),
+                exclusive=True,
+                group="reply-check",
+                exit_on_error=False,
+            )
             return
         if button_id in ("reply-tpl-cn", "reply-tpl-en"):
             self._apply_template("cn" if button_id == "reply-tpl-cn" else "en")
@@ -586,7 +607,11 @@ class ReplyModal(ModalScreen[Any]):
                 self._set_status(self._t("reply.body_changed"))
                 return
             self._draft = await self._service.confirm_reply(draft.draft_id, draft.token)
-            self._set_status(self._t("tui.reply_sent"))
+            self._set_status(
+                self._t("experience.sent_copy_failed")
+                if self._draft.sent_copy_error
+                else self._t("tui.reply_sent")
+            )
             tasks = [
                 item
                 for item in await self._service.list_actions()
@@ -603,6 +628,22 @@ class ReplyModal(ModalScreen[Any]):
             ):
                 for item in tasks:
                     await self._service.edit_action(item.item_id, completed=True)
+        except Exception as exc:
+            await self._reply_failed(exc)
+        finally:
+            self._reply_busy = False
+            self._sync_reply_controls()
+
+    async def _check_reply(self, draft_id: str) -> None:
+        try:
+            self._draft = ReplyDraft.model_validate(
+                await self._service.workspace_call("reply_reconcile", {"draft_id": draft_id})
+            )
+            self._set_status(
+                self._t("tui.reply_sent")
+                if self._draft.state == ReplyState.SENT
+                else self._t("reply.send_uncertain")
+            )
         except Exception as exc:
             await self._reply_failed(exc)
         finally:

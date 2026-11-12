@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import json
 import queue as queue_module
+import secrets
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -79,6 +80,15 @@ def load_session() -> dict[str, Any]:
 
 def save_session(data: dict[str, Any]) -> None:
     data = dict(data)
+    previous: dict[str, Any] = {}
+    with contextlib.suppress(OSError, ValueError):
+        decoded = json.loads(_SESSION_FILE.read_text(encoding="utf-8"))
+        if isinstance(decoded, dict):
+            previous = cast(dict[str, Any], decoded)
+    if (previous.get("url"), previous.get("username")) == (data.get("url"), data.get("username")):
+        data.setdefault("session_id", previous.get("session_id") or secrets.token_urlsafe(24))
+    else:
+        data.setdefault("session_id", secrets.token_urlsafe(24))
     secret = data.pop("saved_password", None)
     target = (
         "MailFlow/remote/"

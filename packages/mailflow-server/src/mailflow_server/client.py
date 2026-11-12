@@ -75,10 +75,12 @@ def _ws_connect(url: str, auth: dict[str, str]) -> Any:
 class RemoteClient:
     """Thin async wrapper over the REST+WS surface."""
 
-    def __init__(self, base_url: str, username: str, password: str) -> None:
+    def __init__(
+        self, base_url: str, username: str, password: str, *, session_id: str = ""
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self._auth = _basic(username, password)
-        self._auth["X-MailFlow-Session"] = secrets.token_urlsafe(24)
+        self._auth["X-MailFlow-Session"] = session_id or secrets.token_urlsafe(24)
         self._event_handlers: dict[str, list[Callable[..., Any]]] = {}
         self._ws_task: asyncio.Task[Any] | None = None
         self.log_queue: asyncio.Queue[str] = asyncio.Queue()

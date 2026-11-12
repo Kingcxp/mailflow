@@ -374,7 +374,7 @@
       "sent": "Reply sent from draft {draft_id}",
       "show_title": "Draft {draft_id}",
       "template_unknown": "unknown letter template {language!r}; use cn or en",
-      "usage": "reply <create <mail_id>|compose <mail_id> <cn|en>|show <draft_id>|edit <draft_id> <subject> <body>|prepare <draft_id>|confirm <draft_id> <token>|cancel <draft_id>>\nreply new <account> --to <addresses> --subject <subject> --body <body> [--cc <addresses>] [--bcc <addresses>]\nreply forward|all <mail> | reply recipients <draft> --to <addresses> [--cc <addresses>] [--bcc <addresses>]\nreply files | reply attach <draft> [file-id ...]\nreply upload <local-file>",
+      "usage": "reply <create <mail_id>|compose <mail_id> <cn|en>|show <draft_id>|edit <draft_id> <subject> <body>|prepare <draft_id>|confirm <draft_id> <token>|cancel <draft_id>>\nreply new <account> --to <addresses> --subject <subject> --body <body> [--cc <addresses>] [--bcc <addresses>]\nreply forward|all <mail> | reply recipients <draft> --to <addresses> [--cc <addresses>] [--bcc <addresses>]\nreply files | reply attach <draft> [file-id ...]\nreply upload <local-file>\nreply check <draft_id>",
       "state_draft": "Draft",
       "state_prepared": "Awaiting confirmation",
       "state_sending": "Sending / awaiting delivery result",
@@ -1427,7 +1427,8 @@
       "summary_cards": "Include summary cards",
       "sync_mail": "Sync mail",
       "view_read": "Read",
-      "delivery_deferred": "Quiet-hours summary"
+      "delivery_deferred": "Quiet-hours summary",
+      "download_path": "Download directory"
     },
     "sessions": {
       "detach": "Detach",
@@ -1510,7 +1511,8 @@
       "remote_model_setup": "Configure a model in the server’s local settings, then return to the assistant.",
       "session_required": "Reconnect using a current MailFlow client before starting or confirming an assistant task.",
       "operation_write_message": "Compose mail",
-      "usage": "assistant <history [--query text] [--page N]|show ID|delete ID|clear|off|on>"
+      "usage": "assistant <history [--query text] [--page N]|show ID|delete ID|clear|off|on>",
+      "operation_source_mail": "Synchronize mailbox deletion or restoration"
     },
     "recurrence": {
       "category": "Category",
@@ -1664,7 +1666,15 @@
       "capability_archived": "Safe archive",
       "capability_trash": "Safe move to trash",
       "capability_restore": "Safe restore",
-      "capability_error": "Detection incomplete"
+      "capability_error": "Detection incomplete",
+      "history_pending": "Awaiting confirmation; changes have not been executed.",
+      "history_applied": "Completed {count} operation(s).",
+      "history_save_failed": "This result could not be saved to history. Current results and operations remain available.",
+      "sent_check": "Check send result",
+      "sent_check_unsupported": "This source cannot check sent mail. Check the mailbox before attempting another send.",
+      "sent_copy_failed": "Mail was sent and recorded locally, but its mailbox sent copy could not be saved. Check the sent folder settings; do not send it again.",
+      "channel_mail_state": "Mail notifications: {state}",
+      "channel_task_state": "Task reminders: {state}"
     },
     "notifications": {
       "usage": "notifications <status|instant|important|tasks|quiet on/off [22:00 08:00]|check>"

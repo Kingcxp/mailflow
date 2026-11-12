@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import sys
 from collections.abc import Awaitable, Callable
@@ -132,7 +133,9 @@ class TestNonebotExporter:
         matcher.handle.return_value = register_handler
         nonebot = ModuleType("nonebot")
         nonebot.__dict__.update(
-            get_driver=Mock(return_value=driver), on_message=Mock(return_value=matcher)
+            get_driver=Mock(return_value=driver),
+            on_message=Mock(return_value=matcher),
+            on_notice=Mock(return_value=matcher),
         )
         monkeypatch.setitem(sys.modules, "nonebot", nonebot)
         adapters = ModuleType("nonebot.adapters")
@@ -199,6 +202,47 @@ class TestNonebotExporter:
             await module.__dict__["_handle_mailflow"](bot, event)
             assert observed[0].sender == "42"
             assert observed[0].instance_id == "bot-1" and observed[0].chat_id == "chat-1"
+            import base64
+
+            from mailflow.permissions import permission_scope
+
+            context = service.permission_context(
+                sender="42", provider="onebot", instance_id="bot-1", chat_id="1"
+            )
+            with permission_scope(context):
+                uploaded = await service.workspace_call(
+                    "upload",
+                    {"filename": "memo.txt", "data": base64.b64encode(b"file body").decode()},
+                )
+            delivered: list[dict[str, Any]] = []
+
+            async def file_api(operation: str, **values: Any) -> dict[str, Any]:
+                assert operation == "upload_group_file"
+                delivered.append(values)
+                return {"file_id": "sent"}
+
+            bot.call_api = file_api
+            event.group_id = "1"
+            event.get_plaintext = lambda: "/mailflow files send " + uploaded["file_id"]
+            await module.__dict__["_handle_mailflow"](bot, event)
+            assert delivered and delivered[0]["group_id"] == 1, matcher.send.call_args_list
+            assert base64.b64decode(delivered[0]["file"].removeprefix("base64://")) == b"file body"
+            monkeypatch.setattr(
+                "mailflow.chat_files.download_file", AsyncMock(return_value=b"from upload notice")
+            )
+            bot.call_api = AsyncMock(return_value={"url": "https://files.invalid/memo"})
+            notice = SimpleNamespace(
+                notice_type="group_upload",
+                user_id="42",
+                group_id="1",
+                file={"id": "notice-file", "name": "uploaded.txt"},
+            )
+            await module.__dict__["_handle_mailflow_file"](bot, notice)
+            with permission_scope(context):
+                assert {r["filename"] for r in await service.workspace_call("files")} == {
+                    "memo.txt",
+                    "uploaded.txt",
+                }
         finally:
             await driver.shutdowns[0]()
         assert module.__dict__["_service"] is None
@@ -276,3 +320,41 @@ class TestAstrbotExporter:
         assert [reply async for reply in handler(object(), event)]
         assert contexts[0].sender == "42" and contexts[0].provider == "telegram"
         assert contexts[0].instance_id == "bot-1" and contexts[0].chat_id == "chat-1"
+        import base64
+        from enum import StrEnum
+
+        from mailflow.chat_files import framework_files
+        from mailflow.permissions import permission_scope
+
+        class ComponentType(StrEnum):
+            File = "File"
+
+        class File:
+            type = ComponentType.File
+
+            def __init__(self, name: str, file: str) -> None:
+                self.name, self.file = name, file
+
+            async def get_file(self) -> str:
+                return self.file
+
+        components.__dict__["File"] = File
+        path = tmp_path / "memo.txt"
+        path.write_bytes(b"original attachment")
+        incoming = await framework_files([File("memo.txt", str(path))])
+        assert len(incoming) == 1 and base64.b64decode(incoming[0]["data"]) == path.read_bytes()
+        with permission_scope(contexts[0]):
+            uploaded = await service.workspace_call("upload", incoming[0])
+        sent: list[bytes] = []
+
+        async def send_file(chain: list[File]) -> None:
+            sent.append(await asyncio.to_thread(Path(chain[0].file).read_bytes))
+
+        def chain_result(rows: list[File]) -> list[File]:
+            return rows
+
+        event.chain_result = chain_result
+        event.send = send_file
+        event.message_str = "/mailflow files send " + uploaded["file_id"]
+        assert [reply async for reply in handler(object(), event)]
+        assert sent == [b"original attachment"]

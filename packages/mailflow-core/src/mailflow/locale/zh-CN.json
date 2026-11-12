@@ -374,7 +374,7 @@
       "sent": "已通过草稿 {draft_id} 发送回复",
       "show_title": "草稿 {draft_id}",
       "template_unknown": "未知信件模板 {language!r}；请使用 cn 或 en",
-      "usage": "reply <create <mail_id>|compose <mail_id> <cn|en>|show <draft_id>|edit <draft_id> <主题> <正文>|prepare <draft_id>|confirm <draft_id> <令牌>|cancel <draft_id>>\nreply new <account> --to <addresses> --subject <subject> --body <body> [--cc <addresses>] [--bcc <addresses>]\nreply forward|all <mail> | reply recipients <draft> --to <addresses> [--cc <addresses>] [--bcc <addresses>]\nreply files | reply attach <draft> [file-id ...]\nreply upload <local-file>",
+      "usage": "reply <create <mail_id>|compose <mail_id> <cn|en>|show <draft_id>|edit <draft_id> <主题> <正文>|prepare <draft_id>|confirm <draft_id> <令牌>|cancel <draft_id>>\nreply new <account> --to <addresses> --subject <subject> --body <body> [--cc <addresses>] [--bcc <addresses>]\nreply forward|all <mail> | reply recipients <draft> --to <addresses> [--cc <addresses>] [--bcc <addresses>]\nreply files | reply attach <draft> [file-id ...]\nreply upload <local-file>\nreply check <draft_id>",
       "state_draft": "草稿",
       "state_prepared": "待确认",
       "state_sending": "发送中／结果待确认",
@@ -1427,7 +1427,8 @@
       "summary_cards": "附带摘要卡片",
       "sync_mail": "同步邮件",
       "view_read": "已读",
-      "delivery_deferred": "免打扰汇总"
+      "delivery_deferred": "免打扰汇总",
+      "download_path": "下载保存目录"
     },
     "sessions": {
       "detach": "转入后台",
@@ -1510,7 +1511,8 @@
       "remote_model_setup": "请在服务端的本地设置中配置模型，完成后即可使用此助手。",
       "session_required": "请使用新版 MailFlow 客户端重新连接，再执行或确认助手任务。",
       "operation_write_message": "写信",
-      "usage": "assistant <history [--query text] [--page N]|show ID|delete ID|clear|off|on>"
+      "usage": "assistant <history [--query text] [--page N]|show ID|delete ID|clear|off|on>",
+      "operation_source_mail": "同步原邮箱删除或恢复"
     },
     "recurrence": {
       "category": "分类",
@@ -1664,7 +1666,15 @@
       "capability_archived": "安全归档",
       "capability_trash": "安全移入回收站",
       "capability_restore": "安全恢复",
-      "capability_error": "检测未完成"
+      "capability_error": "检测未完成",
+      "history_pending": "等待确认，尚未执行修改。",
+      "history_applied": "已完成 {count} 项操作。",
+      "history_save_failed": "本次结果未能保存到助手历史，当前结果和操作仍可使用。",
+      "sent_check": "核对发送结果",
+      "sent_check_unsupported": "此邮件源无法核对已发送记录。请先在原邮箱核对，不要重复发送。",
+      "sent_copy_failed": "邮件已发送，本地记录已保存，但未能保存原邮箱已发送副本。请检查已发送目录设置，不要再次发送。",
+      "channel_mail_state": "邮件通知：{state}",
+      "channel_task_state": "待办提醒：{state}"
     },
     "notifications": {
       "usage": "notifications <status|instant|important|tasks|quiet on/off [22:00 08:00]|check>"

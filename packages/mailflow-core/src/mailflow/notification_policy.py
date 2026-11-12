@@ -55,6 +55,8 @@ async def preferences(service: MailFlowService, values: dict[str, Any]) -> dict[
         await service._persist_config(updated, "general.notifications")  # pyright: ignore[reportPrivateUsage]
         if previous.notifiers != updated.notifiers:
             await service._rebuild_notifiers()  # pyright: ignore[reportPrivateUsage]
+        if preset in {"instant", "important", "tasks", "custom"}:
+            await service.storage.set_preference("notifications.preset", str(preset))
     general = service.config.general
     switches = (
         general.mail_notifications,
@@ -62,17 +64,19 @@ async def preferences(service: MailFlowService, values: dict[str, Any]) -> dict[
         general.daily_digest,
         general.hourly_summary,
     )
-    preset = "custom"
-    if switches[1:] == (True, False, False):
-        preset = (
-            "tasks"
-            if not switches[0]
-            else "important"
-            if all(n.minimum_urgency == Urgency.IMPORTANT for n in service.config.notifiers)
-            else "instant"
-            if all(n.minimum_urgency == Urgency.AD for n in service.config.notifiers)
-            else "custom"
+    preset = await service.storage.get_preference("notifications.preset") or "custom"
+    if preset != "custom" and (
+        switches != (preset != "tasks", True, False, False)
+        or any(
+            n.minimum_urgency != (Urgency.IMPORTANT if preset == "important" else Urgency.AD)
+            or option_enabled(n.options, "mail_notifications") != (preset != "tasks")
+            or not option_enabled(n.options, "task_reminders")
+            or option_enabled(n.options, "daily_digest")
+            or option_enabled(n.options, "hourly_summary")
+            for n in service.config.notifiers
         )
+    ):
+        preset = "custom"
     return {
         "preset": preset,
         "quiet_enabled": general.quiet_enabled,
@@ -96,6 +100,13 @@ async def preferences(service: MailFlowService, values: dict[str, Any]) -> dict[
                 else service.t("experience.channel_disabled")
                 if not option_enabled(n.options, "mail_notifications")
                 else "",
+                "task_reason": service.t("experience.channel_disabled")
+                if not n.enabled
+                else service.t("experience.global_disabled")
+                if not general.task_reminders
+                else service.t("experience.channel_disabled")
+                if not option_enabled(n.options, "task_reminders")
+                else "",
             }
             for n in service.config.notifiers
         ],
@@ -118,7 +129,11 @@ async def flush_mail(runtime: MailFlowRuntime) -> None:
         return
     retained: set[str] = set()
     failed = await runtime.deliveries.read()
-    records = [r for ident in rows if (r := await storage.get_mail(ident)) is not None]
+    records = [
+        r
+        for ident in rows
+        if (r := await storage.get_mail(ident)) is not None and not r.is_read and not r.archived
+    ]
     for notifier, config in runtime.notification_channels():
         if (
             not config.enabled
@@ -130,6 +145,10 @@ async def flush_mail(runtime: MailFlowRuntime) -> None:
         if not callable(getattr(notifier, "push_text", None)):
             for record in eligible:
                 await runtime._notify_unlocked(record, only=config.notifier_id)  # pyright: ignore[reportPrivateUsage]
+                if not await storage.get_preference(
+                    f"mail.delivery.{record.record_id}.{config.notifier_id}"
+                ):
+                    retained.add(record.record_id)
             continue
         targets = targets_of(config)
         if not targets and config.options.get("excluded_targets"):
