@@ -94,6 +94,8 @@ class UserWorkflows:
             return (await self.service.reconcile_reply(str(values.get("draft_id", "")))).model_dump(
                 mode="json"
             )
+        if action == "assistant_cancel":
+            return await self.service.cancel_smart_plan(str(values.get("plan_id", "")))
         if action == "source_status":
             return await self.service.source_sync.status(values)
         if action == "source_refresh":

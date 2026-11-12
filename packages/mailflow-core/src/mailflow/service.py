@@ -487,6 +487,10 @@ class MailFlowService:
         self._expiry_task = None
         self._storage_watch_task = None
         self._maintenance_task = None
+        self._smart_plans.clear()
+        self._smart_history.clear()
+        self._assistant_confirmations.clear()
+        self._assistant_chats.clear()
         # User-triggered analysis is temporary too, even in a host that never
         # started background receiving. Cancel it before slow gateway teardown.
         closed = await self._stop_component(
@@ -2155,6 +2159,20 @@ Return every candidate in this batch."""
         return await stage(self, name, arguments)
 
     @admin_operation
+    async def cancel_smart_plan(self, plan_id: str) -> bool:
+        async with self._smart_plan_lock:
+            plan = self._smart_plans.get(plan_id)
+            if plan is not None and plan[0] != current_context():
+                raise translated_error(ValueError, self.t, "ux.plan_expired")
+            self._smart_plans.pop(plan_id, None)
+            history_id = self._smart_history.pop(plan_id, "")
+            try:
+                await self.assistant_history.finish(history_id, {"cancelled": True})
+            except Exception:
+                logger.exception("cannot update cancelled assistant history")
+            return plan is not None
+
+    @admin_operation
     async def apply_smart_plan(
         self, plan_id: str, operations: list[PendingOperation]
     ) -> dict[str, Any]:
@@ -3659,7 +3677,7 @@ Return every candidate in this batch."""
             self._assistant_confirmations.pop(actor, None)
             result = confirmation[1]
             if action in {"取消", "cancel"}:
-                self._smart_plans.pop(result.plan_id, None)
+                await self.cancel_smart_plan(result.plan_id)
                 return self.t("tui.smart_changes_cancelled")
             outcome = await self.apply_smart_plan(result.plan_id, result.pending)
             result.pending = list(outcome["failed"])
@@ -3692,7 +3710,7 @@ Return every candidate in this batch."""
             return self.t("assistant.busy")
         previous = self._assistant_confirmations.pop(actor, None)
         if previous is not None:
-            self._smart_plans.pop(previous[1].plan_id, None)
+            await self.cancel_smart_plan(previous[1].plan_id)
         history = self._assistant_chats.setdefault(actor, [])
         result = await self.smart_action(text, conversation=history[-12:])
         references = "\n".join(

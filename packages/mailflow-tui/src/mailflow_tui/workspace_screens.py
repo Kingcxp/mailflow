@@ -186,6 +186,9 @@ class SourceSyncScreen(WorkflowScreen):
                 )
                 preview = pending["pending"][0]["summary_params"]["preview"]
                 if not await self.ask(self.confirmation(preview)):
+                    await self.service.workspace_call(
+                        "assistant_cancel", {"plan_id": pending["plan_id"]}
+                    )
                     return
                 outcome = await self.service.workspace_call(
                     "source_confirm", {"plan_id": pending["plan_id"]}

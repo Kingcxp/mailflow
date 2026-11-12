@@ -188,12 +188,17 @@ class AssistantPane(Vertical):
                 label = self._service.t("assistant.working")
             progress.write(f"{label}  {done}/{total}")
 
-        task = asyncio.create_task(
-            self._service.smart_action(
+        async def query() -> SmartActionResult:
+            if self._result and self._result.pending:
+                await self._service.workspace_call(
+                    "assistant_cancel", {"plan_id": self._result.plan_id}
+                )
+                self._result.pending.clear()
+            return await self._service.smart_action(
                 text, progress=report, conversation=self._history[-12:], **self._scope
-            ),
-            name="assistant-query",
-        )
+            )
+
+        task = asyncio.create_task(query(), name="assistant-query")
         self._query_task = task
         self._sync_controls()
         try:
@@ -293,6 +298,7 @@ class AssistantPane(Vertical):
                 SmartActionReviewModal(self._service, operations)
             )
             if selected is None:
+                await self._service.workspace_call("assistant_cancel", {"plan_id": result.plan_id})
                 result.pending.clear()
                 self._show_status("tui.smart_changes_cancelled")
                 return

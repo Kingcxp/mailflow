@@ -220,6 +220,37 @@ async def test_remote_smart_task_is_reviewed_and_applied_once(
         await remote.apply_smart_plan(result.plan_id, result.pending)
     assert len(await service.list_actions()) == 1
 
+    service.router = cast(Any, Router())
+    cancelled = await remote.smart_action("Cancel this proposed task")
+    with pytest.raises(RemoteError):
+        await other_session.workspace_call("assistant_cancel", {"plan_id": cancelled.plan_id})
+    assert await remote.workspace_call("assistant_cancel", {"plan_id": cancelled.plan_id})
+    assert not await remote.workspace_call("assistant_cancel", {"plan_id": cancelled.plan_id})
+    with pytest.raises(RemoteError):
+        await remote.apply_smart_plan(cancelled.plan_id, cancelled.pending)
+    history = await remote.workspace_call(
+        "assistant_history", {"query": "Cancel this proposed task"}
+    )
+    assert len(history["records"]) == 1
+    assert not history["records"][0]["needs_confirmation"]
+    assert history["records"][0]["outcome"] and len(await service.list_actions()) == 1
+    service.router = cast(Any, Router())
+    expired = await remote.smart_action("Leave this request for later")
+    import mailflow.assistant_history as history_module
+
+    later = datetime.now(UTC) + timedelta(minutes=21)
+
+    class Later(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return later.astimezone(tz)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(history_module, "datetime", Later)
+        history = await remote.workspace_call("assistant_history", {"query": "Leave this request"})
+        assert service.t("experience.history_expired") in history["records"][0]["answer"]
+    await remote.workspace_call("assistant_cancel", {"plan_id": expired.plan_id})
+
     entered, stopped = asyncio.Event(), asyncio.Event()
 
     # Stopping confirmation must stop server-side work as well as polling.

@@ -45,15 +45,44 @@ class AssistantHistory:
             if len(kept) != len(rows):
                 await workflows.write_value(key, kept)
         query = str(values.get("query", "")).casefold()
+        active = {
+            history_id
+            for plan_id, history_id in self.service._smart_history.items()  # pyright: ignore[reportPrivateUsage]
+            if (plan := self.service._smart_plans.get(plan_id)) is not None  # pyright: ignore[reportPrivateUsage]
+            and plan[1] > datetime.now(UTC)
+        }
+        records: list[dict[str, Any]] = []
+        for row in reversed(kept):
+            outcome = row.get("outcome", "")
+            if row.get("needs_confirmation"):
+                outcome = "\n".join(
+                    filter(
+                        None,
+                        [
+                            outcome,
+                            self.service.t(
+                                "experience.history_pending"
+                                if row["id"] in active
+                                else "experience.history_expired"
+                            ),
+                        ],
+                    )
+                )
+            if (
+                query
+                and query not in (row["request"] + "\n" + row["answer"] + "\n" + outcome).casefold()
+            ):
+                continue
+            records.append(
+                {
+                    **row,
+                    "outcome": outcome,
+                    "answer": row["answer"] + ("\n\n" + outcome if outcome else ""),
+                }
+            )
         return {
             "retention_days": days,
-            "records": [
-                {**r, "answer": r["answer"] + ("\n\n" + r["outcome"] if r.get("outcome") else "")}
-                for r in reversed(kept)
-                if not query
-                or query
-                in (r["request"] + "\n" + r["answer"] + "\n" + r.get("outcome", "")).casefold()
-            ],
+            "records": records,
         }
 
     async def change(self, values: dict[str, Any]) -> dict[str, Any]:
@@ -91,7 +120,8 @@ class AssistantHistory:
             "request": request,
             "answer": result.final_text,
             "references": references,
-            "outcome": self.service.t("experience.history_pending") if result.pending else "",
+            "outcome": "",
+            "needs_confirmation": bool(result.pending),
             "applied": 0,
         }
         workflows = self.service.workflows
@@ -118,7 +148,16 @@ class AssistantHistory:
             if row is None:
                 return
             row["applied"] = row.get("applied", 0) + int(result.get("applied", 0))
-            row["outcome"] = self.service.t("experience.history_applied", count=row["applied"])
+            row["needs_confirmation"] = bool(result.get("failed"))
+            row["outcome"] = (
+                self.service.t("experience.history_applied", count=row["applied"])
+                if row["applied"] or not result.get("cancelled")
+                else ""
+            )
+            if result.get("cancelled"):
+                row["outcome"] = "\n".join(
+                    filter(None, [row["outcome"], self.service.t("tui.smart_changes_cancelled")])
+                )
             if result.get("errors"):
                 row["outcome"] += "\n" + "\n".join(result["errors"])
             for ident, state in result.get("source_results", {}).items():

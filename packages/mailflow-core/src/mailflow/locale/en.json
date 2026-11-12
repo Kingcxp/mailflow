@@ -1668,6 +1668,7 @@
       "capability_restore": "Safe restore",
       "capability_error": "Detection incomplete",
       "history_pending": "Awaiting confirmation; changes have not been executed.",
+      "history_expired": "The previous confirmation has expired. Start a new request to make further changes.",
       "history_applied": "Completed {count} operation(s).",
       "history_save_failed": "This result could not be saved to history. Current results and operations remain available.",
       "sent_check": "Check send result",

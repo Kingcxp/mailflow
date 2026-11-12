@@ -1668,6 +1668,7 @@
       "capability_restore": "安全恢复",
       "capability_error": "检测未完成",
       "history_pending": "等待确认，尚未执行修改。",
+      "history_expired": "原确认已失效。如需继续修改，请重新发起需求。",
       "history_applied": "已完成 {count} 项操作。",
       "history_save_failed": "本次结果未能保存到助手历史，当前结果和操作仍可使用。",
       "sent_check": "核对发送结果",
