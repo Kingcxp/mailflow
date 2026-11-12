@@ -20,6 +20,193 @@ from mailflow_tui.mail_workflows import WorkflowScreen, save_attachment
 from mailflow_tui.widgets import Input, SafeSelect, SelectionTable, TextArea
 
 
+class SourceSyncScreen(WorkflowScreen):
+    def __init__(self, service: MailFlowService, record_ids: list[str] | None = None) -> None:
+        super().__init__(service)
+        self.record_ids = list(record_ids or [])
+        self.busy = False
+        self.source_state: dict[str, Any] = {"accounts": [], "operations": []}
+        self.capabilities: dict[str, dict[str, Any]] = {}
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self.t("experience.source_sync"))
+            yield Static(self.t("experience.source_confirmation"), markup=False)
+            yield SafeSelect(
+                [(a.account_id, a.account_id) for a in self.service.config.accounts],
+                id="source-account",
+                prompt=self.t("tui.entry_pick_first"),
+            )
+            yield Checkbox(self.t("experience.source_enabled"), id="source-enabled")
+            for role in ("archive", "trash", "sent"):
+                yield Input(placeholder=self.t("experience.folder_" + role), id="source-" + role)
+            yield TextArea("", id="source-status", read_only=True)
+            yield SafeSelect([], id="source-pending", prompt=self.t("experience.source_pending"))
+            yield Static("", id="workflow-status", markup=False)
+            with Horizontal():
+                for op, key in [
+                    ("save", "saved"),
+                    ("detect", "source_detect"),
+                    ("refresh", "source_refresh"),
+                    ("retry", "source_retry"),
+                    ("delete", "source_delete"),
+                    ("restore", "source_restore"),
+                    ("back", "back"),
+                ]:
+                    yield Button(
+                        self.t("experience." + key) if op != "save" else self.t("tui.btn_save"),
+                        id="source-" + op,
+                        disabled=op != "back",
+                    )
+
+    async def on_mount(self) -> None:
+        await self.render_state(await self.service.workspace_call("source_status"))
+
+    async def render_state(self, state: dict[str, Any]) -> None:
+        self.source_state = state
+        text: list[str] = []
+        for row in state["accounts"]:
+            if row["capabilities"]:
+                self.capabilities[row["account_id"]] = row["capabilities"]
+            text.append(
+                row["account_id"]
+                + ": "
+                + self.t("experience.source_enabled" if row["enabled"] else "experience.source_off")
+            )
+            for key, value in row["capabilities"].items():
+                if key == "folders":
+                    text.extend(
+                        self.t("experience.folder_" + role) + ": " + name
+                        for role, name in value.items()
+                    )
+                else:
+                    text.append(
+                        self.t("experience.capability_" + key)
+                        + ": "
+                        + (
+                            self.t("common.yes" if value else "common.no")
+                            if isinstance(value, bool)
+                            else str(value)
+                        )
+                    )
+        self.query_one("#source-status", TextArea).load_text("\n".join(text))
+        cast(Select[str], self.query_one("#source-pending", Select)).set_options(
+            [(r["account_id"] + " · " + r["record_id"], r["id"]) for r in state["operations"]]
+        )
+        self.update_buttons()
+
+    def update_buttons(self) -> None:
+        if not self.is_attached:
+            return
+        account_id = cast(Select[str], self.query_one("#source-account", Select)).value
+        selected = next(
+            (r for r in self.source_state["accounts"] if r["account_id"] == account_id), None
+        )
+        supported = bool(selected and selected["supported"])
+        for op in ("save", "detect", "refresh", "retry", "delete", "restore"):
+            available = supported
+            if op == "detect":
+                available = any(r["supported"] for r in self.source_state["accounts"])
+            elif op == "refresh":
+                available = any(
+                    r["supported"] and r["enabled"] for r in self.source_state["accounts"]
+                )
+            elif op == "retry":
+                available = isinstance(
+                    cast(Select[str], self.query_one("#source-pending", Select)).value, str
+                )
+            elif op in {"delete", "restore"}:
+                available = bool(
+                    self.record_ids
+                    and selected
+                    and selected["enabled"]
+                    and self.capabilities.get(str(account_id), {}).get(
+                        "trash" if op == "delete" else "restore"
+                    )
+                )
+            self.query_one("#source-" + op, Button).disabled = self.busy or not available
+        self.query_one("#source-enabled", Checkbox).disabled = self.busy or not supported
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "source-account":
+            account = next(
+                (a for a in self.service.config.accounts if a.account_id == event.value), None
+            )
+            if account:
+                self.query_one("#source-enabled", Checkbox).value = account.state_sync
+                for role in ("archive", "trash", "sent"):
+                    self.query_one("#source-" + role, Input).value = str(
+                        account.options.get(role + "_folder", "")
+                    )
+        self.update_buttons()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if self.busy:
+            return
+        if event.button.id == "source-back":
+            self.dismiss(None)
+            return
+        self.busy = True
+        self.update_buttons()
+        self.run_worker(self.operate(str(event.button.id)), exclusive=True, exit_on_error=False)
+
+    async def operate(self, ident: str) -> None:
+        try:
+            if ident == "source-save":
+                account_id = cast(Select[str], self.query_one("#source-account", Select)).value
+                index = next(
+                    i
+                    for i, a in enumerate(self.service.config.accounts)
+                    if a.account_id == account_id
+                )
+                account = self.service.config.accounts[index].model_copy(deep=True)
+                account.state_sync = self.query_one("#source-enabled", Checkbox).value
+                for role in ("archive", "trash", "sent"):
+                    raw = self.query_one("#source-" + role, Input).value.strip()
+                    if raw:
+                        account.options[role + "_folder"] = raw
+                    else:
+                        account.options.pop(role + "_folder", None)
+                await self.service.update_config_entry("accounts", index, account.model_dump())
+                self.status(self.t("experience.saved"))
+            elif ident in {"source-delete", "source-restore"}:
+                pending = await self.service.workspace_call(
+                    "source_prepare",
+                    {
+                        "operation": "delete" if ident == "source-delete" else "restore",
+                        "record_ids": self.record_ids,
+                    },
+                )
+                preview = pending["pending"][0]["summary_params"]["preview"]
+                if not await self.ask(self.confirmation(preview)):
+                    return
+                outcome = await self.service.workspace_call(
+                    "source_confirm", {"plan_id": pending["plan_id"]}
+                )
+                self.status(
+                    "\n".join(r["message"] for r in outcome.get("source_results", {}).values())
+                )
+            elif ident == "source-retry":
+                if not await self.ask(self.confirmation(self.t("experience.source_confirmation"))):
+                    return
+                result = await self.service.workspace_call(
+                    "source_retry",
+                    {"id": str(cast(Select[str], self.query_one("#source-pending", Select)).value)},
+                )
+                self.status(result["message"])
+            state = await self.service.workspace_call(
+                "source_refresh" if ident == "source-refresh" else "source_status",
+                {"detect": ident == "source-detect"},
+            )
+            await self.render_state(state)
+        except Exception as exc:
+            self.status(error_text(exc, self.t))
+        finally:
+            self.busy = False
+            self.update_buttons()
+
+
 class AttachmentLibraryScreen(WorkflowScreen):
     def __init__(self, service: MailFlowService, account_id: str = "") -> None:
         super().__init__(service)

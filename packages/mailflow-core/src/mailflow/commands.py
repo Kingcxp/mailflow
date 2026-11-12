@@ -64,6 +64,7 @@ _TOPICS = (
     "notifications",
     "files",
     "backup",
+    "source",
     "mail",
     "action",
     "plugin",
@@ -254,6 +255,7 @@ class CommandRouter:
             "notifications": self._cmd_notifications,
             "files": self._cmd_files,
             "backup": self._cmd_backup,
+            "source": self._cmd_source,
             "help": self._cmd_help,
             "mail": self._cmd_mail,
             "action": self._cmd_action,
@@ -786,6 +788,66 @@ class CommandRouter:
             self._t("mail.wipe_done", mails=moved, trash=purged)
             + f"\n({self._t('plugin.applies_now')})"
         )
+
+    async def _cmd_source(self, args: list[str]) -> CommandResponse:
+        if args and args[0] in {"on", "off"} and len(args) == 2:
+            index = next(
+                (
+                    i
+                    for i, account in enumerate(self.service.config.accounts)
+                    if account.account_id == args[1]
+                ),
+                None,
+            )
+            if index is None:
+                return self._err(self._t("experience.account_unavailable"))
+            await self.service.set_setting(f"accounts[{index}].state_sync", args[0] == "on")
+            return self._ok(self._t("experience.saved"))
+        if args and args[0] in {"delete", "restore"} and len(args) >= 2:
+            result = await self.service.workspace_call(
+                "source_prepare", {"operation": args[0], "record_ids": args[1:]}
+            )
+            preview = result["pending"][0]["summary_params"]["preview"]
+            return self._ok(
+                preview
+                + "\n"
+                + self._t("experience.source_confirm_command", token=result["plan_id"])
+            )
+        if len(args) == 2 and args[0] == "confirm":
+            result = await self.service.workspace_call("source_confirm", {"plan_id": args[1]})
+            return self._ok(
+                "\n".join(
+                    key + ": " + value["message"]
+                    for key, value in result.get("source_results", {}).items()
+                )
+                or self._t("experience.source_synced")
+            )
+        if len(args) == 3 and args[0] == "retry" and args[2] == "CONFIRM":
+            result = await self.service.workspace_call("source_retry", {"id": args[1]})
+            return self._ok(result["message"])
+        if not args or args[0] in {"status", "detect", "refresh"}:
+            state = await self.service.workspace_call(
+                "source_refresh" if args and args[0] == "refresh" else "source_status",
+                {"detect": bool(args and args[0] == "detect")},
+            )
+            return self._ok(
+                "\n".join(
+                    r["account_id"]
+                    + ": "
+                    + self._t(
+                        "experience.source_synced" if r["enabled"] else "experience.source_off"
+                    )
+                    + "\n"
+                    + json.dumps(r["capabilities"], ensure_ascii=False)
+                    for r in state["accounts"]
+                )
+                + "\n"
+                + "\n".join(
+                    r["id"] + ": " + r["record_id"] + " · " + self._t("experience.source_pending")
+                    for r in state["operations"]
+                )
+            )
+        return self._err(self._t("source.usage"))
 
     async def _cmd_files(self, args: list[str]) -> CommandResponse:
         import base64

@@ -68,6 +68,7 @@ def authorize_command(command: str, args: list[str], translate: Callable[..., st
         "help": None,
         "assistant": None,
         "files": {"", "list"},
+        "source": {"", "status"},
         "example": None,
         "status": None,
         "runtime": None,

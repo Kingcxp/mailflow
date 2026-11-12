@@ -85,6 +85,59 @@ class UserWorkflows:
             from mailflow.chat_files import send_file
 
             return await send_file(self.service, values)
+        if action == "source_status":
+            return await self.service.source_sync.status(values)
+        if action == "source_refresh":
+            require_admin(self.service.t)
+            await self.service.source_sync.refresh(values)
+            return await self.service.source_sync.status({})
+        if action == "source_retry":
+            return await self.service.source_sync.retry(values)
+        if action in {"source_prepare", "source_preview"}:
+            from mailflow.domain import PendingOperation
+
+            require_admin(self.service.t)
+            operation = str(values.get("operation", "delete"))
+            if operation not in {"delete", "restore"}:
+                raise self.error("common.unsupported")
+            ids = list(dict.fromkeys(str(i) for i in values.get("record_ids", [])))
+            rows = (
+                await self.service.list_mails()
+                if operation == "delete"
+                else [t.to_mail_record() for t in await self.service.list_trash()]
+            )
+            records = [r for r in rows if r.record_id in ids]
+            if len(records) != len(ids) or not records:
+                raise self.error("reply.mail_not_found")
+            for record in records:
+                source = self.service.source_sync.source(record)
+                if source is None:
+                    raise self.error("experience.source_off")
+                capabilities = await source.source_capabilities()
+                if not getattr(capabilities, "trash" if operation == "delete" else "restore"):
+                    raise self.error("experience.source_unsupported")
+            source_preview_text = (
+                self.service.t("experience.source_confirmation")
+                + "\n"
+                + "\n".join(
+                    f"{r.mail.account_id} · {r.mail.subject} [{r.record_id}]" for r in records
+                )
+            )
+            pending = PendingOperation(
+                tool="source_mail",
+                arguments={"record_ids": ids, "operation": operation},
+                record_ids=ids,
+                summary_key="experience.source_preview",
+                summary_params={"preview": source_preview_text},
+            )
+            if action == "source_preview":
+                return pending.model_dump(mode="json")
+            return self.service.prepare_operations([pending]).model_dump(mode="json")
+        if action == "source_confirm":
+            require_admin(self.service.t)
+            plan_id = str(values.get("plan_id", ""))
+            plan = self.service._smart_plans.get(plan_id)  # pyright: ignore[reportPrivateUsage]
+            return await self.service.apply_smart_plan(plan_id, plan[2] if plan else [])
         if action.startswith("backup_"):
             from pathlib import Path
 

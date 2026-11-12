@@ -937,6 +937,86 @@ async def test_assistant_history_is_private_searchable_and_can_be_disabled(
     assert not (await service.workspace_call("assistant_history"))["records"]
 
 
+async def test_source_sync_protects_pending_edits_and_does_not_replay_unknown_delete(
+    service: MailFlowService,
+) -> None:
+    from mailflow.config import MailAccountConfig
+    from mailflow.domain import SourceCapabilities, SourceMailState
+
+    from mailflow_test_support.service import RecordingSource
+
+    class Source(RecordingSource):
+        def __init__(self) -> None:
+            super().__init__()
+            self.state = SourceMailState(
+                message_id="source-message",
+                provider_message_id="INBOX:1:2",
+                known=True,
+                is_read=False,
+                starred=False,
+                archived=False,
+            )
+            self.fail = False
+            self.calls = 0
+
+        async def source_capabilities(self) -> SourceCapabilities:
+            return SourceCapabilities(
+                is_read=True, starred=True, archived=True, trash=True, restore=True
+            )
+
+        async def read_source_state(self, mails: Any) -> list[SourceMailState]:
+            return [self.state.model_copy(deep=True)]
+
+        async def change_source_state(self, mail: Any, changes: dict[str, Any]) -> SourceMailState:
+            self.calls += 1
+            if self.fail:
+                raise OSError("connection lost")
+            self.state = self.state.model_copy(
+                update={k: v for k, v in changes.items() if k != "restore_folder"}
+            )
+            return self.state.model_copy(deep=True)
+
+    record = make_record("source-mail")
+    record.mail.message_id = "source-message"
+    record.mail.provider_message_id = "INBOX:1:2"
+    await service.storage.save_mail(record)
+    source = Source()
+    service.sources[record.mail.account_id] = source
+    service.config.accounts = [
+        MailAccountConfig(account_id=record.mail.account_id, provider="fake")
+    ]
+    await service.source_sync.refresh()
+    assert source.calls == 0
+    service.config.accounts[0].state_sync = True
+    source.fail = True
+    result = await service.set_mail_state([record.record_id], starred=True)
+    assert result.source_results[record.record_id]["state"] == "unknown"
+    await service.source_sync.refresh()
+    saved = await service.get_mail(record.record_id)
+    assert saved and saved.starred and source.calls == 1
+    source.state.starred = True
+    await service.source_sync.refresh()
+    assert not (await service.workspace_call("source_status"))["operations"]
+    plan = await service.workspace_call(
+        "source_prepare", {"record_ids": [record.record_id], "operation": "delete"}
+    )
+    outcome = await service.workspace_call("source_confirm", {"plan_id": plan["plan_id"]})
+    assert outcome["source_results"][record.record_id]["state"] == "unknown"
+    calls = source.calls
+    await service.source_sync.refresh()
+    assert source.calls == calls and await service.get_mail(record.record_id) is None
+    source.state.deleted = True
+    source.state.provider_message_id = "Trash:9:22"
+    await service.source_sync.refresh()
+    source.state.deleted = False
+    source.state.provider_message_id = "INBOX:1:3"
+    await service.source_sync.refresh()
+    assert await service.get_mail(record.record_id) is not None
+    await service.batch_mail([record.record_id])
+    await service.source_sync.refresh()
+    assert await service.get_mail(record.record_id) is None
+
+
 async def test_saved_filters_roll_forward_and_threads_ignore_subject_collisions(
     service: MailFlowService,
 ) -> None:

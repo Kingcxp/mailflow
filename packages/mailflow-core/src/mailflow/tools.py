@@ -507,7 +507,7 @@ class ToolRegistry:
     ) -> tuple[str, PendingOperation | None]:
         ids = (
             arguments.get("record_ids", [])
-            if name == "update_mail"
+            if name in {"update_mail", "source_mail"}
             else [arguments["record_id"]]
             if name == "write_reply"
             else [arguments["mail_id"]]

@@ -126,6 +126,7 @@ class MailMenu(WorkflowScreen):
                                     "reply_all",
                                     "forward",
                                     "attachment_library",
+                                    "source_sync",
                                 }
                                 else "ux."
                             )
@@ -138,6 +139,7 @@ class MailMenu(WorkflowScreen):
                         "filter",
                         "saved_filters",
                         "attachment_library",
+                        "source_sync",
                         "compose",
                         "thread",
                         "reply_all",
@@ -595,6 +597,7 @@ class TrashScreen(WorkflowScreen):
                 yield Button(
                     self.t("ux.restore"), id="trash-restore", variant="primary", disabled=True
                 )
+                yield Button(self.t("experience.source_restore"), id="trash-source", disabled=True)
                 yield Button(
                     self.t("ux.permanent_delete"), id="trash-purge", variant="error", disabled=True
                 )
@@ -641,9 +644,15 @@ class TrashScreen(WorkflowScreen):
     def _sync_controls(self) -> None:
         table = self.query_one("#trash-table", SelectionTable)
         available = bool(table.checked_keys or table.row_count)
-        for ident in ("trash-restore", "trash-purge", "trash-refresh", "trash-close"):
+        for ident in (
+            "trash-restore",
+            "trash-source",
+            "trash-purge",
+            "trash-refresh",
+            "trash-close",
+        ):
             self.query_one(f"#{ident}", Button).disabled = self.busy or (
-                ident in {"trash-restore", "trash-purge"} and not available
+                ident in {"trash-restore", "trash-source", "trash-purge"} and not available
             )
         table.disabled = self.busy
         self.query_one("#trash-search", Input).disabled = self.busy
@@ -676,6 +685,16 @@ class TrashScreen(WorkflowScreen):
                 self._sync_controls()
 
     async def _operate(self, ident: str) -> None:
+        if ident == "trash-source":
+            from mailflow_tui.workspace_screens import SourceSyncScreen
+
+            table = self.query_one("#trash-table", SelectionTable)
+            ids = sorted(table.checked_keys)
+            if not table.checked_keys:
+                ids = [str(list(table.rows)[table.cursor_row].value)]
+            await self.ask(SourceSyncScreen(self.service, ids))
+            await self.refresh_rows()
+            return
         if ident == "trash-refresh":
             await self.refresh_rows()
             return

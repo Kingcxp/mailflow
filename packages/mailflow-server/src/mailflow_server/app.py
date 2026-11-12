@@ -521,6 +521,7 @@ def create_app(service: MailFlowService) -> FastAPI:
                 body.get("record_ids", []),
                 operation=body.get("operation", "delete"),
                 delete_actions=bool(body.get("delete_actions", False)),
+                source=bool(body.get("source", False)),
             )
         )
 

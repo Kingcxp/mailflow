@@ -26,6 +26,8 @@ from mailflow.domain import (
     NotificationCapabilities,
     NotificationMessage,
     ReplyDraft,
+    SourceCapabilities,
+    SourceMailState,
     TrashRecord,
     Urgency,
 )
@@ -75,6 +77,17 @@ class MessageSource(Protocol):
     """Optional full composition; legacy sources keep their reply contract."""
 
     async def send_message(self, draft: ReplyDraft) -> None: ...
+
+
+@runtime_checkable
+class StateSyncSource(Protocol):
+    async def source_capabilities(self) -> SourceCapabilities: ...
+
+    async def read_source_state(self, mails: list[MailMessage]) -> list[SourceMailState]: ...
+
+    async def change_source_state(
+        self, mail: MailMessage, changes: dict[str, Any]
+    ) -> SourceMailState: ...
 
 
 class SyncCursorError(RuntimeError):

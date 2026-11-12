@@ -16,6 +16,14 @@ if TYPE_CHECKING:
 
 
 SCHEMAS: dict[str, tuple[str, dict[str, Any], list[str]]] = {
+    "source_mail": (
+        "Propose moving mail to the original mailbox trash or restoring it, only when explicitly requested. Local deletion uses delete_mail. Requires enabled account state sync and confirmation.",
+        {
+            "record_ids": {"type": "array", "items": {"type": "string"}},
+            "operation": {"type": "string", "enum": ["delete", "restore"]},
+        },
+        ["record_ids", "operation"],
+    ),
     "inspect_app": (
         "Inspect runtime, accounts, models, plugins, gateways or an exact setting key. Plugin query searches configured repositories.",
         {
@@ -188,6 +196,10 @@ async def stage(
         raise translated_error(ValueError, service.t, "ux.unsupported")
     values = dict(args)
     description = service.t(f"assistant.operation_{name}")
+    if name == "source_mail":
+        pending = await service.workspace_call("source_preview", args)
+        operation = PendingOperation.model_validate(pending)
+        return operation.summary_params["preview"], operation
     if name == "manage_plugin":
         identity, action = str(args.get("plugin_id", "")), str(args.get("action", ""))
         if action not in {"install", "uninstall", "enable", "disable"}:

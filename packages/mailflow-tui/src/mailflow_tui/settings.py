@@ -382,7 +382,7 @@ _MINIMAL_CORE_FIELDS: dict[str, frozenset[str]] = {
     # of the form on purpose: a slow or cold model that cannot answer within the
     # default needs it raised, and hunting for it in TOML is not acceptable.
     "llms": frozenset({"llm_id", "model", "provider", "timeout_seconds", "max_retries"}),
-    "accounts": frozenset({"account_id", "provider", "email", "enabled"}),
+    "accounts": frozenset({"account_id", "provider", "email", "enabled", "state_sync"}),
 }
 
 _IMAP_PRESET_HOSTS: dict[str, tuple[str, int, bool]] = {

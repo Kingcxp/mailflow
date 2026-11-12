@@ -37,6 +37,8 @@ from mailflow.domain import (
     MailAddress,
     MailMessage,
     ReplyDraft,
+    SourceCapabilities,
+    SourceMailState,
 )
 from mailflow.forms import FormField
 from mailflow.mail_body import html_to_text
@@ -646,7 +648,10 @@ class IMAPSource:
         try:
             folder, validity, uid = mail.provider_message_id.rsplit(":", 2)
             if folder != self._folder:
-                raise ValueError("mail folder changed")
+                from mailflow_mail_imap.state_sync import quote
+
+                if client.select(quote(folder), readonly=True)[0] != "OK":
+                    raise FileNotFoundError("source folder unavailable")
             if validity != self._validity(client):
                 message_id = mail.headers.get("Message-ID") or mail.message_id
                 message_id = message_id.replace("\r", "").replace("\n", "").replace('"', "")
@@ -691,6 +696,23 @@ class IMAPSource:
 
     async def fetch_attachment(self, mail: MailMessage, index: int) -> bytes:
         return await asyncio.to_thread(self._download_attachment, mail, index)
+
+    async def source_capabilities(self) -> SourceCapabilities:
+        from mailflow_mail_imap.state_sync import IMAPState
+
+        return await asyncio.to_thread(IMAPState(self).capabilities)
+
+    async def read_source_state(self, mails: list[MailMessage]) -> list[SourceMailState]:
+        from mailflow_mail_imap.state_sync import IMAPState
+
+        return await asyncio.to_thread(IMAPState(self).read, mails)
+
+    async def change_source_state(
+        self, mail: MailMessage, changes: dict[str, Any]
+    ) -> SourceMailState:
+        from mailflow_mail_imap.state_sync import IMAPState
+
+        return await asyncio.to_thread(IMAPState(self).change, mail, changes)
 
     async def fetch_history(self, limit: int = 50, offset: int = 0) -> list[MailMessage]:
         return await asyncio.to_thread(self._fetch_history, limit, offset)
@@ -831,6 +853,9 @@ def account_form(preset: str = "qq") -> tuple[FormField, ...]:
         FormField("imap_port", kind="number", default=993),
         FormField("imap_ssl", kind="boolean", default=True),
         FormField("imap_folder", default="INBOX"),
+        FormField("archive_folder", label_key="experience.folder_archive"),
+        FormField("trash_folder", label_key="experience.folder_trash"),
+        FormField("sent_folder", label_key="experience.folder_sent"),
         FormField("smtp_host"),
         FormField("smtp_port", kind="number", default=465),
         FormField("smtp_ssl", kind="boolean", default=True),

@@ -194,7 +194,15 @@
         "general.task_reminders": "待办提醒",
         "general.daily_digest": "每日待办摘要",
         "general.daily_digest_hour": "每日待办摘要发送小时；留空沿用提醒时间。",
-        "general.daily_digest_minute": "每日待办摘要发送分钟；留空沿用提醒时间。"
+        "general.daily_digest_minute": "每日待办摘要发送分钟；留空沿用提醒时间。",
+        "accounts[].state_sync": "默认关闭。开启后同步已读、收藏和归档；删除与恢复原邮箱邮件仍需明确确认。仅支持可可靠核对的能力。",
+        "general.auto_backup": "默认关闭。开启后在配置时区每天备份一次，错过时下次服务启动补一份；单次命令不会启动备份循环。",
+        "general.backup_directory": "自动备份保存目录，相对路径以配置文件所在目录为准。备份包含配置、数据库及已缓存和上传的附件。",
+        "general.backup_time": "自动备份时间，使用配置时区，默认 04:30。",
+        "general.backup_keep": "自动保留最近的备份份数，默认 7 份；手动和恢复前备份不会自动删除。",
+        "general.quiet_enabled": "默认关闭。开启后普通邮件通知延后，到期提醒遵守有效时间与事项状态，不补发已失效提醒。",
+        "general.quiet_start": "免打扰开始时间，使用配置时区，默认 22:00。",
+        "general.quiet_end": "免打扰结束时间，使用配置时区，默认 08:00；结束后合并仍有意义的邮件通知。"
       },
       "collection": "{count} 项",
       "description": "说明",
@@ -1080,7 +1088,15 @@
         "channel": "频道",
         "secret": "签名密钥",
         "send_key": "推送密钥",
-        "title": "通知标题"
+        "title": "通知标题",
+        "state_sync": "原邮箱状态联动（默认关闭）",
+        "auto_backup": "每日自动备份（默认关闭）",
+        "backup_directory": "备份目录",
+        "backup_time": "备份时间（配置时区）",
+        "backup_keep": "保留备份份数",
+        "quiet_enabled": "启用免打扰",
+        "quiet_start": "免打扰开始时间",
+        "quiet_end": "免打扰结束时间"
       },
       "smart_tool_find_mail": "查找邮件",
       "smart_tool_read_mail": "读取邮件详情",
@@ -1624,7 +1640,31 @@
       "download_result": "已下载 {success} 项，失败 {failed} 项。",
       "backup_preview": "将恢复 {accounts} 个账户、{mails} 封邮件、{tasks} 项待办和 {files} 个缓存或上传文件。未下载的附件仍需原邮箱。",
       "file_send_unsupported": "该渠道暂不支持文件投递，请在终端附件中心下载。",
-      "file_sent": "文件已发送到当前会话。"
+      "file_sent": "文件已发送到当前会话。",
+      "source_sync": "原邮箱联动",
+      "source_confirmation": "仅在账户开启联动并支持安全移动时操作原邮箱。请核对账户、邮件及作用范围；本地永久清除不会删除原邮箱。",
+      "source_enabled": "原邮箱联动已开启",
+      "source_off": "原邮箱联动未开启或此邮件源不支持，请在对应账户设置中检查。",
+      "source_synced": "原邮箱状态已确认同步。",
+      "source_pending": "本地结果已保留，原邮箱结果尚未确认。请检查连接后核对状态，必要时手动重试。",
+      "source_unsupported": "原邮箱未提供可靠的移动或恢复能力。请检测目录与能力，或仅操作本地记录。",
+      "source_detect": "检测目录与能力",
+      "source_refresh": "核对原邮箱状态",
+      "source_retry": "重试所选操作",
+      "source_delete": "同时移入原邮箱回收站",
+      "source_restore": "同时恢复原邮箱邮件",
+      "source_preview": "{preview}",
+      "source_confirm_command": "核对后使用 source confirm {token} 确认。",
+      "folder_inbox": "收件目录",
+      "folder_archive": "归档目录（留空自动识别）",
+      "folder_trash": "回收站目录（留空自动识别）",
+      "folder_sent": "已发送目录（留空自动识别）",
+      "capability_is_read": "同步已读状态",
+      "capability_starred": "同步收藏状态",
+      "capability_archived": "安全归档",
+      "capability_trash": "安全移入回收站",
+      "capability_restore": "安全恢复",
+      "capability_error": "检测未完成"
     },
     "notifications": {
       "usage": "notifications <status|instant|important|tasks|quiet on/off [22:00 08:00]|check>"
@@ -1634,6 +1674,9 @@
     },
     "backup": {
       "usage": "backup <create|preview FILE_ID|restore FILE_ID CONFIRM>"
+    },
+    "source": {
+      "usage": "source <status|detect|refresh|on/off ACCOUNT|delete/restore MAIL_ID...|confirm TOKEN|retry OPERATION_ID CONFIRM>"
     }
   }
 }

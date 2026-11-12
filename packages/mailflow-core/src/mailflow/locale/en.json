@@ -194,7 +194,15 @@
         "general.task_reminders": "Task reminders",
         "general.daily_digest": "Daily task digest",
         "general.daily_digest_hour": "Daily task digest hour; empty follows the reminder hour.",
-        "general.daily_digest_minute": "Daily task digest minute; empty follows the reminder minute."
+        "general.daily_digest_minute": "Daily task digest minute; empty follows the reminder minute.",
+        "accounts[].state_sync": "Off by default. Synchronize read, starred and archived states. Mailbox deletion and restoration still require explicit confirmation; only reliably supported operations are enabled.",
+        "general.auto_backup": "Off by default. Back up daily in the configured timezone; a missed backup is caught up once while the service runs. One-shot commands do not start backup loops.",
+        "general.backup_directory": "Automatic backup directory, relative to the configuration file. Includes configuration, database and cached or uploaded attachments.",
+        "general.backup_time": "Daily backup time in the configured timezone; defaults to 04:30.",
+        "general.backup_keep": "Number of automatic backups to keep; defaults to 7. Manual and pre-restore backups are not automatically removed.",
+        "general.quiet_enabled": "Off by default. Defer ordinary mail notifications during quiet hours. Task reminders obey current task state and time windows; obsolete reminders are not replayed.",
+        "general.quiet_start": "Quiet hours start in the configured timezone; defaults to 22:00.",
+        "general.quiet_end": "Quiet hours end in the configured timezone; defaults to 08:00. Relevant mail notifications are merged afterward."
       },
       "collection": "{count} entries",
       "description": "DESCRIPTION",
@@ -1080,7 +1088,15 @@
         "channel": "Channel",
         "secret": "Signing secret",
         "send_key": "Send key",
-        "title": "Notification title"
+        "title": "Notification title",
+        "state_sync": "Synchronize mailbox state (off by default)",
+        "auto_backup": "Daily automatic backup (off by default)",
+        "backup_directory": "Backup directory",
+        "backup_time": "Backup time (configured timezone)",
+        "backup_keep": "Number of backups to keep",
+        "quiet_enabled": "Enable quiet hours",
+        "quiet_start": "Quiet hours start",
+        "quiet_end": "Quiet hours end"
       },
       "smart_tool_find_mail": "find mail",
       "smart_tool_read_mail": "read mail details",
@@ -1624,7 +1640,31 @@
       "download_result": "Downloaded {success}; failed {failed}.",
       "backup_preview": "Restore {accounts} accounts, {mails} messages, {tasks} tasks and {files} cached/uploaded files. Uncached attachments still require the mailbox.",
       "file_send_unsupported": "This channel cannot deliver files; use the terminal attachment library.",
-      "file_sent": "File sent to this conversation."
+      "file_sent": "File sent to this conversation.",
+      "source_sync": "Mailbox synchronization",
+      "source_confirmation": "Only opted-in accounts with safe move support can change the mailbox. Review accounts, messages and scope. Local permanent removal never purges the mailbox.",
+      "source_enabled": "Mailbox synchronization enabled",
+      "source_off": "Mailbox synchronization is off or unsupported. Check this account’s settings.",
+      "source_synced": "Mailbox state confirmed.",
+      "source_pending": "Local results are preserved; mailbox results are unconfirmed. Check the connection and reconcile before retrying manually.",
+      "source_unsupported": "The mailbox does not offer reliable move or restore support. Check folders and capabilities, or use local operations.",
+      "source_detect": "Detect folders and capabilities",
+      "source_refresh": "Reconcile mailbox state",
+      "source_retry": "Retry selected operation",
+      "source_delete": "Move to mailbox trash too",
+      "source_restore": "Restore mailbox mail too",
+      "source_preview": "{preview}",
+      "source_confirm_command": "Review, then use source confirm {token}.",
+      "folder_inbox": "Inbox folder",
+      "folder_archive": "Archive folder (blank detects automatically)",
+      "folder_trash": "Trash folder (blank detects automatically)",
+      "folder_sent": "Sent folder (blank detects automatically)",
+      "capability_is_read": "Read state synchronization",
+      "capability_starred": "Star synchronization",
+      "capability_archived": "Safe archive",
+      "capability_trash": "Safe move to trash",
+      "capability_restore": "Safe restore",
+      "capability_error": "Detection incomplete"
     },
     "notifications": {
       "usage": "notifications <status|instant|important|tasks|quiet on/off [22:00 08:00]|check>"
@@ -1634,6 +1674,9 @@
     },
     "backup": {
       "usage": "backup <create|preview FILE_ID|restore FILE_ID CONFIRM>"
+    },
+    "source": {
+      "usage": "source <status|detect|refresh|on/off ACCOUNT|delete/restore MAIL_ID...|confirm TOKEN|retry OPERATION_ID CONFIRM>"
     }
   }
 }

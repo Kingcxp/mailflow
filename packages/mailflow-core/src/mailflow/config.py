@@ -298,6 +298,10 @@ class MailAccountConfig(BaseModel):
     provider: str = Field(description="Mail source adapter component id (e.g. fake)")
     email: str = Field(default="", description="Account email address")
     enabled: bool = Field(default=True, description="Whether this account is polled")
+    state_sync: bool = Field(
+        default=False,
+        description="Opt in to source read/star/archive and explicit trash/restore synchronization",
+    )
     options: dict[str, Any] = Field(
         default_factory=lambda: {},
         description="Provider-specific settings (e.g. fake mail definitions)",

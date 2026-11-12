@@ -455,6 +455,25 @@ class NotificationImage(BaseModel):
     data: bytes
 
 
+class SourceCapabilities(BaseModel):
+    is_read: bool = False
+    starred: bool = False
+    archived: bool = False
+    trash: bool = False
+    restore: bool = False
+    folders: dict[str, str] = Field(default_factory=lambda: {})
+
+
+class SourceMailState(BaseModel):
+    message_id: str
+    provider_message_id: str = ""
+    known: bool = False
+    deleted: bool = False
+    is_read: bool | None = None
+    starred: bool | None = None
+    archived: bool | None = None
+
+
 class NotificationMessage(BaseModel):
     text: str = ""
     images: list[NotificationImage] = Field(default_factory=lambda: [])
@@ -682,6 +701,7 @@ class AccountSnapshot(BaseModel):
 
 
 class BatchResult(BaseModel):
+    source_results: dict[str, dict[str, str]] = Field(default_factory=lambda: {})
     succeeded: list[str] = Field(default_factory=lambda: [])
     skipped: list[str] = Field(default_factory=lambda: [])
     failed: dict[str, str] = Field(default_factory=dict)

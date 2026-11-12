@@ -375,6 +375,9 @@ class MailFlowService:
         from mailflow.assistant_history import AssistantHistory
 
         self.assistant_history = AssistantHistory(self)
+        from mailflow.source_sync import SourceSync
+
+        self.source_sync = SourceSync(self)
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
@@ -551,6 +554,11 @@ class MailFlowService:
             except Exception:
                 logger.exception("automatic backup failed")
                 await self.events.emit("backup.failed", code="errors.operation")
+            try:
+                await self.source_sync.refresh()
+            except Exception:
+                logger.exception("mailbox state synchronization failed")
+                await self.events.emit("mail.source.failed", code="errors.operation")
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stopped_event.wait(), 60)
 
@@ -2267,6 +2275,17 @@ Return every candidate in this batch."""
                         elif operation.tool == "delete_action":
                             if not await self.delete_action(str(arguments["item_id"])):
                                 continue
+                        elif operation.tool == "source_mail":
+                            outcome = await self.batch_mail(
+                                arguments["record_ids"],
+                                operation=arguments["operation"],
+                                source=True,
+                            )
+                            result.setdefault("source_results", {}).update(outcome.source_results)
+                            if outcome.failed:
+                                raise translated_error(
+                                    RuntimeError, self.t, "experience.source_pending"
+                                )
                         else:
                             from mailflow.assistant_operations import apply
 
@@ -2283,6 +2302,21 @@ Return every candidate in this batch."""
             else:
                 self._smart_plans.pop(plan_id, None)
             return result
+
+    def prepare_operations(self, operations: list[PendingOperation]) -> SmartActionResult:
+        require_admin(self.t)
+        self._smart_plans = {
+            key: value for key, value in self._smart_plans.items() if value[1] > utcnow()
+        }
+        if len(self._smart_plans) >= 32:
+            self._smart_plans.pop(next(iter(self._smart_plans)))
+        result = SmartActionResult(plan_id=secrets.token_urlsafe(24), pending=operations)
+        self._smart_plans[result.plan_id] = (
+            current_context(),
+            utcnow() + timedelta(minutes=20),
+            [op.model_copy(deep=True) for op in operations],
+        )
+        return result
 
     @admin_operation
     async def update_mail_analysis(
@@ -2317,73 +2351,111 @@ Return every candidate in this batch."""
         result = BatchResult()
         for record_id in dict.fromkeys(record_ids):
             try:
-                async with self.runtime.write_lock:
-                    record = await self.storage.get_mail(record_id)
-                    if record is None:
-                        result.skipped.append(record_id)
-                        continue
-                    changes = {
-                        key: value
-                        for key, value in dict(
-                            is_read=is_read, starred=starred, archived=archived
-                        ).items()
-                        if value is not None
-                    }
-                    await self.storage.save_mail(record.model_copy(update=changes))
-                result.succeeded.append(record_id)
-                await self.events.emit("mail.state.changed", record_id=record_id)
+                async with self.source_sync.lock:
+                    async with self.runtime.write_lock:
+                        record = await self.storage.get_mail(record_id)
+                        if record is None:
+                            result.skipped.append(record_id)
+                            continue
+                        changes = {
+                            key: value
+                            for key, value in dict(
+                                is_read=is_read, starred=starred, archived=archived
+                            ).items()
+                            if value is not None
+                        }
+                        await self.storage.save_mail(record.model_copy(update=changes))
+                    result.succeeded.append(record_id)
+                    if self.source_sync.source(record) is not None:
+                        result.source_results[record_id] = await self.source_sync.change_locked(
+                            record, changes
+                        )
+                    await self.events.emit("mail.state.changed", record_id=record_id)
             except Exception as exc:
                 result.failed[record_id] = error_text(exc, self.t)
         return result
 
     @admin_operation
     async def batch_mail(
-        self, record_ids: list[str], *, operation: str = "delete", delete_actions: bool = False
+        self,
+        record_ids: list[str],
+        *,
+        operation: str = "delete",
+        delete_actions: bool = False,
+        source: bool = False,
     ) -> BatchResult:
         """All hosts receive exact successful, skipped and failed objects."""
         result = BatchResult()
         for record_id in dict.fromkeys(record_ids):
             try:
-                if operation == "restore":
-                    changed = await self.restore_mail(record_id)
-                elif operation == "purge":
-                    purge = getattr(self.storage, "purge_trash_records", None)
-                    if purge is None:
-                        raise translated_error(RuntimeError, self.t, "ux.unsupported")
-                    changed = await purge([record_id])
-                elif operation in {"delete", "cleanup", "expired"}:
-                    async with self.runtime.action_store.lock, self.runtime.write_lock:
-                        record = await self.storage.get_mail(record_id)
-                        if record is None:
-                            result.skipped.append(record_id)
-                            continue
-                        entries = await self.runtime.action_store.read(
-                            deduplicate=False, records=[record]
-                        )
-                        linked = [
-                            entry.item
-                            for entry in entries
-                            if (entry.record.record_id if entry.record else entry.item.mail_id)
-                            == record_id
-                        ]
-                        if operation == "cleanup" and not self.runtime.is_cleanup_candidate(
-                            record, linked=linked
-                        ):
-                            result.skipped.append(record_id)
-                            continue
-                        if operation == "expired" and not self._is_expired(
-                            record, utcnow(), linked=linked
-                        ):
-                            result.skipped.append(record_id)
-                            continue
-                        await self.runtime.action_store.trash_mail(
-                            record, delete_actions=delete_actions, entries=entries
-                        )
-                        changed = record
-                    await self.events.emit("mail.deleted", record_id=record_id)
-                else:
-                    raise translated_error(ValueError, self.t, "ux.unsupported")
-                (result.succeeded if changed else result.skipped).append(record_id)
+                async with self.source_sync.lock:
+                    if operation == "restore":
+                        if source:
+                            original = next(
+                                (
+                                    t.to_mail_record()
+                                    for t in await self.storage.list_trash()
+                                    if t.record_id == record_id
+                                ),
+                                None,
+                            )
+                            if original:
+                                location = await self.workflows.read_value(
+                                    "source.location." + record_id
+                                )
+                                if location:
+                                    original.mail.provider_message_id = location
+                                result.source_results[
+                                    record_id
+                                ] = await self.source_sync.change_locked(
+                                    original, {"deleted": False}
+                                )
+                        changed = await self._restore_mail(record_id)
+                        if changed is None:
+                            changed = await self.storage.get_mail(record_id)
+                    elif operation == "purge":
+                        purge = getattr(self.storage, "purge_trash_records", None)
+                        if purge is None:
+                            raise translated_error(RuntimeError, self.t, "ux.unsupported")
+                        changed = await purge([record_id])
+                    elif operation in {"delete", "cleanup", "expired"}:
+                        async with self.runtime.action_store.lock, self.runtime.write_lock:
+                            record = await self.storage.get_mail(record_id)
+                            if record is None:
+                                result.skipped.append(record_id)
+                                continue
+                            entries = await self.runtime.action_store.read(
+                                deduplicate=False, records=[record]
+                            )
+                            linked = [
+                                entry.item
+                                for entry in entries
+                                if (entry.record.record_id if entry.record else entry.item.mail_id)
+                                == record_id
+                            ]
+                            if operation == "cleanup" and not self.runtime.is_cleanup_candidate(
+                                record, linked=linked
+                            ):
+                                result.skipped.append(record_id)
+                                continue
+                            if operation == "expired" and not self._is_expired(
+                                record, utcnow(), linked=linked
+                            ):
+                                result.skipped.append(record_id)
+                                continue
+                            await self.runtime.action_store.trash_mail(
+                                record, delete_actions=delete_actions, entries=entries
+                            )
+                            await self.storage.set_preference("source.trash." + record_id, "local")
+                            changed = record
+                        if source:
+                            result.source_results[record_id] = await self.source_sync.change_locked(
+                                record, {"deleted": True}
+                            )
+                        await self.events.emit("mail.deleted", record_id=record_id)
+                    else:
+                        raise translated_error(ValueError, self.t, "ux.unsupported")
+                    (result.succeeded if changed else result.skipped).append(record_id)
             except Exception as exc:
                 result.failed[record_id] = error_text(exc, self.t)
             finally:
@@ -2403,9 +2475,17 @@ Return every candidate in this batch."""
 
     @admin_operation
     async def restore_mail(self, record_id: str) -> MailRecord | None:
+        async with self.source_sync.lock:
+            return await self._restore_mail(record_id)
+
+    async def _restore_mail(self, record_id: str) -> MailRecord | None:
         async with self.runtime.write_lock:
+            provenance = await self.storage.get_preference("source.trash." + record_id)
             record = await self.storage.restore_from_trash(record_id)
             if record is not None:
+                await self.storage.set_preference(
+                    "source.trash." + record_id, "local_restore" if provenance == "remote" else ""
+                )
                 updated = self.runtime.analysis_language_status(record)
                 if updated != record:
                     await self.storage.save_mail(updated)
@@ -2647,8 +2727,14 @@ Return every candidate in this batch."""
                     self.runtime.update_config(updated)
                     await self._rebuild_notifiers()
                     await self.gateways.update_notifiers(previous, updated)
-                elif key == "general.language" or (
-                    key.startswith("general.") and changed_general <= notification_fields
+                elif (
+                    (
+                        key.split(".")[0] == "accounts"
+                        and [a.model_dump(exclude={"state_sync"}) for a in previous.accounts]
+                        == [a.model_dump(exclude={"state_sync"}) for a in updated.accounts]
+                    )
+                    or key == "general.language"
+                    or (key.startswith("general.") and changed_general <= notification_fields)
                 ):
                     self.runtime.update_config(updated)
                 else:

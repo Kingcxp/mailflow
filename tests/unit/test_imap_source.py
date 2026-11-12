@@ -634,3 +634,92 @@ async def test_catch_up_resumes_acknowledged_uid_and_requires_range_after_reset(
     assert checkpoint[-1] == before
     again.reset_sync("new")
     assert await poll_imap(again) == []
+
+
+async def test_source_state_moves_only_requested_uid_and_keeps_new_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mailflow.config import MailAccountConfig
+    from mailflow_mail_imap.plugin import IMAPSource, parse_mime
+
+    class Mailbox:
+        capabilities = (b"IMAP4rev1", b"MOVE", b"UIDPLUS")
+        messages: ClassVar[dict[str, dict[int, set[str]]]] = {
+            "INBOX": {7: set(), 8: set()},
+            "Archive": {},
+            "Trash": {},
+        }
+        validity: ClassVar[dict[str, int]] = {"INBOX": 10, "Archive": 20, "Trash": 30}
+        changes: ClassVar[list[tuple[str, str]]] = []
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.folder = "INBOX"
+
+        def login(self, *args: Any) -> None:
+            pass
+
+        def logout(self) -> None:
+            pass
+
+        def list(self) -> tuple[str, list[bytes]]:
+            return "OK", [
+                b'(\\Inbox) "/" "INBOX"',
+                b'(\\Archive) "/" "Archive"',
+                b'(\\Trash) "/" "Trash"',
+            ]
+
+        def select(self, folder: str, **kwargs: Any) -> tuple[str, list[bytes]]:
+            self.folder = folder.strip('"')
+            return "OK", [str(len(self.messages[self.folder])).encode()]
+
+        def response(self, code: str) -> tuple[str, list[bytes]]:
+            return "OK", [str(self.validity[self.folder]).encode()]
+
+        def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+            command = command.upper()
+            rows = self.messages[self.folder]
+            if command == "SEARCH":
+                return "OK", [b" ".join(str(uid).encode() for uid in rows if uid != 8)]
+            uid = int(args[0])
+            if command == "FETCH":
+                if uid not in rows:
+                    return "OK", [None]
+                if "HEADER" in args[1]:
+                    return "OK", [(b"header", b"Message-ID: <target@example.com>\r\n\r\n")]
+                return "OK", [f"1 (UID {uid} FLAGS ({' '.join(rows[uid])}))".encode()]
+            self.changes.append((command, str(uid)))
+            if command == "STORE":
+                flag = str(args[2]).strip("()")
+                (rows[uid].add if args[1].startswith("+") else rows[uid].discard)(flag)
+                return "OK", []
+            assert command == "MOVE"
+            destination = str(args[1]).strip('"')
+            new_uid = 40 + self.validity[destination]
+            self.messages[destination][new_uid] = rows.pop(uid)
+            return "OK", [f"[COPYUID {self.validity[destination]} {uid} {new_uid}]".encode()]
+
+    monkeypatch.setattr("mailflow_mail_imap.plugin.imaplib.IMAP4_SSL", Mailbox)
+    source = IMAPSource(
+        MailAccountConfig(account_id="a", provider="imap", options={"preset": "qq"})
+    )
+    mail = parse_mime(b"Message-ID: <target@example.com>\r\n\r\nbody", "a")
+    mail.provider_message_id = "INBOX:10:7"
+    assert (await source.source_capabilities()).trash
+    archived = await source.change_source_state(mail, {"starred": True, "archived": True})
+    assert archived.known and archived.starred and archived.archived
+    assert archived.provider_message_id == "Archive:20:60"
+    assert (await source.read_source_state([mail]))[0].provider_message_id == "Archive:20:60"
+    mail.provider_message_id = archived.provider_message_id
+    deleted = await source.change_source_state(mail, {"deleted": True})
+    assert deleted.deleted and deleted.provider_message_id == "Trash:30:70"
+    mail.provider_message_id = deleted.provider_message_id
+    restored = await source.change_source_state(
+        mail, {"deleted": False, "restore_folder": "Archive"}
+    )
+    assert restored.archived and not restored.deleted and restored.starred
+    assert Mailbox.messages["INBOX"] == {8: set()}
+    assert all(command in {"STORE", "MOVE"} for command, _ in Mailbox.changes)
+    Mailbox.messages["Archive"].clear()
+    Mailbox.validity["Trash"] = 31
+    uncertain = (await source.read_source_state([mail]))[0]
+    assert not uncertain.known and not uncertain.deleted

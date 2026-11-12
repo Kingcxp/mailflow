@@ -1622,6 +1622,19 @@ class MailPane(Vertical):
                 if chosen:
                     self._selected_id = str(chosen)
                     await self._show_selected()
+            elif choice == "source_sync":
+                from mailflow_tui.workspace_screens import SourceSyncScreen
+
+                table = self._mail_table()
+                ids = (
+                    list(table.checked_keys)
+                    if table and table.checked_keys
+                    else [self._selected_id]
+                    if self._selected_id
+                    else []
+                )
+                await self._ask_screen(SourceSyncScreen(self._service, ids))
+                await self.refresh_mail()
             elif choice in {"compose", "forward", "reply_all"}:
                 from mailflow_tui.workspace_screens import ComposeScreen
 
