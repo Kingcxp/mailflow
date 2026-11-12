@@ -2194,15 +2194,30 @@ Return every candidate in this batch."""
             for operation, original in selected:
                 try:
                     arguments = dict(operation.arguments)
-                    if operation.tool == "delete_mail":
-                        moved = await self.batch_mail(arguments.get("record_ids", []))
+                    if operation.tool in {"delete_mail", "update_mail"}:
+                        moved = (
+                            await self.batch_mail(arguments.get("record_ids", []))
+                            if operation.tool == "delete_mail"
+                            else await self.set_mail_state(
+                                arguments.get("record_ids", []),
+                                **{
+                                    key: value
+                                    for key, value in arguments.items()
+                                    if key in {"is_read", "starred", "archived"}
+                                },
+                            )
+                        )
                         result["applied"] += len(moved.succeeded)
-                        result["deleted"].extend(moved.succeeded)
+                        if operation.tool == "delete_mail":
+                            result["deleted"].extend(moved.succeeded)
                         if moved.failed:
                             retry = original.model_copy(
                                 update={
                                     "record_ids": list(moved.failed),
-                                    "arguments": {"record_ids": list(moved.failed)},
+                                    "arguments": {
+                                        **arguments,
+                                        "record_ids": list(moved.failed),
+                                    },
                                 }
                             )
                             remaining.append(retry)

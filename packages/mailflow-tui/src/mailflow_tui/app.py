@@ -4272,6 +4272,12 @@ class MailFlowApp(App[None]):
             self.notify(self._service.t("assistant.busy"))
 
     async def on_assistant_pane_open_result(self, event: AssistantPane.OpenResult) -> None:
+        try:
+            await self._open_assistant_result(event)
+        except Exception as exc:
+            self.notify(error_message(self._service, exc), severity="error")
+
+    async def _open_assistant_result(self, event: AssistantPane.OpenResult) -> None:
         if event.kind == "model":
             self.query_one(TabbedContent).active = "tab-settings" if self._remote else "tab-llms"
             if self._remote:
@@ -4280,6 +4286,8 @@ class MailFlowApp(App[None]):
             record = await self._service.get_mail(event.identity)
             if record is not None:
                 self.push_screen(MailReader(self._service, record))
+            else:
+                self.notify(self._service.t("mail.not_found", mail_id=event.identity))
         elif event.kind == "action":
             item = next(
                 (a for a in await self._service.list_actions_all() if a.item_id == event.identity),
@@ -4287,6 +4295,8 @@ class MailFlowApp(App[None]):
             )
             if item is not None:
                 self.push_screen(TodoEditModal(self._service, item))
+            else:
+                self.notify(self._service.t("action.not_found", item_id=event.identity))
         elif event.kind == "plugin":
             self.query_one(TabbedContent).active = "tab-runtime"
             self.query_one(RuntimePane)._open_plugin_detail(event.identity)  # pyright: ignore[reportPrivateUsage]

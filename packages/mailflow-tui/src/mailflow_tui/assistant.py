@@ -297,7 +297,24 @@ class AssistantPane(Vertical):
                 failed=len(result.pending),
             )
             self._status_extra = "\n" + "\n".join(outcome["errors"]) if outcome["errors"] else ""
+            result.records = [
+                record for record in result.records if record.record_id not in outcome["deleted"]
+            ]
+            try:
+                if result.records:
+                    records = {r.record_id: r for r in await self._service.list_mails()}
+                    result.records = [
+                        records[r.record_id] for r in result.records if r.record_id in records
+                    ]
+                if result.actions:
+                    actions = {a.item_id: a for a in await self._service.list_actions_all()}
+                    result.actions = [
+                        actions[a.item_id] for a in result.actions if a.item_id in actions
+                    ]
+            except Exception as exc:
+                self._status_extra += "\n" + str(error_info(exc, self._service.t)["message"])
             self._render_status()
+            self._render_result()
             self._history.append(
                 {
                     "role": "assistant",

@@ -304,7 +304,10 @@ class RemoteClient:
     async def smart_action(
         self, instruction: str, *, progress: Any = None, **scope: Any
     ) -> dict[str, Any]:
-        started = await self._request("POST", "/smart/jobs", {"instruction": instruction, **scope})
+        return await self._smart_job({"instruction": instruction, **scope}, progress=progress)
+
+    async def _smart_job(self, body: dict[str, Any], *, progress: Any = None) -> dict[str, Any]:
+        started = await self._request("POST", "/smart/jobs", body)
         job_id, cursor = started["job_id"], 0
         try:
             while True:
@@ -320,7 +323,16 @@ class RemoteClient:
                     result: dict[str, Any] = status["result"]
                     return result
                 if status["state"] != "running":
-                    raise RemoteError(400, "smart.model_failed", str(status.get("error") or ""))
+                    error: Any = status.get("error") or {}
+                    if isinstance(error, dict):
+                        failure = cast("dict[str, Any]", error)
+                        raise RemoteError(
+                            400,
+                            str(failure.get("code") or "smart.model_failed"),
+                            str(failure.get("message") or ""),
+                            dict(failure.get("params") or {}),
+                        )
+                    raise RemoteError(400, "smart.model_failed", str(error))
                 await asyncio.sleep(0.2)
         finally:
             await self._cancel_smart_job(job_id)
@@ -328,10 +340,7 @@ class RemoteClient:
     async def apply_smart_plan(
         self, plan_id: str, operations: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        result: dict[str, Any] = await self._request(
-            "POST", f"/smart/plans/{plan_id}", {"operations": operations}
-        )
-        return result
+        return await self._smart_job({"plan_id": plan_id, "operations": operations})
 
     async def query_mails(self, values: dict[str, Any]) -> dict[str, Any]:
         result: dict[str, Any] = await self._request("POST", "/mails/query", values)

@@ -222,6 +222,33 @@ async def test_remote_smart_task_is_reviewed_and_applied_once(
 
     entered, stopped = asyncio.Event(), asyncio.Event()
 
+    # Stopping confirmation must stop server-side work as well as polling.
+    service.router = cast(Any, Router())
+    pending = await remote.smart_action("Add another task")
+    add_action = service.add_action
+
+    async def blocked_add(*args: Any, **values: Any) -> ActionItem:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+            return await add_action(*args, **values)
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(service, "add_action", blocked_add)
+    confirming = asyncio.create_task(remote.apply_smart_plan(pending.plan_id, pending.pending))
+    await asyncio.wait_for(entered.wait(), 1)
+    confirming.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await confirming
+    await asyncio.wait_for(stopped.wait(), 1)
+    assert len(await service.list_actions()) == 1
+    monkeypatch.setattr(service, "add_action", add_action)
+    with pytest.raises(RemoteError):
+        await remote.apply_smart_plan(pending.plan_id, pending.pending)
+    entered.clear()
+    stopped.clear()
+
     class BlockingRouter:
         async def chat(self, messages: Any, **kwargs: Any) -> LLMCompletion:
             entered.set()
@@ -307,6 +334,58 @@ async def test_task_notification_failure_retries_without_repeating_success(
     )
     assert not await service.failed_deliveries()
     assert (await service.list_actions())[0].reply_task
+
+
+async def test_assistant_mail_changes_respect_scope_and_retry_only_failed_items(
+    service: MailFlowService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Router:
+        async def chat(self, messages: Any, **kwargs: Any) -> LLMCompletion:
+            if messages[-1]["role"] == "tool":
+                return LLMCompletion(text="Ready for review")
+            return LLMCompletion(
+                text="",
+                tool_calls=[
+                    ToolCall(
+                        call_id="outside",
+                        name="write_reply",
+                        arguments={"record_id": "other", "body": "Outside the selected scope"},
+                    ),
+                    ToolCall(
+                        call_id="star",
+                        name="update_mail",
+                        arguments={"record_ids": ["kept", "missing"], "starred": True},
+                    ),
+                ],
+            )
+
+    for identity in ("kept", "missing", "other"):
+        await service.storage.save_mail(make_record(identity))
+    service.config.llms = [LLMConfig(llm_id="fake")]
+    service.router = cast(Any, Router())
+    result = await service.smart_action("Star these messages", record_ids=["kept", "missing"])
+    assert [operation.tool for operation in result.pending] == ["update_mail"]
+    assert not any(record.starred for record in await service.list_mails())
+    save_mail = service.storage.save_mail
+    fail_save = True
+
+    async def flaky_save(record: MailRecord) -> None:
+        if fail_save and record.record_id == "missing":
+            raise OSError("Temporary storage failure")
+        await save_mail(record)
+
+    monkeypatch.setattr(service.storage, "save_mail", flaky_save)
+    partial = await service.apply_smart_plan(result.plan_id, result.pending)
+    assert partial["applied"] == 1 and partial["errors"]
+    assert partial["failed"][0].arguments["record_ids"] == ["missing"]
+    await service.set_mail_state(["kept"], starred=False)
+    fail_save = False
+    retry = await service.apply_smart_plan(result.plan_id, partial["failed"])
+    assert retry["applied"] == 1 and not retry["failed"]
+    assert {record.record_id for record in await service.list_mails() if record.starred} == {
+        "missing"
+    }
 
 
 async def test_mail_read_download_and_trash_recovery(

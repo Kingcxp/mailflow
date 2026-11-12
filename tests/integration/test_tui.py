@@ -407,6 +407,9 @@ async def test_smart_query_task_crud_requires_confirmation(
             await until(pilot, lambda: modal() is None)
             await pilot.pause()
             assert await service.storage.list_custom_actions() == []
+            await until(
+                pilot, lambda: app.query_one("#assistant-results", DataTable).row_count == 0
+            )
             app.exit()
             await pilot.pause()
     finally:

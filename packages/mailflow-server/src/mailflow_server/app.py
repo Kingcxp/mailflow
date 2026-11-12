@@ -30,7 +30,7 @@ import logging
 import secrets
 import time
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from datetime import datetime
 from threading import RLock
 from typing import TYPE_CHECKING, Any
@@ -47,7 +47,7 @@ from fastapi import (  # pyright: ignore[reportMissingTypeStubs]
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse  # pyright: ignore[reportMissingTypeStubs]
 from mailflow.domain import PendingOperation
-from mailflow.errors import error_info, error_text
+from mailflow.errors import error_info
 from mailflow.mail_query import MailQuery
 from mailflow.permissions import (
     AccessDenied,
@@ -325,6 +325,13 @@ def create_app(service: MailFlowService) -> FastAPI:
 
     @app.post("/smart/jobs")
     async def start_smart_job(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        operations = (
+            [PendingOperation.model_validate(row) for row in body.get("operations", [])]
+            if body.get("plan_id")
+            else []
+        )
+        if body.get("plan_id"):
+            require_admin(service.t)
         for key in list(jobs):
             if jobs[key]["state"] != "running" and time.monotonic() - jobs[key]["created"] > 1200:
                 jobs.pop(key)
@@ -354,15 +361,23 @@ def create_app(service: MailFlowService) -> FastAPI:
             job["events"] = job["events"][-300:]
 
         async def run() -> None:
-            operation = asyncio.create_task(
-                service.smart_action(
+            action: Coroutine[Any, Any, Any]
+            if body.get("plan_id"):
+                action = service.apply_smart_plan(
+                    str(body["plan_id"]),
+                    operations,
+                )
+            else:
+                action = service.smart_action(
                     str(body.get("instruction", "")),
                     record_ids=body.get("record_ids"),
                     account_id=str(body.get("account_id", "")),
                     conversation=body.get("conversation"),
                     action_ids=body.get("action_ids"),
                     progress=progress,
-                ),
+                )
+            operation = asyncio.create_task(
+                action,
                 name=f"smart-operation-{job_id}",
             )
             try:
@@ -378,7 +393,7 @@ def create_app(service: MailFlowService) -> FastAPI:
                 raise
             except Exception as exc:
                 logger.warning("smart query failed: %s", exc)
-                job["state"], job["error"] = "failed", error_text(exc, service.t)
+                job["state"], job["error"] = "failed", error_info(exc, service.t)
             finally:
                 if not operation.done():
                     operation.cancel()

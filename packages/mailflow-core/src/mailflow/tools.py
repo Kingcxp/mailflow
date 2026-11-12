@@ -35,6 +35,7 @@ from mailflow.domain import (
     action_sort_time,
     to_utc,
 )
+from mailflow.errors import error_text
 from mailflow.mail_body import mail_body_text
 from mailflow.mail_query import MailQuery
 from mailflow.prompts import prompt_context
@@ -484,24 +485,12 @@ class ToolRegistry:
         from mailflow.assistant_operations import SCHEMAS
 
         if name in SCHEMAS and callable(getattr(self._service, "assistant_tool", None)):
-            ids = (
-                arguments.get("record_ids", [])
-                if name == "update_mail"
-                else [arguments["record_id"]]
-                if name == "write_reply"
-                else []
-            )
-            if self._allowed_ids is not None and any(rid not in self._allowed_ids for rid in ids):
-                raise ToolError("mail is outside the user-selected scope")
-            action = cast(
-                Callable[[str, dict[str, Any]], Awaitable[tuple[str, PendingOperation | None]]],
-                cast(ManagementService, self._service).assistant_tool,
-            )
-            text, pending = await action(name, arguments)
-            if name == "inspect_app" and arguments.get("resource") == "plugins":
-                rows = json.loads(text).get("results", [])
-                self.matched_plugins.update({str(row["id"]): row for row in rows})
-            return text, pending
+            try:
+                return await self._call_management(name, arguments)
+            except ToolError as exc:
+                return f"error: {exc}", None
+            except (ValueError, KeyError, PermissionError, NotImplementedError) as exc:
+                return f"error: {error_text(exc, self._service.t)}", None
         handler: (
             Callable[[dict[str, Any]], Awaitable[tuple[str, PendingOperation | None]]] | None
         ) = getattr(self, f"_tool_{name}", None)
@@ -511,6 +500,28 @@ class ToolRegistry:
             return await handler(arguments)
         except ToolError as exc:
             return f"error: {exc}", None
+
+    async def _call_management(
+        self, name: str, arguments: dict[str, Any]
+    ) -> tuple[str, PendingOperation | None]:
+        ids = (
+            arguments.get("record_ids", [])
+            if name == "update_mail"
+            else [arguments["record_id"]]
+            if name == "write_reply"
+            else []
+        )
+        if self._allowed_ids is not None and any(rid not in self._allowed_ids for rid in ids):
+            raise ToolError("mail is outside the user-selected scope")
+        action = cast(
+            Callable[[str, dict[str, Any]], Awaitable[tuple[str, PendingOperation | None]]],
+            cast(ManagementService, self._service).assistant_tool,
+        )
+        text, pending = await action(name, arguments)
+        if name == "inspect_app" and arguments.get("resource") == "plugins":
+            rows = json.loads(text).get("results", [])
+            self.matched_plugins.update({str(row["id"]): row for row in rows})
+        return text, pending
 
     # -- read-only tools -------------------------------------------------------
 
