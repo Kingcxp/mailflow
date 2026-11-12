@@ -65,7 +65,7 @@ class SourceSyncScreen(WorkflowScreen):
                             disabled=op != "back",
                         )
 
-    async def on_mount(self) -> None:
+    async def load_data(self) -> None:
         await self.render_state(await self.service.workspace_call("source_status"))
 
     async def render_state(self, state: dict[str, Any]) -> None:
@@ -247,7 +247,7 @@ class AttachmentLibraryScreen(WorkflowScreen):
                 yield Button(self.t("experience.source"), id="library-source", disabled=True)
                 yield Button(self.t("tui.btn_back"), id="library-back")
 
-    async def on_mount(self) -> None:
+    async def load_data(self) -> None:
         table = self.query_one("#library-table", SelectionTable)
         table.add_columns(
             "[ ]",
@@ -365,7 +365,7 @@ class NotificationPreferencesScreen(WorkflowScreen):
                 )
                 yield Button(self.t("tui.btn_back"), id="notification-back")
 
-    async def on_mount(self) -> None:
+    async def load_data(self) -> None:
         state = await self.service.workspace_call("notification_preferences")
         self.query_one("#notification-preset", Select).value = state["preset"]
         self.query_one("#quiet-enabled", Checkbox).value = state["quiet_enabled"]
@@ -483,7 +483,7 @@ class AssistantHistoryScreen(WorkflowScreen):
                             disabled=name in {"open", "delete"},
                         )
 
-    async def on_mount(self) -> None:
+    async def load_data(self) -> None:
         await self.reload_rows()
 
     async def reload_rows(self) -> None:
@@ -589,7 +589,7 @@ class PlansScreen(WorkflowScreen):
                 for op in ("pause", "resume", "skip", "back"):
                     yield Button(self.t("experience." + op), id="plan-" + op, disabled=op != "back")
 
-    async def on_mount(self) -> None:
+    async def load_data(self) -> None:
         self.rows = await self.service.action_plans()
         cast(Select[str], self.query_one("#plan-row", Select)).set_options(
             [
@@ -649,7 +649,7 @@ class SavedFiltersScreen(WorkflowScreen):
                 yield Button(self.t("tui.btn_delete"), id="filter-delete", disabled=True)
                 yield Button(self.t("tui.btn_back"), id="filter-close")
 
-    async def on_mount(self) -> None:
+    async def load_data(self) -> None:
         await self.reload_rows()
 
     async def reload_rows(self) -> None:
@@ -719,7 +719,7 @@ class ThreadScreen(WorkflowScreen):
                 yield Button(self.t("ux.full_mail"), id="thread-open", disabled=True)
                 yield Button(self.t("tui.btn_back"), id="thread-close")
 
-    async def on_mount(self) -> None:
+    async def load_data(self) -> None:
         try:
             result = await self.service.workspace_call("thread", {"record_id": self.record_id})
             self.rows = result["messages"]
@@ -805,7 +805,7 @@ class ComposeScreen(WorkflowScreen):
                 yield Button(self.t("experience.sent_check"), id="compose-check", disabled=True)
                 yield Button(self.t("tui.btn_back"), id="compose-close")
 
-    async def on_mount(self) -> None:
+    async def load_data(self) -> None:
         try:
             if self.draft is None and self.kind != "new":
                 self.draft = ReplyDraft.model_validate(
@@ -1049,7 +1049,7 @@ class FileSelectionScreen(WorkflowScreen):
                 yield Button(self.t("tui.btn_apply"), id="files-apply")
                 yield Button(self.t("tui.btn_cancel"), id="files-close")
 
-    async def on_mount(self) -> None:
+    async def load_data(self) -> None:
         from mailflow_tui.widgets import SelectionTable
 
         table = self.query_one("#files-table", SelectionTable)

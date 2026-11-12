@@ -62,6 +62,15 @@ class WorkflowScreen(ModalScreen[Any]):
     def t(self, key: str, **params: Any) -> str:
         return self.service.t(key, **params)
 
+    async def on_mount(self) -> None:
+        try:
+            await self.load_data()
+        except Exception as exc:
+            self.status(error_text(exc, self.t))
+
+    async def load_data(self) -> None:
+        """Load dialog data after mounting; keep connection errors inside the dialog."""
+
     def action_close(self) -> None:
         self.dismiss(None)
 
@@ -217,7 +226,7 @@ class SyncScreen(WorkflowScreen):
                 )
                 yield Button(self.t("tui.btn_back"), id="sync-close")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self.set_interval(1.0, self.refresh_status)
         self.refresh_status()
 
@@ -424,7 +433,7 @@ class MailReader(WorkflowScreen):
                 yield Button(self.t("ux.next"), id="reader-next")
                 yield Button(self.t("tui.btn_back"), id="reader-close")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self._render_body()
 
     def _render_body(self) -> None:
@@ -907,7 +916,7 @@ class QueryTasksScreen(WorkflowScreen):
             )
             yield Button(self.t("tui.btn_back"), id="query-task-close")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         table = cast(DataTable[Any], self.query_one("#query-tasks-table", DataTable))
         table.cursor_type = "row"
         for key in ("subject", "due", "source"):

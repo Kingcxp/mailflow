@@ -1151,6 +1151,7 @@ async def test_composition_keeps_private_files_and_invalidates_old_confirmation(
 
 async def test_compose_dialog_preserves_input_and_requires_a_fresh_review(
     service: MailFlowService,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from mailflow.config import MailAccountConfig
     from mailflow.domain import ReplyDraft
@@ -1189,3 +1190,42 @@ async def test_compose_dialog_preserves_input_and_requires_a_fresh_review(
         )
         assert screen.query_one("#compose-body", TextArea).text == "Edited draft"
         assert screen.draft and screen.draft.body == "Edited draft"
+        from unittest.mock import AsyncMock
+
+        from mailflow.errors import error_text
+        from mailflow_tui.workspace_screens import (
+            AssistantHistoryScreen,
+            AttachmentLibraryScreen,
+            FileSelectionScreen,
+            NotificationPreferencesScreen,
+            PlansScreen,
+            SavedFiltersScreen,
+            SourceSyncScreen,
+        )
+        from textual.widgets import Static
+
+        failure = ConnectionError("connection lost")
+        monkeypatch.setattr(service, "workspace_call", AsyncMock(side_effect=failure))
+        monkeypatch.setattr(service, "action_plans", AsyncMock(side_effect=failure))
+        for dialog in [
+            AssistantHistoryScreen(service),
+            AttachmentLibraryScreen(service),
+            FileSelectionScreen(service, []),
+            NotificationPreferencesScreen(service),
+            PlansScreen(service),
+            SavedFiltersScreen(service, MailQuery()),
+            SourceSyncScreen(service),
+        ]:
+            app.push_screen(dialog)
+            await pilot.pause()
+            assert error_text(failure, service.t) in str(
+                dialog.query_one("#workflow-status", Static).render()
+            )
+            next(
+                button
+                for button in dialog.query(Button)
+                if str(button.id).endswith(("-back", "-close"))
+            ).press()
+            await pilot.pause()
+            assert app.screen is screen
+        assert screen.query_one("#compose-body", TextArea).text == "Edited draft"
