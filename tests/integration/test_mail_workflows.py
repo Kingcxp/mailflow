@@ -982,6 +982,7 @@ async def test_source_sync_protects_pending_edits_and_does_not_replay_unknown_de
                 archived=False,
             )
             self.fail = False
+            self.offline = False
             self.calls = 0
 
         async def source_capabilities(self) -> SourceCapabilities:
@@ -990,7 +991,13 @@ async def test_source_sync_protects_pending_edits_and_does_not_replay_unknown_de
             )
 
         async def read_source_state(self, mails: Any) -> list[SourceMailState]:
-            return [self.state.model_copy(deep=True)]
+            if self.offline:
+                raise OSError("connection lost")
+            return (
+                [self.state.model_copy(deep=True)]
+                if any(mail.message_id == self.state.message_id for mail in mails)
+                else []
+            )
 
         async def change_source_state(self, mail: Any, changes: dict[str, Any]) -> SourceMailState:
             self.calls += 1
@@ -1019,8 +1026,18 @@ async def test_source_sync_protects_pending_edits_and_does_not_replay_unknown_de
     await service.source_sync.refresh()
     saved = await service.get_mail(record.record_id)
     assert saved and saved.starred and source.calls == 1
+    operation = (await service.workspace_call("source_status"))["operations"][0]
+    source.offline = True
+    retried = await service.workspace_call("source_retry", {"id": operation["id"]})
+    assert retried["state"] == "unknown" and source.calls == 1
+    source.offline = False
+    for index in range(55):
+        other = make_record(f"newer-{index}")
+        other.mail.received_at = record.mail.received_at + timedelta(hours=1)
+        await service.storage.save_mail(other)
     source.state.starred = True
-    await service.source_sync.refresh()
+    retried = await service.workspace_call("source_retry", {"id": operation["id"]})
+    assert retried["state"] == "synced" and source.calls == 1
     assert not (await service.workspace_call("source_status"))["operations"]
     plan = await service.workspace_call(
         "source_prepare", {"record_ids": [record.record_id], "operation": "delete"}
@@ -1028,17 +1045,17 @@ async def test_source_sync_protects_pending_edits_and_does_not_replay_unknown_de
     outcome = await service.workspace_call("source_confirm", {"plan_id": plan["plan_id"]})
     assert outcome["source_results"][record.record_id]["state"] == "unknown"
     calls = source.calls
-    await service.source_sync.refresh()
+    await service.source_sync.refresh({"record_ids": [record.record_id]})
     assert source.calls == calls and await service.get_mail(record.record_id) is None
     source.state.deleted = True
     source.state.provider_message_id = "Trash:9:22"
-    await service.source_sync.refresh()
+    await service.source_sync.refresh({"record_ids": [record.record_id]})
     source.state.deleted = False
     source.state.provider_message_id = "INBOX:1:3"
-    await service.source_sync.refresh()
+    await service.source_sync.refresh({"record_ids": [record.record_id]})
     assert await service.get_mail(record.record_id) is not None
     await service.batch_mail([record.record_id])
-    await service.source_sync.refresh()
+    await service.source_sync.refresh({"record_ids": [record.record_id]})
     assert await service.get_mail(record.record_id) is None
     from mailflow_tui.workspace_screens import SourceSyncScreen
     from textual.widgets import Checkbox

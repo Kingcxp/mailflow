@@ -181,63 +181,71 @@ class SourceSync:
         if not any(a.enabled and a.state_sync for a in self.service.config.accounts):
             return
         async with self.lock:
-            rows = await self.journal()
-            records = await self.service.storage.list_mails()
-            for trash in await self.service.storage.list_trash():
-                if await self.service.storage.get_preference(
-                    "source.trash." + trash.record_id
-                ) == "remote" or any(r["record_id"] == trash.record_id for r in rows):
-                    record = trash.to_mail_record()
-                    location = await self.service.workflows.read_value(
-                        "source.location." + record.record_id
-                    )
-                    if location:
-                        record.mail.provider_message_id = location
-                    records.append(record)
-            records = [r for r in records if self.source(r) is not None]
-            if not records:
-                return
+            await self._refresh_locked(values or {})
+
+    async def _refresh_locked(self, values: dict[str, Any]) -> None:
+        rows = await self.journal()
+        records = await self.service.storage.list_mails()
+        for trash in await self.service.storage.list_trash():
+            if await self.service.storage.get_preference(
+                "source.trash." + trash.record_id
+            ) == "remote" or any(r["record_id"] == trash.record_id for r in rows):
+                record = trash.to_mail_record()
+                location = await self.service.workflows.read_value(
+                    "source.location." + record.record_id
+                )
+                if location:
+                    record.mail.provider_message_id = location
+                records.append(record)
+        records = [r for r in records if self.source(r) is not None]
+        if not records:
+            return
+        if "record_ids" in values:
+            selected = [r for r in records if r.record_id in values["record_ids"]]
+        else:
             selected = records[self.offset : self.offset + 50]
             self.offset = 0 if self.offset + 50 >= len(records) else self.offset + 50
-            for account_id in {r.mail.account_id for r in selected}:
-                batch = [r for r in selected if r.mail.account_id == account_id]
-                source = self.source(batch[0])
-                if source is None:
+        selected_ids = {r.record_id for r in selected}
+        for row in rows:
+            if row["record_id"] in selected_ids:
+                row["state"] = "unknown"
+        for account_id in {r.mail.account_id for r in selected}:
+            batch = [r for r in selected if r.mail.account_id == account_id]
+            source = self.source(batch[0])
+            if source is None:
+                continue
+            try:
+                states = await asyncio.wait_for(
+                    source.read_source_state([r.mail for r in batch]), 30
+                )
+            except Exception:
+                await self.service.events.emit(
+                    "mail.source.failed",
+                    account_id=account_id,
+                    code="experience.source_pending",
+                )
+                continue
+            for state in states:
+                found = next((r for r in batch if r.mail.message_id == state.message_id), None)
+                if found is None or not state.known:
                     continue
-                try:
-                    states = await asyncio.wait_for(
-                        source.read_source_state([r.mail for r in batch]), 30
-                    )
-                except Exception:
-                    await self.service.events.emit(
-                        "mail.source.failed",
-                        account_id=account_id,
-                        code="experience.source_pending",
-                    )
-                    continue
-                for state in states:
-                    found = next((r for r in batch if r.mail.message_id == state.message_id), None)
-                    if found is None or not state.known:
+                blocked: set[str] = set()
+                confirmed_delete = False
+                for row in list(rows):
+                    if row["record_id"] != found.record_id:
                         continue
-                    blocked: set[str] = set()
-                    confirmed_delete = False
-                    for row in list(rows):
-                        if row["record_id"] != found.record_id:
-                            continue
-                        if all(
-                            getattr(state, key, None) == value
-                            for key, value in row["changes"].items()
-                            if key != "restore_folder"
-                        ):
-                            confirmed_delete = confirmed_delete or bool(
-                                row["changes"].get("deleted")
-                            )
-                            rows.remove(row)
-                        else:
-                            row["state"] = "retry"
-                            blocked.update(row["changes"])
-                    await self.apply(found, state, remote_delete=confirmed_delete, blocked=blocked)
-            await self.save(rows)
+                    if all(
+                        getattr(state, key, None) == value
+                        for key, value in row["changes"].items()
+                        if key != "restore_folder"
+                    ):
+                        confirmed_delete = confirmed_delete or bool(row["changes"].get("deleted"))
+                        rows.remove(row)
+                    else:
+                        row["state"] = "retry"
+                        blocked.update(row["changes"])
+                await self.apply(found, state, remote_delete=confirmed_delete, blocked=blocked)
+        await self.save(rows)
 
     async def status(self, values: dict[str, Any]) -> dict[str, Any]:
         rows: list[dict[str, Any]] = []
@@ -263,10 +271,18 @@ class SourceSync:
 
     async def retry(self, values: dict[str, Any]) -> dict[str, str]:
         require_admin(self.service.t)
-        await self.refresh()
+        async with self.lock:
+            row = next((r for r in await self.journal() if r["id"] == values.get("id")), None)
+            if row:
+                await self._refresh_locked({"record_ids": [row["record_id"]]})
+            return await self._retry_locked(values)
+
+    async def _retry_locked(self, values: dict[str, Any]) -> dict[str, str]:
         row = next((r for r in await self.journal() if r["id"] == values.get("id")), None)
         if not row:
             return {"state": "synced", "message": self.service.t("experience.source_synced")}
+        if row["state"] != "retry":
+            return {"state": "unknown", "message": self.service.t("experience.source_pending")}
         record = await self.service.storage.get_mail(row["record_id"])
         if record is None:
             trash = next(
@@ -283,4 +299,4 @@ class SourceSync:
         location = await self.service.workflows.read_value("source.location." + record.record_id)
         if location:
             record.mail.provider_message_id = location
-        return await self.change(record, row["changes"])
+        return await self.change_locked(record, row["changes"])
