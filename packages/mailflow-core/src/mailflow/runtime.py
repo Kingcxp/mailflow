@@ -1508,6 +1508,7 @@ class MailFlowRuntime:
                     and await self._storage.get_mail(row.get("record_id", "")) is None
                 )
                 or (row.get("item_ids") and not set(open_items).intersection(row["item_ids"]))
+                or (row.get("kind") == "hourly" and await self._storage.get_preference(row["key"]))
                 or (
                     row.get("key", "").startswith("digest.")
                     and row["key"] != f"digest.{today.isoformat()}"
@@ -1554,12 +1555,23 @@ class MailFlowRuntime:
                     tzinfo=UTC
                 )
                 hour_end = hour_start + timedelta(hours=1)
+                window = json.loads(await self._storage.get_preference(key + ".window") or "{}")
+                if window:
+                    hour_start = datetime.fromisoformat(window["start"])
+                    hour_end = datetime.fromisoformat(window["end"])
                 mails = [
                     record
                     for record in await self._storage.list_mails()
                     if hour_start <= record.mail.received_at < hour_end
                     and record.ingestion == "live"
+                    and (
+                        not window.get("unread_only")
+                        or (not record.is_read and not record.archived)
+                    )
                 ]
+                if not mails:
+                    await self.deliveries.update(receipt, None)
+                    continue
                 briefing = await self._hourly_briefing(key, mails, hour_start, hour_end)
                 for notifier, config in channels:
                     if briefing:
@@ -1856,6 +1868,16 @@ class MailFlowRuntime:
             if quiet:
                 await finish()
             return 0
+        await self._storage.set_preference(
+            key + ".window",
+            json.dumps(
+                {
+                    "start": hour_start.isoformat(),
+                    "end": hour_end.isoformat(),
+                    "unread_only": bool(quiet),
+                }
+            ),
+        )
         mails = [
             record
             for record in await self._storage.list_mails()
@@ -1976,8 +1998,12 @@ class MailFlowRuntime:
         self, key: str, mails: list[MailRecord], hour_start: datetime, hour_end: datetime
     ) -> str:
         language = self.analysis_language
+        identities = json.dumps(sorted(record.record_id for record in mails))
         briefing = await self._storage.get_preference(f"{key}.briefing")
-        if await self._storage.get_preference(f"{key}.language") != language:
+        if (
+            await self._storage.get_preference(f"{key}.language") != language
+            or await self._storage.get_preference(f"{key}.mails") != identities
+        ):
             briefing = None
         if not briefing:
             briefing = await self._summarize_hour(mails, hour_start, hour_end)
@@ -1985,6 +2011,7 @@ class MailFlowRuntime:
                 return ""
             await self._storage.set_preference(f"{key}.briefing", briefing)
             await self._storage.set_preference(f"{key}.language", language)
+            await self._storage.set_preference(f"{key}.mails", identities)
         return briefing
 
     async def _summarize_hour(

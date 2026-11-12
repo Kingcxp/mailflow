@@ -155,8 +155,16 @@ async def test_quiet_hours_merge_mail_and_retry_only_the_failed_chat(
     clock = datetime(2028, 2, 2, 8, tzinfo=UTC)
     await summary_service.runtime.run_reminder_tick()
     assert notifier.destinations == ["user:a"] and notifier.sent == ["dawn, night"]
+    failures = await summary_service.failed_deliveries()
+    assert len(failures) == 1
+    night = await summary_service.storage.get_mail("night")
+    assert night is not None
+    night.is_read = True
+    await summary_service.storage.save_mail(night)
     clock = clock.replace(hour=9)
     notifier.fail = False
+    await summary_service.retry_deliveries([failures[0]["delivery_id"]])
+    assert notifier.sent == ["dawn, night", "dawn"]
     await summary_service.runtime.run_reminder_tick()
     await summary_service.runtime.run_reminder_tick()
     assert notifier.destinations == ["user:a", "user:b"]
