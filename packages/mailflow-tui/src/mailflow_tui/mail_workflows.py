@@ -199,10 +199,20 @@ class SyncScreen(WorkflowScreen):
         account = next(
             (a for a in self.service.snapshot().accounts if a.account_id == selected), None
         )
-        for ident in ("sync-start", "sync-stop"):
-            self.query_one("#" + ident, Button).disabled = (
-                self._busy or account is None or not account.enabled
-            )
+        unavailable = self._busy or account is None or not account.enabled
+        active = account is not None and account.status in {
+            "starting",
+            "running",
+            "retrying",
+            "syncing",
+        }
+        mode = cast(Select[str], self.query_one("#sync-mode", Select)).value
+        self.query_one("#sync-start", Button).disabled = unavailable or (
+            active and mode == "resume"
+        )
+        self.query_one("#sync-stop", Button).disabled = unavailable or (
+            not active and not (account and account.pending_count)
+        )
         if account is not None and not self._busy:
             self.status(
                 self._error
@@ -222,6 +232,9 @@ class SyncScreen(WorkflowScreen):
             return
         if event.select.id == "sync-mode":
             self.query_one("#sync-days", Input).disabled = event.value != "recent"
+        elif event.select.id == "sync-account":
+            self._error = ""
+            self.status("")
         self.refresh_status()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:

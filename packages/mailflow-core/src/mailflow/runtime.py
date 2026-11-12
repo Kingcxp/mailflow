@@ -373,7 +373,18 @@ class MailFlowRuntime:
             raise ValueError(mode)
         if mode not in {"pause", "resume"} and not isinstance(source, SyncCapableSource):
             raise NotImplementedError
+        if mode != "pause" and not account.enabled:
+            raise ValueError(account_id)
         async with self._lifecycle_lock:
+            if (
+                mode == "resume"
+                and account_id not in self._sync_paused
+                and any(
+                    task.get_name() == f"source-{account_id}" and not task.done()
+                    for task in self._tasks
+                )
+            ):
+                return
             self._sync_paused.add(account_id)
             await self._stop_named_tasks(
                 lambda task: task.get_name() == f"source-{account_id}", timeout_seconds=1.0
@@ -406,8 +417,6 @@ class MailFlowRuntime:
                         )
                     )
             if mode != "pause":
-                if not account.enabled:
-                    raise ValueError(account_id)
                 if mode != "resume":
                     assert isinstance(source, SyncCapableSource)
                     source.reset_sync(mode, days)

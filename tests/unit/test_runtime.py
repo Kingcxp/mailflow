@@ -1154,6 +1154,9 @@ async def test_stop_one_catch_up_keeps_raw_mail_and_other_accounts_running() -> 
     await runtime.start()
     try:
         await asyncio.wait_for(started.wait(), 1)
+        await runtime.control_sync("acct-1", "resume")
+        assert source.round == 1
+        assert all(r.analysis_state != "cancelled" for r in await storage.list_mails())
         await runtime.control_sync("acct-1", "pause")
         assert runtime.account_status("acct-1") == "paused"
         gate.set()
