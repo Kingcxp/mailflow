@@ -134,8 +134,13 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
             await until(pilot, has_mail)
             mail_search = app.query_one("#mail-search", Input)
             mail_search.value = "lecture"
-            await pilot.pause(0.4)
             table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
+            await until(
+                pilot,
+                lambda: (
+                    table.row_count == 1 and "Optional Friday lecture" in str(table.get_row_at(0))
+                ),
+            )
             before = list(table.rows)
             tabs = app.query_one(TabbedContent)
             tabs.active = "tab-assistant"
