@@ -131,6 +131,36 @@ async def test_quiet_hours_merge_mail_and_retry_only_the_failed_chat(
     notifier.fail = False
     assert await service.retry_deliveries([failures[0]["delivery_id"]]) == 1
     assert notifier.destinations == ["user:a", "user:b"] and not await service.failed_deliveries()
+    import mailflow.runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "datetime", Clock)
+    notifier = Targets()
+    summary_service = make_service(MemoryStorage(), notifier)
+    general = summary_service.config.general
+    general.timezone, general.quiet_enabled, general.hourly_summary = "UTC", True, True
+    general.mail_notifications = False
+    channel = summary_service.runtime.notification_channels()[0][1]
+    channel.options.update(targets=["user:a", "user:b"], hourly_summary=True)
+    clock = datetime(2028, 2, 1, 22, tzinfo=UTC)
+    await summary_service.runtime.run_reminder_tick()
+    for ident, hour, read in [("night", 23, False), ("dawn", 5, False), ("read", 4, True)]:
+        record = make_record().model_copy(update={"record_id": ident, "is_read": read})
+        record.mail.received_at = datetime(2028, 2, 1 if hour == 23 else 2, hour, tzinfo=UTC)
+        await summary_service.storage.save_mail(record)
+
+    async def summarize(mails: Any, *_: Any) -> str:
+        return ", ".join(sorted(r.record_id for r in mails))
+
+    monkeypatch.setattr(summary_service.runtime, "_summarize_hour", summarize)
+    clock = datetime(2028, 2, 2, 8, tzinfo=UTC)
+    await summary_service.runtime.run_reminder_tick()
+    assert notifier.destinations == ["user:a"] and notifier.sent == ["dawn, night"]
+    clock = clock.replace(hour=9)
+    notifier.fail = False
+    await summary_service.runtime.run_reminder_tick()
+    await summary_service.runtime.run_reminder_tick()
+    assert notifier.destinations == ["user:a", "user:b"]
+    assert not await summary_service.failed_deliveries()
 
 
 async def test_deleted_mail_action_disappears_from_search_reminders_and_digest() -> None:

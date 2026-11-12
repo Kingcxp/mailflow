@@ -1730,6 +1730,20 @@ class MailFlowRuntime:
             now = datetime.now(UTC)
             config = self._config.general
             if in_quiet_hours(config, now):
+                if config.hourly_summary and not await self._storage.get_preference(
+                    "hourly_summary.quiet"
+                ):
+                    closed = to_utc(
+                        now.astimezone(ZoneInfo(config.timezone)).replace(
+                            minute=0, second=0, microsecond=0
+                        )
+                    )
+                    start = closed - timedelta(hours=1)
+                    if await self._storage.get_preference(f"hourly_summary.{start:%Y-%m-%dT%H:00}"):
+                        start = closed
+                    await self._storage.set_preference(
+                        "hourly_summary.quiet", json.dumps({"start": start.isoformat(), "end": ""})
+                    )
                 return 0
             async with self._notifier_lock:
                 await flush_mail(self)
@@ -1807,6 +1821,8 @@ class MailFlowRuntime:
         the notifiers that opted in (``options.hourly_summary``). An hour
         with no mail is marked and stays silent."""
         if not config.hourly_summary:
+            if await self._storage.get_preference("hourly_summary.quiet"):
+                await self._storage.set_preference("hourly_summary.quiet", "")
             return 0
         local_now = now.astimezone(ZoneInfo(config.timezone))
         # summarize the LAST CLOSED hour: this tick fires every
@@ -1816,14 +1832,36 @@ class MailFlowRuntime:
             local_now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
         )
         hour_end = hour_start + timedelta(hours=1)
+        quiet_raw = await self._storage.get_preference("hourly_summary.quiet")
+        quiet = json.loads(quiet_raw) if quiet_raw else None
+        if quiet:
+            if not quiet["end"]:
+                quiet["end"] = hour_end.isoformat()
+                await self._storage.set_preference("hourly_summary.quiet", json.dumps(quiet))
+            hour_start = datetime.fromisoformat(quiet["start"])
+            hour_end = datetime.fromisoformat(quiet["end"])
         hour_key = hour_start.strftime("%Y-%m-%dT%H:00")
-        if await self._storage.get_preference(f"hourly_summary.{hour_key}"):
-            return 0
         key = f"hourly_summary.{hour_key}"
+
+        async def finish() -> None:
+            await self._storage.set_preference(key, "fired")
+            if quiet:
+                last_hour = hour_end - timedelta(hours=1)
+                await self._storage.set_preference(
+                    f"hourly_summary.{last_hour:%Y-%m-%dT%H:00}", "fired"
+                )
+                await self._storage.set_preference("hourly_summary.quiet", "")
+
+        if await self._storage.get_preference(key):
+            if quiet:
+                await finish()
+            return 0
         mails = [
             record
             for record in await self._storage.list_mails()
-            if hour_start <= record.mail.received_at < hour_end and record.ingestion == "live"
+            if hour_start <= record.mail.received_at < hour_end
+            and record.ingestion == "live"
+            and (not quiet or (not record.is_read and not record.archived))
         ]
         opted_in = [
             notifier
@@ -1833,7 +1871,7 @@ class MailFlowRuntime:
             if option_enabled(notifier_config.options, "hourly_summary", False)
         ]
         if not mails or not opted_in:
-            await self._storage.set_preference(key, "fired")
+            await finish()
             return 0
         briefing = await self._hourly_briefing(key, mails, hour_start, hour_end)
         if not briefing:
@@ -1858,7 +1896,7 @@ class MailFlowRuntime:
                 )
         if not complete:
             return 0
-        await self._storage.set_preference(key, "fired")
+        await finish()
         reminder_logger.warning(
             self._rt("reminder.hourly_log", hour=hour_key, count=len(mails))
             or f"HOURLY SUMMARY {hour_key}: {len(mails)} mail(s)"
