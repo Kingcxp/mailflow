@@ -691,6 +691,7 @@ class MailFlowRuntime:
 
     async def _worker(self, index: int) -> None:
         logger.debug("worker %d started", index)
+        task = cast(asyncio.Task[Any], asyncio.current_task())
         queue = self._queue
         stop_event = self._stop_event
         generation = self._processing_generation
@@ -714,11 +715,14 @@ class MailFlowRuntime:
                         completed = True
                         break
                     except Exception as exc:
+                        self._analysis_accounts[task] = mail.account_id
+                        self._pending_mail_accounts[mail.normalized_message_id()] = mail.account_id
                         logger.error(
                             "mail %r processing failed; retrying: %s", mail.message_id, exc
                         )
                         await asyncio.sleep(1)
             finally:
+                self._analysis_accounts.pop(task, None)
                 if (
                     completed
                     or stop_event.is_set()
@@ -726,7 +730,8 @@ class MailFlowRuntime:
                     or mail.account_id in self._sync_paused
                 ):
                     self._queued_mail_ids.discard(mail.normalized_message_id())
-                    self._pending_mail_accounts.pop(mail.normalized_message_id(), None)
+                    if completed:
+                        self._pending_mail_accounts.pop(mail.normalized_message_id(), None)
                     queue.task_done()
                 else:
                     # Reconfiguration may continue work within this session.

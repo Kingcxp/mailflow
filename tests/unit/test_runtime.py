@@ -1097,7 +1097,9 @@ async def test_retired_source_cannot_emit_after_reload() -> None:
         await runtime.stop()
 
 
-async def test_stop_one_catch_up_keeps_raw_mail_and_other_accounts_running() -> None:
+async def test_stop_one_catch_up_keeps_raw_mail_and_other_accounts_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     gate, started = asyncio.Event(), asyncio.Event()
 
     class Source(EmittingSource):
@@ -1112,7 +1114,7 @@ async def test_stop_one_catch_up_keeps_raw_mail_and_other_accounts_running() -> 
 
         async def run(self, emit: MailEmitter, stop_event: asyncio.Event) -> None:
             self.round += 1
-            numbers = [1, 2] if self.round == 1 else [3]
+            numbers = [1, 2] if self.round == 1 else [self.round + 1]
             self.sync_progress.update(sync_active=True, sync_received=0, sync_total=len(numbers))
             for number in numbers:
                 mail = make_mail().model_copy(
@@ -1176,5 +1178,29 @@ async def test_stop_one_catch_up_keeps_raw_mail_and_other_accounts_running() -> 
         stored = await storage.list_mails()
         assert len([r for r in stored if r.analysis_state == "cancelled"]) == 2
         assert any(r.mail.message_id == "catch-3" and r.analysis_state == "ready" for r in stored)
+        failed = asyncio.Event()
+        save_mail = storage.save_mail
+        attempts = 0
+
+        async def flaky_save(record: MailRecord) -> None:
+            nonlocal attempts
+            if record.mail.message_id == "catch-4" and record.analysis_state == "analysing":
+                attempts += 1
+                if attempts == 3:
+                    failed.set()
+                raise OSError("Temporary storage failure")
+            await save_mail(record)
+
+        monkeypatch.setattr(storage, "save_mail", flaky_save)
+        await runtime.control_sync("acct-1", "pause")
+        await runtime.control_sync("acct-1", "resume")
+        await asyncio.wait_for(failed.wait(), 3)
+        await runtime.control_sync("acct-1", "pause")
+        assert await runtime.wait_idle()
+        stored = await storage.list_mails()
+        assert any(
+            r.mail.message_id == "catch-4" and r.analysis_state == "cancelled" for r in stored
+        )
+        assert attempts == 3
     finally:
         await runtime.stop()
