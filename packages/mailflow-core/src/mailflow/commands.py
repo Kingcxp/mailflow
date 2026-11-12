@@ -959,7 +959,17 @@ class CommandRouter:
             )
             + "\n"
             + "\n".join(
-                c["id"] + ": " + (c["reason"] or self._t("experience.enabled"))
+                c["id"]
+                + "\n"
+                + self._t(
+                    "experience.channel_mail_state",
+                    state=c["reason"] or self._t("experience.enabled"),
+                )
+                + "\n"
+                + self._t(
+                    "experience.channel_task_state",
+                    state=c["task_reason"] or self._t("experience.enabled"),
+                )
                 for c in state["channels"]
             )
         )

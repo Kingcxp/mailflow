@@ -555,13 +555,40 @@ class ActionFiltersScreen(WorkflowScreen):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.t("experience.action_filters"))
-            yield Input(
-                self.category, placeholder=self.t("recurrence.category"), id="action-category"
-            )
-            yield Input(self.tag, placeholder=self.t("recurrence.tags"), id="action-tag")
+            with ScrollableContainer():
+                for name, value, key in [
+                    ("category", self.category, "category"),
+                    ("tag", self.tag, "tags"),
+                ]:
+                    yield Static(self.t("recurrence." + key))
+                    yield Input(value, id="action-" + name)
+                    yield SafeSelect(
+                        [], id="action-choose-" + name, prompt=self.t("tui.entry_pick_first")
+                    )
+            yield Static("", id="workflow-status", markup=False)
             with Horizontal():
                 yield Button(self.t("tui.btn_apply"), id="action-filter-apply")
                 yield Button(self.t("tui.btn_back"), id="action-filter-close")
+
+    async def load_data(self) -> None:
+        items = await self.service.list_actions_all()
+        for name, choices in [
+            ("category", {a.category for a in items if a.category}),
+            ("tag", {tag for a in items for tag in a.tags}),
+        ]:
+            cast(Select[str], self.query_one("#action-choose-" + name, Select)).set_options(
+                [(value, value) for value in sorted(choices)]
+            )
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if (
+            event.select.id
+            and event.select.id.startswith("action-choose-")
+            and isinstance(event.value, str)
+        ):
+            self.query_one(
+                "#action-" + event.select.id.removeprefix("action-choose-"), Input
+            ).value = event.value
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()

@@ -464,7 +464,12 @@ class UserWorkflows:
                     if address.address.casefold() != own:
                         unique.setdefault(address.address.casefold(), address)
                 draft.recipients = list(unique.values())
-                draft.cc = [a for a in record.mail.cc if a.address.casefold() not in {*unique, own}]
+                copied: dict[str, MailAddress] = {}
+                for address in record.mail.cc:
+                    key = address.address.casefold()
+                    if key not in {*unique, own}:
+                        copied.setdefault(key, address)
+                draft.cc = list(copied.values())
         if "subject" in values:
             draft.subject = str(values["subject"])
         if "body" in values:

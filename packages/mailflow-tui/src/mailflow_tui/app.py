@@ -1823,6 +1823,11 @@ class MailPane(Vertical):
                         failed=len(result.failed),
                         skipped=len(result.skipped),
                     )
+                    + "".join(
+                        "\n" + escape(ident + ": " + state["message"])
+                        for ident, state in result.source_results.items()
+                        if state["state"] != "synced"
+                    )
                 )
             await self.refresh_mail()
         except Exception as exc:

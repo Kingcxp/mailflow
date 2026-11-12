@@ -121,4 +121,7 @@ class AssistantHistory:
             row["outcome"] = self.service.t("experience.history_applied", count=row["applied"])
             if result.get("errors"):
                 row["outcome"] += "\n" + "\n".join(result["errors"])
+            for ident, state in result.get("source_results", {}).items():
+                if state.get("state") != "synced":
+                    row["outcome"] += "\n" + ident + ": " + state["message"]
             await workflows.write_value(key, rows)

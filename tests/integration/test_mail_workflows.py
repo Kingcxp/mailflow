@@ -856,6 +856,18 @@ async def test_recurring_tasks_keep_current_occurrence_and_preview_without_compl
     preview = next(item for item in await service.list_actions_all(preview_days=30) if item.preview)
     app: App[None] = App()
     async with app.run_test(size=(80, 24)) as pilot:
+        from mailflow_tui.workspace_screens import ActionFiltersScreen
+
+        selection: list[Any] = []
+        choices = ActionFiltersScreen(service, "", "")
+        app.push_screen(choices, selection.append)
+        await pilot.pause()
+        choices.query_one("#action-choose-category", Select).value = "Home"
+        choices.query_one("#action-choose-tag", Select).value = "bills"
+        await pilot.pause()
+        choices.query_one("#action-filter-apply", Button).press()
+        await pilot.pause()
+        assert selection == [("Home", "bills")]
         app.push_screen(TodoEditModal(service, preview))
         await pilot.pause()
         app.screen.query_one("#todo-summary", Input).value = "Renamed bill"
@@ -1103,6 +1115,24 @@ async def test_composition_keeps_private_files_and_invalidates_old_confirmation(
         MailAccountConfig(account_id="acct-1", provider="fake", email="me@example.com")
     ]
     service.sources["acct-1"] = source
+    from mailflow.domain import MailAddress
+
+    record = make_record("reply-all")
+    record.mail.recipients = [
+        MailAddress(address="me@example.com"),
+        MailAddress(address="friend@example.com"),
+    ]
+    record.mail.cc = [
+        MailAddress(address="cc@example.com"),
+        MailAddress(address="CC@example.com"),
+        MailAddress(address="me@example.com"),
+        MailAddress(address="friend@example.com"),
+    ]
+    await service.storage.save_mail(record)
+    reply_all = await service.workspace_call(
+        "compose", {"kind": "reply_all", "mail_id": record.record_id}
+    )
+    assert [a["address"] for a in reply_all["cc"]] == ["cc@example.com"]
     uploaded = await service.workspace_call(
         "upload", {"filename": "note.txt", "data": base64.b64encode(b"my file").decode()}
     )
