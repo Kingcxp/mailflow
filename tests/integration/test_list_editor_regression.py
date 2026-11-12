@@ -16,19 +16,7 @@ from mailflow_tui.list_editor import ListEditor
 from textual.widgets import Button, Input
 
 from mailflow_test_support.settings import start_service_quiet
-
-
-async def _wait_until(pilot: Any, predicate: Any, budget: float = 4.0) -> None:
-    """Poll a predicate across pilot pauses (pauses are not sync points on
-    slow runners). Mirrors the helper in test_settings_forms."""
-    import time as _time
-
-    deadline = _time.monotonic() + budget
-    while _time.monotonic() < deadline:
-        await pilot.pause(0.05)
-        if predicate():
-            return
-    raise AssertionError("condition not met in time")
+from mailflow_test_support.ui import until
 
 
 @pytest.mark.asyncio
@@ -47,12 +35,17 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
             # switch provider to napcat (auto-deploy gateway)
             provider: Any = app.screen.query_one("#field-provider")
             provider.value = "napcat"
-            await _wait_until(pilot, lambda: bool(app.screen.query("#extra-admins")))
+            await until(
+                pilot,
+                lambda: (
+                    app.screen.query_one("#entry-form-next", Button).display
+                    and bool(app.screen.query("#extra-admins Input"))
+                ),
+            )
 
             editor: ListEditor = app.screen.query_one("#extra-admins", ListEditor)
-            assert editor is not None
             # starts with one empty input row
-            row0: Input = editor.query_one("#list-editor-input-0", Input)
+            row0: Input = editor.query_one(Input)
             assert row0.value == ""
             # typing IS the value; no add button needed
             row0.value = "10001"
@@ -60,42 +53,43 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
             # non-focused rows render the value centered (Textual Input is
             # left-aligned by default; CenteredInput centers while blurred)
             row0.blur()  # pyright: ignore[reportUnknownMemberType]
-            await _wait_until(pilot, lambda: row0.render_line(0).text.strip() == "10001")
+            await until(pilot, lambda: row0.render_line(0).text.strip() == "10001")
             rendered = row0.render_line(0).text
             assert rendered.strip() == "10001"
             assert rendered.find("10001") > 0, f"value not centered: {rendered!r}"
             # Enter appends a stable-token row, preserves the value and moves focus.
             row0.focus()  # pyright: ignore[reportUnknownMemberType]
+            await until(pilot, lambda: row0.has_focus)
             await pilot.press("enter")
             # the new row's focus lands a frame later on slow runners: poll
-            await _wait_until(pilot, lambda: editor.value() == ["10001"])
-            await _wait_until(
+            await until(pilot, lambda: editor.value() == ["10001"])
+            await until(
                 pilot,
-                lambda: len(editor.query(".list-editor-row")) == 2,
+                lambda: len(editor.query(Input)) == 2,
             )
-            row1 = editor.query(".list-editor-row")[1].query_one(Input)
-            await _wait_until(pilot, lambda: row1.has_focus)
+            row1 = editor.query(Input)[1]
+            await until(pilot, lambda: row1.has_focus)
             assert row1.has_focus
             # bottom add appends another row and focuses it without rebuilding prior rows
             add_btn: Button = editor.query_one("#list-editor-add", Button)
             add_btn.press()
-            await _wait_until(
+            await until(
                 pilot,
-                lambda: len(editor.query(".list-editor-row")) == 3,
+                lambda: len(editor.query(Input)) == 3,
             )
-            row2 = editor.query(".list-editor-row")[2].query_one(Input)
-            await _wait_until(pilot, lambda: row2.has_focus)
+            row2 = editor.query(Input)[2]
+            await until(pilot, lambda: row2.has_focus)
             assert row2.has_focus
             # Delete the original row by its stable token, then focus the next surviving row.
             token = (row0.id or "").removeprefix("list-editor-input-")
             del0: Button = editor.query_one(f"#list-editor-del-{token}", Button)
             del0.press()
-            await _wait_until(pilot, lambda: editor.value() == [])
-            await _wait_until(
+            await until(pilot, lambda: editor.value() == [])
+            await until(
                 pilot,
-                lambda: len(editor.query(".list-editor-row")) == 2,
+                lambda: len(editor.query(Input)) == 2,
             )
-            await _wait_until(pilot, lambda: row1.has_focus)
+            await until(pilot, lambda: row1.has_focus)
             assert row1.has_focus
 
             # collection passes required with a typed value, and the value
@@ -106,7 +100,7 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
             # the admins extra (otherwise the core validation fails first)
             id_field: Input = form.query_one("#field-notifier-id", Input)
             id_field.value = "bot-1"
-            row_a: Input = editor.query(".list-editor-row")[0].query_one(Input)
+            row_a: Input = editor.query(Input).first()
             row_a.value = "123456"
             collected = form._collect()
             assert collected["options"]["admins"] == ["123456"]

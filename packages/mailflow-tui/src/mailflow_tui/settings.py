@@ -1321,6 +1321,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "field-provider":
+            if self._current_provider() == self._active_provider:
+                return
             await self._cancel_test()
             self._remember_extras()
             self._active_provider = self._current_provider()

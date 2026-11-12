@@ -1127,26 +1127,31 @@ async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
                 await pilot.pause(0.05)
             tabs = app.query_one(TabbedContent)
             tabs.active = "tab-mailboxes"  # pyright: ignore[reportUnknownMemberType]
-            await pilot.pause(0.2)
-            accounts = cast(DataTable[Any], app.query_one("#accounts-table", DataTable))
-            assert accounts.row_count == 1
+            await until(
+                pilot,
+                lambda: (
+                    bool(app.query("#accounts-table"))
+                    and cast(DataTable[Any], app.query_one("#accounts-table", DataTable)).row_count
+                    == 1
+                ),
+            )
 
             pane = app.query_one(AccountsPane)
             pane._selected = 0  # pyright: ignore[reportPrivateUsage]
             app.query_one("#account-history", Button).press()
-            await pilot.pause(0.5)
             history = cast(DataTable[Any], app.query_one("#history-table", DataTable))
+            await until(pilot, lambda: history.row_count == 3)
             assert history.row_count == 3
             # every one of them is already stored, so the browser marks them
             states = {str(history.get_row_at(i)[4]) for i in range(history.row_count)}
             assert states == {service.t("tui.history_marked_known")}
 
-            # analyzing an already-known mail is a no-op, never a duplicate
+            # Reanalysis replaces an already-known mail, never duplicates it.
             known_id = str(next(iter(history.rows)).value)
             pane._picked = {known_id}  # pyright: ignore[reportPrivateUsage]
             pane._render_history()  # pyright: ignore[reportPrivateUsage]
             app.query_one("#history-analyze", Button).press()
-            await pilot.pause(0.5)
+            await until(pilot, lambda: app.query_one("#history-analyze", Button).disabled)
             assert await service.count_mails() == 3
 
             # a mail that never came through the live stream *is* analyzed
@@ -1162,7 +1167,7 @@ async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
             pane._picked = {unseen.normalized_message_id()}  # pyright: ignore[reportPrivateUsage]
             pane._render_history()  # pyright: ignore[reportPrivateUsage]
             app.query_one("#history-analyze", Button).press()
-            await pilot.pause(0.6)
+            await until(pilot, lambda: app.query_one("#history-analyze", Button).disabled)
             assert await service.count_mails() == 4
             stored = await service.get_mail(unseen.normalized_message_id())
             assert stored is not None
