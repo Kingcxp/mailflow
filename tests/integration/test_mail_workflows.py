@@ -595,7 +595,12 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     # preference has ever been written to the database.
     service.config.general.language = "zh-CN"
     service.i18n.set_language("zh-CN")
-    path = await service.create_backup(str(tmp_path / "backup.zip"))
+    from mailflow.commands import CommandRouter
+
+    commands = CommandRouter(service)
+    path = str(tmp_path / "backup.zip")
+    response = await commands.execute(f'backup create --path "{path}"')
+    assert response.ok and await asyncio.to_thread(Path(path).is_file)
     if os.name == "posix":
         assert (await asyncio.to_thread(Path(path).stat)).st_mode & 0o777 == 0o600
     saved_backup = await asyncio.to_thread(Path(path).read_bytes)
@@ -644,7 +649,11 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     await service.batch_mail(["saved"])
     await service.delete_action(task.item_id)
     service.config.general.timezone = "Asia/Tokyo"
-    recovery = await service.restore_backup(path)
+    response = await commands.execute(f'backup preview "{path}"')
+    assert response.ok
+    response = await commands.execute(f'backup restore "{path}" CONFIRM')
+    assert response.ok
+    recovery = str(await asyncio.to_thread(lambda: next(tmp_path.glob("before-restore-*.zip"))))
     assert await asyncio.to_thread(Path(recovery).is_file)
     assert service.config.general.timezone == "UTC"
     assert await service.get_language() == service.config.general.language == "zh-CN"

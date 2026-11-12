@@ -908,12 +908,33 @@ class CommandRouter:
         )
 
     async def _cmd_backup(self, args: list[str]) -> CommandResponse:
+        import base64
 
-        if args == ["create"]:
+        positionals, flags = _split_flags(args)
+        local = current_context().provider == "local"
+        if positionals == ["create"]:
+            if local:
+                directory = (
+                    self.service.config_path.parent if self.service.config_path else Path.cwd()
+                )
+                destination = flags.get("path") or str(
+                    directory / "backups" / f"mailflow-{datetime.now(UTC):%Y%m%d-%H%M%S-%f}.zip"
+                )
+                saved = await self.service.create_backup(destination)
+                return self._ok(self._t("ux.backup_saved", path=saved))
             await self.service.workspace_call("backup_send")
             return self._ok(self._t("experience.file_sent"))
         if len(args) >= 2 and args[0] in {"preview", "restore"}:
-            file = await self.service.workspace_call("file_download", {"file_id": args[1]})
+            path = await asyncio.to_thread(lambda: Path(args[1]).expanduser()) if local else None
+            if path is not None and await asyncio.to_thread(path.is_file):
+                file = {
+                    "data": base64.b64encode(await asyncio.to_thread(path.read_bytes)).decode(
+                        "ascii"
+                    )
+                }
+            else:
+                path = None
+                file = await self.service.workspace_call("file_download", {"file_id": args[1]})
             preview = await self.service.workspace_call("backup_preview", file)
             summary = self._t(
                 "experience.backup_preview",
@@ -924,7 +945,11 @@ class CommandRouter:
             )
             if args[0] == "preview" or args[-1] != "CONFIRM":
                 return self._ok(summary + "\n" + self._t("backup.usage"))
-            recovery = await self.service.workspace_call("backup_restore", file)
+            recovery = (
+                await self.service.restore_backup(str(path))
+                if path is not None
+                else await self.service.workspace_call("backup_restore", file)
+            )
             return self._ok(self._t("ux.restore_done", path=recovery))
         return self._err(self._t("backup.usage"))
 

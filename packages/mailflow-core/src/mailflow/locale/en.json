@@ -1685,7 +1685,7 @@
       "usage": "files <list [--filename NAME] [--content_type TYPE] [--account_id ACCOUNT] [--after DATE] [--before DATE]|get MAIL_ID:INDEX [--path PATH]|saved|send FILE_ID>"
     },
     "backup": {
-      "usage": "backup <create|preview FILE_ID|restore FILE_ID CONFIRM>"
+      "usage": "backup create [--path FILE.zip]\nbackup preview FILE_ID|FILE.zip\nbackup restore FILE_ID|FILE.zip CONFIRM\nLocal paths are available in the CLI; use private chat for bot backups."
     },
     "source": {
       "usage": "source <status|detect|refresh|on/off ACCOUNT|delete/restore MAIL_ID...|confirm TOKEN|retry OPERATION_ID CONFIRM>"

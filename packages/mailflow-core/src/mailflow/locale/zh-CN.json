@@ -1685,7 +1685,7 @@
       "usage": "files <list [--filename NAME] [--content_type TYPE] [--account_id ACCOUNT] [--after DATE] [--before DATE]|get MAIL_ID:INDEX [--path PATH]|saved|send FILE_ID>"
     },
     "backup": {
-      "usage": "backup <create|preview FILE_ID|restore FILE_ID CONFIRM>"
+      "usage": "backup create [--path FILE.zip]\nbackup preview FILE_ID|FILE.zip\nbackup restore FILE_ID|FILE.zip CONFIRM\n命令行可使用本地路径；机器人备份请在私聊中操作。"
     },
     "source": {
       "usage": "source <status|detect|refresh|on/off ACCOUNT|delete/restore MAIL_ID...|confirm TOKEN|retry OPERATION_ID CONFIRM>"
