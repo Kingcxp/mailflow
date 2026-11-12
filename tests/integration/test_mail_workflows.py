@@ -822,6 +822,15 @@ async def test_recurring_tasks_keep_current_occurrence_and_preview_without_compl
         tags=["bills", "bills"],
     )
     january = (await service.list_actions())[0]
+    filtered = await service.workspace_call("actions", {"category": "Home", "tag": "bills"})
+    assert [row["item_id"] for row in filtered] == [january.item_id]
+    await service.workspace_call("plan_control", {"plan_id": january.plan_id, "operation": "pause"})
+    assert not [item for item in await service.list_actions_all(preview_days=30) if item.preview]
+    assert (await service.list_actions())[0].item_id == january.item_id
+    assert (await service.action_plans())[0].paused
+    await service.workspace_call(
+        "plan_control", {"plan_id": january.plan_id, "operation": "resume"}
+    )
     assert january.due_at == datetime(2028, 1, 31, 9, tzinfo=UTC) and january.tags == ["bills"]
     assert [
         item.due_at for item in await service.list_actions_all(preview_days=30) if item.preview
@@ -879,6 +888,37 @@ async def test_recurring_tasks_keep_current_occurrence_and_preview_without_compl
     assert future.preview and future.due_at is not None and future.due_at.weekday() == 3
     assert all(item.item_id != future.item_id for item in await service.list_actions())
     assert await service.stop_action_plan(future.plan_id)
+
+
+async def test_assistant_history_is_private_searchable_and_can_be_disabled(
+    service: MailFlowService,
+) -> None:
+    from mailflow.domain import SmartActionResult
+    from mailflow.permissions import PermissionContext, permission_scope
+
+    result = SmartActionResult(
+        final_text="Invoice found",
+        evidence=[
+            {
+                "kind": "mail",
+                "id": "invoice",
+                "title": "Invoice",
+                "quote": "Total: 20",
+                "verified": True,
+            }
+        ],
+    )
+    await service.assistant_history.add("Find invoice", result)
+    state = await service.workspace_call("assistant_history", {"query": "invoice"})
+    assert (
+        len(state["records"]) == 1 and state["records"][0]["references"][0]["quote"] == "Total: 20"
+    )
+    assert not ({"token", "pending", "task"} & state["records"][0].keys())
+    with permission_scope(PermissionContext(sender="other", provider="telegram", chat_id="room")):
+        assert not (await service.workspace_call("assistant_history"))["records"]
+    await service.workspace_call("assistant_history_change", {"retention_days": 0})
+    await service.assistant_history.add("Find invoice", result)
+    assert not (await service.workspace_call("assistant_history"))["records"]
 
 
 async def test_saved_filters_roll_forward_and_threads_ignore_subject_collisions(

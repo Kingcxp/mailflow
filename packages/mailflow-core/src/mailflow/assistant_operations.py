@@ -77,7 +77,8 @@ SCHEMAS: dict[str, tuple[str, dict[str, Any], list[str]]] = {
         "Propose editing future occurrences or stopping an entire recurring plan; existing outstanding tasks are retained.",
         {
             "plan_id": {"type": "string"},
-            "action": {"enum": ["edit", "stop"]},
+            "item_id": {"type": "string"},
+            "action": {"enum": ["edit", "stop", "pause", "resume", "skip"]},
             "values": {
                 "type": "object",
                 "description": "Editable template fields: summary, due_at, due_end, category, tags, notes, reminder_enabled and repeat (frequency, weekdays, month_day).",
@@ -237,7 +238,7 @@ async def stage(
         plan = next(
             (p for p in await service.action_plans() if p.plan_id == args.get("plan_id")), None
         )
-        if plan is None or args.get("action") not in {"stop", "edit"}:
+        if plan is None or args.get("action") not in {"stop", "edit", "pause", "resume", "skip"}:
             raise translated_error(ValueError, service.t, "ux.unsupported")
         description += (
             f"\n{plan.template.summary}\n"
@@ -337,6 +338,15 @@ async def apply(service: MailFlowService, operation: PendingOperation) -> Any:
             return await service.confirm_reply(draft.draft_id, draft.token or "")
         return draft
     elif operation.tool == "manage_action_plan":
+        if args["action"] in {"pause", "resume", "skip"}:
+            return await service.workspace_call(
+                "plan_control",
+                {
+                    "plan_id": args["plan_id"],
+                    "operation": args["action"],
+                    "item_id": args.get("item_id", ""),
+                },
+            )
         if args["action"] == "stop":
             return await service.stop_action_plan(str(args["plan_id"]))
         return await service.update_action_plan(str(args["plan_id"]), **args.get("values", {}))

@@ -20,6 +20,182 @@ from mailflow_tui.mail_workflows import WorkflowScreen
 from mailflow_tui.widgets import Input, SafeSelect, TextArea
 
 
+class AssistantHistoryScreen(WorkflowScreen):
+    def __init__(self, service: MailFlowService) -> None:
+        super().__init__(service)
+        self.rows: list[dict[str, Any]] = []
+        self.enabled = True
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self.t("experience.history"))
+            yield Input(placeholder=self.t("experience.history_search"), id="history-search")
+            yield SafeSelect([], id="history-row", prompt=self.t("tui.entry_pick_first"))
+            yield TextArea("", id="history-text", read_only=True)
+            yield SafeSelect([], id="history-ref", prompt=self.t("experience.source"))
+            yield Static("", id="workflow-status", markup=False)
+            with Horizontal():
+                for name, key in [
+                    ("open", "source"),
+                    ("delete", "delete"),
+                    ("clear", "clear"),
+                    ("toggle", "history_toggle"),
+                    ("close", "back"),
+                ]:
+                    yield Button(
+                        self.t("experience." + key),
+                        id="history-" + name,
+                        disabled=name in {"open", "delete"},
+                    )
+
+    async def on_mount(self) -> None:
+        await self.reload_rows()
+
+    async def reload_rows(self) -> None:
+        state = await self.service.workspace_call(
+            "assistant_history", {"query": self.query_one("#history-search", Input).value}
+        )
+        self.rows = state["records"]
+        self.enabled = bool(state["retention_days"])
+        self.status(
+            self.t("experience.history_enabled" if self.enabled else "experience.history_disabled")
+        )
+        cast(Select[str], self.query_one("#history-row", Select)).set_options(
+            [(r["at"][:16] + " · " + r["request"][:80], r["id"]) for r in self.rows]
+        )
+        self.query_one("#history-text", TextArea).load_text("")
+        cast(Select[str], self.query_one("#history-ref", Select)).set_options([])
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        await self.reload_rows()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "history-row":
+            row = next((r for r in self.rows if r["id"] == event.value), None)
+            self.query_one("#history-delete", Button).disabled = row is None
+            if row:
+                text = row["request"] + "\n\n" + row["answer"]
+                for ref in row["references"]:
+                    text += (
+                        "\n\n"
+                        + ref["title"]
+                        + "\n"
+                        + (ref["quote"] if ref["verified"] else self.t("experience.unverified"))
+                    )
+                self.query_one("#history-text", TextArea).load_text(text)
+                cast(Select[str], self.query_one("#history-ref", Select)).set_options(
+                    [(r["title"], r["kind"] + ":" + r["id"]) for r in row["references"]]
+                )
+        elif event.select.id == "history-ref":
+            self.query_one("#history-open", Button).disabled = event.value == Select.BLANK
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        ident = event.button.id
+        if ident == "history-close":
+            self.dismiss(None)
+        elif ident == "history-open":
+            value = str(cast(Select[str], self.query_one("#history-ref", Select)).value)
+            self.dismiss(value.split(":", 1))
+        elif ident in {"history-delete", "history-clear", "history-toggle"}:
+            values: dict[str, Any] = (
+                {"record_id": str(cast(Select[str], self.query_one("#history-row", Select)).value)}
+                if ident == "history-delete"
+                else {"clear": True}
+                if ident == "history-clear"
+                else {"retention_days": 0 if self.enabled else 30}
+            )
+            try:
+                await self.service.workspace_call("assistant_history_change", values)
+                await self.reload_rows()
+            except Exception as exc:
+                self.status(error_text(exc, self.t))
+
+
+class ActionFiltersScreen(WorkflowScreen):
+    def __init__(self, service: MailFlowService, category: str, tag: str) -> None:
+        super().__init__(service)
+        self.category, self.tag = category, tag
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self.t("experience.action_filters"))
+            yield Input(
+                self.category, placeholder=self.t("recurrence.category"), id="action-category"
+            )
+            yield Input(self.tag, placeholder=self.t("recurrence.tags"), id="action-tag")
+            with Horizontal():
+                yield Button(self.t("tui.btn_apply"), id="action-filter-apply")
+                yield Button(self.t("tui.btn_back"), id="action-filter-close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss(
+            (
+                self.query_one("#action-category", Input).value.strip(),
+                self.query_one("#action-tag", Input).value.strip(),
+            )
+            if event.button.id == "action-filter-apply"
+            else None
+        )
+
+
+class PlansScreen(WorkflowScreen):
+    def __init__(self, service: MailFlowService) -> None:
+        super().__init__(service)
+        self.rows: list[Any] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self.t("experience.plans"))
+            yield SafeSelect([], id="plan-row", prompt=self.t("tui.entry_pick_first"))
+            yield Static("", id="workflow-status", markup=False)
+            with Horizontal():
+                for op in ("pause", "resume", "skip", "back"):
+                    yield Button(self.t("experience." + op), id="plan-" + op, disabled=op != "back")
+
+    async def on_mount(self) -> None:
+        self.rows = await self.service.action_plans()
+        cast(Select[str], self.query_one("#plan-row", Select)).set_options(
+            [
+                (
+                    p.template.summary + (" · " + self.t("experience.paused") if p.paused else ""),
+                    p.plan_id,
+                )
+                for p in self.rows
+            ]
+        )
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        plan = next((p for p in self.rows if p.plan_id == event.value), None)
+        self.query_one("#plan-pause", Button).disabled = plan is None or plan.paused
+        self.query_one("#plan-resume", Button).disabled = plan is None or not plan.paused
+        self.query_one("#plan-skip", Button).disabled = plan is None or plan.paused
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "plan-back":
+            self.dismiss(None)
+            return
+        plan_id = str(cast(Select[str], self.query_one("#plan-row", Select)).value)
+        values: dict[str, Any] = {
+            "plan_id": plan_id,
+            "operation": str(event.button.id).removeprefix("plan-"),
+        }
+        try:
+            if values["operation"] == "skip":
+                items = [a for a in await self.service.list_actions_all() if a.plan_id == plan_id]
+                if not items:
+                    self.status(self.t("tui.empty"))
+                    return
+                values["item_id"] = items[-1].item_id
+            await self.service.workspace_call("plan_control", values)
+            self.status(self.t("experience.saved"))
+            await self.on_mount()
+        except Exception as exc:
+            self.status(error_text(exc, self.t))
+
+
 class SavedFiltersScreen(WorkflowScreen):
     def __init__(self, service: MailFlowService, query: MailQuery) -> None:
         super().__init__(service)

@@ -60,6 +60,7 @@ _STYLE_USAGE = "cyan"
 _STYLE_ACCENT = "magenta"
 
 _TOPICS = (
+    "assistant",
     "mail",
     "action",
     "plugin",
@@ -246,6 +247,7 @@ class CommandRouter:
         self.service = service
         service.commands = self
         self._handlers: dict[str, Callable[[list[str]], Awaitable[CommandResponse]]] = {
+            "assistant": self._cmd_assistant,
             "help": self._cmd_help,
             "mail": self._cmd_mail,
             "action": self._cmd_action,
@@ -779,7 +781,53 @@ class CommandRouter:
             + f"\n({self._t('plugin.applies_now')})"
         )
 
+    async def _cmd_assistant(self, args: list[str]) -> CommandResponse:
+        positionals, flags = _split_flags(args)
+        operation = positionals[0] if positionals else "history"
+        if operation in {"delete", "clear", "off", "on"}:
+            values: dict[str, Any] = {}
+            if operation == "delete" and len(positionals) == 2:
+                values["record_id"] = positionals[1]
+            elif operation == "clear":
+                values["clear"] = True
+            elif operation in {"off", "on"}:
+                values["retention_days"] = 0 if operation == "off" else 30
+            else:
+                return self._err(self._t("assistant.usage"))
+            await self.service.workspace_call("assistant_history_change", values)
+            return self._ok(self._t("experience.saved"))
+        state = await self.service.workspace_call(
+            "assistant_history", {"query": flags.get("query", "")}
+        )
+        if operation == "show" and len(positionals) == 2:
+            row = next((r for r in state["records"] if r["id"] == positionals[1]), None)
+            if row is None:
+                return self._err(self._t("experience.record_missing"))
+            return self._ok(
+                row["request"]
+                + "\n\n"
+                + row["answer"]
+                + "\n"
+                + "\n".join(f"[{r['kind']}:{r['id']}] {r['quote']}" for r in row["references"])
+            )
+        if operation != "history":
+            return self._err(self._t("assistant.usage"))
+        page, _, _ = _paginate(state["records"], _page_number(flags))
+        return self._ok(
+            "\n".join(f"[{r['id']}] {r['at']} · {r['request']}" for r in page)
+            or self._t("tui.empty")
+        )
+
     async def _cmd_action(self, args: list[str]) -> CommandResponse:
+        if args and args[0] in {"pause", "resume", "skip"} and len(args) == 2:
+            values: dict[str, Any] = {"operation": args[0], "plan_id": args[1]}
+            if args[0] == "skip":
+                target = await self._find_action(args[1])
+                if target is None or not target.plan_id:
+                    return self._err(self._t("action.not_found", item_id=args[1]))
+                values.update(plan_id=target.plan_id, item_id=target.item_id)
+            await self.service.workspace_call("plan_control", values)
+            return self._ok(self._t("experience.saved"))
         if not args or args[0] == "list":
             return await self._action_list(args[1:])
         if args[0] == "show" and len(args) == 2:
@@ -855,6 +903,12 @@ class CommandRouter:
             with contextlib.suppress(ValueError):
                 page = int(positionals[0])
         items = await self.service.list_actions()
+        items = [
+            item
+            for item in items
+            if (not flags.get("category") or item.category == flags["category"])
+            and (not flags.get("tag") or flags["tag"] in item.tags)
+        ]
         if flags.get("state") in {"completed", "all"}:
             items = [
                 item

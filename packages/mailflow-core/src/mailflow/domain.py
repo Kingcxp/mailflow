@@ -361,6 +361,8 @@ class ActionPlan(BaseModel):
     schedule: RepeatSchedule
     timezone: str
     last_occurrence: datetime | None = None
+    paused: bool = False
+    skipped: list[str] = Field(default_factory=lambda: [])
 
 
 class MailAnalysis(BaseModel):
@@ -526,6 +528,7 @@ class SmartActionResult(BaseModel):
     tool_steps: list[str] = Field(default_factory=lambda: [])
     final_text: str = ""
     deleted: int = 0
+    evidence: list[dict[str, Any]] = Field(default_factory=lambda: [])
 
     @property
     def is_complete(self) -> bool:

@@ -57,6 +57,7 @@ class AssistantPane(Vertical):
             yield Button(self._service.t("assistant.stop"), id="assistant-stop", disabled=True)
             yield Button(self._service.t("assistant.review"), id="assistant-review", disabled=True)
             yield Button(self._service.t("assistant.all"), id="assistant-all")
+            yield Button(self._service.t("experience.history"), id="assistant-history")
         yield Static("", id="assistant-status", markup=False)
         yield Button(self._service.t("assistant.configure_model"), id="assistant-configure")
         yield RichLog(id="assistant-progress", max_lines=100, wrap=True, markup=False)
@@ -70,6 +71,7 @@ class AssistantPane(Vertical):
         await self.stop()
 
     async def relabel(self) -> None:
+        self.query_one("#assistant-history", Button).label = self._service.t("experience.history")
         for ident, key in (
             ("send", "send"),
             ("stop", "stop"),
@@ -157,6 +159,14 @@ class AssistantPane(Vertical):
             self.set_scope({}, "")
         elif event.button.id == "assistant-configure":
             self.post_message(self.OpenResult("model", ""))
+        elif event.button.id == "assistant-history":
+            from mailflow_tui.workspace_screens import AssistantHistoryScreen
+
+            def opened(value: Any) -> None:
+                if value:
+                    self.post_message(self.OpenResult(str(value[0]), str(value[1])))
+
+            cast(Any, self).app.push_screen(AssistantHistoryScreen(self._service), opened)
 
     async def execute(self) -> None:
         text = self.query_one("#assistant-input", Input).value.strip()

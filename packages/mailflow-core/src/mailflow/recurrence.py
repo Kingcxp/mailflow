@@ -101,6 +101,8 @@ class RecurringActions:
             changed = False
             existing = {item.item_id for item in await self.storage.list_custom_actions()}
             for plan in plans:
+                if plan.paused:
+                    continue
                 today = now.astimezone(ZoneInfo(plan.timezone)).date()
                 current = None
                 # The previous monthly occurrence is at most 31 days away.
@@ -115,8 +117,17 @@ class RecurringActions:
                     plan.last_occurrence is not None and current <= plan.last_occurrence
                 ):
                     continue
+                if plan.last_occurrence is not None:
+                    previous = plan.last_occurrence.astimezone(ZoneInfo(plan.timezone))
+                    candidate_local = current.astimezone(ZoneInfo(plan.timezone))
+                    if previous.date() == candidate_local.date() or (
+                        plan.schedule.frequency == "monthly"
+                        and (previous.year, previous.month)
+                        == (candidate_local.year, candidate_local.month)
+                    ):
+                        continue
                 item = occurrence(plan, current)
-                if item.item_id not in existing:
+                if item.item_id not in existing and item.item_id not in plan.skipped:
                     await self.storage.save_custom_action(item)
                 plan.last_occurrence = current
                 changed = True
@@ -128,14 +139,34 @@ class RecurringActions:
         existing = {item.item_id for item in await self.storage.list_custom_actions()}
         items: list[ActionItem] = []
         for plan in await self.read():
+            if plan.paused:
+                continue
             today = now.astimezone(ZoneInfo(plan.timezone)).date()
             for offset in range(max(0, days) + 1):
                 when = occurrence_on(plan, today + timedelta(days=offset))
                 if when is None or when <= now or when > now + timedelta(days=days):
                     continue
                 item = occurrence(plan, when, preview=True)
-                if item.item_id not in existing and (
-                    plan.last_occurrence is None or when > plan.last_occurrence
+                if (
+                    item.item_id not in existing
+                    and item.item_id not in plan.skipped
+                    and (plan.last_occurrence is None or when > plan.last_occurrence)
                 ):
                     items.append(item)
         return sorted(items, key=lambda item: item.due_at or now)
+
+    async def paused_ids(self) -> set[str]:
+        return {plan.plan_id for plan in await self.read() if plan.paused}
+
+    async def control(self, plan_id: str, *, paused: bool | None = None, skip: str = "") -> bool:
+        async with self.lock:
+            plans = await self.read()
+            plan = next((p for p in plans if p.plan_id == plan_id), None)
+            if plan is None:
+                return False
+            if paused is not None:
+                plan.paused = paused
+            if skip and skip not in plan.skipped:
+                plan.skipped.append(skip)
+            await self.save(plans)
+            return True

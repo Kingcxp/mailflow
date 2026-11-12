@@ -70,8 +70,8 @@ class UserWorkflows:
     async def write_value(self, key: str, value: Any) -> None:
         await self.service.storage.set_preference(key, json.dumps(value, ensure_ascii=False))
 
-    def error(self, key: str) -> ValueError:
-        return translated_error(ValueError, self.service.t, key)
+    def error(self, key: str, **params: Any) -> ValueError:
+        return translated_error(ValueError, self.service.t, key, **params)
 
     async def call(self, action: str, values: dict[str, Any]) -> Any:
         handlers = {
@@ -83,6 +83,10 @@ class UserWorkflows:
             "upload": self.upload,
             "files": self.files,
             "edit_message": self.edit_message,
+            "actions": self.actions,
+            "plan_control": self.plan_control,
+            "assistant_history": self.service.assistant_history.read,
+            "assistant_history_change": self.service.assistant_history.change,
         }
         handler = handlers.get(action)
         if handler is None:
@@ -336,6 +340,44 @@ class UserWorkflows:
             file_ids=[str(i) for i in values["file_ids"]] if "file_ids" in values else None,
         )
         return draft.model_dump(mode="json")
+
+    async def actions(self, values: dict[str, Any]) -> list[dict[str, Any]]:
+        items = await self.service.list_actions_all(preview_days=int(values.get("preview_days", 0)))
+        return [
+            item.model_dump(mode="json")
+            for item in items
+            if (not values.get("category") or item.category == values["category"])
+            and (not values.get("tag") or values["tag"] in item.tags)
+        ]
+
+    async def plan_control(self, values: dict[str, Any]) -> bool:
+        require_admin(self.service.t)
+        operation = str(values.get("operation", ""))
+        plan_id = str(values.get("plan_id", ""))
+        recurring = self.service.runtime.action_store.recurring
+        if operation in {"pause", "resume"}:
+            result = await recurring.control(plan_id, paused=operation == "pause")
+        elif operation == "skip":
+            item_id = str(values.get("item_id", ""))
+            item = next(
+                (
+                    a
+                    for a in await self.service.list_actions_all(preview_days=30)
+                    if a.item_id == item_id and a.plan_id == plan_id
+                ),
+                None,
+            )
+            if item is None:
+                raise self.error("action.not_found", item_id=item_id)
+            result = await recurring.control(plan_id, skip=item_id)
+            if result and not item.preview:
+                await self.service.delete_action(item_id)
+        else:
+            raise self.error("common.unsupported")
+        if not result:
+            raise self.error("action.not_found", item_id=plan_id)
+        await self.service.events.emit("action.changed", plan_id=plan_id)
+        return result
 
     async def outgoing(self, draft: ReplyDraft) -> list[Attachment]:
         result: list[Attachment] = []

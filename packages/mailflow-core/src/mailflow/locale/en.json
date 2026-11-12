@@ -55,7 +55,7 @@
       "type_meeting": "meeting",
       "type_other": "other",
       "updated": "Action {item_id} updated: {summary} (due {time})",
-      "usage": "action <list [--state open|all]|show <id>|add <summary>|edit <id>|complete <id>|delete <id>>"
+      "usage": "action <list [--state open|all]|show <id>|add <summary>|edit <id>|complete <id>|delete <id>> | action pause/resume <plan_id> | action skip <item_id> | action list --category NAME --tag TAG"
     },
     "adapter": {
       "header_id": "ADAPTER",
@@ -1492,7 +1492,8 @@
       "configure_model": "Configure a model",
       "remote_model_setup": "Configure a model in the server’s local settings, then return to the assistant.",
       "session_required": "Reconnect using a current MailFlow client before starting or confirming an assistant task.",
-      "operation_write_message": "Compose mail"
+      "operation_write_message": "Compose mail",
+      "usage": "assistant <history [--query text] [--page N]|show ID|delete ID|clear|off|on>"
     },
     "recurrence": {
       "category": "Category",
@@ -1569,7 +1570,24 @@
       "send_preview": "Sending account: {account}\nTo: {to}\nCc: {cc}\nBcc: {bcc}\nAttachments: {files}\nReview the body, then confirm sending.",
       "file_download_failed": "The attachment could not be retrieved. Upload it again or add it in the terminal.",
       "private_send": "Use a private chat or terminal for drafts with Bcc recipients.",
-      "upload_in_chat": "Upload the file in this chat, then select it with reply files."
+      "upload_in_chat": "Upload the file in this chat, then select it with reply files.",
+      "history": "Assistant history",
+      "history_search": "Enter keywords and press Enter",
+      "source": "Open source",
+      "delete": "Delete",
+      "clear": "Clear history",
+      "back": "Back",
+      "history_toggle": "Toggle history",
+      "history_enabled": "History enabled for 30 days; tasks and confirmations are never restored.",
+      "history_disabled": "History disabled.",
+      "unverified": "Original text has not been checked",
+      "action_filters": "Category and tag filters",
+      "plans": "Recurring plans",
+      "pause": "Pause plan",
+      "resume": "Resume plan",
+      "skip": "Skip current occurrence",
+      "paused": "Paused",
+      "record_missing": "This record was deleted or expired."
     }
   }
 }

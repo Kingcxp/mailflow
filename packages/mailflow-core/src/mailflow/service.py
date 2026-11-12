@@ -372,6 +372,9 @@ class MailFlowService:
         from mailflow.workflows import UserWorkflows
 
         self.workflows = UserWorkflows(self)
+        from mailflow.assistant_history import AssistantHistory
+
+        self.assistant_history = AssistantHistory(self)
         self._stopped_event = asyncio.Event()
         self._stop_task: asyncio.Task[Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
@@ -2083,6 +2086,7 @@ Return every candidate in this batch."""
                 utcnow() + timedelta(minutes=20),
                 [operation.model_copy(deep=True) for operation in result.pending],
             )
+        await self.assistant_history.add(text, result)
         return result
 
     async def assistant_tool(

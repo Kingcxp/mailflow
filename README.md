@@ -31,7 +31,7 @@ without one, deterministic rules remain available.
 |---|---|
 | Mail | Read originals before background analysis; account/date/sender filters, read/star/archive states, full text, attachments and OCR search |
 | Batch actions | Check rows, Shift-select a range, Ctrl+A for visible results, delete expired mail and undo the last deletion |
-| Tasks | Optional deadlines, overdue and completed history, reopen, mute or snooze reminders |
+| Tasks | Optional deadlines, overdue items, categories/tags, recurring plans, pause/skip, mute or snooze reminders; completion removes the occurrence |
 | Replies | Search drafts and sent replies; prepare and confirm before sending; failed sends remain retryable |
 | Notifications | Configure chat-platform instances and notification targets; export NoneBot or AstrBot plugins |
 | Plugins | Install, enable or disable mail sources, model backends, processors, notifiers, storage and gateways |
@@ -43,7 +43,7 @@ default; automatic cleanup is opt-in and protects starred, important and unfinis
 mail. Trash is kept for 7 days. Backup and restore are under Settings. Automatic updates
 are disabled by default; existing retention settings are preserved.
 
-Smart query finds or deletes mail, manages tasks and shows live progress. Changes
+The independent Assistant tab finds or deletes mail, manages tasks and shows live progress. Changes
 require confirmation and can be excluded individually. Select the scope from Mail → More.
 Long messages are checked in chunks; incomplete searches are reported. Remote TUI supports
 mail, tasks, replies, smart query and conversational correction. Plugin/process management

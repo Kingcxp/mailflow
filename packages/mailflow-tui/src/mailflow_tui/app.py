@@ -2254,6 +2254,8 @@ class ActionsPane(Vertical):
         self._actions_matcher = SearchMatcher("")
         self._delete_busy = False
         self._action_status = ""
+        self._category_filter = ""
+        self._tag_filter = ""
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="actions-search-row"):
@@ -2299,6 +2301,9 @@ class ActionsPane(Vertical):
                 disabled=True,
             )
         yield Button(self._service.t("assistant.handoff"), id="actions-assistant")
+        with Horizontal():
+            yield Button(self._service.t("experience.action_filters"), id="actions-filters")
+            yield Button(self._service.t("experience.plans"), id="actions-plans")
         yield Static(self._service.t("tui.empty"), id="actions-hint")
 
     async def on_mount(self) -> None:
@@ -2338,6 +2343,8 @@ class ActionsPane(Vertical):
                 "actions-add": "tui.btn_add_todo",
                 "actions-edit": "tui.btn_edit",
                 "actions-delete": "tui.btn_delete",
+                "actions-filters": "experience.action_filters",
+                "actions-plans": "experience.plans",
             },
         )
         search = self.query_one_optional("#actions-search", Input)
@@ -2400,6 +2407,12 @@ class ActionsPane(Vertical):
         table.unselectable_keys = {item.item_id for item in loaded if item.preview}
         table.retain_checks({item.item_id for item in loaded if not item.preview})
         items = list(self._items)
+        items = [
+            item
+            for item in items
+            if (not self._category_filter or item.category == self._category_filter)
+            and (not self._tag_filter or self._tag_filter in item.tags)
+        ]
         types = sorted({item.action_type for item in self._items})
         type_filter = self._select_value("#actions-type-filter")
         if type_filter not in {"all", *types}:
@@ -2628,6 +2641,23 @@ class ActionsPane(Vertical):
             self.query_one("#actions-hint", Static).update(message)
 
     async def _handle_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id in {"actions-filters", "actions-plans"}:
+            from mailflow_tui.workspace_screens import ActionFiltersScreen, PlansScreen
+
+            def closed(value: Any) -> None:
+                if value is not None and event.button.id == "actions-filters":
+                    self._category_filter, self._tag_filter = value
+                self.run_worker(
+                    self.refresh_actions(), group="actions-refresh", exit_on_error=False
+                )
+
+            cast(Any, self).app.push_screen(
+                ActionFiltersScreen(self._service, self._category_filter, self._tag_filter)
+                if event.button.id == "actions-filters"
+                else PlansScreen(self._service),
+                closed,
+            )
+            return
         if event.button.id == "actions-assistant":
             table = self._actions_table()
             ids = list(table.checked_keys) if table is not None and table.checked_keys else []

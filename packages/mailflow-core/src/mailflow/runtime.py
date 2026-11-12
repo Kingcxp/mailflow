@@ -1450,10 +1450,12 @@ class MailFlowRuntime:
 
     async def failed_deliveries(self) -> list[dict[str, Any]]:
         rows = await self.deliveries.read()
+        paused = await self.action_store.recurring.paused_ids()
         open_items = {
             entry.item.item_id: entry.item
             for entry in await self.action_store.read()
-            if entry.item.completed_at is None
+            if entry.item.plan_id not in paused
+            and entry.item.completed_at is None
             and entry.item.reminder_enabled
             and (
                 entry.item.snoozed_until is None
@@ -2003,10 +2005,12 @@ class MailFlowRuntime:
             to_utc(day_start).astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0)
         )
         horizon = to_utc(local_start + timedelta(days=max(0, days_before) + 1))
+        paused = await self.action_store.recurring.paused_ids()
         return [
             entry.item
             for entry in await self.action_store.read()
-            if entry.item.completed_at is None
+            if entry.item.plan_id not in paused
+            and entry.item.completed_at is None
             and entry.item.due_at is not None
             and entry.item.reminder_enabled
             and reminder_end(entry.item, self._config.general.timezone) > to_utc(now or day_start)
@@ -2116,6 +2120,8 @@ class MailFlowRuntime:
             or (item.snoozed_until is not None and item.snoozed_until > now)
             or reminder_end(item, config.timezone) <= to_utc(now)
         ):
+            return 0
+        if item.plan_id in await self.action_store.recurring.paused_ids():
             return 0
         windows = reminder_times(
             item,

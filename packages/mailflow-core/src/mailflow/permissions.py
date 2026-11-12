@@ -66,6 +66,7 @@ def authorize_command(command: str, args: list[str], translate: Callable[..., st
     sub = args[0] if args else ""
     reads = {
         "help": None,
+        "assistant": None,
         "example": None,
         "status": None,
         "runtime": None,
