@@ -48,13 +48,15 @@ def _dismissal_key(item: ActionItem) -> str:
     )
 
 
-def completed_key(item: ActionItem) -> str:
+def completed_key(item: ActionItem, *, legacy: bool = False) -> str:
     title = "".join(
         char
         for char in item.summary.casefold()
         if not unicodedata.category(char).startswith(("P", "Z"))
     )
     value = [item.mail_id, title, item.action_type, str(item.due_at), str(item.due_end)]
+    if not legacy:
+        value.extend([item.notes, item.location, item.url])
     return "done|" + hashlib.sha256(json.dumps(value).encode()).hexdigest()
 
 
@@ -85,6 +87,7 @@ class ActionStore:
                 action_key(item),
                 _legacy_key(item),
                 completed_key(item),
+                completed_key(item, legacy=True),
             )
         )
 

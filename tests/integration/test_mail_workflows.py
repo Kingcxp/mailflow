@@ -104,6 +104,20 @@ async def test_mail_states_search_and_task_survive_trash_and_reopen(
     assert (await service.batch_mail(["mail"], delete_actions=True)).succeeded == ["mail"]
     assert not await service.list_actions_all()
 
+    # Completing one task must not suppress a different task with the same
+    # title and time in the same mail, including after another analysis save.
+    first = task.model_copy(update={"item_id": "a", "notes": "Client A"})
+    second = task.model_copy(update={"item_id": "b", "notes": "Client B"})
+    record = make_record("mail", action=first)
+    assert record.analysis is not None
+    record.analysis.action_items.append(second)
+    await service.storage.save_mail(record)
+    await service.edit_action("a", completed=True)
+    assert [item.item_id for item in await service.list_actions()] == ["b"]
+    first.summary += "."
+    await service.storage.save_mail(record)
+    assert [item.item_id for item in await service.list_actions()] == ["b"]
+
 
 async def test_original_mail_is_readable_during_analysis_and_history_is_quiet(
     service: MailFlowService,
@@ -724,7 +738,7 @@ async def test_recurring_tasks_keep_current_occurrence_and_preview_without_compl
     await service.add_action(
         "Monthly bill",
         datetime(2028, 1, 31, 9, tzinfo=UTC),
-        repeat={"frequency": "monthly", "month_day": 31},
+        repeat={"frequency": "monthly"},
         category="Home",
         tags=["bills", "bills"],
     )
@@ -733,6 +747,25 @@ async def test_recurring_tasks_keep_current_occurrence_and_preview_without_compl
     assert [
         item.due_at for item in await service.list_actions_all(preview_days=30) if item.preview
     ] == [datetime(2028, 2, 29, 9, tzinfo=UTC)]
+    from mailflow_tui.todo_create import TodoEditModal
+
+    preview = next(item for item in await service.list_actions_all(preview_days=30) if item.preview)
+    app: App[None] = App()
+    async with app.run_test(size=(80, 24)) as pilot:
+        app.push_screen(TodoEditModal(service, preview))
+        await pilot.pause()
+        app.screen.query_one("#todo-summary", Input).value = "Renamed bill"
+        app.screen.query_one("#todo-save", Button).press()
+        await until(pilot, lambda: not isinstance(app.screen, TodoEditModal))
+    plan = (await service.action_plans())[0]
+    assert plan.template.due_at == january.due_at and plan.schedule.month_day == 31
+    assert (await service.list_actions())[0].summary == "Monthly bill"
+    assert (
+        next(
+            item for item in await service.list_actions_all(preview_days=30) if item.preview
+        ).summary
+        == "Renamed bill"
+    )
     await service.edit_action(january.item_id, completed=True)
     assert not await service.list_actions_all()
     await service.storage.close()
@@ -759,3 +792,11 @@ async def test_recurring_tasks_keep_current_occurrence_and_preview_without_compl
     assert (
         len(await service.list_actions()) == 2
     )  # existing outstanding + current, no missed occurrences
+    future = await service.add_action(
+        "Future weekly",
+        clock + timedelta(days=10),
+        repeat={"frequency": "weekly", "weekdays": [3]},
+    )
+    assert future.preview and future.due_at is not None and future.due_at.weekday() == 3
+    assert all(item.item_id != future.item_id for item in await service.list_actions())
+    assert await service.stop_action_plan(future.plan_id)

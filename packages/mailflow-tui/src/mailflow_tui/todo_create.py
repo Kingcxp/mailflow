@@ -227,8 +227,33 @@ class TodoCreateModal(ModalScreen[bool]):
                     if repeat is None:
                         error.update(self._t("recurrence.use_stop"))
                         return
-                    await self._service.update_action_plan(
-                        self._item.plan_id,
+                    plan = next(
+                        (
+                            plan
+                            for plan in await self._service.action_plans()
+                            if plan.plan_id == self._item.plan_id
+                        ),
+                        None,
+                    )
+                    if (
+                        plan is not None
+                        and plan.template.due_at is not None
+                        and self._item.due_at is not None
+                        and due_at is not None
+                        and due_at.astimezone(tz).date() == self._item.due_at.astimezone(tz).date()
+                    ):
+                        # Editing a preview's time changes future occurrences,
+                        # without replacing the original plan's start date.
+                        duration = due_end - due_at if due_end is not None else None
+                        local = due_at.astimezone(tz)
+                        due_at = plan.template.due_at.astimezone(tz).replace(
+                            hour=local.hour,
+                            minute=local.minute,
+                            second=local.second,
+                            microsecond=local.microsecond,
+                        )
+                        due_end = due_at + duration if duration is not None else None
+                    changes: dict[str, Any] = dict(
                         repeat=repeat,
                         summary=summary,
                         due_at=due_at,
@@ -239,6 +264,7 @@ class TodoCreateModal(ModalScreen[bool]):
                         reminder_enabled=self.query_one("#todo-reminder", Checkbox).value,
                         **extra,
                     )
+                    await self._service.update_action_plan(self._item.plan_id, **changes)
                     self.dismiss(True)
                     return
             if self._item is None:

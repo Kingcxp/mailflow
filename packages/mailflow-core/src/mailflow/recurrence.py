@@ -12,6 +12,17 @@ from mailflow.contracts import StorageBackend
 from mailflow.domain import ActionItem, ActionPlan, to_utc
 
 
+def resolve_schedule(plan: ActionPlan) -> None:
+    """Keep an omitted day anchored to the plan, including in month-end previews."""
+    if plan.template.due_at is None:
+        return
+    local = plan.template.due_at.astimezone(ZoneInfo(plan.timezone))
+    if plan.schedule.frequency == "monthly" and plan.schedule.month_day is None:
+        plan.schedule.month_day = local.day
+    elif plan.schedule.frequency == "weekly" and not plan.schedule.weekdays:
+        plan.schedule.weekdays = [local.weekday()]
+
+
 def occurrence_on(plan: ActionPlan, day: date) -> datetime | None:
     start = plan.template.due_at
     assert start is not None
@@ -59,7 +70,10 @@ class RecurringActions:
 
     async def read(self) -> list[ActionPlan]:
         raw = await self.storage.get_preference("actions.plans")
-        return [ActionPlan.model_validate(row) for row in json.loads(raw or "[]")]
+        plans = [ActionPlan.model_validate(row) for row in json.loads(raw or "[]")]
+        for plan in plans:
+            resolve_schedule(plan)
+        return plans
 
     async def save(self, plans: list[ActionPlan]) -> None:
         await self.storage.set_preference(
@@ -68,6 +82,7 @@ class RecurringActions:
 
     async def add(self, plan: ActionPlan) -> None:
         async with self.lock:
+            resolve_schedule(plan)
             await self.save([*await self.read(), plan])
 
     async def stop(self, plan_id: str) -> bool:

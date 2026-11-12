@@ -1155,7 +1155,13 @@ class MailFlowService:
             if plan is None:
                 raise translated_error(ValueError, self.t, "action.not_found", item_id=plan_id)
             if "repeat" in values:
-                plan.schedule = RepeatSchedule.model_validate(values.pop("repeat"))
+                schedule = RepeatSchedule.model_validate(values.pop("repeat"))
+                if schedule.frequency == plan.schedule.frequency:
+                    if schedule.month_day is None:
+                        schedule.month_day = plan.schedule.month_day
+                    if not schedule.weekdays:
+                        schedule.weekdays = plan.schedule.weekdays
+                plan.schedule = schedule
             allowed = {
                 "summary",
                 "due_at",
@@ -1177,6 +1183,9 @@ class MailFlowService:
                 raise translated_error(ValueError, self.t, "action.invalid_end")
             if any(day not in range(7) for day in plan.schedule.weekdays):
                 raise translated_error(ValueError, self.t, "recurrence.invalid_days")
+            from mailflow.recurrence import resolve_schedule
+
+            resolve_schedule(plan)
             await recurring.save(plans)
         await self.events.emit("action.changed", plan_id=plan_id)
         return plan
@@ -1250,11 +1259,23 @@ class MailFlowService:
                 schedule=schedule,
                 timezone=self.config.general.timezone,
             )
-            await self.runtime.action_store.recurring.add(plan)
+            recurring = self.runtime.action_store.recurring
+            await recurring.add(plan)
+            await recurring.materialize()
             await self.events.emit("action.changed", plan_id=plan_id)
-            from mailflow.recurrence import occurrence
+            from mailflow.recurrence import occurrence, occurrence_on
 
-            return occurrence(plan, final_due, preview=final_due.date() > utcnow().date())
+            saved = next(p for p in await recurring.read() if p.plan_id == plan_id)
+            if saved.last_occurrence is not None:
+                return occurrence(saved, saved.last_occurrence)
+            local_day = final_due.astimezone(ZoneInfo(saved.timezone)).date()
+            first = next(
+                when
+                for offset in range(32)
+                if (when := occurrence_on(saved, local_day + timedelta(days=offset))) is not None
+                and when >= final_due
+            )
+            return occurrence(saved, first, preview=True)
         duplicate = await self._find_duplicate_action(item)
         if duplicate is not None:
             raise translated_error(
