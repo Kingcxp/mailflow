@@ -1639,7 +1639,7 @@
       "source_required": "需从原邮箱获取",
       "search": "查找",
       "download_selected": "下载所选",
-      "download_result": "已下载 {success} 项，失败 {failed} 项。",
+      "download_result": "已下载 {success} 项，失败 {failed} 项，跳过 {skipped} 项。失败和跳过的文件仍保留勾选。",
       "backup_preview": "将恢复 {accounts} 个账户、{mails} 封邮件、{tasks} 项待办和 {files} 个缓存或上传文件。未下载的附件仍需原邮箱。",
       "file_send_unsupported": "该渠道暂不支持文件投递，请在终端附件中心下载。",
       "file_sent": "文件已发送到当前会话。",

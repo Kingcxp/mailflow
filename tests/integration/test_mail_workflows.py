@@ -478,6 +478,55 @@ async def test_mail_read_download_and_trash_recovery(
         assert target.read_bytes() == b"SECOND"
         attachments.query_one("#attachment-close", Button).press()
         await pilot.pause()
+        from mailflow_tui.widgets import SelectionTable
+        from mailflow_tui.workspace_screens import AttachmentLibraryScreen, FileSelectionScreen
+
+        library = AttachmentLibraryScreen(service)
+        await app.push_screen(library)
+        await until(
+            pilot, lambda: library.query_one("#library-table", SelectionTable).row_count == 2
+        )
+        table = library.query_one("#library-table", SelectionTable)
+        table.focus()
+        await pilot.press("f4")
+        assert table.checked_keys == {"0", "1"}
+        real_call = service.workspace_call
+        downloads: list[int] = []
+
+        async def download_with_failure(action: str, values: Any = None) -> Any:
+            if action == "attachment_download":
+                downloads.append(values["index"])
+                if values["index"] == 1 and len(downloads) == 2:
+                    raise ConnectionError("private connection detail")
+            return await real_call(action, values)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(service, "workspace_call", download_with_failure)
+            library.query_one("#library-path", Input).value = str(tmp_path / "batch")
+            library.query_one("#library-download", Button).press()
+            await until(pilot, lambda: len(downloads) == 2 and not library.busy)
+            assert (tmp_path / "batch" / "first.txt").read_bytes() == b"FIRST"
+            assert table.checked_keys == {"1"}
+            assert str(table.get_cell("0", "selected")) == "[ ]"
+            assert "second.txt" in str(library.query_one("#workflow-status").render())
+            library.query_one("#library-download", Button).press()
+            await until(pilot, lambda: len(downloads) == 3 and not library.busy)
+            assert downloads == [0, 1, 1]
+            assert (tmp_path / "batch" / "second.txt").read_bytes() == b"SECOND"
+        library.query_one("#library-back", Button).press()
+        await pilot.pause()
+        await service.workspace_call("attachment_download", {"record_id": "long", "index": 0})
+        files = await service.workspace_call("files")
+        assert len(files) == 2
+        selected_files: list[Any] = []
+        chooser = FileSelectionScreen(service, [])
+        await app.push_screen(chooser, selected_files.append)
+        await until(pilot, lambda: chooser.query_one("#files-table", SelectionTable).row_count == 2)
+        chooser.query_one("#files-table", SelectionTable).focus()
+        await pilot.press("f4")
+        chooser.query_one("#files-apply", Button).press()
+        await until(pilot, lambda: bool(selected_files))
+        assert set(selected_files[0]) == {file["file_id"] for file in files}
         await service.batch_mail(["long"])
         trash = TrashScreen(service)
         app.push_screen(trash)

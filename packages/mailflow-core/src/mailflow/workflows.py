@@ -344,9 +344,17 @@ class UserWorkflows:
         key = "files." + actor_key()
         async with self.lock:
             rows = await self.read_value(key, {})
+            content = {
+                "filename": reference.filename,
+                "content_type": reference.content_type,
+                "data": base64.b64encode(data).decode("ascii"),
+            }
+            for row in rows.values():
+                if all(row.get(k) == v for k, v in content.items()):
+                    return FileReference.model_validate(row).model_dump()
             rows[reference.file_id] = {
                 **reference.model_dump(),
-                "data": base64.b64encode(data).decode("ascii"),
+                **content,
             }
             await self.write_value(key, rows)
         return reference.model_dump()
@@ -389,7 +397,9 @@ class UserWorkflows:
                     not in attachment.content_type.casefold()
                 ):
                     continue
-                cached = await self.read_value(f"attachment.cache.{record.record_id}.{index}")
+                cached = await self.service.storage.get_preference(
+                    f"attachment.cache.{record.record_id}.{index}"
+                )
                 rows.append(
                     {
                         "record_id": record.record_id,
@@ -481,7 +491,8 @@ class UserWorkflows:
         draft.bcc = addresses(values.get("bcc", []))
         self.check_private_recipients(draft.bcc)
         draft.attachments = [
-            (await self.file(str(file_id)))[0] for file_id in values.get("file_ids", [])
+            (await self.file(str(file_id)))[0]
+            for file_id in dict.fromkeys(values.get("file_ids", []))
         ]
         if not persist:
             return draft.model_dump(mode="json")

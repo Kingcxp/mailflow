@@ -1639,7 +1639,7 @@
       "source_required": "Fetch from source mailbox",
       "search": "Search",
       "download_selected": "Download selected",
-      "download_result": "Downloaded {success}; failed {failed}.",
+      "download_result": "Downloaded {success}; failed {failed}; skipped {skipped}. Failed and skipped files remain selected.",
       "backup_preview": "Restore {accounts} accounts, {mails} messages, {tasks} tasks and {files} cached/uploaded files. Uncached attachments still require the mailbox.",
       "file_send_unsupported": "This channel cannot deliver files; use the terminal attachment library.",
       "file_sent": "File sent to this conversation.",

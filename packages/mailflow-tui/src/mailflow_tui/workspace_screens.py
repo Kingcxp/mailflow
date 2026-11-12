@@ -249,14 +249,32 @@ class AttachmentLibraryScreen(WorkflowScreen):
 
     async def load_data(self) -> None:
         table = self.query_one("#library-table", SelectionTable)
+        table.add_column("[ ]", key="selected", width=3)
         table.add_columns(
-            "[ ]",
             self.t("experience.filename"),
             self.t("experience.file_type"),
             self.t("experience.account_filter"),
-            self.t("experience.cache_state"),
         )
-        await self.reload_rows()
+        table.add_column(self.t("experience.cache_state"), key="cache")
+        table.cursor_type = "row"
+        self.busy = True
+        self.update_controls()
+        try:
+            await self.reload_rows()
+        finally:
+            self.busy = False
+            self.update_controls()
+
+    def update_controls(self) -> None:
+        if not self.is_attached:
+            return
+        for name in ("download", "source", "search"):
+            self.query_one("#library-" + name, Button).disabled = self.busy or (
+                name != "search" and not self.rows
+            )
+        self.query_one("#library-table", SelectionTable).disabled = self.busy
+        for field in self.query(Input):
+            field.disabled = self.busy
 
     async def reload_rows(self) -> None:
         values: dict[str, Any] = {
@@ -281,19 +299,18 @@ class AttachmentLibraryScreen(WorkflowScreen):
                 self.t("experience.cached" if row["cached"] else "experience.source_required"),
                 key=str(index),
             )
-        for ident in ("download", "source"):
-            self.query_one("#library-" + ident, Button).disabled = not self.rows
         if not self.rows:
             self.status(self.t("tui.empty"))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
-        if self.busy:
-            return
         if event.button.id == "library-back":
             self.dismiss(None)
             return
+        if self.busy:
+            return
         self.busy = True
+        self.update_controls()
         self.run_worker(self.operate(str(event.button.id)), exclusive=True, exit_on_error=False)
 
     async def operate(self, ident: str) -> None:
@@ -308,15 +325,19 @@ class AttachmentLibraryScreen(WorkflowScreen):
             if ident == "library-source":
                 self.dismiss(self.rows[int(selected[0])]["record_id"])
                 return
+            table.set_checks(set(selected))
             raw_directory = self.query_one("#library-path", Input).value
             directory = await asyncio.to_thread(lambda: Path(raw_directory).expanduser())
-            success, failed = 0, 0
+            success, skipped = 0, 0
+            errors: list[str] = []
+            self.status(self.t("ux.downloading"))
             for key in selected:
                 row = self.rows[int(key)]
                 target = directory / row["filename"].replace("\\", "/").split("/")[-1]
                 if target.exists() and not await self.ask(
                     self.confirmation(self.t("ux.overwrite_file", path=str(target)))
                 ):
+                    skipped += 1
                     continue
                 try:
                     downloaded = await self.service.workspace_call("attachment_download", row)
@@ -324,15 +345,29 @@ class AttachmentLibraryScreen(WorkflowScreen):
                         save_attachment, target, base64.b64decode(downloaded["data"])
                     )
                     success += 1
-                    table.checked_keys.discard(key)
+                    row["cached"] = True
+                    table.update_cell(key, "cache", self.t("experience.cached"))
+                    table.set_checks(table.checked_keys - {key})
                 except Exception as exc:
-                    failed += 1
-                    self.status(error_text(exc, self.t))
-            self.status(self.t("experience.download_result", success=success, failed=failed))
+                    errors.append(row["filename"] + ": " + error_text(exc, self.t))
+            self.status(
+                "\n".join(
+                    [
+                        self.t(
+                            "experience.download_result",
+                            success=success,
+                            failed=len(errors),
+                            skipped=skipped,
+                        ),
+                        *errors,
+                    ]
+                )
+            )
         except Exception as exc:
             self.status(error_text(exc, self.t))
         finally:
             self.busy = False
+            self.update_controls()
 
 
 class NotificationPreferencesScreen(WorkflowScreen):
@@ -1073,14 +1108,15 @@ class FileSelectionScreen(WorkflowScreen):
             yield SelectionTable(t=self.t, id="files-table")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("tui.btn_apply"), id="files-apply")
+                yield Button(self.t("tui.btn_apply"), id="files-apply", disabled=True)
                 yield Button(self.t("tui.btn_cancel"), id="files-close")
 
     async def load_data(self) -> None:
         from mailflow_tui.widgets import SelectionTable
 
         table = self.query_one("#files-table", SelectionTable)
-        table.add_columns(self.t("ux.selected"), self.t("experience.filename"))
+        table.add_column("[ ]", key="selected", width=3)
+        table.add_column(self.t("experience.filename"))
         table.cursor_type = "row"
         table.checked_keys.update(self.selected)
         for row in await self.service.workspace_call("files"):
@@ -1089,6 +1125,7 @@ class FileSelectionScreen(WorkflowScreen):
                 f"{row['filename']} ({row['size']} B)",
                 key=row["file_id"],
             )
+        self.query_one("#files-apply", Button).disabled = False
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         from mailflow_tui.widgets import SelectionTable
