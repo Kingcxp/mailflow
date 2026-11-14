@@ -47,9 +47,8 @@ _TARGETS: dict[str, tuple[tuple[str, ...], str]] = {
 }
 
 DIR_PATTERNS = (
-    # NOTE: the root .venv is intentionally NOT removed: `make clean` runs
-    # through `uv run`, which needs it. Recreate/upgrade it with `make sync`
-    # or delete it manually for a from-scratch environment.
+    # Environments are not build output. Only `make sync` installs/updates
+    # dependencies; cleaning never recreates or changes an environment.
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
@@ -86,7 +85,10 @@ def _confirm(label: str) -> bool:
     """Destructive targets require an answer or an explicit --yes."""
     if not sys.stdin.isatty():
         return False
-    answer = input(f"Delete {label}? [y/N] ").strip().lower()
+    try:
+        answer = input(f"Delete {label}? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
     return answer in ("y", "yes")
 
 
@@ -127,7 +129,11 @@ def clean_artifacts(root: Path) -> tuple[list[Path], list[Path]]:
     removed_files: list[Path] = []
 
     def remove(path: Path) -> None:
-        if path.is_symlink() or not path.resolve().is_relative_to(root):
+        if (
+            path.is_symlink()
+            or not path.resolve().is_relative_to(root)
+            or (path / "pyvenv.cfg").is_file()
+        ):
             return
         if path.is_dir():
             shutil.rmtree(path)
@@ -145,6 +151,7 @@ def clean_artifacts(root: Path) -> tuple[list[Path], list[Path]]:
                 _preserved(path.relative_to(root))
                 or name in {".git", "venv", "env"}
                 or name.startswith(".venv")
+                or (path / "pyvenv.cfg").is_file()
                 or path.is_symlink()
                 or not path.resolve().is_relative_to(root)
                 or (path / ".git").exists()

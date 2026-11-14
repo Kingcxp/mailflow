@@ -51,9 +51,12 @@ Copy-Item configs/example.toml configs/local.toml
 ```
 
 ```bash
-uv run mailflow config-check -c configs/local.toml
-uv run mailflow tui -c configs/local.toml
+uv run --no-sync mailflow config-check -c configs/local.toml
+uv run --no-sync mailflow tui -c configs/local.toml
 ```
+
+初次同步后，日常命令使用 `--no-sync`，保留已安装的插件和可选依赖。
+`make help` 和 `make clean` 不安装依赖，需要同步时主动运行 `make sync`。
 
 进入界面后添加邮箱，选择仅接收新邮件或导入历史，分别检查收件与发件是否就绪。
 需要总结和智能助手时再添加模型，需要外部推送时再连接通知渠道。
@@ -66,14 +69,14 @@ uv run mailflow tui -c configs/local.toml
 
 | 用途 | 命令 |
 | --- | --- |
-| 终端界面 | `uv run mailflow tui -c configs/local.toml` |
-| 后台终端实例 | `uv run mailflow tui -c configs/local.toml --background --name inbox` |
-| 查看／重新连接 | `uv run mailflow tui list` / `uv run mailflow tui attach inbox` |
-| 前台服务 | `uv run mailflow run -c configs/local.toml` |
-| 需认证的远程服务 | `uv run mailflow serve -c configs/local.toml` |
-| 远程终端 | `uv run mailflow tui --remote http://127.0.0.1:8800` |
-| 交互命令行 | `uv run mailflow shell -c configs/local.toml` |
-| 执行单条命令 | `uv run mailflow command "help" -c configs/local.toml` |
+| 终端界面 | `uv run --no-sync mailflow tui -c configs/local.toml` |
+| 后台终端实例 | `uv run --no-sync mailflow tui -c configs/local.toml --background --name inbox` |
+| 查看／重新连接 | `uv run --no-sync mailflow tui list` / `uv run --no-sync mailflow tui attach inbox` |
+| 前台服务 | `uv run --no-sync mailflow run -c configs/local.toml` |
+| 需认证的远程服务 | `uv run --no-sync mailflow serve -c configs/local.toml` |
+| 远程终端 | `uv run --no-sync mailflow tui --remote http://127.0.0.1:8800` |
+| 交互命令行 | `uv run --no-sync mailflow shell -c configs/local.toml` |
+| 执行单条命令 | `uv run --no-sync mailflow command "help" -c configs/local.toml` |
 
 **F8 分离终端、保留后台运行；Ctrl+Q 停止实例。**
 使用 `mailflow tui stop inbox` 可停止指定后台实例。

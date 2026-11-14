@@ -9,9 +9,14 @@ saving settings needs a writable configuration path. Relative data paths use
 the process working directory, so launch from the same directory each time.
 
 ```bash
-uv run mailflow config-check -c configs/local.toml
-uv run mailflow tui -c configs/local.toml
+uv run --no-sync mailflow config-check -c configs/local.toml
+uv run --no-sync mailflow tui -c configs/local.toml
 ```
+
+Install dependencies once using the [quickstart](../../README.md#quickstart),
+then keep `--no-sync` on everyday commands to preserve installed plugins and
+optional dependencies. Only an explicit `make sync` synchronizes the environment;
+`make help` and `make clean` also work without a project environment.
 
 `config-check` checks configuration locally; it does not prove a mailbox, model
 or chat connection works. The settings interface provides the corresponding
@@ -158,8 +163,8 @@ password_env = "MAILFLOW_SERVER_PASSWORD"
 Set the referenced environment variable, then use:
 
 ```bash
-uv run mailflow serve -c configs/local.toml
-uv run mailflow tui --remote http://127.0.0.1:8800
+uv run --no-sync mailflow serve -c configs/local.toml
+uv run --no-sync mailflow tui --remote http://127.0.0.1:8800
 ```
 
 The login screen requests credentials; remembered passwords use the operating
@@ -229,6 +234,8 @@ for safe issue reports.
 将示例复制为 `configs/local.toml`，运行时统一传入 `-c configs/local.toml`。
 未指定路径时使用内置默认值；保存设置需要可写的配置文件。相对数据路径以工作目录为准，
 重启时请使用相同工作目录。`config-check` 仅检查配置，不会验证真实连接。
+按首页完成初次依赖安装后，日常使用 `uv run --no-sync ...`，保留已安装插件和可选依赖。
+只有主动运行 `make sync` 才同步环境；`make help` 和 `make clean` 无需项目环境即可使用。
 
 ### 账户与启动
 

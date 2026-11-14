@@ -54,9 +54,13 @@ Copy-Item configs/example.toml configs/local.toml
 ```
 
 ```bash
-uv run mailflow config-check -c configs/local.toml
-uv run mailflow tui -c configs/local.toml
+uv run --no-sync mailflow config-check -c configs/local.toml
+uv run --no-sync mailflow tui -c configs/local.toml
 ```
+
+After the initial sync, use `--no-sync` for everyday commands so installed
+plugins and optional dependencies are preserved. `make help` and `make clean`
+do not install dependencies; run `make sync` explicitly when needed.
 
 In the interface, add an account, choose whether to receive only new mail or
 import history, and check receiving and sending separately. Add a model if you
@@ -72,14 +76,14 @@ entire mailbox. See [account setup](docs/configuration/overview.md#accounts-and-
 
 | Need | Command |
 | --- | --- |
-| Terminal interface | `uv run mailflow tui -c configs/local.toml` |
-| Background terminal instance | `uv run mailflow tui -c configs/local.toml --background --name inbox` |
-| List / reconnect | `uv run mailflow tui list` / `uv run mailflow tui attach inbox` |
-| Foreground service | `uv run mailflow run -c configs/local.toml` |
-| Authenticated server | `uv run mailflow serve -c configs/local.toml` |
-| Remote terminal | `uv run mailflow tui --remote http://127.0.0.1:8800` |
-| Interactive commands | `uv run mailflow shell -c configs/local.toml` |
-| One command | `uv run mailflow command "help" -c configs/local.toml` |
+| Terminal interface | `uv run --no-sync mailflow tui -c configs/local.toml` |
+| Background terminal instance | `uv run --no-sync mailflow tui -c configs/local.toml --background --name inbox` |
+| List / reconnect | `uv run --no-sync mailflow tui list` / `uv run --no-sync mailflow tui attach inbox` |
+| Foreground service | `uv run --no-sync mailflow run -c configs/local.toml` |
+| Authenticated server | `uv run --no-sync mailflow serve -c configs/local.toml` |
+| Remote terminal | `uv run --no-sync mailflow tui --remote http://127.0.0.1:8800` |
+| Interactive commands | `uv run --no-sync mailflow shell -c configs/local.toml` |
+| One command | `uv run --no-sync mailflow command "help" -c configs/local.toml` |
 
 **F8 detaches** a persistent TUI and leaves it running; **Ctrl+Q stops** it.
 `mailflow tui stop inbox` stops a background instance. Single commands and the

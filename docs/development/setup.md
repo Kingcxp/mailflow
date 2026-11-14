@@ -14,13 +14,22 @@ uv sync --locked --all-packages --group dev
 ```
 
 GNU Make is a convenience, not a runtime requirement. `make sync` runs the
-command above. On Windows, the same `uv` commands work in PowerShell without
-Make. Use fake sources and temporary databases for development; connect actual
+command above and is the only Make target that synchronizes dependencies.
+Other targets use the existing environment's Python directly; `help` and
+`clean` use system Python and work before dependency installation. A missing
+environment produces setup instructions rather than an automatic installation.
+Use `VENV=...` to select another environment, for example
+`make test VENV=.venv312`. The default is `UV_PROJECT_ENVIRONMENT` when set,
+otherwise `.venv`; `PYTHON=...` selects the system Python for Make's helpers.
+
+On Windows, the same Python commands work in PowerShell without Make.
+Use fake sources and temporary databases for development; connect actual
 accounts only for deliberate manual testing. Never include local credentials
 or user data in a patch.
 
 The run/export Make targets use the ignored `configs/development.toml`.
-Copy the example there before using them, or use an explicit CLI `-c` path.
+Copy the example there before using them, use `CONFIG=configs/local.toml`,
+or use an explicit CLI `-c` path.
 The README uses `configs/local.toml` for ordinary first use.
 
 ## Checks
@@ -31,19 +40,27 @@ Python 3.11 and 3.12; it uses simulated external services.
 
 | Make target | Equivalent / purpose |
 | --- | --- |
-| `make test-unit` | `uv run --all-packages pytest -q tests/unit` |
-| `make test-integration` | `uv run --all-packages pytest -q tests/integration` |
-| `make test-e2e` | `uv run --all-packages pytest -q tests/e2e` |
-| `make test` | `uv run --all-packages pytest -q` |
-| `make coverage` | `uv run --all-packages pytest --cov --cov-report=term-missing --cov-report=html --cov-report=xml` |
-| `make validate-plugins` | `uv run --all-packages python -B -m mailflow_testkit.plugin_smoke --root plugins --source` |
-| `make lint` | `uv run --all-packages ruff check .` |
-| `make format-check` / `make format` | `uv run --all-packages ruff format --check .` / omit `--check` to apply |
-| `make mypy` | `uv run --all-packages mypy packages plugins tools` |
-| `make pyright` | `uv run --all-packages python -m pyright --pythonpath .venv/bin/python` (Windows: `.venv/Scripts/python.exe`) |
+| `make test-unit` | `python -m pytest -q tests/unit` |
+| `make test-integration` | `python -m pytest -q tests/integration` |
+| `make test-e2e` | `python -m pytest -q tests/e2e` |
+| `make test` | `python -m pytest -q` |
+| `make coverage` | `python -m pytest --cov --cov-report=term-missing --cov-report=html --cov-report=xml` |
+| `make validate-plugins` | `python -B -m mailflow_testkit.plugin_smoke --root plugins --source` |
+| `make lint` | `python -m ruff check .` |
+| `make format-check` / `make format` | `python -m ruff format --check .` / omit `--check` to apply |
+| `make mypy` | `python -m mypy packages plugins tools` |
+| `make pyright` | `python -m pyright --pythonpath .venv/bin/python` (Windows: `.venv/Scripts/python.exe`) |
 | `make check` | Tests, plugin validation, lint, format check and both type checkers |
-| `make build` | `uv run --all-packages python tools/build_all.py` |
-| `make clean` | `uv run --all-packages python tools/clean.py`; removes development output, not user data |
+| `make build` | `python tools/build_all.py` |
+| `make clean` | System Python runs `tools/clean.py`; removes development output, not user data |
+
+In the equivalents above, `python` means the selected environment's interpreter
+(`.venv/bin/python` or `.venv/Scripts/python.exe`), except for cleanup.
+After the initial sync, `uv run --no-sync ...` is another way to use installed
+tools without replacing plugins or optional dependencies. `--frozen` alone
+only protects the lockfile and still allows environment synchronization.
+An explicit `make sync` restores locked workspace sources; it can replace a
+manually installed same-name plugin and remove extra packages.
 
 Use `make help` for all targets. Coverage output goes to `build/reports` and
 wheels to `dist/wheels`; both are ignored. Data-modifying `clean-*` targets are
@@ -110,8 +127,8 @@ explicit bundled imports: extra Python plugins must be included at build time.
 Export a configured instance without starting its mail runtime:
 
 ```bash
-uv run mailflow export --framework nonebot --output dist/nonebot_plugin_mailflow -c configs/local.toml
-uv run mailflow export --framework astrbot --output dist/astrbot_plugin_mailflow -c configs/local.toml
+uv run --no-sync mailflow export --framework nonebot --output dist/nonebot_plugin_mailflow -c configs/local.toml
+uv run --no-sync mailflow export --framework astrbot --output dist/astrbot_plugin_mailflow -c configs/local.toml
 ```
 
 The generated framework host owns startup/shutdown and permissions. Install it
@@ -133,11 +150,17 @@ pull request or release notes, not as generated report files in the repository.
 
 使用 Python 3.11+、Git 和 uv，在 `dev` 分支运行
 `uv sync --locked --all-packages --group dev`。修改共享插件时，插件仓库也使用 `dev`。
-Make 是便捷入口，Windows 可直接使用上表中的 uv 命令，不必安装 Make。
+Make 是便捷入口，Windows 可直接用指定环境的 Python 执行上表命令，不必安装 Make。
+只有 `make sync` 同步依赖；日常命令直接使用现有环境，帮助和清理只需要系统 Python。
+环境缺失时提示安装，不会擅自创建或重装。默认使用 `.venv`，也支持
+`UV_PROJECT_ENVIRONMENT` 或 `make test VENV=.venv312`；`PYTHON=...` 指定辅助脚本的系统 Python。
+初次同步后，普通 uv 命令使用 `uv run --no-sync ...`，避免覆盖本地插件和可选依赖。
+`--frozen` 只锁定文件，不禁止同步；主动执行 `make sync` 会恢复锁定来源，可能替换同名插件或移除额外包。
 日常测试使用假邮件源、临时配置和数据库，不接触真实用户数据。
 
 README 使用 `configs/local.toml`；Make 的运行和导出目标使用
-`configs/development.toml`，需要事先从示例复制，或改用带明确 `-c` 的命令。
+`configs/development.toml`，需要事先从示例复制，也可传入 `CONFIG=configs/local.toml`，
+或改用带明确 `-c` 的命令。
 
 先验证相关行为，再运行受影响的静态检查；共享接口与运行时修改执行完整检查。
 CI 覆盖 Windows/Linux 和 Python 3.11/3.12。测试分为组件隔离、真实组件组合、

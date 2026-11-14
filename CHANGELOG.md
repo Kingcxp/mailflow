@@ -39,6 +39,9 @@ for artifacts and Git history for individual commits.
 
 ### Fixed
 
+- Stop help, cleanup, checks and application startup from implicitly synchronizing
+  or replacing the Python environment. Only `make sync` installs dependencies;
+  updates explicitly target the running interpreter.
 - Preserve account-scoped mail identity, source handoff progress, MIME/OCR bytes,
   manual priority and valid previous analysis during retries and reanalysis.
 - Use actual receipt dates consistently in filtering, migration and trash restore;
@@ -77,3 +80,5 @@ confirmed reply drafts and workspace build/check tooling.
 同时修复日期筛选、来源操作核对与重试、附件多选及失败恢复、通知按目标重试、
 助手取消确认和旧历史状态，以及备份嵌套膨胀和本地备份命令。
 数据与配置保持兼容，详细变化按上面的新增、调整和修复分类列出。
+Make 帮助、清理、检查和启动不再隐式重装依赖；清理保留自定义名称的 Python 环境，
+主动更新只操作正在运行的解释器。

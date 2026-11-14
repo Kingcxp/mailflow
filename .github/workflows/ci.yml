@@ -34,35 +34,35 @@ jobs:
 
       - name: Tests and coverage
         id: tests
-        run: uv run --frozen --all-packages pytest -q --cov --cov-report=term-missing --cov-report=xml --cov-report=html --junitxml=build/reports/pytest.xml
+        run: uv run --no-sync --no-python-downloads pytest -q --cov --cov-report=term-missing --cov-report=xml --cov-report=html --junitxml=build/reports/pytest.xml
 
       - name: Validate bundled plugins with offline samples
         if: ${{ !cancelled() }}
-        run: uv run --frozen --all-packages python -B -m mailflow_testkit.plugin_smoke --root plugins --source
+        run: uv run --no-sync --no-python-downloads python -B -m mailflow_testkit.plugin_smoke --root plugins --source
 
       - name: Lint (ruff check)
         if: ${{ !cancelled() }}
-        run: uv run --frozen --all-packages ruff check .
+        run: uv run --no-sync --no-python-downloads ruff check .
 
       - name: Format (ruff format)
         if: ${{ !cancelled() }}
-        run: uv run --frozen --all-packages ruff format --check .
+        run: uv run --no-sync --no-python-downloads ruff format --check .
 
       - name: Type check (mypy)
         if: ${{ !cancelled() }}
-        run: uv run --frozen --all-packages mypy packages plugins tools
+        run: uv run --no-sync --no-python-downloads mypy packages plugins tools
 
       - name: Type check (pyright)
         if: ${{ !cancelled() }}
-        run: uv run --frozen --all-packages python -c "import subprocess, sys; sys.exit(subprocess.call([sys.executable, '-m', 'pyright', '--pythonpath', sys.executable]))"
+        run: uv run --no-sync --no-python-downloads python -c "import subprocess, sys; sys.exit(subprocess.call([sys.executable, '-m', 'pyright', '--pythonpath', sys.executable]))"
 
       - name: Build workspace wheels
         if: ${{ !cancelled() }}
-        run: uv run --frozen --all-packages python tools/build_all.py --offline
+        run: uv run --no-sync --no-python-downloads python tools/build_all.py --offline
 
       - name: Annotate test failures
         if: ${{ failure() && steps.tests.outcome == 'failure' }}
-        run: uv run --frozen --all-packages python tools/annotate_pytest_failures.py build/reports/pytest.xml
+        run: uv run --no-sync --no-python-downloads python tools/annotate_pytest_failures.py build/reports/pytest.xml
 
       - name: Upload test reports
         if: ${{ !cancelled() }}

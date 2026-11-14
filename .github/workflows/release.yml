@@ -55,12 +55,12 @@ jobs:
       - name: Install dependencies (incl. nuitka)
         run: uv sync --locked --all-packages --group dev
       - name: Build frozen standalone executable
-        run: uv run --frozen --all-packages python tools/build_exe.py --mode standalone --download-tools
+        run: uv run --no-sync --no-python-downloads python tools/build_exe.py --mode standalone --download-tools
       - name: Check standalone startup without external services
         run: |
           python -c "import subprocess, sys; from pathlib import Path; binary = Path('dist/standalone/frozen_entry.dist') / ('mailflow.exe' if sys.platform == 'win32' else 'mailflow'); subprocess.run([str(binary), 'config-check', '-c', 'configs/example.toml'], check=True)"
       - name: Build frozen onefile executable
-        run: uv run --frozen --all-packages python tools/build_exe.py --mode onefile --download-tools
+        run: uv run --no-sync --no-python-downloads python tools/build_exe.py --mode onefile --download-tools
       - name: Rename artifact
         run: |
           python -c "import shutil, sys; from pathlib import Path; source = Path('dist/onefile') / ('mailflow.exe' if sys.platform == 'win32' else 'mailflow'); target = Path('dist/release/${{ matrix.artifact }}'); target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(source, target)"

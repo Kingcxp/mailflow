@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
+import os
+import shutil
 import subprocess
 import sys
 import tomllib
+import venv
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -22,6 +26,164 @@ def load_tool(name: str) -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_make_help_and_cleanup_need_no_project_environment(tmp_path: Path) -> None:
+    make = shutil.which("make")
+    if make is None:
+        pytest.skip("GNU Make is unavailable")
+    root = tmp_path / "checkout with spaces"
+    (root / "tools").mkdir(parents=True)
+    shutil.copyfile(ROOT / "Makefile", root / "Makefile")
+    shutil.copyfile(ROOT / "tools/clean.py", root / "tools/clean.py")
+    env = {**os.environ, "PYTHONUTF8": "1", "UV_OFFLINE": "1", "UV_PYTHON_DOWNLOADS": "never"}
+    env.pop("UV_PROJECT_ENVIRONMENT", None)
+    for key in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "MAKELEVEL"):
+        env.pop(key, None)
+    command = [
+        make,
+        "--no-print-directory",
+        "-f",
+        str(root / "Makefile"),
+        f'PYTHON="{sys.executable}"',
+    ]
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [*command, *args],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=20,
+        )
+
+    help_result = run("help")
+    assert help_result.returncode == 0, help_result.stdout + help_result.stderr
+    assert "clean-records" in help_result.stdout and "test-integration" in help_result.stdout
+    assert not (root / ".venv").exists() and not (root / "uv.lock").exists()
+    missing = run("lint")
+    assert missing.returncode != 0 and "make sync" in missing.stdout
+    assert not (root / ".venv").exists()
+
+    preserved = [
+        ".venv/installed-plugin",
+        ".venv312/installed-plugin",
+        "data/mail.db",
+        "configs/local.toml",
+    ]
+    for name in [*preserved, "build/disposable", "pkg/__pycache__/cached.pyc"]:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("unchanged", encoding="utf-8")
+    for target in ("help", "clean", "clean-config", "clean-gateways"):
+        result = run(target)
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert all((root / name).read_text(encoding="utf-8") == "unchanged" for name in preserved)
+    assert not (root / "build").exists() and not (root / "pkg/__pycache__").exists()
+    assert not (root / "uv.lock").exists()
+
+
+def test_make_targets_use_selected_environment_without_sync(tmp_path: Path) -> None:
+    make = shutil.which("make")
+    if make is None:
+        pytest.skip("GNU Make is unavailable")
+    root = tmp_path / "project with spaces"
+    root.mkdir()
+    shutil.copyfile(ROOT / "Makefile", root / "Makefile")
+    environment = tmp_path / "existing environment"
+    venv.EnvBuilder(with_pip=False).create(environment)
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    site = subprocess.check_output(
+        [str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+        text=True,
+    ).strip()
+    calls = tmp_path / "calls.jsonl"
+    stub = (
+        "import json, os, sys\nfrom pathlib import Path\n"
+        "with Path(os.environ['MAILFLOW_MAKE_CALLS']).open('a', encoding='utf-8') as f:\n"
+        " f.write(json.dumps({'args':sys.argv,'cwd':str(Path.cwd()),'python':sys.executable})+'\\n')\n"
+    )
+    for module in ("pytest", "ruff", "mypy", "pyright"):
+        (Path(site) / f"{module}.py").write_text(stub, encoding="utf-8")
+    (Path(site) / "mailflow_cli").mkdir()
+    (Path(site) / "mailflow_cli/__init__.py").touch()
+    (Path(site) / "mailflow_cli/app.py").write_text(stub, encoding="utf-8")
+    (Path(site) / "mailflow_testkit").mkdir()
+    (Path(site) / "mailflow_testkit/__init__.py").touch()
+    (Path(site) / "mailflow_testkit/plugin_smoke.py").write_text(stub, encoding="utf-8")
+    (root / "tools").mkdir()
+    for tool in ("build_all", "build_exe"):
+        (root / f"tools/{tool}.py").write_text(stub, encoding="utf-8")
+    retained = Path(site) / "retained_plugin.py"
+    retained.write_text('VERSION = "2.0"\n', encoding="utf-8")
+    env = {
+        **os.environ,
+        "PYTHONUTF8": "1",
+        "UV_OFFLINE": "1",
+        "UV_PYTHON_DOWNLOADS": "never",
+        "UV_PROJECT_ENVIRONMENT": str(environment),
+        "MAILFLOW_MAKE_CALLS": str(calls),
+    }
+    for key in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "MAKELEVEL"):
+        env.pop(key, None)
+    targets = [
+        "check",
+        "test-unit",
+        "test-integration",
+        "test-e2e",
+        "coverage",
+        "format",
+        "run",
+        "tui",
+        "tui-background",
+        "tui-list",
+        "tui-attach",
+        "tui-detach",
+        "tui-stop",
+        "build",
+        "exe-standalone",
+        "exe-onefile",
+        "bot-plugin",
+        "bot-plugin-nonebot",
+        "bot-plugin-astrbot",
+        "clean-records",
+        "clean-trash",
+    ]
+    for target in targets:
+        result = subprocess.run(
+            [
+                make,
+                "--no-print-directory",
+                "-f",
+                str(root / "Makefile"),
+                f'PYTHON="{sys.executable}"',
+                "CONFIG=configs/test config.toml",
+                "SESSION=test inbox",
+                "FRAMEWORK=nonebot",
+                "OUTPUT=exports/bot plugin",
+                target,
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+        assert result.returncode == 0, (target, result.stdout, result.stderr)
+    rows = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
+    assert rows and all(Path(row["python"]) == python and Path(row["cwd"]) == root for row in rows)
+    assert all(
+        row["args"][row["args"].index("-c") + 1] == "configs/test config.toml"
+        for row in rows
+        if "-c" in row["args"]
+    )
+    assert any("test inbox" in row["args"] for row in rows)
+    assert any("exports/bot plugin" in row["args"] for row in rows)
+    assert retained.read_text(encoding="utf-8") == 'VERSION = "2.0"\n'
+    assert not (root / ".venv").exists() and not (root / "uv.lock").exists()
 
 
 def test_cleanup_removes_artifacts_without_entering_environments_or_user_data(
@@ -47,6 +209,9 @@ def test_cleanup_removes_artifacts_without_entering_environments_or_user_data(
         ".git/cache/.coverage",
         ".venv/lib/build/data.db",
         ".venv312/lib/__pycache__/x.pyc",
+        "python runtime/pyvenv.cfg",
+        "python runtime/lib/__pycache__/x.pyc",
+        "python runtime/lib/plugin.egg-info/PKG-INFO",
         "nested/.git/HEAD",
         "nested/__pycache__/x.pyc",
     ]
