@@ -170,6 +170,10 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
         self._service = service
         self._operation = operation.model_copy(deep=True)
         self._bindings.bind("escape", "cancel", self._t("tui.smart_review_cancel"))
+        self._bindings.bind("ctrl+s", "save_edit", self._t("tui.btn_save"))
+
+    def action_save_edit(self) -> None:
+        self.query_one("#smart-review-save-edit", Button).press()
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)

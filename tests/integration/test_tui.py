@@ -395,7 +395,7 @@ async def test_smart_query_task_crud_requires_confirmation(
             await until(pilot, lambda: isinstance(app.screen, SmartOperationEditModal))
             assert app.screen.query_one("#smart-review-start", Input).value == ""
             app.screen.query_one("#smart-review-notes", TextArea).text = "Keep without a deadline"
-            app.screen.query_one("#smart-review-save-edit", Button).press()
+            await pilot.press("ctrl+s")
             await until(pilot, lambda: isinstance(app.screen, SmartActionReviewModal))
             app.screen.query_one("#smart-review-apply", Button).press()
             await until(pilot, lambda: modal() is None)

@@ -692,7 +692,7 @@ async def test_mapping_editor_keeps_edits_after_save_failure() -> None:
         assert app.screen is form and not results
         assert form.query_one("#list-edit-text", TextArea).text == "access_token = draft-secret"
         assert "draft-secret" not in rendered(form, "#list-edit-status")
-        form.query_one("#list-edit-save", Button).press()
+        await pilot.press("ctrl+s")
         await settle(pilot)
         assert results == ["access_token = draft-secret"]
 

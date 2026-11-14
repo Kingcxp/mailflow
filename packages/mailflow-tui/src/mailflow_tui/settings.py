@@ -219,6 +219,11 @@ class ListEditScreen(ModalScreen[str | None]):
         self._on_save = on_save
         self._saving = False
         self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_back"))
+        self._bindings.bind("ctrl+s", "save_list", self._t("tui.btn_save"))
+
+    def action_save_list(self) -> None:
+        if not self._saving:
+            self.query_one("#list-edit-save", Button).press()
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
