@@ -277,8 +277,14 @@ class TestApplyPluginUpdates:
 async def test_application_update_targets_the_running_interpreter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("mailflow.updates.shutil.which", lambda name: "uv")
-    monkeypatch.setattr("mailflow.updates._distribution_installed", lambda name: True)
+    def which(name: str) -> str:
+        return "uv"
+
+    def installed(name: str) -> bool:
+        return True
+
+    monkeypatch.setattr("mailflow.updates.shutil.which", which)
+    monkeypatch.setattr("mailflow.updates._distribution_installed", installed)
 
     def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         assert command[command.index("--python") + 1] == sys.executable
