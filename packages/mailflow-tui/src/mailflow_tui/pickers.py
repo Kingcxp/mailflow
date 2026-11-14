@@ -34,15 +34,22 @@ class ChoicePicker(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.service.t("interface.browse"))
-            yield Input(self.value, id="picker-query")
+            yield Input(
+                placeholder=self.service.t("tui.settings_search_placeholder"), id="picker-query"
+            )
             yield DataTable(id="picker-results", cursor_type="row")
             with ButtonRow():
                 yield Button(self.service.t("tui.btn_apply"), id="picker-apply", variant="primary")
                 yield Button(self.service.t("tui.btn_back"), id="picker-back")
 
     def on_mount(self) -> None:
-        self.query_one(DataTable).add_column("")
+        table = cast("DataTable[str]", self.query_one(DataTable))
+        table.add_column("")
         self.filter()
+        for index, (_, value) in enumerate(self.matches):
+            if value == self.value:
+                table.move_cursor(row=index)
+                break
 
     def filter(self) -> None:
         query = self.query_one(Input).value.casefold()
@@ -51,7 +58,7 @@ class ChoicePicker(ModalScreen[str | None]):
             for label, value in self.choices
             if query in f"{label} {value}".casefold()
         ]
-        table = self.query_one(DataTable)
+        table = cast("DataTable[str]", self.query_one(DataTable))
         table.clear()
         for label, _ in self.matches:
             table.add_row(label)
@@ -64,7 +71,7 @@ class ChoicePicker(ModalScreen[str | None]):
         self.choose()
 
     def choose(self) -> None:
-        table = self.query_one(DataTable)
+        table = cast("DataTable[str]", self.query_one(DataTable))
         self.dismiss(
             self.matches[table.cursor_row][1] if table.row_count else self.query_one(Input).value
         )
@@ -287,4 +294,4 @@ class AssistedInput(Horizontal):
                 node.value = value
                 node.focus()
 
-        cast(Any, self.app).push_screen(screen, selected)
+        cast(Any, self).app.push_screen(screen, selected)

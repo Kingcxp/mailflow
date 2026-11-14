@@ -149,9 +149,16 @@ async def test_stored_html_is_readable_in_mail_reader_and_related_task(host: Any
         assert "<p>" not in full and "secret-" not in full
         reader.query_one("#reader-close", Button).press()
         await pilot.pause()
-        app.push_screen(ActionModal(view, task))
-        await pilot.pause()
-        detail = str(app.screen.query_one("#action-mail-detail", Static).render())
+        action_detail = ActionModal(view, task)
+        await app.push_screen(action_detail)
+        await until(
+            pilot,
+            lambda: (
+                "First paragraph"
+                in str(action_detail.query_one("#action-mail-detail", Static).render())
+            ),
+        )
+        detail = str(action_detail.query_one("#action-mail-detail", Static).render())
         assert "First paragraph\nSecond line" in detail and "<p>" not in detail
     stored = await service.get_mail("html")
     assert (

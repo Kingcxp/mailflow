@@ -12,6 +12,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Static
 
 from mailflow_tui.labels import error_message
+from mailflow_tui.view_state import TableView, update_table
 from mailflow_tui.widgets import ButtonRow, Input
 
 
@@ -24,6 +25,7 @@ class ReposScreen(ModalScreen[bool | None]):
         super().__init__()
         self._service = service
         self._editing_name: str | None = None
+        self._busy = False
         self._status_by_name: dict[str, str] = {}
         self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_cancel"))
 
@@ -44,7 +46,8 @@ class ReposScreen(ModalScreen[bool | None]):
             yield Static(self._t("tui.repos_esc_hint"), id="repos-esc-hint")
 
     def action_dismiss_modal(self) -> None:
-        self.dismiss(None)
+        if not self._busy:
+            self.dismiss(None)
 
     def on_mount(self) -> None:
         table: DataTable[Any] = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
@@ -58,15 +61,17 @@ class ReposScreen(ModalScreen[bool | None]):
 
     def _reload(self) -> None:
         table: DataTable[Any] = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
-        table.clear()  # pyright: ignore[reportUnknownMemberType]
+        view = TableView.capture(table)
         checking = self._t("tui.repo_status_checking")
-        for repo in self._service.config.plugins.repositories:
-            table.add_row(
-                repo.name,
-                repo.url,
-                self._status_by_name.get(repo.name, checking),
-                key=repo.name,
-            )  # pyright: ignore[reportUnknownMemberType]
+        update_table(
+            table,
+            [
+                (repo.name, (repo.name, repo.url, self._status_by_name.get(repo.name, checking)))
+                for repo in self._service.config.plugins.repositories
+            ],
+        )
+        view.restore(table)
+        self.query_one("#repos-remove", Button).disabled = self._busy or not table.row_count
 
     async def _refresh_status(self) -> None:
         try:
@@ -82,7 +87,7 @@ class ReposScreen(ModalScreen[bool | None]):
                 status.repository.name: (
                     self._t("tui.repo_status_ok", count=status.plugin_count)
                     if status.ok
-                    else self._t("tui.repo_status_failed", error=status.error)
+                    else self._t("tui.repo_status_failed", error=self._t(status.error_code))
                 )
                 for status in statuses
             }
@@ -91,16 +96,42 @@ class ReposScreen(ModalScreen[bool | None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "repos-cancel":
-            self.dismiss(None)
+            self.action_dismiss_modal()
+            return
+        if self._busy:
             return
         if button_id == "repos-add":
-            self.run_worker(self._add_repo(), exit_on_error=False)
+            self._busy = True
+            self.run_worker(self._operate(remove=False), exit_on_error=False)
             return
         if button_id == "repos-remove":
-            self.run_worker(self._remove_repo(), exit_on_error=False)
+            self._busy = True
+            self.run_worker(self._operate(remove=True), exit_on_error=False)
+
+    async def _operate(self, *, remove: bool) -> None:
+        self.query_one("#repos-esc-hint", Static).update(self._t("tui.form_saving"))
+        for control in self.query("Button, Input"):
+            control.disabled = True
+        try:
+            if remove:
+                await self._remove_repo()
+            else:
+                await self._add_repo()
+        except Exception as exc:
+            self.query_one("#repos-esc-hint", Static).update(error_message(self._service, exc))
+        finally:
+            self._busy = False
+            if self.is_mounted:
+                for control in self.query("Button, Input"):
+                    control.disabled = False
+                self.query_one("#repos-remove", Button).disabled = not self.query_one(
+                    "#repos-table", DataTable
+                ).row_count
 
     def on_data_table_row_selected(self, event: Any) -> None:
         """Double-click / Enter on a repo loads it into the form for editing."""
+        if self._busy:
+            return
         table: DataTable[Any] = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         try:
             row_values = table.get_row_at(table.cursor_row)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -126,7 +157,7 @@ class ReposScreen(ModalScreen[bool | None]):
         name = self.query_one("#repos-name", Input).value.strip()
         url = self.query_one("#repos-url", Input).value.strip()
         if not name or not url:
-            self.notify(self._t("tui.repos_missing_fields"), severity="error", timeout=6)
+            self.query_one("#repos-esc-hint", Static).update(self._t("tui.repos_missing_fields"))
             return
         editing = self._editing_name
         try:
@@ -135,30 +166,30 @@ class ReposScreen(ModalScreen[bool | None]):
             else:
                 await self._service.plugin_repo_add(name, url)
         except (KeyError, ValueError) as exc:
-            self.notify(error_message(self._service, exc), severity="error", timeout=6)
+            self.query_one("#repos-esc-hint", Static).update(error_message(self._service, exc))
             return
         self._reset_edit_state()
         self._reload()
         self.run_worker(
             self._refresh_status(), exclusive=True, group="repo-status", exit_on_error=False
         )
-        self.notify(self._t("plugin.repo_added", name=name), timeout=5)
+        self.query_one("#repos-esc-hint", Static).update(self._t("plugin.repo_added", name=name))
 
     async def _remove_repo(self) -> None:
         table: DataTable[Any] = self.query_one("#repos-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         row_index = table.cursor_row
-        if row_index < 0:
-            self.notify(self._t("tui.repos_pick_first"), severity="error", timeout=6)
+        if row_index < 0 or not table.row_count:
+            self.query_one("#repos-esc-hint", Static).update(self._t("tui.repos_pick_first"))
             return
         row_values = table.get_row_at(row_index)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         name = str(row_values[0])  # pyright: ignore[reportUnknownArgumentType, reportUnknownIndexType]
         try:
             await self._service.plugin_repo_remove(name)
         except KeyError as exc:
-            self.notify(error_message(self._service, exc), severity="error", timeout=6)
+            self.query_one("#repos-esc-hint", Static).update(error_message(self._service, exc))
             return
         self._reload()
         self.run_worker(
             self._refresh_status(), exclusive=True, group="repo-status", exit_on_error=False
         )
-        self.notify(self._t("plugin.repo_removed", name=name), timeout=5)
+        self.query_one("#repos-esc-hint", Static).update(self._t("plugin.repo_removed", name=name))

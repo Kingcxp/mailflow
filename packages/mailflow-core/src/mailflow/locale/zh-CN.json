@@ -477,7 +477,7 @@
       "bots_targets": "推送目标",
       "bots_title": "IM 机器人实例",
       "notifications_title": "通知",
-      "notifications_help": "管理所有通知渠道：聊天平台网关（QQ 的 OneBot/NapCat、微信）以及普通投递渠道。添加网关类提供商可在 TUI 内自动安装并扫码登录；状态列会自动刷新已启用渠道，失败会显示原因。",
+      "notifications_help": "选择渠道后可配置、检查或重新登录；通知偏好控制发送内容。",
       "notifications_enabled": "启用",
       "notifications_urgency": "紧急度",
       "notifications_on": "开",
@@ -690,7 +690,7 @@
       "runtime_bindings": "处理器 → LLM",
       "runtime_llms": "LLM",
       "runtime_plugins": "插件",
-      "runtime_plugins_help": "选中插件后按 禁用/启用（下次启动生效）",
+      "runtime_plugins_help": "选择插件后可启用、禁用或卸载，操作结果会说明生效时间。",
       "runtime_storage": "存储",
       "scaffold_created": "插件模板已创建：{path}",
       "scaffold_folder_name": "子文件夹名称",
@@ -962,7 +962,7 @@
       "reparse_all_start": "正在重新分析全部 {count} 封邮件…",
       "profile_title": "邮件偏好",
       "profile_label": "关于你（可选）",
-      "profile_hint": "描述你的身份与关心的邮件类型——AI 会在每次分析与查找时参考它，从而按你的实际情况判断，而不是按泛泛的“学生”来猜。例如：“我是计算机专业硕士生；课程、考试、实验室通知，以及实习和科研机会对我重要；购物促销和社团社交活动不重要。”",
+      "profile_hint": "填写你的身份以及关心的邮件内容。这些偏好用于今后的分析，不会自动修改旧邮件。",
       "profile_saved": "邮件偏好已保存——AI 之后会参考它。",
       "profile_cleared": "邮件偏好已清空。",
       "profile_save_failed": "无法保存邮件偏好：{error}",
@@ -1200,7 +1200,9 @@
       "mail_provider_outlook": "Outlook 邮箱",
       "extras_smtp_host": "通常由邮箱服务自动填写；其他邮箱请参考服务商的收发信设置。",
       "extras_imap_host": "通常由邮箱服务自动填写；其他邮箱请参考服务商的收发信设置。",
-      "extras_smtp_ssl": "开启时直接建立加密连接，通常用 465 端口；关闭时使用 STARTTLS，通常用 587 端口。"
+      "extras_smtp_ssl": "开启时直接建立加密连接，通常用 465 端口；关闭时使用 STARTTLS，通常用 587 端口。",
+      "market_category_bot_exporter": "聊天框架导出",
+      "market_category_storage_backend": "存储"
     },
     "update": {
       "applied_title": "已应用的更新",
@@ -1459,7 +1461,7 @@
       "config_active": "已保存并生效",
       "secure_store_failed": "无法保存到系统凭据存储。请取消“记住密码”后连接。",
       "backup_title": "备份与恢复",
-      "backup_hint": "备份包含配置、邮件、待办、草稿和处理状态；也可能包含配置中直接填写的密码，请妥善保存。邮箱中的原始附件不包含在内。系统凭据和环境变量需在新电脑重新配置。",
+      "backup_hint": "备份包含配置、邮件、待办、草稿、已上传文件和已缓存附件；未下载的附件仍需从邮箱获取。配置可能含有密码，请妥善保存备份。更换电脑后需重新设置系统凭据和环境变量。",
       "create_backup": "创建备份",
       "restore_backup": "恢复备份",
       "backup_running": "正在创建备份…",
@@ -1778,7 +1780,7 @@
       "choose_directory": "选择目录",
       "choose_date": "选择日期时间",
       "date_hint": "按配置时区填写；可使用日期选择器。",
-      "send_hint": "Enter 换行；Ctrl+Enter 或“执行”发送需求",
+      "send_hint": "Enter 换行；Ctrl+Enter 或点击发送执行需求",
       "saved_draft": "保存草稿并返回",
       "details": "查看详情",
       "add_account": "添加邮箱",
@@ -1792,7 +1794,7 @@
       "tomorrow": "明天",
       "no_deadline": "不设截止时间",
       "browse": "浏览",
-      "follow_logs": "跟随最新",
+      "follow_logs": "跟随最新日志",
       "retry": "重试",
       "loading": "正在处理，可继续操作其他页面…",
       "models": {
@@ -1836,7 +1838,20 @@
       "weekday_6": "星期日",
       "view_original": "查看原文",
       "back_to_correction": "返回纠正",
-      "occurrence": "选择要跳过的具体一期"
+      "occurrence": "选择要跳过的具体一期",
+      "component_details": "组件详情",
+      "runtime_summary": "启用邮箱 {accounts} · 等待分析 {pending} · 邮箱异常 {errors}\n分析：{analysis} · 启用通知渠道 {channels}",
+      "mail_maintenance": "分析与维护",
+      "developer_tools": "插件开发与导出",
+      "recipients_files": "收件人与附件",
+      "file_type": "类型",
+      "failure_details": "查看失败原因",
+      "show_advanced": "显示高级设置",
+      "hide_advanced": "收起高级设置",
+      "no_channels": "尚未配置通知渠道，请到通知页添加。",
+      "minimum_notification": "最低通知等级",
+      "login_qr": "查看登录二维码",
+      "connection_address": "本机连接地址：{address}\n用户名：{username}\n远程终端请将地址中的主机替换为这台电脑可访问的地址，并确保服务正在运行且允许远程连接。"
     }
   }
 }

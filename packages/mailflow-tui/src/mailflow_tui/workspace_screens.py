@@ -284,7 +284,7 @@ class AttachmentLibraryScreen(WorkflowScreen):
         table.add_column("[ ]", key="selected", width=3)
         table.add_columns(
             self.t("experience.filename"),
-            self.t("experience.file_type"),
+            self.t("interface.file_type"),
             self.t("experience.account_filter"),
         )
         table.add_column(self.t("experience.cache_state"), key="cache")
@@ -307,7 +307,7 @@ class AttachmentLibraryScreen(WorkflowScreen):
         self.query_one("#library-table", SelectionTable).disabled = self.busy
         for field in self.query(Input):
             field.disabled = self.busy
-        for selector in self.query(Select):
+        for selector in self.query("Select"):
             selector.disabled = self.busy
 
     async def reload_rows(self) -> None:
@@ -409,22 +409,53 @@ class AttachmentLibraryScreen(WorkflowScreen):
 
 
 class NotificationPreferencesScreen(WorkflowScreen):
+    DEFAULT_CSS = """NotificationPreferencesScreen .workflow-form { height: 1fr; }
+    #notification-state { height: 5; min-height: 3; }"""
+
+    def __init__(self, service: MailFlowService) -> None:
+        super().__init__(service)
+        self.busy = False
+        self._bindings.bind("ctrl+s", "save", self.t("tui.btn_save"))
+
+    def action_save(self) -> None:
+        self.query_one("#notification-save", Button).press()
+
+    def action_close(self) -> None:
+        if not self.busy:
+            self.dismiss(None)
+
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.t("experience.notification_preferences"))
-            yield SafeSelect(
-                [
-                    (self.t("experience.preset_" + p), p)
-                    for p in ("custom", "instant", "important", "tasks")
-                ],
-                id="notification-preset",
-                allow_blank=False,
-            )
-            yield Checkbox(self.t("experience.quiet_hours"), id="quiet-enabled")
-            yield Static(self.t("tui.form_fields.quiet_start"))
-            yield Input("22:00", id="quiet-start", disabled=True)
-            yield Static(self.t("tui.form_fields.quiet_end"))
-            yield Input("08:00", id="quiet-end", disabled=True)
+            with ScrollableContainer(classes="workflow-form"):
+                yield SafeSelect(
+                    [
+                        (self.t("experience.preset_" + p), p)
+                        for p in ("custom", "instant", "important", "tasks")
+                    ],
+                    id="notification-preset",
+                    allow_blank=False,
+                )
+                yield Checkbox(self.t("experience.quiet_hours"), id="quiet-enabled")
+                yield Static(self.t("tui.form_fields.quiet_start"))
+                yield AssistedInput(
+                    self.service,
+                    "22:00",
+                    id="quiet-start",
+                    mode="choice",
+                    choices=[(f"{hour:02}:00", f"{hour:02}:00") for hour in range(24)],
+                )
+                yield Static(self.t("tui.form_fields.quiet_end"))
+                yield AssistedInput(
+                    self.service,
+                    "08:00",
+                    id="quiet-end",
+                    mode="choice",
+                    choices=[(f"{hour:02}:00", f"{hour:02}:00") for hour in range(24)],
+                )
+                yield Static(
+                    self.t("interface.timezone", zone=self.service.config.general.timezone)
+                )
             yield TextArea("", id="notification-state", read_only=True)
             yield SafeSelect(
                 [], id="connection-setting", prompt=self.t("experience.connection_settings")
@@ -446,6 +477,8 @@ class NotificationPreferencesScreen(WorkflowScreen):
         self.query_one("#quiet-enabled", Checkbox).value = state["quiet_enabled"]
         self.query_one("#quiet-start", Input).value = state["quiet_start"]
         self.query_one("#quiet-end", Input).value = state["quiet_end"]
+        for name in ("quiet-start", "quiet-end"):
+            self.query_one("#" + name, Input).disabled = not state["quiet_enabled"]
         self.query_one("#notification-state", TextArea).load_text(
             "\n".join(
                 c["id"]
@@ -461,14 +494,20 @@ class NotificationPreferencesScreen(WorkflowScreen):
                 )
                 for c in state["channels"]
             )
+            or self.t("interface.no_channels")
+        )
+        self.query_one("#notification-state", TextArea).styles.height = (
+            5 if state["channels"] else 3
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         if event.button.id == "notification-back":
-            self.dismiss(None)
-        else:
-            self.run_worker(self.operate(str(event.button.id)), exclusive=True, exit_on_error=False)
+            if not self.busy:
+                self.dismiss(None)
+        elif not self.busy:
+            self.busy = True
+            self.run_worker(self.operate(str(event.button.id)), exit_on_error=False)
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "quiet-enabled":
@@ -526,6 +565,7 @@ class NotificationPreferencesScreen(WorkflowScreen):
         except Exception as exc:
             self.status(error_text(exc, self.t))
         finally:
+            self.busy = False
             for button in buttons:
                 button.disabled = False
             self.query_one("#notification-settings", Button).disabled = not isinstance(
@@ -961,6 +1001,7 @@ class ComposeScreen(WorkflowScreen):
         self.draft = draft
         self.kind, self.mail_id = kind, mail_id
         self.busy = False
+        self._preview = False
         self._bindings.bind("ctrl+s", "save_draft", self.t("tui.btn_save"))
 
     def action_save_draft(self) -> None:
@@ -968,9 +1009,11 @@ class ComposeScreen(WorkflowScreen):
             self.query_one("#compose-save", Button).press()
 
     def compose(self) -> ComposeResult:
+        from mailflow_tui.mail_workflows import DraftPreview
+
         with Vertical():
             yield Static(self.t("experience.compose"))
-            with ScrollableContainer():
+            with ScrollableContainer(id="compose-editor"):
                 yield Static(self.t("ux.account"))
                 yield SafeSelect(
                     [
@@ -1001,7 +1044,8 @@ class ComposeScreen(WorkflowScreen):
                 with ButtonRow():
                     yield Button(self.t("experience.add_file"), id="compose-upload")
                     yield Button(self.t("experience.choose_files"), id="compose-choose-files")
-                yield Static("", id="workflow-status", markup=False)
+            yield DraftPreview(self.service, id="compose-preview")
+            yield Static("", id="workflow-status", markup=False)
             with ButtonRow():
                 yield Button(self.t("tui.btn_save"), id="compose-save", variant="primary")
                 yield Button(
@@ -1065,6 +1109,13 @@ class ComposeScreen(WorkflowScreen):
     def sync_controls(self) -> None:
         if not self.is_attached:
             return
+        if self._preview and not self.unchanged():
+            self._preview = False
+        self.query_one("#compose-editor").display = not self._preview
+        self.query_one("#compose-preview").display = self._preview
+        self.query_one("#compose-save", Button).label = self.t(
+            "tui.btn_edit" if self._preview else "tui.btn_save"
+        )
         locked = bool(
             self.draft
             and self.draft.state in {ReplyState.SENT, ReplyState.SENDING, ReplyState.CANCELLED}
@@ -1089,6 +1140,7 @@ class ComposeScreen(WorkflowScreen):
         for name in ("to", "cc", "bcc", "subject"):
             self.query_one("#compose-" + name, Input).disabled = self.busy or locked
         self.query_one("#compose-body", TextArea).read_only = self.busy or locked
+        self.query_one("#compose-path", Input).disabled = self.busy or locked
         self.query_one("#compose-account", Select).disabled = self.busy or self.draft is not None
         self.query_one("#compose-files", Static).update(
             "\n".join(f"{f.filename} ({f.size} B)" for f in self.draft.attachments)
@@ -1130,6 +1182,10 @@ class ComposeScreen(WorkflowScreen):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
+        if event.button.id == "compose-save" and self._preview and not self.busy:
+            self._preview = False
+            self.sync_controls()
+            return
         if not self.busy and not event.button.disabled:
             self.busy = True
             self.sync_controls()
@@ -1220,17 +1276,12 @@ class ComposeScreen(WorkflowScreen):
                         )
                     )
             elif action == "compose-prepare":
+                from mailflow_tui.mail_workflows import DraftPreview
+
                 self.draft = await self.service.prepare_reply(self.draft.draft_id)
-                self.status(
-                    self.t(
-                        "experience.send_preview",
-                        account=self.draft.account_id,
-                        to=", ".join(a.display for a in self.draft.to_addresses),
-                        cc=", ".join(a.display for a in self.draft.cc),
-                        bcc=", ".join(a.display for a in self.draft.bcc),
-                        files=", ".join(f.filename for f in self.draft.attachments),
-                    )
-                )
+                self.query_one(DraftPreview).show_draft(self.draft)
+                self._preview = True
+                self.status(self.t("tui.reply_confirm_hint"))
             else:
                 self.status(self.t("experience.saved"))
                 if action == "compose-close":

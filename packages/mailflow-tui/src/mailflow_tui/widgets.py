@@ -111,6 +111,8 @@ class ButtonRow(Horizontal):
     """
 
     def on_mount(self) -> None:
+        for button in self.query_children(Button):
+            self.watch(button, "label", self._reflow, init=False)
         self.call_after_refresh(self._reflow)
 
     def on_resize(self) -> None:

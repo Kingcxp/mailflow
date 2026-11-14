@@ -23,7 +23,7 @@ from mailflow.errors import error_text
 from mailflow.service import ConfigReloadError, MailFlowService
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import ScrollableContainer, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.widgets import Button, DataTable, Select, Static
 
@@ -170,6 +170,11 @@ class NotificationsPane(Vertical):
         yield Static(escape(self._service.t("tui.notifications_help")), id="notifications-help")
         with ScrollableContainer(id="notifications-table-wrap"):
             yield DataTable(id="notifications-table", cursor_type="row")  # pyright: ignore[reportUnknownMemberType]
+        with Horizontal(id="notifications-level-row"):
+            yield Static(
+                self._service.t("interface.minimum_notification"), id="notification-level-label"
+            )
+            yield SafeSelect(self._urgency_options(), id="notif-urgency", allow_blank=False)
         with ButtonRow(id="notifications-actions"):
             yield Button(self._service.t("tui.btn_add"), id="notif-add", variant="success")
             yield Button(self._service.t("tui.btn_edit"), id="notif-edit", variant="primary")
@@ -180,7 +185,6 @@ class NotificationsPane(Vertical):
             yield Button(
                 self._service.t("tui.notifications_toggle"), id="notif-toggle", variant="primary"
             )
-            yield SafeSelect(self._urgency_options(), id="notif-urgency", allow_blank=False)
             yield Button(
                 self._service.t("tui.notifications_check"), id="notif-check", variant="primary"
             )
@@ -286,6 +290,9 @@ class NotificationsPane(Vertical):
         self._timer = self.set_interval(self._PROBE_INTERVAL, self.check_if_visible)
 
     async def relabel(self) -> None:
+        self.query_one("#notification-level-label", Static).update(
+            self._service.t("interface.minimum_notification")
+        )
         self.query_one("#notif-preferences", Button).label = self._service.t(
             "experience.notification_preferences"
         )

@@ -325,15 +325,15 @@ TodoCreateModal {
 #todo-create-dialog {
     width: 64;
     max-width: 96%;
-    height: 90%;
-    max-height: 90%;
+    height: 92%;
+    max-height: 92%;
     border: round $accent;
     background: $surface;
-    padding: 1 2;
+    padding: 0 1;
 }
 #todo-create-title {
     text-style: bold;
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 #todo-create-form {
     height: 1fr;
@@ -345,16 +345,16 @@ TodoCreateModal {
 }
 #todo-create-form Input,
 #todo-create-form Select {
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 #todo-create-error {
     height: auto;
     color: $text-muted;
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 #todo-create-buttons {
     height: auto;
-    margin-top: 1;
+    margin-top: 0;
 }
 #todo-create-buttons Button {
     margin-right: 1;
@@ -402,7 +402,6 @@ TodoCreateModal {
     width: 24;
 }
 
-
 #actions-table {
     width: 100%;
     height: 1fr;
@@ -432,8 +431,9 @@ TodoCreateModal {
 }
 
 #log-view {
-    border: round $accent;
+    border: none;
     height: 100%;
+    padding: 0;
 }
 
 /* Log export modal */
@@ -513,7 +513,8 @@ BotExportScreen {
 #log-scroll {
     height: 1fr;
     margin: 0 1;
-    border: round $accent;
+    border: none;
+    padding: 0;
 }
 
 #settings-label {
@@ -637,10 +638,11 @@ LogExportScreen {
 
 #reply-dialog {
     width: 90;
-    height: 80%;
+    height: 92%;
     border: round $accent;
     background: $surface;
     padding: 0 1;
+    max-width: 96%;
 }
 
 #reply-templates {
@@ -659,8 +661,8 @@ LogExportScreen {
 }
 
 #reply-body {
-    height: auto;
-    min-height: 10;
+    height: 10;
+    min-height: 6;
     margin: 0 1;
     border: round $primary;
 }
@@ -683,12 +685,15 @@ LogExportScreen {
 
 #reply-actions {
     height: auto;
-    margin: 1;
+    margin: 0;
 }
 
 #reply-status {
     margin: 0 1;
     color: $text-muted;
+    height: auto;
+    max-height: 4;
+    overflow-y: auto;
 }
 
 #reply-confirm {
@@ -941,6 +946,12 @@ ReposScreen {
     height: auto;
 }
 
+#repos-esc-hint {
+    height: auto;
+    max-height: 3;
+    overflow-y: auto;
+}
+
 #repos-form Input {
     margin-bottom: 1;
 }
@@ -1054,6 +1065,7 @@ MarketDetailScreen {
     height: auto;
     padding: 0 1 1 1;
     border-bottom: solid $panel;
+    padding-bottom: 0;
 }
 
 .option-key {
@@ -1068,6 +1080,7 @@ MarketDetailScreen {
 .option-default {
     height: auto;
     color: $text-disabled;
+    display: none;
 }
 
 .option-row {
@@ -1077,7 +1090,7 @@ MarketDetailScreen {
 
 .option-editor {
     height: auto;
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 
 .option-editor .option-input, .option-editor .option-summary {
@@ -1234,7 +1247,6 @@ ListEditScreen, EntryFormScreen {
     color: $text-muted;
 }
 
-
 .secret-row {
     height: 3;
     align: right middle;
@@ -1264,7 +1276,6 @@ ListEditScreen, EntryFormScreen {
     height: auto;
 }
 
-
 .secret-row Input {
     height: 3;
 }
@@ -1275,7 +1286,6 @@ ListEditScreen, EntryFormScreen {
     margin-right: 1;
     content-align: center middle;
 }
-
 
 #notify-title {
     margin-bottom: 1;
@@ -1572,3 +1582,21 @@ UserProfileModal {
 
 #todo-weekdays { height: 9; }
 #profile-text, #profile-guidelines { height: 8; min-height: 5; }
+
+#notifications-level-row { height: 3; }
+#notifications-level-row > Static { width: auto; height: 3; content-align: left middle; padding-right: 1; }
+#notifications-level-row Select { width: 1fr; }
+#runtime-summary { height: auto; margin-bottom: 1; }
+#runtime-details { height: auto; }
+#log-follow { height: 1; border: none; padding: 0; margin: 0; }
+
+#mail-maintenance, #market-development { height: auto; border: none; padding: 0; }
+#mail-maintenance > Contents, #market-development > Contents { padding: 0; }
+
+#reply-title { height: auto; }
+#reply-form { height: 1fr; }
+#reply-form Label { height: auto; }
+
+#reply-templates Button, #reply-toolbar Button, #reply-actions Button { width: 1fr; min-width: 0; margin: 0; }
+
+#btn-assistant, #btn-filter, AssistedInput > Button { height: 3; content-align: center middle; }

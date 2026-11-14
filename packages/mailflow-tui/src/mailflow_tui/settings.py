@@ -97,6 +97,20 @@ _SECTION_LABELS = {
 
 _MULTILINE_EDITORS = (EditorKind.STRING_LIST, EditorKind.MAPPING)
 
+_ADVANCED_SETTINGS = {
+    "general.command_prefix",
+    "general.queue_size",
+    "general.workers",
+    "general.cleanup_hour",
+    "general.cleanup_minute",
+    "general.reminder_interval_seconds",
+    "general.browser_render_url",
+    "logging.console_redirect",
+    "logging.logger_levels",
+    "logging.file_max_bytes",
+    "logging.file_backup_count",
+}
+
 _INDEXED = re.compile(r"\[\d+\]")
 
 
@@ -1553,7 +1567,11 @@ class OptionCard(Vertical):
         spec = self.spec
         slug = _slug(spec.key)
         title = Static(self._title(), classes="option-key")
-        title.tooltip = spec.key
+        title.tooltip = (
+            spec.key
+            + "\n"
+            + self._t("tui.settings_default_hint", value=default_text(self._service, spec))
+        )
         yield title
         yield Static(escape(self._description), classes="option-desc")
         yield Static(
@@ -1700,6 +1718,7 @@ class SettingsPane(Vertical):
         self._saving = False
         self._saving_key = ""
         self._sidebar_signature: list[tuple[str, str]] = []
+        self._show_advanced = False
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -1715,6 +1734,7 @@ class SettingsPane(Vertical):
             yield Button(self._t("ux.backup_title"), id="settings-backup")
             if not getattr(self._service, "remote", False):
                 yield Button(self._t("ux.remote_connection"), id="settings-connection")
+            yield Button(self._t("interface.show_advanced"), id="settings-advanced")
         with Horizontal(id="settings-body"):
             with Vertical(id="settings-sidebar"):
                 yield Static(self._t("tui.settings_sections"), id="settings-sidebar-title")
@@ -1743,6 +1763,9 @@ class SettingsPane(Vertical):
         self.run_worker(self.reload(), exclusive=True, group="settings-reload", exit_on_error=False)
 
     async def relabel(self) -> None:
+        self.query_one("#settings-advanced", Button).label = self._t(
+            "interface.hide_advanced" if self._show_advanced else "interface.show_advanced"
+        )
         self.query_one("#settings-search", Input).placeholder = self._t(
             "tui.settings_search_placeholder"
         )
@@ -1917,6 +1940,9 @@ class SettingsPane(Vertical):
                     else str(spec.value if spec.value is not None else "")
                 )
                 card.update_spec(spec, self._describe(spec), self._drafts.get(spec.key, current))
+                card.display = (
+                    bool(self._query) or self._show_advanced or spec.key not in _ADVANCED_SETTINGS
+                )
                 card.refresh_dirty()
                 for node in card.query(".option-button"):
                     node.disabled = self._saving
@@ -2039,6 +2065,18 @@ class SettingsPane(Vertical):
         return node
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "settings-advanced":
+            self._show_advanced = not self._show_advanced
+            event.button.label = self._t(
+                "interface.hide_advanced" if self._show_advanced else "interface.show_advanced"
+            )
+            for visible_card in self.query(OptionCard):
+                visible_card.display = (
+                    bool(self._query)
+                    or self._show_advanced
+                    or visible_card.spec.key not in _ADVANCED_SETTINGS
+                )
+            return
         if event.button.id == "settings-save-section":
             self.run_worker(
                 self._save_section(), group="settings-save", exclusive=True, exit_on_error=False
@@ -2518,6 +2556,9 @@ class LLMPane(Vertical):
 
 class AccountsPane(Vertical):
     """Mailboxes plus the history browser (select mail, run the pipeline)."""
+
+    def add_account(self) -> None:
+        self._open_form(None)
 
     _DEFAULT_HISTORY_BATCH_SIZE = 25
 

@@ -13,6 +13,7 @@ from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Static
 
+from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.widgets import ButtonRow, Input, TextArea
 
 
@@ -73,7 +74,7 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
             parts.append(
                 self._t("recurrence.weekdays")
                 + ": "
-                + ", ".join(str(day + 1) for day in repeat["weekdays"])
+                + ", ".join(self._t("interface.weekday_" + str(day)) for day in repeat["weekdays"])
             )
         if repeat.get("month_day"):
             parts.append(self._t("recurrence.month_day") + f": {repeat['month_day']}")
@@ -203,7 +204,28 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
                         if field in {"start", "end"}
                         else str(args.get("action_type" if field == "type" else key) or default)
                     )
-                    yield Input(value=value, id=f"smart-review-{field}")
+                    if field in {"start", "end"}:
+                        yield AssistedInput(
+                            self._service, value, id=f"smart-review-{field}", mode="datetime"
+                        )
+                    elif field == "type":
+                        keys = ("errand", "meeting", "exam", "other")
+                        label = self._t("tui.action_type_" + value) if value in keys else value
+                        yield AssistedInput(
+                            self._service,
+                            label,
+                            id="smart-review-type",
+                            mode="choice",
+                            choices=[
+                                (
+                                    self._t("tui.action_type_" + key),
+                                    self._t("tui.action_type_" + key),
+                                )
+                                for key in keys
+                            ],
+                        )
+                    else:
+                        yield Input(value=value, id=f"smart-review-{field}")
                 yield Static(self._t("tui.smart_review_notes"), classes="todo-label")
                 yield TextArea(str(args.get("notes") or ""), id="smart-review-notes")
                 for field in ("location", "url"):
@@ -228,6 +250,14 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
         error = self.query_one("#smart-review-edit-error", Static)
         summary = self.query_one("#smart-review-summary", Input).value.strip()
         action_type = self.query_one("#smart-review-type", Input).value.strip()
+        action_type = next(
+            (
+                key
+                for key in ("errand", "meeting", "exam", "other")
+                if self._t("tui.action_type_" + key) == action_type
+            ),
+            action_type,
+        )
         if not summary or not action_type:
             error.update(self._t("tui.smart_review_required"))
             return

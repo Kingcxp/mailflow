@@ -447,7 +447,7 @@ class TodoEditModal(TodoCreateModal):
         self.query_one("#todo-url", Input).value = item.url
         if item.repeat is not None:
             self.query_one("#todo-repeat", Select).value = item.repeat.frequency
-            days = self.query_one("#todo-weekdays", SelectionList)
+            days = cast("SelectionList[int]", self.query_one("#todo-weekdays", SelectionList))
             days.deselect_all()
             for day in item.repeat.weekdays:
                 days.select(day)

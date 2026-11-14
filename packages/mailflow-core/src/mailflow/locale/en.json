@@ -477,7 +477,7 @@
       "bots_targets": "targets",
       "bots_title": "IM bot instances",
       "notifications_title": "Notifications",
-      "notifications_help": "Manage every notification channel: chat-platform gateways (QQ via OneBot/NapCat, WeChat) and plain delivery channels. Add a gateway-backed provider to auto-install and log in inside the TUI. The status column is refreshed automatically for enabled channels; failures show the reason.",
+      "notifications_help": "Select a channel to configure or check it. Notification preferences control what is delivered.",
       "notifications_enabled": "enabled",
       "notifications_urgency": "urgency",
       "notifications_on": "on",
@@ -690,7 +690,7 @@
       "runtime_bindings": "Processor → LLM",
       "runtime_llms": "LLMs",
       "runtime_plugins": "Plugins",
-      "runtime_plugins_help": "Select a plugin, then press Disable/Enable (applies on next start)",
+      "runtime_plugins_help": "Select a plugin to enable, disable or uninstall; the result states when it takes effect.",
       "runtime_storage": "Storage",
       "scaffold_created": "Plugin template created at {path}",
       "scaffold_folder_name": "Subfolder name",
@@ -962,7 +962,7 @@
       "reparse_all_start": "Re-analyzing all {count} mail(s)…",
       "profile_title": "Mail preferences",
       "profile_label": "About you (optional)",
-      "profile_hint": "Describe who you are and which mail matters to you — the AI reads this with every analysis and search, so its judgement follows your situation instead of a generic student's. Example: \"I am a CS master's student; course, exam and lab notices matter, as do internship and research opportunities; shopping, promotions and club socials do not.\"",
+      "profile_hint": "Describe your role and the mail you care about. These preferences apply to future analysis; they do not change old mail automatically.",
       "profile_saved": "Mail preferences saved — the AI will use them from now on.",
       "profile_cleared": "Mail preferences cleared.",
       "profile_save_failed": "Could not save your preferences: {error}",
@@ -1200,7 +1200,9 @@
       "mail_provider_outlook": "Outlook",
       "extras_smtp_host": "Filled by the email provider menu. For other mailboxes, use your provider's connection settings.",
       "extras_imap_host": "Filled by the email provider menu. For other mailboxes, use your provider's connection settings.",
-      "extras_smtp_ssl": "On: implicit TLS, usually port 465. Off: STARTTLS, usually port 587."
+      "extras_smtp_ssl": "On: implicit TLS, usually port 465. Off: STARTTLS, usually port 587.",
+      "market_category_bot_exporter": "Chat framework exports",
+      "market_category_storage_backend": "Storage"
     },
     "update": {
       "applied_title": "Applied updates",
@@ -1459,7 +1461,7 @@
       "config_active": "Saved and active",
       "secure_store_failed": "Cannot save to the system credential store. Turn off Remember password and connect again.",
       "backup_title": "Backup and restore",
-      "backup_hint": "Backups contain configuration, mail, tasks, drafts and processing state, and may include passwords entered in configuration. Keep them private. Source attachments are not included. Set up system credentials and environment variables again on a new computer.",
+      "backup_hint": "Backups include configuration, mail, tasks, drafts, uploaded files and cached attachments. Undownloaded attachments still require the mailbox. Keep backups private: configuration may contain passwords. Reconfigure system credentials and environment variables on a new computer.",
       "create_backup": "Create backup",
       "restore_backup": "Restore backup",
       "backup_running": "Creating backup…",
@@ -1792,7 +1794,7 @@
       "tomorrow": "Tomorrow",
       "no_deadline": "No deadline",
       "browse": "Browse",
-      "follow_logs": "Follow latest",
+      "follow_logs": "Follow latest logs",
       "retry": "Retry",
       "loading": "Working; other pages remain available…",
       "models": {
@@ -1836,7 +1838,20 @@
       "weekday_6": "Sunday",
       "view_original": "View original",
       "back_to_correction": "Back to correction",
-      "occurrence": "Choose the occurrence to skip"
+      "occurrence": "Choose the occurrence to skip",
+      "component_details": "Component details",
+      "runtime_summary": "Accounts: {accounts} · Pending analysis: {pending} · Account errors: {errors}\nAnalysis: {analysis} · Enabled notification channels: {channels}",
+      "mail_maintenance": "Analysis and maintenance",
+      "developer_tools": "Plugin development and export",
+      "recipients_files": "Recipients and attachments",
+      "file_type": "Type",
+      "failure_details": "Failure details",
+      "show_advanced": "Show advanced settings",
+      "hide_advanced": "Hide advanced settings",
+      "no_channels": "No notification channels configured. Add one on the Notifications page.",
+      "minimum_notification": "Minimum notification level",
+      "login_qr": "View login QR code",
+      "connection_address": "On this computer: {address}\nUsername: {username}\nFor a remote terminal, replace the host with this computer's reachable address. The service must be running and allow remote connections."
     }
   }
 }

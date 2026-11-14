@@ -110,6 +110,45 @@ class WorkflowScreen(ModalScreen[Any]):
             node.update(text)
 
 
+class DraftPreview(Vertical):
+    """Review the persisted recipients, body and files before sending."""
+
+    DEFAULT_CSS = """
+    DraftPreview { height: 1fr; }
+    DraftPreview .draft-preview-info { height: auto; max-height: 45%; overflow-y: auto; }
+    DraftPreview TextArea { height: 1fr; min-height: 3; }
+    """
+
+    def __init__(self, service: MailFlowService, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.service = service
+        self.display = False
+
+    def compose(self) -> ComposeResult:
+        yield Static("", markup=False, classes="draft-preview-info")
+        yield TextArea(read_only=True)
+
+    def show_draft(self, draft: ReplyDraft) -> None:
+        self.query_one(Static).update(
+            self.service.t(
+                "experience.send_preview",
+                account=draft.account_id,
+                to=", ".join(a.display for a in draft.to_addresses),
+                cc=", ".join(a.display for a in draft.cc),
+                bcc=", ".join(a.display for a in draft.bcc),
+                files=", ".join(f.filename for f in draft.attachments),
+            )
+            + "\n"
+            + self.service.t("experience.subject")
+            + ": "
+            + draft.subject
+        )
+        body = self.query_one(TextArea)
+        if body.text != draft.body:
+            body.load_text(draft.body)
+        self.display = True
+
+
 class TrashChoiceScreen(WorkflowScreen):
     def __init__(self, service: MailFlowService, preview: str) -> None:
         super().__init__(service)
@@ -983,6 +1022,10 @@ class DeliveriesScreen(WorkflowScreen):
             yield Static("", id="workflow-status", markup=False)
             with ButtonRow():
                 yield Button(self.t("ux.retry_delivery"), id="delivery-retry", disabled=True)
+                yield Button(self.t("experience.source"), id="delivery-source", disabled=True)
+                yield Button(
+                    self.t("interface.failure_details"), id="delivery-details", disabled=True
+                )
                 yield Button(self.t("tui.btn_refresh"), id="delivery-refresh")
                 yield Button(self.t("tui.btn_back"), id="delivery-close")
 
@@ -999,6 +1042,7 @@ class DeliveriesScreen(WorkflowScreen):
         try:
             self.rows = await self.service.failed_deliveries()
             table = self.query_one("#delivery-table", SelectionTable)
+            view = TableView.capture(table)
             table.retain_checks({str(row["delivery_id"]) for row in self.rows})
             table.clear()
             for row in self.rows:
@@ -1014,6 +1058,7 @@ class DeliveriesScreen(WorkflowScreen):
                 )
             if not self.rows:
                 self.status(self.t("ux.no_failed_deliveries"))
+            view.restore(table)
         except Exception as exc:
             self.status(error_text(exc, self.service.t))
         finally:
@@ -1022,6 +1067,68 @@ class DeliveriesScreen(WorkflowScreen):
     def _sync_controls(self) -> None:
         self.query_one("#delivery-retry", Button).disabled = self._retrying or not self.rows
         self.query_one("#delivery-refresh", Button).disabled = self._retrying
+        row = self.selected_delivery()
+        self.query_one("#delivery-details", Button).disabled = self._retrying or row is None
+        self.query_one("#delivery-source", Button).disabled = self._retrying or not (
+            row and (row.get("record_id") or row.get("item_id"))
+        )
+
+    def selected_delivery(self) -> dict[str, Any] | None:
+        table = self.query_one("#delivery-table", SelectionTable)
+        if not table.row_count:
+            return None
+        key = str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+        return next((row for row in self.rows if str(row["delivery_id"]) == key), None)
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        self._sync_controls()
+
+    async def inspect_delivery(self, row: dict[str, Any], *, source: bool) -> None:
+        try:
+            if source and row.get("record_id"):
+                record = await self.service.get_mail(str(row["record_id"]))
+                if record is not None:
+                    await self.ask(MailReader(self.service, record))
+                    return
+            elif source and row.get("item_id"):
+                from mailflow_tui.app import ActionModal
+
+                item = next(
+                    (
+                        item
+                        for item in await self.service.list_actions_all()
+                        if item.item_id == row["item_id"]
+                    ),
+                    None,
+                )
+                if item is not None:
+                    await self.ask(ActionModal(self.service, item))
+                    return
+            if source:
+                self.status(self.t("tui.empty"))
+                return
+            body = "\n".join(
+                [
+                    self.t("ux.delivery_" + str(row.get("kind", "text"))),
+                    str(row.get("channel", "")),
+                    str(row.get("target", "")),
+                    self.t(
+                        str(row.get("error_code") or "errors.operation"),
+                        **(row.get("error_params") or {}),
+                    ),
+                ]
+            )
+            await self.ask(
+                ConfirmModal(
+                    self.service,
+                    title=self.t("interface.failure_details"),
+                    body=body,
+                    confirm_label=self.t("tui.btn_back"),
+                    variant="default",
+                )
+            )
+        except Exception as exc:
+            self.status(error_text(exc, self.t))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
@@ -1029,6 +1136,15 @@ class DeliveriesScreen(WorkflowScreen):
             return
         if event.button.id == "delivery-close":
             self.dismiss(None)
+        elif event.button.id in {"delivery-details", "delivery-source"}:
+            row = self.selected_delivery()
+            if row is not None:
+                self.run_worker(
+                    self.inspect_delivery(dict(row), source=event.button.id == "delivery-source"),
+                    group="delivery-inspect",
+                    exclusive=True,
+                    exit_on_error=False,
+                )
         else:
             self.run_worker(
                 self.operate(event.button.id or ""), exclusive=True, exit_on_error=False
@@ -1160,11 +1276,22 @@ class RemoteConnectionScreen(WorkflowScreen):
         server = self.service.config.server
         with Vertical():
             yield Static(self.t("ux.remote_connection"))
-            yield Static(self.t("ux.remote_connection_hint"), markup=False)
-            yield Static(f"{server.host}:{server.port} · {server.username}", markup=False)
-            yield Input(server.password, password=True, id="connection-password")
-            yield Checkbox(self.t("ux.show_password"), id="connection-show-password")
-            yield Button(self.t("tui.btn_back"), id="connection-close")
+            with ScrollableContainer():
+                yield Static(self.t("ux.remote_connection_hint"), markup=False)
+                host = "127.0.0.1" if server.host in {"0.0.0.0", "::"} else server.host
+                host = f"[{host}]" if ":" in host else host
+                yield Static(
+                    self.t(
+                        "interface.connection_address",
+                        address=f"http://{host}:{server.port}",
+                        username=server.username,
+                    ),
+                    markup=False,
+                )
+                yield Input(server.password, password=True, id="connection-password")
+                yield Checkbox(self.t("ux.show_password"), id="connection-show-password")
+            with ButtonRow():
+                yield Button(self.t("tui.btn_back"), id="connection-close")
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id == "connection-show-password":

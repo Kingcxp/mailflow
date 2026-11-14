@@ -26,6 +26,7 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
+        self._busy = False
         self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -49,7 +50,7 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
                     value="mailflow-",
                 )
                 yield SafeSelect(
-                    [(f"{c} — {self._t(f'plugin.template.{c}')}", c) for c in CATEGORIES],
+                    [(self._t(f"plugin.template.{c}"), c) for c in CATEGORIES],
                     id="scaffold-type",
                     value=CATEGORIES[3],
                 )
@@ -58,7 +59,8 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
                 yield Button(self._t("tui.btn_cancel"), id="scaffold-cancel", variant="primary")
 
     def action_dismiss_modal(self) -> None:
-        self.dismiss(None)
+        if not self._busy:
+            self.dismiss(None)
 
     def on_mount(self) -> None:
         self.query_one("#scaffold-tree", DirectoryTree).focus()
@@ -73,11 +75,13 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "scaffold-cancel":
-            self.dismiss(None)
+            self.action_dismiss_modal()
         elif button_id == "scaffold-generate":
             self._generate()
 
     def _generate(self) -> None:
+        if self._busy:
+            return
         tree = self.query_one("#scaffold-tree", DirectoryTree)
         node = tree.cursor_node
         if node is None or node.data is None:
@@ -99,6 +103,8 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
             else:
                 target = base
             self.query_one("#scaffold-generate", Button).disabled = True
+            self._busy = True
+            self.query_one("#scaffold-cancel", Button).disabled = True
             self.run_worker(self._scaffold(target, plugin_id, category), exit_on_error=False)
         except ValueError as exc:
             self._notify_error(error_message(self._service, exc))
@@ -106,7 +112,9 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
     async def _scaffold(self, target: Path, plugin_id: str, category: str) -> None:
         try:
             created = await asyncio.to_thread(scaffold_plugin, target, plugin_id, category)
-        except (ValueError, OSError) as exc:
+        except Exception as exc:
+            self._busy = False
+            self.query_one("#scaffold-cancel", Button).disabled = False
             self._notify_error(error_message(self._service, exc))
             generate_btn = self.query_one_optional("#scaffold-generate", Button)
             if generate_btn is not None:

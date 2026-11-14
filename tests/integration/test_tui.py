@@ -173,7 +173,7 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
             )
             results = cast(DataTable[str], app.query_one("#assistant-results", DataTable))
             assert "Pick up your student ID card" in str(results.get_row_at(0))
-            assert "Answered." in str(app.query_one("#assistant-answer", Static).render())
+            assert "Answered." in app.query_one("#assistant-answer", TextArea).text
             assert list(table.rows) == before and mail_search.value == "lecture"
             await service.set_language("zh-CN")
             await pilot.pause()
@@ -373,7 +373,9 @@ async def test_smart_query_task_crud_requires_confirmation(
             prompt.query_one("#smart-review-edit-0", Button).press()
             await until(pilot, lambda: isinstance(app.screen, SmartOperationEditModal))
             assert app.screen.query_one("#smart-review-end", Input).value == ""
-            assert app.screen.query_one("#smart-review-type", Input).value == "meeting"
+            assert app.screen.query_one("#smart-review-type", Input).value == service.t(
+                "tui.action_type_meeting"
+            )
             app.screen.query_one("#smart-review-location", Input).value = "Office 4"
             app.screen.query_one("#smart-review-save-edit", Button).press()
             await until(pilot, lambda: isinstance(app.screen, SmartActionReviewModal))
@@ -734,6 +736,7 @@ async def test_reply_letter_template_and_toolbar(
             assert isinstance(app.screen, ReplyModal)
             textarea = app.screen.query_one("#reply-body", TextArea)
             # apply the Chinese letter template: structure + auto date + alignment
+            await until(pilot, lambda: not app.screen.query_one("#reply-tpl-cn", Button).disabled)
             cast(Button, app.screen.query_one("#reply-tpl-cn")).press()
             await pilot.pause(0.05)
             body = textarea.text
@@ -790,6 +793,9 @@ async def test_reply_letter_template_and_toolbar(
             modal.query_one("#reply-prepare", Button).press()
             await until(pilot, lambda: not modal.query_one("#reply-confirm", Button).disabled)
             assert not modal.query_one("#reply-confirm", Button).disabled
+            from mailflow_tui.mail_workflows import DraftPreview
+
+            assert modal.query_one(DraftPreview).query_one(TextArea).text == stored.body
             textarea.text = "Updated reply from the editor"
             await until(pilot, lambda: modal.query_one("#reply-confirm", Button).disabled)
             assert modal.query_one("#reply-confirm", Button).disabled
@@ -839,12 +845,17 @@ async def test_reply_letter_template_and_toolbar(
 
 
 @pytest.mark.asyncio
-async def test_market_repos_screen(tmp_path: Path) -> None:
+async def test_market_repos_screen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The Market tab manages remote repositories from a dedicated screen."""
-    from mailflow.plugin_market import PluginMarket
+    from mailflow.plugin_market import MarketPlugin, PluginMarket
     from mailflow_tui.app import MarketPane
     from mailflow_tui.repos import ReposScreen
     from textual.widgets import DataTable, TabbedContent
+
+    def offline_index(*_: Any, **__: Any) -> list[MarketPlugin]:
+        return []
+
+    monkeypatch.setattr(PluginMarket, "fetch_index", offline_index)
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
@@ -881,6 +892,21 @@ async def test_market_repos_screen(tmp_path: Path) -> None:
             assert "third-party" in names
             # the service config now carries the repository
             assert any(repo.name == "third-party" for repo in service.config.plugins.repositories)
+            app.screen.query_one("#repos-name", Input).value = "third-party"
+            app.screen.query_one("#repos-url", Input).value = "https://example.com/other"
+            app.screen.query_one("#repos-add", Button).press()
+            await until(
+                pilot,
+                lambda: (
+                    service.t("errors.repository_exists", name="third-party")
+                    in str(app.screen.query_one("#repos-esc-hint", Static).render())
+                ),
+            )
+            assert app.screen.query_one("#repos-url", Input).value == "https://example.com/other"
+            assert table.row_count == 1
+            assert service.t("errors.repository_exists", name="third-party") in str(
+                app.screen.query_one("#repos-esc-hint", Static).render()
+            )
             # a visible Back button closes the form: escape must not be the
             # only way out (regression: the dialog had no return control)
             back = cast(Button, app.screen.query_one("#repos-cancel"))
@@ -1493,7 +1519,7 @@ async def test_reparse_all_can_be_stopped_while_running(tmp_path: Path) -> None:
             dialog: ConfirmModal | None = None
             for _ in range(80):
                 current = app.screen
-                if isinstance(current, ConfirmModal):
+                if isinstance(current, ConfirmModal) and current.is_mounted:
                     dialog = current
                     break
                 await pilot.pause(0.05)
@@ -1586,7 +1612,7 @@ async def test_bulk_reparse_stop_covers_reanalyze_failed_and_never_latches(
             dialog: ConfirmModal | None = None
             for _ in range(80):
                 current = app.screen
-                if isinstance(current, ConfirmModal):
+                if isinstance(current, ConfirmModal) and current.is_mounted:
                     dialog = current
                     break
                 await pilot.pause(0.05)

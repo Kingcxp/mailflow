@@ -29,12 +29,12 @@ class AssistantPane(Vertical):
 
     DEFAULT_CSS = """
     AssistantPane { padding: 0 1; }
-    #assistant-scope, #assistant-status, #assistant-answer { height: auto; max-height: 12; overflow-y: auto; }
+    #assistant-scope, #assistant-status { height: auto; max-height: 3; overflow-y: auto; }
     #assistant-input-row, #assistant-controls { height: auto; }
     #assistant-input { width: 1fr; height: 5; }
     #assistant-send-hint { height: 1; color: $text-muted; }
-    #assistant-answer { max-height: 6; }
-    #assistant-progress { height: 6; display: none; }
+    #assistant-answer { height: 4; display: none; }
+    #assistant-progress { height: 3; display: none; }
     #assistant-results { height: 1fr; min-height: 3; }
     #assistant-controls Button { min-width: 10; width: 1fr; }
     """
@@ -66,11 +66,20 @@ class AssistantPane(Vertical):
         yield Static("", id="assistant-status", markup=False)
         yield Button(self._service.t("assistant.configure_model"), id="assistant-configure")
         yield RichLog(id="assistant-progress", max_lines=100, wrap=True, markup=False)
-        yield Static("", id="assistant-answer", markup=False)
+        yield TextArea("", id="assistant-answer", read_only=True, soft_wrap=True)
         yield DataTable(id="assistant-results", cursor_type="row")
 
     async def on_mount(self) -> None:
+        self.on_resize()
         await self.relabel()
+
+    def on_resize(self) -> None:
+        answer = self.query_one_optional("#assistant-answer", TextArea)
+        if answer is not None:
+            answer.styles.height = 4 if self.size.height < 30 else 6
+            self.query_one("#assistant-progress", RichLog).styles.height = (
+                3 if self.size.height < 30 else 6
+            )
 
     async def on_unmount(self) -> None:
         await self.stop()
@@ -151,7 +160,8 @@ class AssistantPane(Vertical):
         )
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        self._sync_controls()
+        if event.text_area.id == "assistant-input":
+            self._sync_controls()
 
     def action_send(self) -> None:
         if not self._busy:
@@ -267,7 +277,10 @@ class AssistantPane(Vertical):
                     str(plugin.get("name") or plugin["id"]),
                     key=f"plugin:{plugin['id']}",
                 )
-        self.query_one("#assistant-answer", Static).update(answer)
+        editor = self.query_one("#assistant-answer", TextArea)
+        if editor.text != answer:
+            editor.load_text(answer)
+        editor.display = bool(answer)
         if table.row_count:
             table.move_cursor(row=min(cursor, table.row_count - 1))
         self._sync_controls()

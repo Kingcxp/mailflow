@@ -1420,7 +1420,11 @@ class CommandRouter:
                 ),
             ]
             if report.failures:
-                detail = "; ".join(f"{repo.name}: {reason}" for repo, reason in report.failures)
+                detail = "; ".join(
+                    f"{status.repository.name}: {self.service.t(status.error_code)}"
+                    for status in report.repositories
+                    if not status.ok
+                )
                 spans.append(
                     StyleSpan(
                         text=f"\n{self._t('tui.market_stale')}: {detail}",

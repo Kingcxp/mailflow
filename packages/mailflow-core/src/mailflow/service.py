@@ -1020,7 +1020,7 @@ class MailFlowService:
         values = {_PROFILE_PREFERENCE: profile, "feedback.guidelines": guidelines.strip()}
         batch = getattr(self.storage, "set_preferences", None)
         if callable(batch):
-            await batch(values)
+            await cast(Callable[[dict[str, str]], Awaitable[None]], batch)(values)
         else:
             previous = {key: await self.storage.get_preference(key) or "" for key in values}
             try:

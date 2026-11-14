@@ -40,6 +40,8 @@ from textual.screen import ModalScreen
 from textual.widget import MountError
 from textual.widgets import (
     Button,
+    Checkbox,
+    Collapsible,
     DataTable,
     Footer,
     Header,
@@ -245,6 +247,7 @@ class ReplyModal(ModalScreen[Any]):
         self._resume_draft = draft
         self._draft: ReplyDraft | None = None
         self._reply_busy = False
+        self._preview = False
         self._bindings.bind("escape", "close_reply", self._t("tui.btn_close"))
         self._bindings.bind("ctrl+s", "save_reply", self._t("tui.reply_save"))
 
@@ -252,58 +255,70 @@ class ReplyModal(ModalScreen[Any]):
         return self._service.t(key, **params)
 
     def compose(self) -> ComposeResult:
-        yield Static(self._t("tui.reply_title"), id="reply-title")
+        from mailflow_tui.mail_workflows import DraftPreview
+
         with Vertical(id="reply-dialog"):
-            yield Label(f"{self._t('mail.field_account')}: {escape(self._record.mail.account_id)}")
-            yield Label(
-                f"{self._t('tui.reply_to_label')}: "
-                f"{escape((self._record.mail.reply_to or self._record.mail.sender).display)}"
-            )
-            yield Label(
-                f"{self._t('tui.reply_subject_label')}: "
-                f"{self._service.t('tui.reply.subject_prefix')} {escape(self._record.mail.subject)}"
-            )
-            with Horizontal(id="reply-templates"):
-                yield Button(self._t("tui.reply_tpl_cn"), id="reply-tpl-cn", variant="primary")
-                yield Button(self._t("tui.reply_tpl_en"), id="reply-tpl-en", variant="primary")
+            yield Static(self._t("tui.reply_title"), id="reply-title")
+            with ScrollableContainer(id="reply-form"):
+                yield Static(
+                    f"{self._t('mail.field_account')}: {self._record.mail.account_id}",
+                    id="reply-account",
+                    markup=False,
+                )
+                yield Static(
+                    f"{self._t('tui.reply_to_label')}: "
+                    f"{(self._record.mail.reply_to or self._record.mail.sender).display}",
+                    id="reply-recipient",
+                    markup=False,
+                )
+                yield Static(
+                    f"{self._t('tui.reply_subject_label')}: "
+                    f"{self._service.t('tui.reply.subject_prefix')} {self._record.mail.subject}",
+                    id="reply-subject",
+                    markup=False,
+                )
+                with ButtonRow(id="reply-templates"):
+                    yield Button(self._t("tui.reply_tpl_cn"), id="reply-tpl-cn", variant="primary")
+                    yield Button(self._t("tui.reply_tpl_en"), id="reply-tpl-en", variant="primary")
                 yield Static(self._t("tui.reply_tpl_hint"), id="reply-tpl-hint")
-            yield TextArea(
-                placeholder=self._service.t("tui.reply_body_placeholder"),
-                id="reply-body",
-            )
-            with Horizontal(id="reply-toolbar"):
-                yield Button(
-                    self._t("tui.reply_toolbar_bold"),
-                    id="reply-bold",
-                    variant="primary",
-                    classes="reply-tool",
+                yield TextArea(
+                    placeholder=self._service.t("tui.reply_body_placeholder"),
+                    id="reply-body",
                 )
-                yield Button(
-                    self._t("tui.reply_toolbar_italic"),
-                    id="reply-italic",
-                    variant="primary",
-                    classes="reply-tool",
-                )
-                yield Button(
-                    self._t("tui.reply_toolbar_left"),
-                    id="reply-align-left",
-                    variant="primary",
-                    classes="reply-tool",
-                )
-                yield Button(
-                    self._t("tui.reply_toolbar_center"),
-                    id="reply-align-center",
-                    variant="primary",
-                    classes="reply-tool",
-                )
-                yield Button(
-                    self._t("tui.reply_toolbar_right"),
-                    id="reply-align-right",
-                    variant="primary",
-                    classes="reply-tool",
-                )
+                with ButtonRow(id="reply-toolbar"):
+                    yield Button(
+                        self._t("tui.reply_toolbar_bold"),
+                        id="reply-bold",
+                        variant="primary",
+                        classes="reply-tool",
+                    )
+                    yield Button(
+                        self._t("tui.reply_toolbar_italic"),
+                        id="reply-italic",
+                        variant="primary",
+                        classes="reply-tool",
+                    )
+                    yield Button(
+                        self._t("tui.reply_toolbar_left"),
+                        id="reply-align-left",
+                        variant="primary",
+                        classes="reply-tool",
+                    )
+                    yield Button(
+                        self._t("tui.reply_toolbar_center"),
+                        id="reply-align-center",
+                        variant="primary",
+                        classes="reply-tool",
+                    )
+                    yield Button(
+                        self._t("tui.reply_toolbar_right"),
+                        id="reply-align-right",
+                        variant="primary",
+                        classes="reply-tool",
+                    )
                 yield Static(self._t("tui.reply_markup_hint"), id="reply-markup-hint")
-            with Horizontal(id="reply-actions"):
+            yield DraftPreview(self._service, id="reply-preview")
+            with ButtonRow(id="reply-actions"):
                 yield Button(self._t("tui.reply_save"), id="reply-save", variant="primary")
                 yield Button(self._t("tui.reply_prepare"), id="reply-prepare", variant="warning")
                 yield Button(
@@ -314,9 +329,16 @@ class ReplyModal(ModalScreen[Any]):
                 )
                 yield Button(self._t("experience.sent_check"), id="reply-check", disabled=True)
                 yield Button(self._t("tui.reply_cancel"), id="reply-cancel", variant="error")
+                yield Button(self._t("interface.recipients_files"), id="reply-files")
+                yield Button(self._t("interface.saved_draft"), id="reply-back")
             yield Static(self._t("tui.reply_confirm_hint"), id="reply-status")
 
-    async def on_mount(self) -> None:
+    def on_mount(self) -> None:
+        self._sync_reply_controls()
+        self._set_status(self._t("tui.loading"))
+        self.run_worker(self._load_reply(), group="reply-load", exit_on_error=False)
+
+    async def _load_reply(self) -> None:
         try:
             self._draft = self._resume_draft or await self._service.create_reply(
                 self._record.record_id, resume=True
@@ -341,8 +363,51 @@ class ReplyModal(ModalScreen[Any]):
             self._set_status(self._t("tui.reply_prepare_expired"))
         self._sync_reply_controls()
 
+    async def _edit_reply_details(self) -> None:
+        from mailflow_tui.workspace_screens import ComposeScreen
+
+        try:
+            if self._draft is None:
+                return
+            self._draft = await self._service.edit_draft(
+                self._draft.draft_id,
+                self._draft.subject,
+                self.query_one("#reply-body", TextArea).text,
+            )
+            await cast(Any, self).app.push_screen_wait(
+                ComposeScreen(self._service, draft=self._draft)
+            )
+            self._draft = await self._service.get_draft(self._draft.draft_id)
+            if self._draft is not None:
+                self.query_one("#reply-body", TextArea).load_text(self._draft.body)
+        except Exception as exc:
+            await self._reply_failed(exc)
+        finally:
+            self._reply_busy = False
+            if self.is_mounted:
+                self._sync_reply_controls()
+
     def _sync_reply_controls(self) -> None:
         draft = self._draft
+        if draft:
+            for selector, text in (
+                ("#reply-account", self._t("mail.field_account") + ": " + draft.account_id),
+                (
+                    "#reply-recipient",
+                    self._t("tui.reply_to_label")
+                    + ": "
+                    + ", ".join(a.display for a in draft.to_addresses),
+                ),
+                ("#reply-subject", self._t("tui.reply_subject_label") + ": " + draft.subject),
+            ):
+                self.query_one(selector, Static).update(text)
+            if self.query_one("#reply-body", TextArea).text != draft.body:
+                self._preview = False
+        self.query_one("#reply-form").display = not self._preview
+        self.query_one("#reply-preview").display = self._preview
+        self.query_one("#reply-save", Button).label = self._t(
+            "tui.btn_edit" if self._preview else "tui.reply_save"
+        )
         locked = draft is None or draft.state in (
             ReplyState.SENDING,
             ReplyState.SENT,
@@ -358,6 +423,7 @@ class ReplyModal(ModalScreen[Any]):
             or not draft.is_confirmation_valid(draft.token or "")
             or self.query_one("#reply-body", TextArea).text != draft.body
         )
+        self.query_one("#reply-back", Button).disabled = self._reply_busy
         check = self.query_one("#reply-check", Button)
         check.display = draft is not None and draft.state == ReplyState.SENDING
         check.disabled = self._reply_busy or not check.display
@@ -512,6 +578,14 @@ class ReplyModal(ModalScreen[Any]):
         button_id = event.button.id
         if self._reply_busy:
             return
+        if button_id == "reply-back":
+            self.action_close_reply()
+            return
+        if button_id == "reply-files" and self._draft is not None:
+            self._reply_busy = True
+            self._sync_reply_controls()
+            self.run_worker(self._edit_reply_details(), group="reply-details", exit_on_error=False)
+            return
         if button_id == "reply-cancel":
             if self._draft is None or self._draft.state in (
                 ReplyState.SENDING,
@@ -554,6 +628,10 @@ class ReplyModal(ModalScreen[Any]):
             )
             return
         if button_id == "reply-save":
+            if self._preview:
+                self._preview = False
+                self._sync_reply_controls()
+                return
             self.action_save_reply()
             return
         if button_id == "reply-prepare":
@@ -583,6 +661,8 @@ class ReplyModal(ModalScreen[Any]):
             )
 
     async def _prepare_reply(self, draft_id: str) -> None:
+        from mailflow_tui.mail_workflows import DraftPreview
+
         try:
             draft = await self._service.get_draft(draft_id)
             if draft is None:
@@ -591,7 +671,9 @@ class ReplyModal(ModalScreen[Any]):
             if body != draft.body:
                 await self._service.edit_draft(draft_id, draft.subject, body)
             self._draft = await self._service.prepare_reply(draft_id)
-            self._set_status(self._t("tui.reply_prepared", token=self._draft.token or ""))
+            self.query_one(DraftPreview).show_draft(self._draft)
+            self._preview = True
+            self._set_status(self._t("tui.reply_confirm_hint"))
         except Exception as exc:
             await self._reply_failed(exc)
         finally:
@@ -719,14 +801,18 @@ class ActionModal(ModalScreen[Any]):
             yield Button(self._service.t("tui.btn_edit"), id="action-edit", variant="primary")
             yield Button(self._service.t("tui.btn_close"), id="action-close", variant="default")
 
-    async def on_mount(self) -> None:
+    def on_mount(self) -> None:
         """Load the source mail: a todo without its original message context
         (subject, sender, body) forces the user to hunt through the mail tab."""
+        self.run_worker(self._load_source_mail(), group="action-source", exit_on_error=False)
+
+    async def _load_source_mail(self) -> None:
         node = self.query_one_optional("#action-mail-detail", Static)
         if node is None:
             return
         if not self._item.mail_id:
             return
+        node.update(self._service.t("tui.loading"))
         try:
             record = await self._service.get_mail(self._item.mail_id)
         except Exception as exc:
@@ -879,13 +965,33 @@ class MailPane(Vertical):
                 yield Button(
                     self._service.t("experience.compose"), id="btn-compose", variant="primary"
                 )
-                for buttons in self._button_rows():
-                    for ident, key, variant in buttons:
-                        if getattr(self._service, "remote", False) and ident in {
-                            "btn-reparse",
-                            "btn-reparse-all",
-                            "btn-reparse-failed",
-                        }:
+                maintenance = {
+                    "btn-ask-correct",
+                    "btn-reparse",
+                    "btn-reparse-failed",
+                    "btn-purge-expired",
+                    "btn-reparse-all",
+                    "btn-profile",
+                }
+                for row in self._button_rows():
+                    for ident, key, variant in row:
+                        if ident not in maintenance:
+                            yield Button(self._service.t(key), id=ident, variant=variant)
+            with (
+                Collapsible(
+                    title=self._service.t("interface.mail_maintenance"),
+                    id="mail-maintenance",
+                    collapsed=True,
+                ),
+                ButtonRow(),
+            ):
+                for row in self._button_rows():
+                    for ident, key, variant in row:
+                        if ident not in maintenance:
+                            continue
+                        if getattr(self._service, "remote", False) and ident.startswith(
+                            "btn-reparse"
+                        ):
                             continue
                         yield Button(self._service.t(key), id=ident, variant=variant)
 
@@ -987,6 +1093,9 @@ class MailPane(Vertical):
         self._columns_done = True
 
     async def relabel(self) -> None:
+        self.query_one("#mail-maintenance", Collapsible).title = self._service.t(
+            "interface.mail_maintenance"
+        )
         self._columns_done = False
         _relabel_buttons(
             self,
@@ -1612,8 +1721,9 @@ class MailPane(Vertical):
             )
             return
         if button_id == "mail-add-account":
-            self.app.query_one(TabbedContent).active = "tab-mailboxes"
-            self.app.query_one(AccountsPane)._open_form(None)
+            app = cast(MailFlowApp, cast(Any, self).app)
+            app.query_one(TabbedContent).active = "tab-mailboxes"
+            app.query_one(AccountsPane).add_account()
             return
         direct = {"btn-full": "full_mail", "btn-compose": "compose", "btn-filter": "filter"}
         if button_id in direct:
@@ -2998,6 +3108,7 @@ class RuntimePane(Vertical):
 
     def compose(self) -> ComposeResult:
         with ScrollableContainer(id="runtime-scroll"):
+            yield Static("", id="runtime-summary", markup=False)
             yield Static(self._runtime_title(), id="runtime-plugins")
             yield _RuntimePluginTable(
                 self._open_plugin_detail,
@@ -3018,11 +3129,16 @@ class RuntimePane(Vertical):
                     variant="warning",
                 )
             yield Static("", id="runtime-status")
-            yield Static("", id="runtime-adapters")
             yield Static("", id="runtime-accounts")
-            yield Static("", id="runtime-llms")
-            yield Static("", id="runtime-bindings")
-            yield Static("", id="runtime-storage")
+            with Collapsible(
+                title=self._service.t("interface.component_details"),
+                id="runtime-details",
+                collapsed=True,
+            ):
+                yield Static("", id="runtime-adapters")
+                yield Static("", id="runtime-llms")
+                yield Static("", id="runtime-bindings")
+                yield Static("", id="runtime-storage")
 
     async def on_mount(self) -> None:
         self.run_worker(
@@ -3093,6 +3209,22 @@ class RuntimePane(Vertical):
             await cast(Any, self._service).refresh_snapshot()
         snapshot = self._service.snapshot()
         service = self._service
+        self._set_static(
+            "#runtime-summary",
+            service.t(
+                "interface.runtime_summary",
+                accounts=sum(a.enabled for a in snapshot.accounts),
+                pending=sum(a.pending_count for a in snapshot.accounts),
+                errors=sum(bool(a.error) for a in snapshot.accounts),
+                channels=sum(n.enabled for n in service.config.notifiers),
+                analysis=service.t(
+                    "experience.paused" if snapshot.analysis_paused else "experience.enabled"
+                ),
+            ),
+        )
+        self.query_one("#runtime-details", Collapsible).title = service.t(
+            "interface.component_details"
+        )
         scroll = self.query_one_optional("#runtime-scroll", ScrollableContainer)
         offset = (scroll.scroll_x, scroll.scroll_y) if scroll is not None else (0.0, 0.0)
         table = self._plugins_table()
@@ -3231,6 +3363,7 @@ class RuntimePane(Vertical):
         if plugin is None:
             plugin = self._local_market_plugin(plugin_id)
         if plugin is None:
+            self._detail_open_for = None
             self.query_one("#runtime-status", Static).update(
                 f"[yellow]{self._service.t('plugin.unknown_plugin', plugin_id=plugin_id)}[/yellow]"
             )
@@ -3402,6 +3535,8 @@ class LogsPane(Vertical):
         self._log_filter_generation = 0
         self._log_matcher = SearchMatcher("")
         self._rendered_logs: list[Any] = []
+        self._pending_log_lines: list[str] | None = None
+        self._log_render_lock = asyncio.Lock()
         # incremental rendering: newly pulled lines are appended to the
         # RichLog (capped by its own max_lines) instead of re-rendering the
         # whole 2000-line buffer every second — on slow terminals full
@@ -3439,12 +3574,13 @@ class LogsPane(Vertical):
                     variant="default",
                 )
         yield Static("", id="logs-search-status")
+        yield Checkbox(self._service.t("interface.follow_logs"), value=True, id="log-follow")
         with ScrollableContainer(id="log-scroll"):
             yield RichLog(id="log-view", wrap=True, highlight=True, max_lines=2000)
 
     async def on_mount(self) -> None:
         self.run_worker(
-            cast(Any, self._render_logs), exclusive=True, group="logs-filter", exit_on_error=False
+            cast(Any, self._render_logs), exclusive=True, group="logs-render", exit_on_error=False
         )
 
     def relabel(self) -> None:
@@ -3457,6 +3593,9 @@ class LogsPane(Vertical):
         if source is not None:
             self._refresh_source_options()
         search = self.query_one_optional("#log-search", Input)
+        follow = self.query_one_optional("#log-follow", Checkbox)
+        if follow is not None:
+            follow.label = self._service.t("interface.follow_logs")
         if search is not None:
             search.placeholder = self._service.t("tui.logs_search_placeholder")
         self._schedule_log_filter()
@@ -3558,13 +3697,22 @@ class LogsPane(Vertical):
         log_view = self.query_one_optional("#log-view", RichLog)
         if log_view is None:
             return
-        log_view.clear()
-        for index, line in enumerate(self._rendered_logs, start=1):
-            log_view.write(line)
-            if index % 50 == 0:
-                await asyncio.sleep(0)
+        self._pending_log_lines = []
+        try:
+            log_view.clear()
+            for index, line in enumerate(list(self._rendered_logs), start=1):
+                log_view.write(line)
+                if index % 50 == 0:
+                    await asyncio.sleep(0)
+        finally:
+            pending, self._pending_log_lines = self._pending_log_lines, None
+            self._append_new_lines(pending or [], preserve_follow=True)
 
     async def _render_logs(self, generation: int | None = None) -> None:
+        async with self._log_render_lock:
+            await self._rebuild_logs(generation)
+
+    async def _rebuild_logs(self, generation: int | None = None) -> None:
         generation = self._log_filter_generation if generation is None else generation
         matcher = self._current_log_matcher()
         status = self.query_one_optional("#logs-search-status", Static)
@@ -3581,28 +3729,37 @@ class LogsPane(Vertical):
         log_view = self.query_one_optional("#log-view", RichLog)
         if log_view is None:
             return
-        rendered: list[Any] = []
-        for index, line in enumerate(self._buffer, start=1):
-            text = self._line_to_text(line)
-            if text is not None:
-                rendered.append(text)
-            if index % 50 == 0:
-                await asyncio.sleep(0)
-                if generation != self._log_filter_generation:
-                    return
-        if generation != self._log_filter_generation:
-            return
-        previous = list(self._rendered_logs)
-        log_view.clear()
-        for index, line in enumerate(rendered, start=1):
-            log_view.write(line)
-            if index % 50 == 0:
-                await asyncio.sleep(0)
-                if generation != self._log_filter_generation:
-                    self._rendered_logs = previous
-                    await self._restore_rendered_logs()
-                    return
-        self._rendered_logs = rendered
+        offset = log_view.scroll_y
+        follow = self.query_one("#log-follow", Checkbox).value
+        log_view.auto_scroll = follow
+        self._pending_log_lines = []
+        try:
+            rendered: list[Any] = []
+            for index, line in enumerate(list(self._buffer), start=1):
+                text = self._line_to_text(line)
+                if text is not None:
+                    rendered.append(text)
+                if index % 50 == 0:
+                    await asyncio.sleep(0)
+                    if generation != self._log_filter_generation:
+                        return
+            if generation != self._log_filter_generation:
+                return
+            log_view.clear()
+            for index, line in enumerate(rendered, start=1):
+                log_view.write(line)
+                if index % 50 == 0:
+                    await asyncio.sleep(0)
+                    if generation != self._log_filter_generation:
+                        return
+            self._rendered_logs = rendered
+        finally:
+            pending, self._pending_log_lines = self._pending_log_lines, None
+            self._append_new_lines(pending or [], preserve_follow=True)
+        if not follow:
+            log_view.call_after_refresh(
+                lambda: log_view.scroll_to(y=offset, animate=False, force=True)
+            )
 
     def _line_to_text(self, line: str) -> Any:
         """Format one buffered line under the current filters; '' means the
@@ -3646,16 +3803,40 @@ class LogsPane(Vertical):
         text.append(f"  {message}")
         return text
 
-    def _append_new_lines(self, new_lines: list[str]) -> None:
+    def _append_new_lines(self, new_lines: list[str], *, preserve_follow: bool = False) -> None:
         """Incremental path: write only rows added since the last drain."""
+        if not new_lines:
+            return
+        if self._pending_log_lines is not None:
+            self._pending_log_lines.extend(new_lines)
+            self._pending_log_lines = self._pending_log_lines[-self._MAX_LINES :]
+            return
         log_view = self.query_one_optional("#log-view", RichLog)
         if log_view is None:
             return  # detached: on remount, _render_logs rebuilds cleanly
+        follow = self.query_one("#log-follow", Checkbox)
+        if (
+            not preserve_follow
+            and follow.value
+            and log_view.lines
+            and not log_view.is_vertical_scroll_end
+        ):
+            follow.value = False
+        log_view.auto_scroll = follow.value
         for line in new_lines:
             text = self._line_to_text(line)
             if text is None:
                 continue
             log_view.write(text)
+            self._rendered_logs.append(text)
+        self._rendered_logs = self._rendered_logs[-self._MAX_LINES :]
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id == "log-follow":
+            view = self.query_one("#log-view", RichLog)
+            view.auto_scroll = event.value
+            if event.value:
+                view.scroll_end(animate=False)
 
     def _schedule_log_filter(self) -> None:
         self._log_filter_generation += 1
@@ -3668,7 +3849,7 @@ class LogsPane(Vertical):
                     f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]"
                 )
             self.run_worker(
-                cast(Any, self._restore_rendered_logs),
+                cast(Any, self._render_logs),
                 exclusive=True,
                 group="logs-render",
                 exit_on_error=False,
@@ -3959,6 +4140,7 @@ class MarketPane(Vertical):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
+        self._categories: list[str] | None = None
         self._entries: list[tuple[Repository, MarketPlugin]] = []
         self._selected: MarketPlugin | None = None
         self._installed: dict[str, bool] = {}
@@ -3996,17 +4178,25 @@ class MarketPane(Vertical):
                     self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary"
                 )
                 yield Button(
-                    self._service.t("tui.btn_new_plugin"), id="market-create", variant="primary"
-                )
-                yield Button(
-                    self._service.t("tui.btn_export"), id="market-export", variant="success"
-                )
-                yield Button(
                     self._service.t("tui.btn_install_local"),
                     id="market-install-local",
                     variant="primary",
                 )
                 yield Button(self._service.t("tui.btn_repos"), id="market-repos", variant="primary")
+            with (
+                Collapsible(
+                    title=self._service.t("interface.developer_tools"),
+                    id="market-development",
+                    collapsed=True,
+                ),
+                ButtonRow(),
+            ):
+                yield Button(
+                    self._service.t("tui.btn_new_plugin"), id="market-create", variant="default"
+                )
+                yield Button(
+                    self._service.t("tui.btn_export"), id="market-export", variant="default"
+                )
         yield DataTable(id="market-table")
         with Vertical(id="market-detail"):
             with ScrollableContainer(id="market-detail-scroll"):
@@ -4077,6 +4267,10 @@ class MarketPane(Vertical):
 
     async def relabel(self) -> None:
         self._columns_done = False
+        self.query_one("#market-development", Collapsible).title = self._service.t(
+            "interface.developer_tools"
+        )
+        self._categories = None
         await self._render_entries()
 
     def _category_label(self, category: str) -> str:
@@ -4120,7 +4314,11 @@ class MarketPane(Vertical):
         try:
             report = await self._service.market_fetch_report()
             fresh = list(report.entries)
-            failures = list(report.failures)
+            failures = [
+                (status.repository, self._service.t(status.error_code))
+                for status in report.repositories
+                if not status.ok
+            ]
         except AttributeError:
             try:
                 fresh = await asyncio.to_thread(market.list_plugins)
@@ -4142,7 +4340,7 @@ class MarketPane(Vertical):
                 continue
             local = app.local_plugin_entry(info.plugin_id)
             if local is not None:
-                local.readme = plugin_doc_readme(info)
+                local.readme = await asyncio.to_thread(plugin_doc_readme, info)
                 local_entries.append((local_repo, local))
                 seen.add(info.plugin_id)
         self._entries = [*fresh, *local_entries]
@@ -4234,7 +4432,10 @@ class MarketPane(Vertical):
             if select is not None and _select_ready(select):
                 try:
                     select.set_options(  # pyright: ignore[reportUnknownMemberType]
-                        [("all", "all"), *[(self._category_label(c), c) for c in categories]]
+                        [
+                            (self._service.t("interface.all"), "all"),
+                            *[(self._category_label(c), c) for c in categories],
+                        ]
                     )
                 except QueryError:
                     return

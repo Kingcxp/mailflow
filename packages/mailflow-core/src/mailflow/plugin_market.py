@@ -109,6 +109,7 @@ class MarketRepositoryStatus:
     ok: bool
     plugin_count: int = 0
     error: str = ""
+    error_code: str = "errors.connection"
 
 
 MARKET_CACHE_VERSION = 1
@@ -359,11 +360,15 @@ class PluginMarket:
             try:
                 index = self.fetch_index(repository, timeout)
             except Exception as exc:
+                from mailflow.errors import error_code
+
                 reason = safe_failure_reason(exc)
                 logger.error("marketplace %r unreachable: %s", repository.name, reason)
                 failures.append((repository, reason))
                 repositories.append(
-                    MarketRepositoryStatus(repository=repository, ok=False, error=reason)
+                    MarketRepositoryStatus(
+                        repository=repository, ok=False, error=reason, error_code=error_code(exc)
+                    )
                 )
                 continue
             repositories.append(

@@ -14,12 +14,12 @@ import contextlib
 import time
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from mailflow.service import MailFlowService
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
@@ -30,7 +30,8 @@ from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
 )
 
 from mailflow_tui.labels import error_detail, redact_operation_logs, secret_values
-from mailflow_tui.widgets import Input
+from mailflow_tui.mail_workflows import WorkflowScreen
+from mailflow_tui.widgets import ButtonRow, Input
 
 _LEVEL_COLORS = {
     "DEBUG": "dim",
@@ -38,6 +39,24 @@ _LEVEL_COLORS = {
     "WARN": "yellow",
     "ERROR": "red",
 }
+
+
+class QRScreen(WorkflowScreen):
+    def __init__(self, service: MailFlowService, text: str) -> None:
+        super().__init__(service)
+        self.text = text
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self.t("interface.login_qr"))
+            with ScrollableContainer():
+                yield Static(self.text, id="qr-code")
+            with ButtonRow():
+                yield Button(self.t("tui.btn_back"), id="qr-close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss(None)
 
 
 class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
@@ -49,11 +68,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     }
     #guide-dialog {
         width: 92%;
-        height: 100%;
+        height: 92%;
+        border: round $accent;
+        background: $surface;
         padding: 0 1;
     }
     #guide-title {
-        height: 1;
+        height: auto;
         padding: 0 1;
         margin: 0 0 0 0;
     }
@@ -63,19 +84,23 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         content-align: center middle;
         text-align: center;
     }
+    #guide-content { height: 1fr; }
+    #guide-log-wrap { height: auto; min-height: 4; }
     #guide-log {
-        height: 1fr;
-        min-height: 0;
+        height: 8;
+        min-height: 4;
     }
     #guide-status {
-        height: 1;
+        height: auto;
+        max-height: 3;
+        overflow-y: auto;
         padding: 0 1;
     }
     #guide-actions {
         height: auto;
         padding: 0 1;
         align: center middle;
-        grid-gutter: 2 2;
+        grid-gutter: 0 1;
     }
     #guide-progress-row {
         display: none;
@@ -124,7 +149,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         height: 3;
         margin-left: 1;
     }
-    #guide-done, #guide-logged-in, #guide-cancel {
+    #guide-actions Button {
         height: 1;
         min-height: 1;
         padding: 0 2;
@@ -156,6 +181,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._phase = "detecting"
         self._sudo_future: asyncio.Future[str] | None = None
         self._manual_login = asyncio.Event()
+        self._qr_text = ""
+        self._qr_screen: QRScreen | None = None
         self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -169,13 +196,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._t("tui.bots_guide_title", provider=self._provider),
                 id="guide-title",
             )
-            # QR panel above the log: the QR (up to 33 rows) must stay
-            # visible without scrolling the log pane
-            yield Static("", id="guide-qr")
-            with Vertical(id="guide-log-wrap"):
-                yield RichLog(
-                    id="guide-log", wrap=True, highlight=True, markup=True, max_lines=5000
-                )
+            with ScrollableContainer(id="guide-content"):
+                yield Static("", id="guide-qr")
+                with Vertical(id="guide-log-wrap"):
+                    yield RichLog(
+                        id="guide-log", wrap=True, highlight=True, markup=True, max_lines=5000
+                    )
             # live install progress: real bar + phase label, shown while
             # the provisioner works
             with Horizontal(id="guide-progress-row"):
@@ -198,7 +224,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     )
                     yield Button(self._t("tui.btn_ok"), id="sudo-prompt-ok", variant="primary")
             yield Static("", id="guide-status")
-            with Horizontal(id="guide-actions"):
+            with ButtonRow(id="guide-actions"):
                 yield Button(
                     self._t("tui.btn_done"),
                     id="guide-done",
@@ -212,6 +238,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     disabled=True,
                 )
                 yield Button(self._t("tui.btn_cancel"), id="guide-cancel", variant="error")
+                yield Button(self._t("interface.login_qr"), id="guide-view-qr", disabled=True)
 
     async def on_mount(self) -> None:
         # pin the chrome sizes in code: Textual's Button variant CSS can
@@ -220,9 +247,6 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             button = self.query_one(f"#{button_id}", Button)
             button.styles.height = 1  # pyright: ignore[reportUnknownMemberType]
             button.styles.min_height = 1  # pyright: ignore[reportUnknownMemberType]
-        actions = self.query_one("#guide-actions", Horizontal)
-        actions.styles.height = 1  # pyright: ignore[reportUnknownMemberType]
-        actions.styles.min_height = 1  # pyright: ignore[reportUnknownMemberType]
         title = self.query_one("#guide-title", Static)
         title.styles.margin = (0, 0, 0, 0)  # pyright: ignore[reportUnknownMemberType]
         self._log(
@@ -266,22 +290,17 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._set_status(self._t(f"tui.gateway_phase_{phase}"))
 
     def _set_qr(self, text: str) -> None:
-        # the QR lives in its own panel above the log; pin the panel
-        # height to the exact rendered row count so the layout engine
-        # compresses the log instead of clipping the QR's last row
+        self._qr_text = text
+        if self._qr_screen is not None and self._qr_screen.is_mounted:
+            self._qr_screen.query_one("#qr-code", Static).update(text)
         node = self.query_one_optional("#guide-qr", Static)
         if node is None:
             return
         node.update(text)
-        # pin the panel to the rendered rows + 1: the extra line is the
-        # bottom quiet-zone row that completes the code visually — the
-        # layout engine compresses the log, never the QR
         rows = len(text.splitlines()) if text else 0
-        if rows:
-            node.styles.height = rows + 1  # pyright: ignore[reportUnknownMemberType]
-            node.styles.min_height = rows + 1  # pyright: ignore[reportUnknownMemberType]
-        # (no size log here: the QR payload dimensions are internal debug
-        # detail that would leak into the user-facing log panel)
+        node.styles.height = rows + 1 if rows else 0
+        node.styles.min_height = 0
+        self.query_one("#guide-view-qr", Button).disabled = not bool(text)
 
     def _logged_in_banner(self) -> str:
         """Completion banner shown in the QR panel after login succeeds —
@@ -623,6 +642,11 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         return False
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "guide-view-qr":
+            event.stop()
+            self._qr_screen = QRScreen(self._service, self._qr_text)
+            cast(Any, self).app.push_screen(self._qr_screen)
+            return
         if event.button.id == "guide-done":
             # the gateway is up and logged in: finish with the result so
             # the caller persists the notifier entry

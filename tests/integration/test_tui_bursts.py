@@ -111,6 +111,14 @@ async def test_log_burst_retains_recent_lines_filters_and_exports(tmp_path: Path
             await until(pilot, lambda: "info-only-marker" in log_text(app))
             assert "burst-2999" not in log_text(app)
 
+            app.query_one("#log-search", Input).value = "concurrent-marker"
+            for index in range(120):
+                log_queue.put(f"10:01|INFO|mailflow.runtime|concurrent-marker-{index:03d}")
+            await until(pilot, lambda: "concurrent-marker-119" in log_text(app))
+            assert log_text(app).count("concurrent-marker-") == 120
+            app.query_one("#log-search", Input).value = "info-only-marker"
+            await until(pilot, lambda: "info-only-marker" in log_text(app))
+
             app.query_one("#logs-export", Button).press()
             await until(pilot, lambda: isinstance(app.screen, LogExportScreen))
             tree = app.screen.query_one("#log-export-tree", DirectoryTree)

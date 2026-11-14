@@ -58,7 +58,8 @@ class BotExportScreen(ModalScreen[Path | None]):
                 yield Button(self._t("tui.btn_cancel"), id="export-cancel", variant="primary")
 
     def action_dismiss_modal(self) -> None:
-        self.dismiss(None)
+        if not self._exporting:
+            self.dismiss(None)
 
     def on_mount(self) -> None:
         self.query_one("#export-tree", DirectoryTree).focus()
@@ -73,7 +74,7 @@ class BotExportScreen(ModalScreen[Path | None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "export-cancel":
-            self.dismiss(None)
+            self.action_dismiss_modal()
         elif button_id == "export-run":
             self._generate()
 
@@ -101,6 +102,7 @@ class BotExportScreen(ModalScreen[Path | None]):
                 return
             target = base / folder_name
         self._exporting = True
+        self.query_one("#export-cancel", Button).disabled = True
         self.query_one("#export-run", Button).disabled = True
         self.query_one("#export-status", Static).update(self._t("tui.form_saving"))
         self.run_worker(
@@ -135,6 +137,7 @@ class BotExportScreen(ModalScreen[Path | None]):
             self._exporting = False
             if self.is_mounted:
                 self.query_one("#export-run", Button).disabled = False
+                self.query_one("#export-cancel", Button).disabled = False
         self.notify(
             self._t("tui.export_created", count=len(result.created), path=str(target)),
             timeout=5,

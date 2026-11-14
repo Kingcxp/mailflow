@@ -2,8 +2,7 @@
 
 A modal over the Logs pane: pick a target directory with a DirectoryTree,
 type a file name (a ``.log`` suffix is appended when absent), and save
-the exact buffered content — the same lines the viewer renders, unfiltered
-so nothing is lost. The saved path is written back into the log buffer so
+the selected filtered content, or the complete buffered content when chosen. The saved path is written back into the log buffer so
 the user sees the confirmation next to the logs they exported.
 """
 
@@ -11,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -78,6 +77,10 @@ class LogExportScreen(ModalScreen[str | None]):
                 self.query_one("#log-export-save", Button).disabled = True
                 self.run_worker(self._save(), group="log-export", exit_on_error=False)
         elif event.button.id == "log-export-cancel":
+            self.action_cancel()
+
+    def action_cancel(self) -> None:
+        if not self._saving:
             self.dismiss(None)
 
     async def _save(self) -> None:
@@ -107,7 +110,7 @@ class LogExportScreen(ModalScreen[str | None]):
         error.update(self._t("tui.form_saving"))
         lines = (
             self._lines
-            if self.query_one("#log-export-scope", Select).value == "all"
+            if cast("Select[str]", self.query_one("#log-export-scope", Select)).value == "all"
             else self._filtered
         )
         try:

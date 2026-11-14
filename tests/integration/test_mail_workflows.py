@@ -1361,6 +1361,11 @@ async def test_compose_dialog_preserves_input_and_requires_a_fresh_review(
         await until(pilot, lambda: not screen.query_one("#compose-prepare", Button).disabled)
         screen.query_one("#compose-prepare", Button).press()
         await until(pilot, lambda: not screen.query_one("#compose-confirm", Button).disabled)
+        from mailflow_tui.mail_workflows import DraftPreview
+
+        preview = screen.query_one(DraftPreview)
+        assert preview.query_one(TextArea).text == "My draft"
+        assert "friend@example.com" in str(preview.query_one("Static").render())
         screen.query_one("#compose-body", TextArea).load_text("Edited draft")
         await pilot.pause()
         assert screen.query_one("#compose-confirm", Button).disabled
