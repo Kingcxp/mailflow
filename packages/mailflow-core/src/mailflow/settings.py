@@ -537,22 +537,27 @@ def apply_value(config: MailFlowConfig, key: str, raw: Any, **kwargs: Any) -> Ma
     Raises :class:`SettingsError` (carrying the offending option key) when
     the value cannot be coerced or the resulting config fails validation.
     """
-    spec = find_spec(config, key, **kwargs)
-    if spec is None:
-        raise SettingsError(key, f"unknown config option {key!r}")
-    if spec.editor is EditorKind.STRUCT:
-        raise SettingsError(key, f"{key!r} is a group; edit the options inside it")
-    value = coerce_value(spec, raw)
+    return apply_values(config, {key: raw}, **kwargs)
+
+
+def apply_values(config: MailFlowConfig, values: dict[str, Any], **kwargs: Any) -> MailFlowConfig:
+    """Validate related edits together before exposing any of them."""
     data = config.model_dump()
-    path = _split_key(key)
-    parent = _navigate(data, path[:-1], key)
-    leaf = path[-1]
-    try:
-        parent[leaf] = value
-    except (KeyError, IndexError, TypeError) as exc:
-        raise SettingsError(key, f"unknown config option {key!r}") from exc
-    updated = _revalidate(data, key)
-    updated.env_placeholders = _carried_placeholders(config, drop=tuple(path))
+    placeholders = dict(config.env_placeholders)
+    for key, raw in values.items():
+        spec = find_spec(config, key, **kwargs)
+        if spec is None:
+            raise SettingsError(key, f"unknown config option {key!r}")
+        if spec.editor is EditorKind.STRUCT:
+            raise SettingsError(key, f"{key!r} is a group; edit the options inside it")
+        path = _split_key(key)
+        parent = _navigate(data, path[:-1], key)
+        parent[path[-1]] = coerce_value(spec, raw)
+        placeholders = {
+            p: value for p, value in placeholders.items() if p[: len(path)] != tuple(path)
+        }
+    updated = _revalidate(data, next(iter(values), "general"))
+    updated.env_placeholders = placeholders
     return updated
 
 

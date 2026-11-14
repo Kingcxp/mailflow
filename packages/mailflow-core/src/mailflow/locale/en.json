@@ -1140,7 +1140,8 @@
         "repositories": "Plugin repositories",
         "path": "Database location",
         "options": "Plugin connection options",
-        "extra_dirs": "Additional translation folders"
+        "extra_dirs": "Additional translation folders",
+        "name": "Display name (optional)"
       },
       "smart_tool_find_mail": "find mail",
       "smart_tool_read_mail": "read mail details",
@@ -1793,7 +1794,37 @@
       "browse": "Browse",
       "follow_logs": "Follow latest",
       "retry": "Retry",
-      "loading": "Working; other pages remain available…"
+      "loading": "Working; other pages remain available…",
+      "models": {
+        "openai-compatible": "OpenAI compatible",
+        "openai-completions": "OpenAI · Chat Completions",
+        "openai-responses": "OpenAI · Responses",
+        "openai-codex-responses": "ChatGPT / Codex",
+        "azure-openai-responses": "Azure OpenAI",
+        "anthropic-messages": "Anthropic Claude",
+        "google-generative-ai": "Google Gemini",
+        "google-vertex": "Google Vertex AI",
+        "ollama": "Ollama (local)"
+      },
+      "year": "Year",
+      "month": "Month",
+      "day": "Day",
+      "time": "Time",
+      "clear": "Clear",
+      "backup_destination": "Save backup to",
+      "restore_file": "Backup file to restore",
+      "copy_recipients": "Cc and Bcc",
+      "body": "Message",
+      "filter_options": "Filter options",
+      "file_types": {
+        "all": "All types",
+        "image": "Images",
+        "pdf": "PDF",
+        "text": "Text",
+        "document": "Documents"
+      },
+      "collision": "Replace all existing files with the same name in this batch? Cancel to skip these files.",
+      "parent_directory": "Parent folder"
     }
   }
 }

@@ -53,6 +53,10 @@ class FormField:
     secret: bool = False
     into_options: bool = True
     description_key: str = ""
+    placeholder_key: str = ""
+    group_key: str = ""
+    advanced: bool = False
+    choice_label_keys: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.kind not in _VALID_KINDS:

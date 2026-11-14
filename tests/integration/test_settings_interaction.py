@@ -659,6 +659,16 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         assert draft.value == "78" and draft.cursor_position == 2
         await pilot.press("ctrl+z")
         assert draft.value == "7"
+        pane.query_one("#value-general-queue-size", Input).value = "65"
+        await settle(pilot)
+        pane.query_one("#settings-save-section", Button).press()
+        await settle(pilot)
+        assert (service.config.general.workers, service.config.general.queue_size) == (7, 65)
+        draft.value = "9"
+        await settle(pilot)
+        pane.query_one("#settings-discard-section", Button).press()
+        await settle(pilot)
+        assert draft.value == "7" and service.config.general.workers == 7
         await pane.remove()
         await pane.reload()
         assert not pane.is_attached

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
+import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -51,6 +52,7 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import (
     Button,
+    Collapsible,
     DataTable,
     Label,
     ListItem,
@@ -66,11 +68,13 @@ from mailflow_tui.labels import (
     error_detail,
     error_message,
     form_choice_label,
+    model_provider_label,
     redact_operation_logs,
     relabel_buttons,
     secret_values,
     urgency_label,
 )
+from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.view_state import TableView
 from mailflow_tui.widgets import (
@@ -262,14 +266,18 @@ class _Extra:
     default and whether it lands in ``options`` (vs a top-level column)."""
 
     __slots__ = (
+        "advanced",
+        "choice_label_keys",
         "choices",
         "default",
         "description_key",
         "field_id",
+        "group_key",
         "into_options",
         "kind",
         "label",
         "label_key",
+        "placeholder_key",
         "required",
         "secret",
     )
@@ -286,6 +294,10 @@ class _Extra:
         required: bool = False,
         label_key: str = "",
         description_key: str = "",
+        placeholder_key: str = "",
+        group_key: str = "",
+        advanced: bool = False,
+        choice_label_keys: tuple[tuple[str, str], ...] = (),
     ) -> None:
         self.field_id = field_id
         self.label = field_id.replace("_", " ")
@@ -297,6 +309,10 @@ class _Extra:
         self.required = required
         self.label_key = label_key
         self.description_key = description_key
+        self.placeholder_key = placeholder_key
+        self.group_key = group_key
+        self.advanced = advanced
+        self.choice_label_keys = choice_label_keys
 
 
 # config group -> ComponentKind, for looking up plugin-declared form fields
@@ -385,7 +401,7 @@ _MINIMAL_CORE_FIELDS: dict[str, frozenset[str]] = {
     # config.toml or via `config set`; forms stay minimal. The timeout is part
     # of the form on purpose: a slow or cold model that cannot answer within the
     # default needs it raised, and hunting for it in TOML is not acceptable.
-    "llms": frozenset({"llm_id", "model", "provider", "timeout_seconds", "max_retries"}),
+    "llms": frozenset({"llm_id", "name", "model", "provider", "timeout_seconds", "max_retries"}),
     "accounts": frozenset({"account_id", "provider", "email", "enabled", "state_sync"}),
 }
 
@@ -435,6 +451,12 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         self._tested_inputs: dict[str, str] = {}
         self._provider_drafts: dict[str, dict[str, Any]] = {}
         self._editing = values is not None
+        id_field = {"accounts": "account_id", "llms": "llm_id", "notifiers": "notifier_id"}.get(
+            group
+        )
+        if id_field and not self._editing:
+            self._values[id_field] = f"{group[:-1]}-{uuid.uuid4().hex[:8]}"
+        self._bindings.bind("ctrl+s", "save_form", self._t("tui.btn_save"))
         minimal = _MINIMAL_CORE_FIELDS.get(group)
         self._specs = [
             spec
@@ -529,6 +551,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         """Localized provider label (e.g. 'QQ (OneBot)' vs
         'QQ (NapCat auto-deploy)'); unknown ids stay raw."""
         value = str(choice)
+        if self._group == "llms":
+            return model_provider_label(self._service, value)
         if self._group == "accounts":
             key = f"tui.mail_provider_{value}"
             translated = self._t(key)
@@ -643,6 +667,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     choices=preset.choices,
                     label_key=field.label_key,
                     description_key=field.description_key,
+                    placeholder_key=field.placeholder_key,
+                    group_key=field.group_key,
+                    advanced=field.advanced,
+                    choice_label_keys=field.choice_label_keys,
                 )
             extras.append(
                 _Extra(
@@ -662,6 +690,22 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     choices=tuple(field.choices),
                     label_key=field.label_key,
                     description_key=field.description_key,
+                    placeholder_key=field.placeholder_key,
+                    group_key=field.group_key,
+                    advanced=field.advanced
+                    or (
+                        self._group == "llms"
+                        and field.field_id
+                        in {
+                            "max_tokens",
+                            "temperature",
+                            "thinking_budget",
+                            "api_version",
+                            "headers",
+                            "query",
+                        }
+                    ),
+                    choice_label_keys=field.choice_label_keys,
                 )
             )
         return tuple(extras)
@@ -763,10 +807,28 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         with Vertical(id="entry-form-dialog"):
             yield Static(self._t(title_key, group=group_label), classes="dialog-title")
             with ScrollableContainer(id="entry-form-fields"):
-                for spec in self._specs:
+                advanced = {
+                    "account_id",
+                    "llm_id",
+                    "notifier_id",
+                    "enabled",
+                    "state_sync",
+                    "timeout_seconds",
+                    "max_retries",
+                    "name",
+                }
+                for spec in sorted(
+                    self._specs, key=lambda s: (s.label != "email", s.label != "provider")
+                ):
+                    if spec.label in advanced:
+                        continue
                     yield from self._field_widgets(spec)
                 with Vertical(id="entry-form-extras"):
                     yield from self._render_extras()
+                with Collapsible(title=self._t("interface.advanced"), collapsed=True):
+                    for spec in self._specs:
+                        if spec.label in advanced:
+                            yield from self._field_widgets(spec)
             yield Static("", id="entry-form-status")
             with ButtonRow(classes="dialog-actions"):
                 if self._group == "llms" or self._group == "accounts":
@@ -791,7 +853,15 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             f"{self._field_label(spec.label)}{' *' if spec.required else ''}", classes="field-label"
         )
         description = self._describe(spec)
-        if description:
+        if description and spec.label not in {
+            "provider",
+            "account_id",
+            "llm_id",
+            "notifier_id",
+            "email",
+            "model",
+            "name",
+        }:
             yield Static(escape(description), classes="field-desc")
         if spec.editor is EditorKind.BOOLEAN:
             yield Switch(value=bool(current), id=widget_id)
@@ -835,81 +905,103 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
     def _render_extras(self) -> ComposeResult:
         provider = self._current_provider()
         extras = self._extras_for(provider)
-        if extras:
-            yield Label(self._t("tui.provider_section", provider=provider), classes="field-label")
         for extra in extras:
-            widget_id = f"extra-{_slug(extra.field_id)}"
-            marker = " *" if extra.required else ""
-            yield Label(
-                self._field_label(extra.field_id, extra.label_key) + marker, classes="field-label"
+            if not extra.advanced:
+                yield from self._extra_widgets(extra, provider)
+        advanced = [extra for extra in extras if extra.advanced]
+        if advanced:
+            yield Collapsible(
+                *(widget for extra in advanced for widget in self._extra_widgets(extra, provider)),
+                title=self._t("interface.advanced"),
+                collapsed=not any(
+                    extra.field_id == "preset" and self._extra_value(extra) == "custom"
+                    for extra in extras
+                ),
+                id="extra-advanced",
             )
-            desc_key = (
-                extra.description_key or f"tui.extras_{_slug(extra.field_id).replace('-', '_')}"
-            )
-            translated_desc = self._t(desc_key)
-            if translated_desc != desc_key:
-                yield Static(escape(translated_desc), classes="field-desc")
-            if extra.kind == "choice":
-                _choice_names = tuple(extra.choices)
-                value = self._extra_value(extra) or (_choice_names[0] if _choice_names else "")
-                if value not in _choice_names:
-                    _choice_names += (value,)
-                if extra.field_id == "preset":
-                    self._preset_values[provider] = value
-                yield SafeSelect(
-                    [
-                        (
-                            form_choice_label(self._service, extra.field_id, name),
-                            name,
-                        )
-                        for name in _choice_names
-                    ],
-                    value=value,
-                    id=widget_id,
-                    allow_blank=False,
-                )
-            elif extra.kind == "lines":
-                from mailflow_tui.list_editor import ListEditor
 
-                raw_lines = self._extra_value(extra)
-                current_lines = [
-                    _unwrap_listish(ln.strip())
-                    for ln in str(raw_lines or "").splitlines()
-                    if ln.strip()
-                ]
-                yield ListEditor(
-                    current_lines,
-                    placeholder=str(extra.default or self._t("tui.list_editor_placeholder")),
-                    add_label=self._t("tui.list_add"),
-                    remove_label=self._t("tui.list_remove"),
-                    id=widget_id,
-                )
-            elif extra.kind == "boolean":
-                yield Switch(
-                    value=str(self._extra_value(extra)).strip().lower()
-                    in ("1", "true", "yes", "on"),
-                    id=widget_id,
-                )
-            elif extra.kind == "textarea" and not extra.secret:
-                yield TextArea(self._extra_value(extra), id=widget_id, classes="field-multiline")
-            elif extra.secret:
-                # mounted via mount_all (outside compose), so children are
-                # attached explicitly instead of with-block composition
-                row = SecretRow(classes="secret-row")
-                row.compose_add_child(
-                    Input(
-                        value=self._extra_value(extra),
-                        id=widget_id,
-                        password=True,
-                        placeholder=extra.default,
+    def _extra_widgets(self, extra: _Extra, provider: str) -> ComposeResult:
+        if extra.group_key:
+            yield Label(self._t(extra.group_key), classes="field-label")
+        widget_id = f"extra-{_slug(extra.field_id)}"
+        marker = " *" if extra.required else ""
+        yield Label(
+            self._field_label(extra.field_id, extra.label_key) + marker, classes="field-label"
+        )
+        desc_key = extra.description_key or f"tui.extras_{_slug(extra.field_id).replace('-', '_')}"
+        translated_desc = self._t(desc_key)
+        if translated_desc != desc_key and extra.field_id != "preset":
+            yield Static(escape(translated_desc), classes="field-desc")
+        if extra.kind == "choice":
+            _choice_names = tuple(extra.choices)
+            value = self._extra_value(extra) or (_choice_names[0] if _choice_names else "")
+            if value not in _choice_names:
+                _choice_names += (value,)
+            if extra.field_id == "preset":
+                self._preset_values[provider] = value
+            yield SafeSelect(
+                [
+                    (
+                        self._t(dict(extra.choice_label_keys)[name])
+                        if name in dict(extra.choice_label_keys)
+                        else form_choice_label(self._service, extra.field_id, name),
+                        name,
                     )
+                    for name in _choice_names
+                ],
+                value=value,
+                id=widget_id,
+                allow_blank=False,
+            )
+        elif extra.kind == "lines":
+            from mailflow_tui.list_editor import ListEditor
+
+            raw_lines = self._extra_value(extra)
+            current_lines = [
+                _unwrap_listish(ln.strip())
+                for ln in str(raw_lines or "").splitlines()
+                if ln.strip()
+            ]
+            yield ListEditor(
+                current_lines,
+                placeholder=str(extra.default or self._t("tui.list_editor_placeholder")),
+                add_label=self._t("tui.list_add"),
+                remove_label=self._t("tui.list_remove"),
+                id=widget_id,
+            )
+        elif extra.kind == "boolean":
+            yield Switch(
+                value=str(self._extra_value(extra)).strip().lower() in ("1", "true", "yes", "on"),
+                id=widget_id,
+            )
+        elif extra.kind == "textarea" and not extra.secret:
+            yield TextArea(self._extra_value(extra), id=widget_id, classes="field-multiline")
+        elif extra.secret:
+            # mounted via mount_all (outside compose), so children are
+            # attached explicitly instead of with-block composition
+            row = SecretRow(classes="secret-row")
+            row.compose_add_child(
+                Input(
+                    value=self._extra_value(extra),
+                    id=widget_id,
+                    password=True,
+                    placeholder=self._t(extra.placeholder_key)
+                    if extra.placeholder_key
+                    else extra.default,
                 )
-                row.compose_add_child(
-                    Button(self._t("tui.eye_hide"), id=f"{widget_id}-eye", classes="eye-btn")
-                )
-                yield row
-            else:
-                yield Input(value=self._extra_value(extra), id=widget_id, placeholder=extra.default)
+            )
+            row.compose_add_child(
+                Button(self._t("tui.eye_hide"), id=f"{widget_id}-eye", classes="eye-btn")
+            )
+            yield row
+        else:
+            yield Input(
+                value=self._extra_value(extra),
+                id=widget_id,
+                placeholder=self._t(extra.placeholder_key)
+                if extra.placeholder_key
+                else extra.default,
+            )
 
     async def _rebuild_extras(self) -> None:
         container = self.query_one_optional("#entry-form-extras", Vertical)
@@ -1360,6 +1452,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             if self._preset_values.get(provider) == selected:
                 return
             self._preset_values[provider] = selected
+            advanced = self.query_one_optional("#extra-advanced", Collapsible)
+            if advanced is not None:
+                advanced.collapsed = selected != "custom"
             await self._cancel_test()
             from mailflow_mail_imap.plugin import PRESETS
 
@@ -1379,6 +1474,11 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             and self._tested_inputs.get(event.input.id) != event.input.value
         ):
             await self._cancel_test()
+
+    def action_save_form(self) -> None:
+        button = self.query_one_optional("#entry-form-save", Button)
+        if button is not None and not button.disabled:
+            button.press()
 
     async def action_dismiss_modal(self) -> None:
         if self._busy == "saving":
@@ -1434,6 +1534,7 @@ class OptionCard(Vertical):
         self.spec = spec
         self._description = description
         self._choice_signature: list[tuple[str, str]] = []
+        self._dirty = False
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -1442,8 +1543,10 @@ class OptionCard(Vertical):
         key = f"tui.form_fields.{self.spec.label}"
         label = self._t(key)
         title = escape(self.spec.key if label == key else label)
-        if not self.spec.is_default():
-            title += f"  [dim]({self._t('tui.settings_modified')})[/dim]"
+        if self._dirty:
+            title += f"  [yellow]({self._t('interface.unsaved')})[/yellow]"
+        elif not self.spec.is_default():
+            title += f"  [dim]({self._t('interface.custom')})[/dim]"
         return f"[bold]{title}[/bold]"
 
     def compose(self) -> ComposeResult:
@@ -1498,6 +1601,17 @@ class OptionCard(Vertical):
                 variant="primary",
                 classes="option-button",
             )
+        elif spec.key == "general.timezone":
+            from zoneinfo import available_timezones
+
+            yield AssistedInput(
+                self._service,
+                str(spec.value),
+                id=widget_id,
+                mode="choice",
+                choices=[(zone, zone) for zone in sorted(available_timezones())],
+                classes="option-input",
+            )
         else:
             yield Input(
                 value="" if spec.value is None else str(spec.value),
@@ -1513,7 +1627,19 @@ class OptionCard(Vertical):
             return self.query_one(selector, Switch).value
         if self.spec.editor is EditorKind.CHOICE:
             return _select_text(self.query_one(selector, Select))
+        if self.spec.editor in _MULTILINE_EDITORS:
+            return self.spec.value
         return self.query_one(selector, Input).value
+
+    def refresh_dirty(self) -> bool:
+        try:
+            self._dirty = coerce_value(self.spec, self.entered_value()) != self.spec.value
+        except SettingsError:
+            self._dirty = True
+        title = self.query_one(".option-key", Static)
+        if title.content != self._title():
+            title.update(self._title())
+        return self._dirty
 
     def update_spec(self, spec: OptionSpec, description: str, draft: Any) -> None:
         """Update a card in place, retaining focus, selection and undo history."""
@@ -1555,6 +1681,8 @@ class OptionCard(Vertical):
 class SettingsPane(Vertical):
     """Sidebar of sections, a search box, and one card per option."""
 
+    BINDINGS: ClassVar[list[Any]] = [("ctrl+s", "save_section", "Save")]
+
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
@@ -1594,6 +1722,18 @@ class SettingsPane(Vertical):
                 # card (dropdown of loaded packs) — no separate row
                 yield Static("", id="settings-status")
                 yield ScrollableContainer(id="settings-options")
+                with ButtonRow(id="settings-section-actions"):
+                    yield Button(
+                        self._t("interface.save_section"),
+                        id="settings-save-section",
+                        variant="success",
+                        disabled=True,
+                    )
+                    yield Button(
+                        self._t("interface.discard_section"),
+                        id="settings-discard-section",
+                        disabled=True,
+                    )
 
     async def on_mount(self) -> None:
         # settings_sections + card construction are heavy: paint the pane
@@ -1607,7 +1747,12 @@ class SettingsPane(Vertical):
         self.query_one("#settings-sidebar-title", Static).update(self._t("tui.settings_sections"))
         relabel_buttons(
             self,
-            {"settings-backup": "ux.backup_title", "settings-connection": "ux.remote_connection"},
+            {
+                "settings-backup": "ux.backup_title",
+                "settings-connection": "ux.remote_connection",
+                "settings-save-section": "interface.save_section",
+                "settings-discard-section": "interface.discard_section",
+            },
         )
         await self.reload()
 
@@ -1770,6 +1915,7 @@ class SettingsPane(Vertical):
                     else str(spec.value if spec.value is not None else "")
                 )
                 card.update_spec(spec, self._describe(spec), self._drafts.get(spec.key, current))
+                card.refresh_dirty()
                 for node in card.query(".option-button"):
                     node.disabled = self._saving
                 for node in card.query(".option-input"):
@@ -1780,6 +1926,7 @@ class SettingsPane(Vertical):
                         x=scroll_offset[0], y=scroll_offset[1], animate=False, force=True
                     )
                 )
+            self._sync_section_controls()
 
     def _schedule_settings_filter(self) -> None:
         self._settings_filter_generation += 1
@@ -1803,6 +1950,73 @@ class SettingsPane(Vertical):
         if event.input.id == "settings-search":
             self._query = event.value
             self._schedule_settings_filter()
+        elif "option-input" in event.input.classes:
+            self._sync_section_controls()
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        self._sync_section_controls()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        self._sync_section_controls()
+
+    def _sync_section_controls(self) -> None:
+        dirty = any([card.refresh_dirty() for card in self.query(OptionCard) if card.is_attached])
+        for ident in ("settings-save-section", "settings-discard-section"):
+            button = self.query_one_optional("#" + ident, Button)
+            if button is not None:
+                button.disabled = self._saving or not dirty
+
+    def action_save_section(self) -> None:
+        button = self.query_one_optional("#settings-save-section", Button)
+        if button is not None and not button.disabled:
+            button.press()
+
+    async def _save_section(self) -> None:
+        if self._saving:
+            return
+        values = {
+            card.spec.key: card.entered_value()
+            for card in self.query(OptionCard)
+            if card.refresh_dirty()
+        }
+        if not values:
+            return
+        self._saving = True
+        self._sync_section_controls()
+        for node in self.query(".option-input, .option-button"):
+            node.disabled = True
+        self._set_status(self._t("tui.form_saving"))
+        try:
+            warning = ""
+            try:
+                await self._service.apply_settings(values)
+            except ConfigReloadError as exc:
+                warning = error_detail(self._service, exc)
+            self._saved_keys.update(values)
+            for key in values:
+                self._drafts.pop(key, None)
+            await self.reload()
+            self._set_status(
+                escape(
+                    warning
+                    or self._t("experience.saved")
+                    + " · "
+                    + self._t(
+                        "ux.config_active"
+                        if all(key.split(".")[0] in LIVE_CONFIG_GROUPS for key in values)
+                        else "ux.config_restart"
+                    )
+                )
+            )
+        except Exception as exc:
+            self._set_status(
+                escape(error_message(self._service, exc, extra_secrets=secret_values(values)))
+            )
+        finally:
+            self._saving = False
+            for node in self.query(".option-input, .option-button"):
+                node.disabled = False
+            self._sync_section_controls()
 
     async def on_search_toggle_toggled(self, event: SearchToggle.Toggled) -> None:
         if event.toggle.id in {"settings-search-regex", "settings-search-case"}:
@@ -1823,6 +2037,18 @@ class SettingsPane(Vertical):
         return node
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "settings-save-section":
+            self.run_worker(
+                self._save_section(), group="settings-save", exclusive=True, exit_on_error=False
+            )
+            return
+        if event.button.id == "settings-discard-section":
+            keys = {card.spec.key for card in self.query(OptionCard)}
+            self._saved_keys.update(keys)
+            for key in keys:
+                self._drafts.pop(key, None)
+            await self._render_options()
+            return
         if event.button.id in {"settings-backup", "settings-connection"}:
             from mailflow_tui.mail_workflows import DataManagementScreen, RemoteConnectionScreen
 
@@ -2036,7 +2262,7 @@ class LLMPane(Vertical):
             yield Button(
                 self._t("tui.btn_move_down"), id="llm-down", variant="primary", disabled=True
             )
-        with Vertical(id="notify-wrap"):
+        with Collapsible(title=self._t("tui.notify_title"), collapsed=True, id="notify-wrap"):
             yield Static(self._t("tui.notify_title"), id="notify-title")
             yield RichLog(id="notify-feed", wrap=True, markup=False, highlight=False)
         yield Static("", id="llms-status")
@@ -2334,6 +2560,11 @@ class AccountsPane(Vertical):
         yield Static(self._t("tui.history_title"), id="history-title")
         yield Static(self._t("tui.history_select_hint"), id="history-help")
         yield SelectionTable(t=self._t, id="history-table")
+        with Horizontal(id="history-batch"):
+            yield Static(self._t("tui.history_count_label"), id="history-count-label")
+            yield Input(
+                value=str(self._DEFAULT_HISTORY_BATCH_SIZE), type="integer", id="history-count"
+            )
         with ButtonRow(id="history-actions"):
             yield Button(
                 self._t("tui.history_analyze"),
@@ -2349,10 +2580,6 @@ class AccountsPane(Vertical):
             )
             yield Button(
                 self._t("tui.history_more"), id="history-more", variant="primary", disabled=True
-            )
-            yield Static(self._t("tui.history_count_label"), id="history-count-label")
-            yield Input(
-                value=str(self._DEFAULT_HISTORY_BATCH_SIZE), type="integer", id="history-count"
             )
         yield Static("", id="accounts-status")
 

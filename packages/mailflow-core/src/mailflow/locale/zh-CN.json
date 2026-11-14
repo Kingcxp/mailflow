@@ -1140,7 +1140,8 @@
         "repositories": "插件市场来源",
         "path": "数据库位置",
         "options": "插件连接选项",
-        "extra_dirs": "额外语言资源目录"
+        "extra_dirs": "额外语言资源目录",
+        "name": "显示名称（可选）"
       },
       "smart_tool_find_mail": "查找邮件",
       "smart_tool_read_mail": "读取邮件详情",
@@ -1793,7 +1794,37 @@
       "browse": "浏览",
       "follow_logs": "跟随最新",
       "retry": "重试",
-      "loading": "正在处理，可继续操作其他页面…"
+      "loading": "正在处理，可继续操作其他页面…",
+      "models": {
+        "openai-compatible": "OpenAI 兼容服务",
+        "openai-completions": "OpenAI · 对话接口",
+        "openai-responses": "OpenAI · Responses 接口",
+        "openai-codex-responses": "ChatGPT / Codex",
+        "azure-openai-responses": "Azure OpenAI",
+        "anthropic-messages": "Anthropic Claude",
+        "google-generative-ai": "Google Gemini",
+        "google-vertex": "Google Vertex AI",
+        "ollama": "Ollama 本地模型"
+      },
+      "year": "年",
+      "month": "月",
+      "day": "日",
+      "time": "时间",
+      "clear": "清空",
+      "backup_destination": "新备份保存位置",
+      "restore_file": "要恢复的备份文件",
+      "copy_recipients": "抄送与密送",
+      "body": "正文",
+      "filter_options": "筛选条件",
+      "file_types": {
+        "all": "全部类型",
+        "image": "图片",
+        "pdf": "PDF",
+        "text": "文本",
+        "document": "文档"
+      },
+      "collision": "本批次存在同名文件，是否全部覆盖？取消则跳过已有文件。",
+      "parent_directory": "上级目录"
     }
   }
 }

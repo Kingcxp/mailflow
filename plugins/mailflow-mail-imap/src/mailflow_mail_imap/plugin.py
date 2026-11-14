@@ -866,18 +866,18 @@ def account_form(preset: str = "qq") -> tuple[FormField, ...]:
             label_key="tui.form_fields.preset",
             description_key="tui.extras_preset",
         ),
-        FormField("username"),
+        FormField("username", advanced=True),
         FormField("password", kind="password", required=True, secret=True),
-        FormField("imap_host"),
-        FormField("imap_port", kind="number", default=993),
-        FormField("imap_ssl", kind="boolean", default=True),
-        FormField("imap_folder", default="INBOX"),
-        FormField("archive_folder", label_key="experience.folder_archive"),
-        FormField("trash_folder", label_key="experience.folder_trash"),
-        FormField("sent_folder", label_key="experience.folder_sent"),
-        FormField("smtp_host"),
-        FormField("smtp_port", kind="number", default=465),
-        FormField("smtp_ssl", kind="boolean", default=True),
+        FormField("imap_host", advanced=True),
+        FormField("imap_port", kind="number", default=993, advanced=True),
+        FormField("imap_ssl", kind="boolean", default=True, advanced=True),
+        FormField("imap_folder", default="INBOX", advanced=True),
+        FormField("archive_folder", label_key="experience.folder_archive", advanced=True),
+        FormField("trash_folder", label_key="experience.folder_trash", advanced=True),
+        FormField("sent_folder", label_key="experience.folder_sent", advanced=True),
+        FormField("smtp_host", advanced=True),
+        FormField("smtp_port", kind="number", default=465, advanced=True),
+        FormField("smtp_ssl", kind="boolean", default=True, advanced=True),
         FormField(
             "initial_sync",
             kind="select",
@@ -885,7 +885,9 @@ def account_form(preset: str = "qq") -> tuple[FormField, ...]:
             choices=("new", "recent", "all"),
             label_key="ux.initial_sync",
         ),
-        FormField("initial_days", kind="number", default=30, label_key="ux.initial_days"),
+        FormField(
+            "initial_days", kind="number", default=30, label_key="ux.initial_days", advanced=True
+        ),
         FormField(
             "catch_up_missed",
             kind="boolean",
@@ -902,8 +904,8 @@ def account_form(preset: str = "qq") -> tuple[FormField, ...]:
         FormField(
             "catch_up_summary", kind="boolean", default=True, label_key="sync.summary_option"
         ),
-        FormField("interval_seconds", kind="number", default=300),
-        FormField("limit", kind="number", default=20),
+        FormField("interval_seconds", kind="number", default=300, advanced=True),
+        FormField("limit", kind="number", default=20, advanced=True),
     )
 
 

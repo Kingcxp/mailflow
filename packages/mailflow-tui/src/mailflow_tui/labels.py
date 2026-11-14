@@ -27,6 +27,12 @@ def urgency_label(service: Any, urgency: Urgency | str) -> str:
     return service.t(key) if key else value
 
 
+def model_provider_label(service: Any, provider: str) -> str:
+    key = "interface.models." + provider
+    label = str(service.t(key))
+    return provider if label == key else label
+
+
 def form_choice_label(service: Any, field: str, value: str) -> str:
     """Translate menu choices while preserving their stored plugin values."""
     if field == "initial_sync":

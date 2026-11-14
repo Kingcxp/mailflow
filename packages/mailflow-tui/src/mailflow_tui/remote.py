@@ -582,6 +582,11 @@ class RemoteServiceAdapter:
         await self.refresh_snapshot()
         return _option(data) if data is not None else None
 
+    async def apply_settings(self, values: dict[str, Any]) -> list[SettingsSection]:
+        self._sections = [_section(item) for item in await self.client.apply_settings(values)]
+        await self.refresh_snapshot()
+        return self._sections
+
     async def reset_setting(self, key: str) -> OptionSpec | None:
         data = await self.client.reset_setting(key)
         await self.refresh_snapshot()

@@ -651,6 +651,10 @@ def create_app(service: MailFlowService) -> FastAPI:
         require_admin(service.t)
         return _jsonable(service.settings_sections())
 
+    @app.put("/settings")
+    async def put_settings(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return _jsonable(await service.apply_settings(body))
+
     @app.put("/settings/{key:path}")
     async def put_setting(key: str, body: dict[str, Any], _: None = Depends(guard)) -> Any:
         spec = await service.set_setting(key, body.get("value"))

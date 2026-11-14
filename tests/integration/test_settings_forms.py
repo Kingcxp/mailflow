@@ -425,7 +425,11 @@ async def test_entry_form_fields_scroll(tmp_path: Path) -> None:
             for width in (80, 60):
                 await pilot.resize_terminal(width, 24)
                 await pilot.pause()
-                inputs = list(app.screen.query("#entry-form-fields Input"))
+                inputs = [
+                    node
+                    for node in app.screen.query("#entry-form-fields Input")
+                    if node.region.width
+                ]
                 assert len({(node.region.x, node.region.width) for node in inputs}) == 1
                 back = app.screen.query_one("#entry-form-back", Button)
                 assert back.region.right <= app.size.width

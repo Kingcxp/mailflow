@@ -90,6 +90,16 @@ def test_settings_put_reports_validation_errors(clients: tuple[Any, Any], tmp_pa
     assert ok.json()["key"] == "general.timezone"
     bad = authed.put("/settings/general.workers", json={"value": "not-a-number"})
     assert bad.status_code == 400
+    batch = authed.put(
+        "/settings", json={"general.mail_notifications": False, "general.daily_digest": False}
+    )
+    assert batch.status_code == 200
+    before = (tmp_path / "config.toml").read_bytes()
+    invalid = authed.put(
+        "/settings", json={"general.timezone": "UTC", "general.workers": "invalid"}
+    )
+    assert invalid.status_code == 400
+    assert (tmp_path / "config.toml").read_bytes() == before
 
 
 def test_llm_test_unknown_id(clients: tuple[Any, Any]) -> None:

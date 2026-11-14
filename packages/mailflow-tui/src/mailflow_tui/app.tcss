@@ -1153,20 +1153,21 @@ ListEditScreen, EntryFormScreen {
 #entry-form-dialog {
     width: 88;
     max-width: 96%;
-    height: 85%;
+    height: 94%;
     border: round $accent;
     background: $surface;
-    padding: 1 2;
+    padding: 0 1;
 }
 
 #entry-form-fields {
     height: 1fr;
-    border: round $primary;
     padding: 0 1;
 }
 
 #entry-form-status {
     height: auto;
+    max-height: 4;
+    overflow-y: auto;
     color: $error;
 }
 
@@ -1194,8 +1195,10 @@ ListEditScreen, EntryFormScreen {
 
 .field-label {
     text-style: bold;
-    margin-top: 1;
+    margin-top: 0;
 }
+
+#entry-form-dialog .dialog-title { height: 1; margin-bottom: 0; }
 
 .field-desc {
     height: auto;
@@ -1233,6 +1236,10 @@ ListEditScreen, EntryFormScreen {
     margin: 0 1;
     border: round $secondary;
 }
+
+#history-batch { height: 3; padding: 0 1; align-vertical: middle; }
+#history-count-label { width: auto; height: 1; margin-right: 1; }
+#history-count { width: 12; }
 
 #accounts-actions, #llms-actions, #history-actions {
     layout: grid;
@@ -1304,11 +1311,11 @@ ListEditScreen, EntryFormScreen {
 }
 
 #notify-wrap {
-    height: 1fr;
+    height: auto;
 }
 
 #notify-feed {
-    height: 1fr;
+    height: 8;
     border: round $secondary;
     background: #181825;
     padding: 0 1;

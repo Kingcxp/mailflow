@@ -114,6 +114,7 @@ from mailflow.settings import (
     SettingsSection,
     add_entry,
     apply_value,
+    apply_values,
     build_sections,
     find_spec,
     move_entry,
@@ -2721,20 +2722,29 @@ Return every candidate in this batch."""
     def settings_option(self, key: str) -> OptionSpec | None:
         return find_spec(self.config, key, **self._settings_context())
 
-    async def _persist_config(self, updated: MailFlowConfig, key: str) -> None:
+    async def _persist_config(
+        self, updated: MailFlowConfig, key: str, *, keys: tuple[str, ...] = ()
+    ) -> None:
         """Write ``updated`` back, preferring a comment-preserving patch."""
         previous = self.config
         if self.config_path is None:
             raise translated_error(ValueError, self.t, "errors.config_required")
-        patched = False
-        if "[" not in key and key.count(".") == 1:
-            with contextlib.suppress(AttributeError, KeyError):
-                patched = patch_config_value(self.config_path, key, _config_value_of(updated, key))
-        if not patched:
-            write_config(updated, self.config_path)
+        config_path = self.config_path
+
+        def save() -> None:
+            patched = False
+            if not keys and "[" not in key and key.count(".") == 1:
+                with contextlib.suppress(AttributeError, KeyError):
+                    patched = patch_config_value(config_path, key, _config_value_of(updated, key))
+            if not patched:
+                write_config(updated, config_path)
+
+        await asyncio.to_thread(save)
         self.config = updated
-        await self.events.emit("config.changed", key=key)
-        if key.split(".")[0] in _LIVE_GROUPS:
+        await self.events.emit("config.changed", key=key, keys=keys or (key,))
+        changed_keys = keys or (key,)
+        groups = {item.split(".")[0].split("[")[0] for item in changed_keys}
+        if groups & _LIVE_GROUPS:
             # accounts/llms/processors/notifiers changes apply immediately;
             # a runtime rebuild problem must never swallow the fact that the
             # config itself was persisted (panes re-read it regardless)
@@ -2763,18 +2773,20 @@ Return every candidate in this batch."""
                     for name, value in updated.general.model_dump().items()
                     if value != previous.general.model_dump().get(name)
                 }
-                if key.split(".")[0] == "notifiers":
+                if (
+                    groups <= {"notifiers", "general"}
+                    and "notifiers" in groups
+                    and changed_general <= notification_fields
+                ):
                     self.runtime.update_config(updated)
                     await self._rebuild_notifiers()
                     await self.gateways.update_notifiers(previous, updated)
                 elif (
-                    (
-                        key.split(".")[0] == "accounts"
-                        and [a.model_dump(exclude={"state_sync"}) for a in previous.accounts]
-                        == [a.model_dump(exclude={"state_sync"}) for a in updated.accounts]
-                    )
-                    or key == "general.language"
-                    or (key.startswith("general.") and changed_general <= notification_fields)
+                    groups == {"accounts"}
+                    and [a.model_dump(exclude={"state_sync"}) for a in previous.accounts]
+                    == [a.model_dump(exclude={"state_sync"}) for a in updated.accounts]
+                ) or (
+                    groups == {"general"} and changed_general <= notification_fields | {"language"}
                 ):
                     self.runtime.update_config(updated)
                 else:
@@ -2794,6 +2806,35 @@ Return every candidate in this batch."""
                     "tui.settings_reload_failed",
                     error=error_text(exc, self.t),
                 ) from exc
+
+    @admin_operation
+    async def apply_settings(self, values: dict[str, Any]) -> list[SettingsSection]:
+        """Persist a section once and apply its combined component changes once."""
+        if not values:
+            return self.settings_sections()
+        if set(values) == {"general.language"}:
+            await self._set_language_setting(values["general.language"])
+            return self.settings_sections()
+        async with self._language_lock:
+            updated = apply_values(self.config, values, **self._settings_context())
+            language_changed = updated.general.language != self.config.general.language
+            pipeline = (
+                _build_processors(
+                    updated, self.registry, self.router, language=updated.general.language
+                )
+                if language_changed
+                else None
+            )
+            await self._persist_config(updated, next(iter(values)), keys=tuple(values))
+            if pipeline is not None:
+                code = updated.general.language
+                await self.storage.set_preference(_LANGUAGE_PREFERENCE, code)
+                self.i18n.set_language(code)
+                self.pipeline = pipeline
+                self.runtime.update_pipeline(pipeline)
+                await self.runtime.invalidate_analysis_language()
+                await self.events.emit("language.changed", language=code)
+        return self.settings_sections()
 
     @admin_operation
     async def set_setting(self, key: str, raw_value: Any) -> OptionSpec | None:

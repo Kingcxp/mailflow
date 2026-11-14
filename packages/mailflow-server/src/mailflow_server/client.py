@@ -551,6 +551,10 @@ class RemoteClient:
         )
         return result
 
+    async def apply_settings(self, values: dict[str, Any]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = await self._request("PUT", "/settings", values)
+        return result
+
     async def reset_setting(self, key: str) -> dict[str, Any] | None:
         result: dict[str, Any] | None = await self._request("POST", f"/settings/{key}/reset")
         return result
