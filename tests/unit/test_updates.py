@@ -3,6 +3,8 @@ versions, update-source tracking and the daily auto-update loop."""
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, cast
 
@@ -15,6 +17,7 @@ from mailflow.updates import (  # pyright: ignore[reportPrivateUsage]
     check_plugin_updates,
     check_updates,
     latest_mailflow_release,
+    upgrade_mailflow,
 )
 
 
@@ -269,6 +272,21 @@ class TestApplyPluginUpdates:
         market = FakeMarket(None)
         results = await apply_plugin_updates(market, {"mailflow-notify-gone": ("0.9.0", "1.0.0")})
         assert results == {"mailflow-notify-gone": "skipped: source repository gone"}
+
+
+async def test_application_update_targets_the_running_interpreter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mailflow.updates.shutil.which", lambda name: "uv")
+    monkeypatch.setattr("mailflow.updates._distribution_installed", lambda name: True)
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert command[command.index("--python") + 1] == sys.executable
+        assert "mailflow-core" in command and "--upgrade" in command
+        return subprocess.CompletedProcess(command, 0, stdout="updated", stderr="")
+
+    monkeypatch.setattr("mailflow.updates.subprocess.run", run)
+    assert await upgrade_mailflow() == "updated"
 
 
 @pytest.mark.parametrize(

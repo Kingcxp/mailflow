@@ -18,6 +18,7 @@ import logging
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from importlib import metadata
 from typing import Any
@@ -176,7 +177,7 @@ async def upgrade_mailflow() -> str:
     installed = {name for name in _MAILFLOW_PACKAGES if _distribution_installed(name)}
     if not installed:
         raise RuntimeError("no mailflow distributions found to update")
-    command = [uv, "pip", "install", "--upgrade", *sorted(installed)]
+    command = [uv, "pip", "install", "--python", sys.executable, "--upgrade", *sorted(installed)]
     result = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
