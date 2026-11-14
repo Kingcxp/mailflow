@@ -27,7 +27,27 @@ Use `api_key_env`, `password_env`, or a supported whole-string `${ENV_VAR}`
 reference for secrets. An unset referenced variable fails loading; embedded
 `prefix-${VAR}` text stays literal. Saving preserves environment references.
 
+## Terminal controls
+
+| Task | Operation |
+| --- | --- |
+| Save a form | Save or Ctrl+S; Enter does not submit multi-field forms |
+| Edit settings | Save or discard the current section together; default, saved custom and unsaved values are distinct; search also finds advanced settings |
+| Read mail | At 110 columns or wider, use the split reader; below that, Enter or Open mail opens full details |
+| Send mail | Prepare displays recipients, body and attachments together; Edit returns to the draft, and changes invalidate the old confirmation |
+| Ask the assistant | Enter adds a line; Send or Ctrl+Enter executes; scope stays fixed until explicitly changed |
+| Read logs | Combine source, level and keyword filters; turn off Follow latest to read older entries; export defaults to the current filter |
+| Select values or files | Use Browse beside dates, times, timezones and paths; custom text remains editable |
+
+Analysis and maintenance contains mail reanalysis and cleanup. Plugin development
+and export is separate from ordinary installation. Login QR codes have a separate
+view for small windows. Backup destination and restore file are separate fields.
+
 ## Accounts and startup
+
+The account form generates an internal ID and offers mailbox presets as a menu.
+Start with the address, mailbox type and credentials; expand advanced settings
+for custom servers. Existing IDs remain unchanged when editing.
 
 Keep `account_id` stable: it is part of mail identity. An IMAP account can use a
 preset (`qq`, `163`, `gmail`, `outlook`) or explicit server settings. Receiving
@@ -237,7 +257,25 @@ for safe issue reports.
 按首页完成初次依赖安装后，日常使用 `uv run --no-sync ...`，保留已安装插件和可选依赖。
 只有主动运行 `make sync` 才同步环境；`make help` 和 `make clean` 无需项目环境即可使用。
 
+### 终端操作
+
+| 用途 | 操作 |
+| --- | --- |
+| 保存表单 | 保存按钮或 Ctrl+S；多字段表单不会因 Enter 意外提交 |
+| 修改设置 | 本区修改可一起保存或撤销；区分默认、已保存的自定义值和未保存修改；搜索也包含高级设置 |
+| 阅读邮件 | 110 列及以上显示列表与详情；小窗口通过 Enter 或打开邮件进入完整详情 |
+| 发送邮件 | 准备后集中预览收件人、正文和附件；编辑可返回草稿，改动使旧确认失效 |
+| 使用助手 | Enter 换行，发送按钮或 Ctrl+Enter 执行；作用范围保持固定，直至主动调整 |
+| 阅读日志 | 来源、等级和关键词可以组合筛选；关闭跟随最新后阅读旧内容；导出默认使用当前筛选 |
+| 选择填写内容 | 日期、时间、时区和路径旁提供选择入口，也可继续填写自定义值 |
+
+邮件重析与清理在“分析与维护”中，插件开发和导出与普通安装分开。
+登录二维码可以单独打开，避免小窗口看不到操作按钮。备份保存位置与恢复文件分别选择。
+
 ### 账户与启动
+
+账户表单自动生成内部标识，邮箱预设通过菜单选择。先填写邮箱、类型与凭据，
+自定义服务器等参数在高级设置中展开；编辑已有账户不会改变其标识。
 
 账户标识 `account_id` 参与邮件去重，请保持稳定。IMAP 可选择预设或填写服务器；
 收件与发件需要分别检查，预设不提供 OAuth，也不能绕过邮箱服务的访问限制。

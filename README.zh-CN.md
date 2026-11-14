@@ -82,6 +82,10 @@ uv run --no-sync mailflow tui -c configs/local.toml
 使用 `mailflow tui stop inbox` 可停止指定后台实例。
 单条命令和交互命令行不会启动自动收件、提醒或备份循环。
 
+表单通过保存按钮或 Ctrl+S 保存；助手支持多行输入，通过发送按钮或 Ctrl+Enter 执行。
+小窗口中按 Enter 打开邮件详情，分析和清理集中在“分析与维护”中。
+更多操作见[终端操作说明](docs/configuration/overview.md#终端操作)。
+
 远程使用前需配置服务端凭据。远程终端操作服务端数据，上传时读取客户端文件。
 插件安装和进程管理在本地执行。
 

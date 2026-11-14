@@ -89,6 +89,11 @@ entire mailbox. See [account setup](docs/configuration/overview.md#accounts-and-
 `mailflow tui stop inbox` stops a background instance. Single commands and the
 command shell do not start automatic mail, reminder or backup loops.
 
+Save forms with their Save button or Ctrl+S. The assistant accepts multiple lines;
+use Send or Ctrl+Enter to execute. In narrow windows, Enter opens mail details;
+analysis and cleanup live under Analysis and maintenance. See
+[terminal controls](docs/configuration/overview.md#terminal-controls).
+
 Set server credentials before remote use. The remote terminal operates on server
 data; files selected for upload come from the client. Local plugin installation
 and process management are not remote terminal operations.

@@ -24,6 +24,9 @@ for artifacts and Git history for individual commits.
 
 ### Changed
 
+- Forms offer presets, date/file pickers and advanced settings with grouped saving.
+  Narrow terminals use full mail dialogs, while the assistant supports multiline
+  requests. Send previews show the persisted recipients, body and attachments.
 - Mail originals appear before background analysis. History import and reanalysis
   are quiet by default; cancelled analysis is not resumed on the next launch.
 - The assistant is separate from ordinary mail filtering; editing input or
@@ -39,6 +42,10 @@ for artifacts and Git history for individual commits.
 
 ### Fixed
 
+- Render the remote login screen from the actual startup entry point; retain
+  failed form input and keep dialog actions reachable with long content.
+- Apply log source filters, retain concurrent arrivals during filtering, and
+  export filtered logs by default without forcing the view back to the latest line.
 - Stop help, cleanup, checks and application startup from implicitly synchronizing
   or replacing the Python environment. Only `make sync` installs dependencies;
   updates explicitly target the running interpreter.
@@ -76,6 +83,10 @@ confirmed reply drafts and workspace build/check tooling.
 通知预设与免打扰、后台终端实例、备份和主动开启的原邮箱联动。
 邮件先可读再分析，历史导入与重析默认静默；完成待办永久移除当期，周期计划继续。
 总结跟随界面语言，切换语言后可重析旧语言结果。
+
+逐页整理表单与弹窗：预设和日期、文件提供选择，常用与高级设置分开，关联修改成组保存。
+小窗口使用完整邮件详情，助手支持多行输入，发送前集中核对正文、收件人与附件。
+修复远程启动登录空白、按钮截断及日志来源筛选，保留筛选期间的新日志和阅读位置。
 
 同时修复日期筛选、来源操作核对与重试、附件多选及失败恢复、通知按目标重试、
 助手取消确认和旧历史状态，以及备份嵌套膨胀和本地备份命令。

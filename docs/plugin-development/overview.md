@@ -61,6 +61,12 @@ For custom hooks, form fields and probes, use
 The declarative registration API is
 [plugin_api.py](../../packages/mailflow-core/src/mailflow/plugin_api.py).
 
+`FormField` supports optional `placeholder_key`, `group_key`, `advanced` and
+`choice_label_keys` presentation metadata. Use `select` for finite choices;
+option values remain stable while labels are translated. Older fields and
+saved custom values remain supported. Keep provider-specific fields in the
+plugin declaration so local and remote forms use the same contract.
+
 Declare `mailflow-core` and all runtime dependencies in `pyproject.toml`.
 Keep the distribution name, plugin ID, version and marketplace metadata aligned;
 configuration `provider` selects the registered component ID. Avoid importing
@@ -130,6 +136,10 @@ Keep live credentials and external services out of automated verification.
 接口以核心的 `contracts.py`、领域模型和配置模型为唯一来源。两仓插件遵守同一契约，
 不要在说明中复制另一套接口定义。插件类型和职责见上表；完整示例演示通过
 `define_plugin` 注册文字通知器，并通过 `mailflow.plugins` 入口加载。
+
+`FormField` 可选声明示例、分组、高级选项和选项翻译键（`placeholder_key`、`group_key`、
+`advanced`、`choice_label_keys`）。有限选项使用 `select`，值保持稳定，显示名称经过翻译；
+旧字段和已有自定义值继续兼容。各服务专属字段由插件声明，本地与远程复用同一契约。
 
 安装包名、插件标识、入口名称、版本和市场元数据保持一致，配置的 `provider`
 选择注册的组件标识。所有运行依赖写入 `pyproject.toml`，安装必须解析依赖，
