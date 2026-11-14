@@ -1152,7 +1152,7 @@
       "smart_tool_delete_action": "prepare task deletion",
       "smart_scan_progress": "{stage} {done}/{total} · {detail}",
       "smart_changes_cancelled": "Changes cancelled; nothing was applied.",
-      "selection_mode_active": "Multiselect on: click rows or press Space to check them. F2 turns it off; F1 opens help.",
+      "selection_mode_active": "Multiselect: click or Space to check; F3 selects a range; F2 exits.",
       "selection_delete_help": "Move checked mail to the MailFlow trash. With no checks, use the current mail.",
       "help_shortcuts": "Keyboard help",
       "help_focus": "Move between fields and buttons",
@@ -1824,7 +1824,9 @@
         "document": "Documents"
       },
       "collision": "Replace all existing files with the same name in this batch? Cancel to skip these files.",
-      "parent_directory": "Parent folder"
+      "parent_directory": "Parent folder",
+      "selected_priority": "Selected mail priority",
+      "open_mail": "Open mail"
     }
   }
 }

@@ -25,6 +25,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Select, Static
 
 from mailflow_tui.confirm import ConfirmModal
+from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.view_state import TableView
 from mailflow_tui.widgets import ButtonRow, Input, SafeSelect, SelectionTable, TextArea
 
@@ -363,7 +364,10 @@ class MailFilter(WorkflowScreen):
                     ),
                 ):
                     yield Static(self.t("ux." + field))
-                    yield Input(value=value, id="filter-" + field)
+                    if field == "sender":
+                        yield Input(value=value, id="filter-" + field)
+                    else:
+                        yield AssistedInput(self.service, value, id="filter-" + field, mode="date")
                 yield SafeSelect(
                     [
                         (self.t("ux.view_" + key), key)
@@ -1063,11 +1067,16 @@ class DataManagementScreen(WorkflowScreen):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.t("ux.backup_title"))
-            yield Static(self.t("ux.backup_hint"), markup=False)
-            yield Input(
-                str(Path.home() / "Downloads" / f"mailflow-{datetime.now():%Y%m%d-%H%M%S}.zip"),
-                id="backup-path",
-            )
+            with ScrollableContainer():
+                yield Static(self.t("ux.backup_hint"), markup=False)
+                yield Static(self.t("interface.backup_destination"))
+                yield AssistedInput(
+                    self.service,
+                    str(Path.home() / "Downloads" / f"mailflow-{datetime.now():%Y%m%d-%H%M%S}.zip"),
+                    id="backup-path",
+                )
+                yield Static(self.t("interface.restore_file"))
+                yield AssistedInput(self.service, id="restore-path")
             yield Static("", id="workflow-status", markup=False)
             with ButtonRow():
                 yield Button(self.t("ux.create_backup"), id="backup-create")
@@ -1101,7 +1110,9 @@ class DataManagementScreen(WorkflowScreen):
                     button.disabled = False
 
     async def operate(self, ident: str) -> None:
-        path = self.query_one("#backup-path", Input).value.strip()
+        path = self.query_one(
+            "#backup-path" if ident == "backup-create" else "#restore-path", Input
+        ).value.strip()
         if not path:
             self.status(self.t("ux.backup_zip_required"))
             return

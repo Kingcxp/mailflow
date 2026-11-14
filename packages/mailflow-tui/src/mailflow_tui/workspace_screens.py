@@ -15,9 +15,10 @@ from mailflow.mail_query import MailQuery
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import ScrollableContainer, Vertical
-from textual.widgets import Button, Checkbox, Select, Static
+from textual.widgets import Button, Checkbox, Collapsible, Select, Static
 
 from mailflow_tui.mail_workflows import WorkflowScreen, save_attachment
+from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.widgets import ButtonRow, Input, SafeSelect, SelectionTable, TextArea
 
 
@@ -217,6 +218,8 @@ class SourceSyncScreen(WorkflowScreen):
 
 
 class AttachmentLibraryScreen(WorkflowScreen):
+    DEFAULT_CSS = "AttachmentLibraryScreen Collapsible { height: auto; max-height: 45%; overflow-y: auto; } AttachmentLibraryScreen #library-table { min-height: 4; }"
+
     def __init__(self, service: MailFlowService, account_id: str = "") -> None:
         super().__init__(service)
         self.account_id = account_id
@@ -226,19 +229,45 @@ class AttachmentLibraryScreen(WorkflowScreen):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.t("experience.attachment_library"))
-            yield Input(placeholder=self.t("experience.filename"), id="library-name")
-            yield Input(placeholder=self.t("experience.file_type"), id="library-type")
-            yield Input(
-                self.account_id,
-                placeholder=self.t("experience.account_filter"),
-                id="library-account",
-            )
-            yield Input(placeholder=self.t("experience.after_date"), id="library-after")
-            yield Input(placeholder=self.t("experience.before_date"), id="library-before")
-            yield Input(
+            yield Static(self.t("experience.filename"))
+            yield Input(id="library-name")
+            with Collapsible(title=self.t("interface.filter_options"), collapsed=True):
+                yield Static(self.t("experience.account_filter"))
+                yield SafeSelect(
+                    [(self.t("ux.all_accounts"), "")]
+                    + [
+                        (a.email or a.account_id, a.account_id)
+                        for a in self.service.snapshot().accounts
+                    ],
+                    value=self.account_id,
+                    id="library-account",
+                    allow_blank=False,
+                )
+                yield Static(self.t("experience.file_type"))
+                yield AssistedInput(
+                    self.service,
+                    id="library-type",
+                    mode="choice",
+                    choices=[
+                        (self.t("interface.file_types." + name), value)
+                        for name, value in (
+                            ("all", ""),
+                            ("image", "image/"),
+                            ("pdf", "application/pdf"),
+                            ("text", "text/"),
+                            ("document", "officedocument"),
+                        )
+                    ],
+                )
+                for key in ("after", "before"):
+                    yield Static(self.t("experience." + key + "_date"))
+                    yield AssistedInput(self.service, id="library-" + key, mode="date")
+            yield Static(self.t("ux.download_path"))
+            yield AssistedInput(
+                self.service,
                 str(Path.home() / "Downloads"),
-                placeholder=self.t("ux.download_path"),
                 id="library-path",
+                mode="directory",
             )
             yield SelectionTable(t=self.t, id="library-table")
             yield Static("", id="workflow-status", markup=False)
@@ -278,12 +307,14 @@ class AttachmentLibraryScreen(WorkflowScreen):
         self.query_one("#library-table", SelectionTable).disabled = self.busy
         for field in self.query(Input):
             field.disabled = self.busy
+        for field in self.query(Select):
+            field.disabled = self.busy
 
     async def reload_rows(self) -> None:
         values: dict[str, Any] = {
             "filename": self.query_one("#library-name", Input).value,
             "content_type": self.query_one("#library-type", Input).value,
-            "account_id": self.query_one("#library-account", Input).value.strip(),
+            "account_id": str(cast(Select[str], self.query_one("#library-account", Select)).value),
         }
         for key in ("after", "before"):
             raw = self.query_one("#library-" + key, Input).value.strip()
@@ -334,14 +365,18 @@ class AttachmentLibraryScreen(WorkflowScreen):
             success, skipped = 0, 0
             errors: list[str] = []
             self.status(self.t("ux.downloading"))
+            overwrite: bool | None = None
             for key in selected:
                 row = self.rows[int(key)]
                 target = directory / row["filename"].replace("\\", "/").split("/")[-1]
-                if target.exists() and not await self.ask(
-                    self.confirmation(self.t("ux.overwrite_file", path=str(target)))
-                ):
-                    skipped += 1
-                    continue
+                if await asyncio.to_thread(target.exists):
+                    if overwrite is None:
+                        overwrite = bool(
+                            await self.ask(self.confirmation(self.t("interface.collision")))
+                        )
+                    if not overwrite:
+                        skipped += 1
+                        continue
                 try:
                     downloaded = await self.service.workspace_call("attachment_download", row)
                     await asyncio.to_thread(
@@ -900,6 +935,8 @@ class ThreadScreen(WorkflowScreen):
 
 
 class ComposeScreen(WorkflowScreen):
+    DEFAULT_CSS = "ComposeScreen #compose-body { height: 10; min-height: 6; } ComposeScreen Collapsible { height: auto; }"
+
     def __init__(
         self,
         service: MailFlowService,
@@ -912,6 +949,11 @@ class ComposeScreen(WorkflowScreen):
         self.draft = draft
         self.kind, self.mail_id = kind, mail_id
         self.busy = False
+        self._bindings.bind("ctrl+s", "save_draft", self.t("tui.btn_save"))
+
+    def action_save_draft(self) -> None:
+        if not self.busy:
+            self.query_one("#compose-save", Button).press()
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -928,12 +970,22 @@ class ComposeScreen(WorkflowScreen):
                     value=Select.NULL,
                     prompt=self.t("tui.entry_pick_first"),
                 )
-                for name in ("to", "cc", "bcc", "subject"):
+                for name in ("to", "subject"):
                     yield Static(self.t("experience." + name))
                     yield Input(id="compose-" + name)
+                yield Static(self.t("interface.body"))
                 yield TextArea(id="compose-body")
+                with Collapsible(
+                    title=self.t("interface.copy_recipients"),
+                    collapsed=not bool(self.draft and (self.draft.cc or self.draft.bcc)),
+                ):
+                    for name in ("cc", "bcc"):
+                        yield Static(self.t("experience." + name))
+                        yield Input(id="compose-" + name)
                 yield Static("", id="compose-files", markup=False)
-                yield Input(placeholder=self.t("experience.upload_path"), id="compose-path")
+                yield AssistedInput(
+                    self.service, placeholder=self.t("experience.upload_path"), id="compose-path"
+                )
                 with ButtonRow():
                     yield Button(self.t("experience.add_file"), id="compose-upload")
                     yield Button(self.t("experience.choose_files"), id="compose-choose-files")
@@ -948,7 +1000,7 @@ class ComposeScreen(WorkflowScreen):
                 )
                 yield Button(self.t("tui.reply_confirm"), id="compose-confirm", disabled=True)
                 yield Button(self.t("experience.sent_check"), id="compose-check", disabled=True)
-                yield Button(self.t("tui.btn_back"), id="compose-close")
+                yield Button(self.t("interface.saved_draft"), id="compose-close")
 
     async def load_data(self) -> None:
         try:
@@ -987,13 +1039,16 @@ class ComposeScreen(WorkflowScreen):
         from mailflow.workflows import addresses
 
         values = self.values()
-        return (
-            values["subject"] == self.draft.subject
-            and values["body"] == self.draft.body
-            and addresses(values["to"]) == self.draft.to_addresses
-            and addresses(values["cc"]) == self.draft.cc
-            and addresses(values["bcc"]) == self.draft.bcc
-        )
+        try:
+            return (
+                values["subject"] == self.draft.subject
+                and values["body"] == self.draft.body
+                and addresses(values["to"]) == self.draft.to_addresses
+                and addresses(values["cc"]) == self.draft.cc
+                and addresses(values["bcc"]) == self.draft.bcc
+            )
+        except ValueError:
+            return False
 
     def sync_controls(self) -> None:
         if not self.is_attached:

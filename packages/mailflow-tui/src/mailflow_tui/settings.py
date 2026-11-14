@@ -1632,6 +1632,8 @@ class OptionCard(Vertical):
         return self.query_one(selector, Input).value
 
     def refresh_dirty(self) -> bool:
+        if self.query_one_optional(f"#value-{_slug(self.spec.key)}") is None:
+            return self._dirty
         try:
             self._dirty = coerce_value(self.spec, self.entered_value()) != self.spec.value
         except SettingsError:

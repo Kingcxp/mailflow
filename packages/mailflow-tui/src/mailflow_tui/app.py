@@ -822,7 +822,6 @@ class MailPane(Vertical):
 
     def compose(self) -> ComposeResult:
         self._urgency_suppress = True
-        remote = bool(getattr(self._service, "remote", False))
         with Horizontal(id="mail-search-row"):
             yield Input(
                 placeholder=self._service.t("tui.mail_search_placeholder"),
@@ -832,10 +831,12 @@ class MailPane(Vertical):
             yield SearchToggle("case", ident="mail-search-case")
             yield Button(self._service.t("assistant.handoff"), id="btn-assistant")
         yield Static("", id="mail-empty-hint")
+        yield Static("", id="mail-filter-summary", markup=False)
+        yield Button(self._service.t("interface.add_account"), id="mail-add-account")
         with Horizontal(id="mail-processing-controls"):
             yield Static("", id="mail-processing-status")
             yield Button(self._service.t("tui.analysis_pause"), id="analysis-toggle")
-        with Horizontal():
+        with Horizontal(id="mail-content"):
             yield SelectionTable(t=self._service.t, id="mail-table")
             with ScrollableContainer(id="mail-detail"):
                 for ident in (
@@ -849,39 +850,44 @@ class MailPane(Vertical):
                     "mail-notes",
                 ):
                     yield Static("", id=ident)
-        with Horizontal(id="mail-controls"):
-            yield SafeSelect(self._urgency_options(), id="urgency-select", allow_blank=False)
-            yield SafeSelect(
-                self._urgency_filter_options(), id="mail-urgency-filter", allow_blank=False
-            )
-            yield SafeSelect(
-                [
-                    (self._service.t("tui.sort_time"), "time"),
-                    (self._service.t("tui.sort_urgency"), "urgency"),
-                ],
-                id="mail-sort",
-                allow_blank=False,
-            )
-            with Vertical(id="mail-actions-buttons"):
-                for index, buttons in enumerate(self._button_rows(), 1):
-                    with Horizontal(id=f"mail-actions-row{index}"):
-                        for ident, key, variant in buttons:
-                            if remote and ident not in {
-                                "btn-more",
-                                "btn-refresh",
-                                "btn-trash",
-                                "btn-reply",
-                                "btn-profile",
-                                "btn-ask-correct",
-                                "btn-purge-expired",
-                            }:
-                                continue
-                            yield Button(
-                                self._service.t(key),
-                                id=ident,
-                                variant=variant,
-                                tooltip=self._service.t(key),
-                            )
+        with Vertical(id="mail-controls"):
+            with Horizontal(id="mail-filter-controls"):
+                yield SafeSelect(
+                    self._urgency_filter_options(), id="mail-urgency-filter", allow_blank=False
+                )
+                yield SafeSelect(
+                    [
+                        (self._service.t("tui.sort_time"), "time"),
+                        (self._service.t("tui.sort_urgency"), "urgency"),
+                    ],
+                    id="mail-sort",
+                    allow_blank=False,
+                )
+                yield Button(self._service.t("ux.filter"), id="btn-filter")
+            with Horizontal(id="mail-selection-controls"):
+                yield Static(
+                    self._service.t("interface.selected_priority"), id="mail-selection-label"
+                )
+                yield SafeSelect(self._urgency_options(), id="urgency-select", allow_blank=False)
+            with ButtonRow(id="mail-actions-buttons"):
+                yield Button(
+                    self._service.t("interface.open_mail"),
+                    id="btn-full",
+                    tooltip=self._service.t("ux.full_mail"),
+                )
+                yield Button(self._service.t("tui.urgency_label"), id="btn-priority")
+                yield Button(
+                    self._service.t("experience.compose"), id="btn-compose", variant="primary"
+                )
+                for buttons in self._button_rows():
+                    for ident, key, variant in buttons:
+                        if getattr(self._service, "remote", False) and ident in {
+                            "btn-reparse",
+                            "btn-reparse-all",
+                            "btn-reparse-failed",
+                        }:
+                            continue
+                        yield Button(self._service.t(key), id=ident, variant=variant)
 
     @staticmethod
     def _button_rows() -> tuple[tuple[tuple[str, str, Any], ...], ...]:
@@ -907,11 +913,27 @@ class MailPane(Vertical):
     async def on_mount(self) -> None:
         self._urgency_suppress = False
         self._sync_selection_controls()
+        self._adapt_width()
         # never block startup on storage reads + row rendering: the pane
         # paints empty and fills in as the exclusive worker delivers
         self.run_worker(
             self.refresh_mail(), exclusive=True, group="mail-refresh", exit_on_error=False
         )
+
+    def _adapt_width(self) -> None:
+        detail = self.query_one_optional("#mail-detail", ScrollableContainer)
+        table = self._mail_table()
+        wide = self.size.width >= 110
+        if detail is not None:
+            detail.display = wide
+        selection = self.query_one_optional("#mail-selection-controls")
+        if selection is not None:
+            selection.display = wide
+        if table is not None:
+            table.styles.width = "60%" if wide else "100%"
+
+    def on_resize(self) -> None:
+        self._adapt_width()
 
     async def on_unmount(self) -> None:
         self._stop_reparse()
@@ -1032,6 +1054,27 @@ class MailPane(Vertical):
             self._rendering = False
         hint = self.query_one_optional("#mail-empty-hint", Static)
         self._selection_hint_visible = False
+        account = self._service.config.account(self._query.account_id)
+        filters = [
+            value
+            for value in (
+                account.email or account.account_id if account else self._query.account_id,
+                self._query.sender,
+                self._query.after.strftime("%Y-%m-%d") if self._query.after else "",
+                self._query.before.strftime("%Y-%m-%d") if self._query.before else "",
+                self._service.t("experience.relative_days") + ": " + str(self._query.relative_days)
+                if self._query.relative_days
+                else "",
+                self._service.t("ux.view_" + self._query.state)
+                if self._query.state != "inbox"
+                else "",
+            )
+            if value
+        ]
+        self._set_static("#mail-filter-summary", " · ".join(filters))
+        self.query_one("#mail-add-account", Button).display = (
+            not bool(self._service.config.accounts) and not records
+        )
         if hint is not None:
             if status_hint:
                 hint.update(status_hint)
@@ -1219,11 +1262,14 @@ class MailPane(Vertical):
         purge = self.query_one_optional("#btn-purge-expired", Button)
         if purge is not None:
             purge.disabled = self._trash_busy or not bool(self._mail_cache)
-        for ident in ("#btn-reply", "#btn-ask-correct"):
+        for ident in ("#btn-full", "#btn-reply", "#btn-ask-correct"):
             button = self.query_one_optional(ident, Button)
             if button is not None:
                 button.tooltip = self._service.t("tui.selection_current_help")
                 button.disabled = self._trash_busy or not has_selected
+        priority = self.query_one_optional("#btn-priority", Button)
+        if priority is not None:
+            priority.disabled = self._trash_busy or not has_selected
         table.disabled = self._trash_busy
         reparse = self.query_one_optional("#btn-reparse", Button)
         if reparse is not None and (reparse_idle or not self._reparse_active()):
@@ -1238,6 +1284,7 @@ class MailPane(Vertical):
                 button = self.query_one_optional(ident, Button)
                 if button is not None:
                     button.disabled = self._trash_busy or not bool(self._mail_cache)
+        self._set_static("#mail-selection-label", self._service.t("interface.selected_priority"))
         urgency = self._urgency_select()
         if urgency is not None:
             urgency.disabled = not has_selected or self._trash_busy
@@ -1326,6 +1373,13 @@ class MailPane(Vertical):
         await self._show_selected(cached=True)
 
         self._sync_selection_controls()
+        if self.size.width < 110 and record is not None:
+            self.run_worker(
+                self._mail_tools("full_mail"),
+                group="mail-reader",
+                exclusive=True,
+                exit_on_error=False,
+            )
 
     async def on_data_table_row_highlighted(self, event: TableRowEvent) -> None:
         """Cursor movement (arrow keys) highlights rows without selecting;
@@ -1552,6 +1606,24 @@ class MailPane(Vertical):
 
     async def _handle_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
+        if button_id == "btn-priority":
+            self.run_worker(
+                self._pick_priority(), group="mail-priority", exclusive=True, exit_on_error=False
+            )
+            return
+        if button_id == "mail-add-account":
+            self.app.query_one(TabbedContent).active = "tab-mailboxes"
+            self.app.query_one(AccountsPane)._open_form(None)
+            return
+        direct = {"btn-full": "full_mail", "btn-compose": "compose", "btn-filter": "filter"}
+        if button_id in direct:
+            self.run_worker(
+                self._mail_tools(direct[button_id]),
+                group="mail-tools",
+                exclusive=True,
+                exit_on_error=False,
+            )
+            return
         if button_id == "analysis-toggle":
             self.run_worker(self._toggle_analysis(), group="analysis-control", exit_on_error=False)
             return
@@ -1641,10 +1713,21 @@ class MailPane(Vertical):
             scope = {}
         cast(MailFlowApp, self.app).open_assistant(scope, self._service.t("ux.scope_" + str(mode)))  # pyright: ignore[reportUnknownMemberType]
 
-    async def _mail_tools(self) -> None:
+    async def _pick_priority(self) -> None:
+        from mailflow_tui.pickers import ChoicePicker
+
+        record_id = self._selected_id
+        value = await self._ask_screen(ChoicePicker(self._service, self._urgency_options()))
+        if value is not None and record_id is not None:
+            await self._service.set_mail_urgency(
+                record_id, None if value == "auto" else Urgency(value)
+            )
+            await self.refresh_mail()
+
+    async def _mail_tools(self, choice: str | None = None) -> None:
         from mailflow_tui.mail_workflows import TrashScreen
 
-        choice = await self._ask_screen(MailMenu(self._service))
+        choice = choice or await self._ask_screen(MailMenu(self._service))
         if not choice:
             return
         try:

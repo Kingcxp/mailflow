@@ -1152,7 +1152,7 @@
       "smart_tool_delete_action": "准备删除待办",
       "smart_scan_progress": "{stage} {done}/{total} · {detail}",
       "smart_changes_cancelled": "已取消修改，未执行任何变更。",
-      "selection_mode_active": "多选已开启：点击行或按空格勾选，F2 关闭，F1 查看帮助。",
+      "selection_mode_active": "多选：点击或空格勾选，F3 选择范围，F2 退出。",
       "selection_delete_help": "将勾选的邮件移入 MailFlow 回收站；没有勾选时处理当前邮件。",
       "help_shortcuts": "键盘帮助",
       "help_focus": "切换输入框和按钮",
@@ -1824,7 +1824,9 @@
         "document": "文档"
       },
       "collision": "本批次存在同名文件，是否全部覆盖？取消则跳过已有文件。",
-      "parent_directory": "上级目录"
+      "parent_directory": "上级目录",
+      "selected_priority": "修改当前邮件的重要程度",
+      "open_mail": "打开邮件"
     }
   }
 }
