@@ -85,6 +85,7 @@ async def test_quiet_hours_merge_mail_and_retry_only_the_failed_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import mailflow.notification_policy as policy
+    import mailflow.runtime as runtime_module
 
     clock = datetime(2028, 2, 1, 6, tzinfo=UTC)
 
@@ -94,6 +95,7 @@ async def test_quiet_hours_merge_mail_and_retry_only_the_failed_chat(
             return clock.astimezone(tz)
 
     monkeypatch.setattr(policy, "datetime", Clock)
+    monkeypatch.setattr(runtime_module, "datetime", Clock)
 
     class Targets(FakeNotifier):
         def __init__(self) -> None:
@@ -131,9 +133,6 @@ async def test_quiet_hours_merge_mail_and_retry_only_the_failed_chat(
     notifier.fail = False
     assert await service.retry_deliveries([failures[0]["delivery_id"]]) == 1
     assert notifier.destinations == ["user:a", "user:b"] and not await service.failed_deliveries()
-    import mailflow.runtime as runtime_module
-
-    monkeypatch.setattr(runtime_module, "datetime", Clock)
     notifier = Targets()
     summary_service = make_service(MemoryStorage(), notifier)
     general = summary_service.config.general
