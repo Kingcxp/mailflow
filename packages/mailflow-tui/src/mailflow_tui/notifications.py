@@ -283,7 +283,7 @@ class NotificationsPane(Vertical):
         # non-blocking); failures render as "offline: <reason>" in the
         # status column
         self.run_worker(self._check_all(), exclusive=True, group="notif-check", exit_on_error=False)
-        self._timer = self.set_interval(self._PROBE_INTERVAL, self._periodic_check)
+        self._timer = self.set_interval(self._PROBE_INTERVAL, self.check_if_visible)
 
     async def relabel(self) -> None:
         self.query_one("#notif-preferences", Button).label = self._service.t(
@@ -315,7 +315,7 @@ class NotificationsPane(Vertical):
         self._refresh_urgency_options()
         self._sync_selection_controls()
 
-    def _periodic_check(self) -> None:
+    def check_if_visible(self) -> None:
         if (
             not self.is_on_screen
             or self._mutating

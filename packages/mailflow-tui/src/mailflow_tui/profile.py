@@ -34,6 +34,7 @@ class UserProfileModal(ModalScreen[bool]):
         self._bindings.bind("ctrl+s", "save", self._service.t("tui.btn_save"))
         self._initial = profile
         self._guidelines = guidelines
+        self._saving = False
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -61,10 +62,10 @@ class UserProfileModal(ModalScreen[bool]):
         if self.is_current:
             self.dismiss(result)
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         if event.button.id == "profile-save":
-            await self._save()
+            self.action_save()
         elif event.button.id == "profile-cancel":
             self._dismiss_once(False)
 
@@ -80,12 +81,24 @@ class UserProfileModal(ModalScreen[bool]):
                 f"[red]{escape(self._t('tui.profile_save_failed', error=error_detail(self._service, exc)))}[/red]"
             )
             return
+        finally:
+            self._saving = False
+            self.query_one("#profile-save", Button).disabled = False
+            for field in self.query(TextArea):
+                field.disabled = False
         status = self._t("tui.profile_saved") if stored else self._t("tui.profile_cleared")
         self.query_one("#profile-status", Static).update(f"[green]{escape(status)}[/green]")
         self._dismiss_once(True)
 
     def action_save(self) -> None:
-        self.run_worker(self._save(), exclusive=True, group="profile-save", exit_on_error=False)
+        if self._saving:
+            return
+        self._saving = True
+        self.query_one("#profile-save", Button).disabled = True
+        for field in self.query(TextArea):
+            field.disabled = True
+        self.query_one("#profile-status", Static).update(self._t("tui.form_saving"))
+        self.run_worker(self._save(), group="profile-save", exit_on_error=False)
 
     def action_cancel(self) -> None:
         self._dismiss_once(False)

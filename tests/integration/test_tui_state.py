@@ -514,6 +514,11 @@ async def test_events_language_and_refresh_keep_reading_state(host: Any) -> None
         await settle(pilot)
         assert cursor(table) == keys(table)[35]
         assert table.scroll_y > mail_state[1]
+        # Opening a result must move the selection even when no rows changed.
+        for target in (keys(table)[5], keys(table)[2]):
+            app.open_mail(target)
+            await settle(pilot)
+            assert cursor(table) == target
 
 
 async def test_failure_details_agree_and_missing_mail_has_visible_state(host: Any) -> None:

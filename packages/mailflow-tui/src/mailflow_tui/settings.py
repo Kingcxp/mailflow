@@ -1543,7 +1543,7 @@ class OptionCard(Vertical):
             ]
             with node.prevent(Select.Changed):
                 if choices != self._choice_signature:
-                    node.set_options(choices)
+                    cast(Select[str], node).set_options(choices)
                     self._choice_signature = choices
                 node.value = draft if draft in spec.choices else Select.NULL
         elif isinstance(node, (Input, Switch)):

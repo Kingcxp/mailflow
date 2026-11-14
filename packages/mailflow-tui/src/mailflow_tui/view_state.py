@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
+from textual.app import App
 from textual.coordinate import Coordinate
 from textual.widgets import DataTable
 from textual.widgets._data_table import RowKey
@@ -13,7 +14,8 @@ from textual.widgets._data_table import RowKey
 def update_table(table: DataTable[Any], rows: list[tuple[str, tuple[Any, ...]]]) -> bool:
     """Change only differing cells; replace rows together when their order changes."""
     reordered = [key.value for key in table.rows] != [key for key, _ in rows]
-    with table.app.batch_update(), table.prevent(DataTable.RowHighlighted, DataTable.RowSelected):
+    app = cast(App[Any], table.app)  # pyright: ignore[reportUnknownMemberType]
+    with app.batch_update(), table.prevent(DataTable.RowHighlighted, DataTable.RowSelected):
         if reordered:
             table.clear()
             for key, cells in rows:

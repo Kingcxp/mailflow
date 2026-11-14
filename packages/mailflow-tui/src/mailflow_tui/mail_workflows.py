@@ -287,7 +287,7 @@ class SyncScreen(WorkflowScreen):
             self.status("")
         self.refresh_status()
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         if event.button.id == "sync-close":
             self.dismiss(None)
@@ -300,16 +300,21 @@ class SyncScreen(WorkflowScreen):
         self._busy = True
         self._error = ""
         self.refresh_status()
+        mode = (
+            "pause"
+            if event.button.id == "sync-stop"
+            else str(cast(Select[str], self.query_one("#sync-mode", Select)).value)
+        )
+        self.run_worker(
+            self._control_sync(str(account), mode), group="sync-control", exit_on_error=False
+        )
+
+    async def _control_sync(self, account: str, mode: str) -> None:
         try:
-            mode = (
-                "pause"
-                if event.button.id == "sync-stop"
-                else str(cast(Select[str], self.query_one("#sync-mode", Select)).value)
-            )
             days = int(self.query_one("#sync-days", Input).value) if mode == "recent" else 30
             if days < 1:
                 raise ValueError
-            await self.service.control_account_sync(str(account), mode, days)
+            await self.service.control_account_sync(account, mode, days)
         except Exception as exc:
             from mailflow.errors import error_text
 

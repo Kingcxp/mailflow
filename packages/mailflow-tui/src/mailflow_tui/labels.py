@@ -215,6 +215,7 @@ __all__ = [
     "analysis_status",
     "error_detail",
     "error_message",
+    "form_choice_label",
     "redact_operation_logs",
     "relabel_buttons",
     "secret_values",

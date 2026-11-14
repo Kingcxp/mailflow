@@ -9,9 +9,11 @@ from typing import Any, cast
 
 import pytest
 from mailflow.i18n import I18n
+from mailflow.mail_query import MailQuery
 from mailflow_tui.app import MailFlowApp
 from mailflow_tui.remote import LoginScreen, RemoteServiceAdapter
-from mailflow_tui.workspace_screens import AssistantHistoryScreen
+from mailflow_tui.widgets import Input
+from mailflow_tui.workspace_screens import AssistantHistoryScreen, SavedFiltersScreen
 from textual.app import App
 from textual.widgets import Button, Static
 
@@ -72,7 +74,7 @@ async def test_remote_login_uses_saved_language_and_validates_required_fields() 
 
 
 @pytest.mark.asyncio
-async def test_slow_dialog_load_can_be_closed_without_waiting(
+async def test_slow_dialog_load_and_save_can_be_closed_without_waiting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = await start_service_quiet(tmp_path)
@@ -94,5 +96,25 @@ async def test_slow_dialog_load_can_be_closed_without_waiting(
             await until(pilot, entered.is_set)
             await pilot.press("escape")
             await until(pilot, lambda: app.screen is not dialog and released.is_set())
+
+            entered.clear()
+            released.clear()
+
+            async def slow_save(operation: str, values: Any = None) -> Any:
+                if operation == "filters":
+                    return []
+                return await slow_history()
+
+            monkeypatch.setattr(service, "workspace_call", slow_save)
+            filters = SavedFiltersScreen(service, MailQuery())
+            app.push_screen(filters)
+            await pilot.pause()
+            filters.query_one("#filter-name", Input).value = "My filter"
+            filters.query_one("#filter-save", Button).press()
+            await until(pilot, entered.is_set)
+            assert filters.query_one("#filter-save", Button).disabled
+            assert not filters.query_one("#filter-close", Button).disabled
+            await pilot.press("escape")
+            await until(pilot, lambda: app.screen is not filters and released.is_set())
     finally:
         await service.stop()

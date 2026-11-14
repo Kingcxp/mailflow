@@ -1026,7 +1026,7 @@ class MailPane(Vertical):
                 reordered = update_table(
                     table, [(record.record_id, self._mail_cells(record)) for record in records]
                 )
-                if reordered:
+                if reordered or view.row_key != TableView.capture(table).row_key:
                     self._selected_id = view.restore(table)
         finally:
             self._rendering = False
@@ -4766,7 +4766,7 @@ class MailFlowApp(App[None]):
             self._schedule_reload(set())
         if active == "tab-notifications":
             for pane in self.query(NotificationsPane):
-                pane._periodic_check()
+                pane.check_if_visible()
 
     def _drain_logs(self) -> None:
         log_query = self.query(LogsPane)

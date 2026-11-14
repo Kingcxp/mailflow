@@ -853,6 +853,10 @@ PluginScaffoldScreen {
     margin-bottom: 1;
 }
 
+#scaffold-fields {
+    height: 1fr;
+}
+
 #scaffold-dialog Input,
 #scaffold-dialog Select,
 #scaffold-dialog Checkbox {
@@ -896,7 +900,8 @@ InstallScreen {
 }
 
 #install-tree {
-    height: 20;
+    height: 1fr;
+    min-height: 3;
     border: round $primary;
     margin-bottom: 1;
 }
@@ -953,7 +958,8 @@ ReposScreen {
 }
 
 #repos-table {
-    height: 10;
+    height: 1fr;
+    min-height: 3;
     border: round $primary;
     margin-bottom: 1;
 }
@@ -1445,7 +1451,7 @@ UserProfileModal {
 }
 #profile-dialog {
     width: 90;
-    height: auto;
+    height: 85%;
     max-height: 90%;
     border: round $accent;
     background: $surface;
@@ -1461,7 +1467,8 @@ UserProfileModal {
     margin-bottom: 1;
 }
 #profile-scroll {
-    height: 12;
+    height: 1fr;
+    min-height: 3;
     border: round $secondary;
     margin-bottom: 1;
 }

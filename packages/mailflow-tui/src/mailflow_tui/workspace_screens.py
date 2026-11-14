@@ -386,8 +386,10 @@ class NotificationPreferencesScreen(WorkflowScreen):
                 allow_blank=False,
             )
             yield Checkbox(self.t("experience.quiet_hours"), id="quiet-enabled")
-            yield Input("22:00", id="quiet-start")
-            yield Input("08:00", id="quiet-end")
+            yield Static(self.t("tui.form_fields.quiet_start"))
+            yield Input("22:00", id="quiet-start", disabled=True)
+            yield Static(self.t("tui.form_fields.quiet_end"))
+            yield Input("08:00", id="quiet-end", disabled=True)
             yield TextArea("", id="notification-state", read_only=True)
             yield SafeSelect(
                 [], id="connection-setting", prompt=self.t("experience.connection_settings")
@@ -432,6 +434,11 @@ class NotificationPreferencesScreen(WorkflowScreen):
             self.dismiss(None)
         else:
             self.run_worker(self.operate(str(event.button.id)), exclusive=True, exit_on_error=False)
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id == "quiet-enabled":
+            self.query_one("#quiet-start", Input).disabled = not event.value
+            self.query_one("#quiet-end", Input).disabled = not event.value
 
     async def operate(self, ident: str) -> None:
         buttons = list(self.query(Button))
@@ -502,6 +509,7 @@ class AssistantHistoryScreen(WorkflowScreen):
         super().__init__(service)
         self.rows: list[dict[str, Any]] = []
         self.enabled = True
+        self.busy = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -541,13 +549,26 @@ class AssistantHistoryScreen(WorkflowScreen):
         self.query_one("#history-text", TextArea).load_text("")
         cast(Select[str], self.query_one("#history-ref", Select)).set_options([])
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        await self.reload_rows()
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "history-search":
+            self.start_operation("history-search")
+
+    def update_controls(self) -> None:
+        selected = cast(Select[str], self.query_one("#history-row", Select)).value
+        reference = cast(Select[str], self.query_one("#history-ref", Select)).value
+        for name in ("delete", "clear", "toggle", "open"):
+            available = (
+                isinstance(reference, str)
+                if name == "open"
+                else any(row["id"] == selected for row in self.rows)
+                if name == "delete"
+                else True
+            )
+            self.query_one("#history-" + name, Button).disabled = self.busy or not available
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "history-row":
             row = next((r for r in self.rows if r["id"] == event.value), None)
-            self.query_one("#history-delete", Button).disabled = row is None
             if row:
                 text = row["request"] + "\n\n" + row["answer"]
                 for ref in row["references"]:
@@ -561,18 +582,32 @@ class AssistantHistoryScreen(WorkflowScreen):
                 cast(Select[str], self.query_one("#history-ref", Select)).set_options(
                     [(r["title"], r["kind"] + ":" + r["id"]) for r in row["references"]]
                 )
-        elif event.select.id == "history-ref":
-            self.query_one("#history-open", Button).disabled = not isinstance(event.value, str)
+        self.update_controls()
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         ident = event.button.id
         if ident == "history-close":
             self.dismiss(None)
-        elif ident == "history-open":
+        elif ident == "history-open" and not self.busy:
             value = str(cast(Select[str], self.query_one("#history-ref", Select)).value)
             self.dismiss(value.split(":", 1))
         elif ident in {"history-delete", "history-clear", "history-toggle"}:
+            self.start_operation(ident)
+
+    def start_operation(self, ident: str) -> None:
+        if self.busy:
+            return
+        self.busy = True
+        self.update_controls()
+        self.status(self.t("tui.loading"))
+        self.run_worker(self.operate(ident), group="history-change", exit_on_error=False)
+
+    async def operate(self, ident: str) -> None:
+        try:
+            if ident == "history-search":
+                await self.reload_rows()
+                return
             values: dict[str, Any] = (
                 {"record_id": str(cast(Select[str], self.query_one("#history-row", Select)).value)}
                 if ident == "history-delete"
@@ -580,11 +615,13 @@ class AssistantHistoryScreen(WorkflowScreen):
                 if ident == "history-clear"
                 else {"retention_days": 0 if self.enabled else 30}
             )
-            try:
-                await self.service.workspace_call("assistant_history_change", values)
-                await self.reload_rows()
-            except Exception as exc:
-                self.status(error_text(exc, self.t))
+            await self.service.workspace_call("assistant_history_change", values)
+            await self.reload_rows()
+        except Exception as exc:
+            self.status(error_text(exc, self.t))
+        finally:
+            self.busy = False
+            self.update_controls()
 
 
 class ActionFiltersScreen(WorkflowScreen):
@@ -646,6 +683,7 @@ class PlansScreen(WorkflowScreen):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__(service)
         self.rows: list[Any] = []
+        self.busy = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -669,24 +707,42 @@ class PlansScreen(WorkflowScreen):
         )
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        plan = next((p for p in self.rows if p.plan_id == event.value), None)
-        self.query_one("#plan-pause", Button).disabled = plan is None or plan.paused
-        self.query_one("#plan-resume", Button).disabled = plan is None or not plan.paused
-        self.query_one("#plan-skip", Button).disabled = plan is None or plan.paused
+        self.update_controls()
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def update_controls(self) -> None:
+        selected = cast(Select[str], self.query_one("#plan-row", Select)).value
+        plan = next((p for p in self.rows if p.plan_id == selected), None)
+        self.query_one("#plan-pause", Button).disabled = self.busy or plan is None or plan.paused
+        self.query_one("#plan-resume", Button).disabled = (
+            self.busy or plan is None or not plan.paused
+        )
+        self.query_one("#plan-skip", Button).disabled = self.busy or plan is None or plan.paused
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         if event.button.id == "plan-back":
             self.dismiss(None)
+            return
+        if self.busy:
             return
         plan_id = str(cast(Select[str], self.query_one("#plan-row", Select)).value)
         values: dict[str, Any] = {
             "plan_id": plan_id,
             "operation": str(event.button.id).removeprefix("plan-"),
         }
+        self.busy = True
+        self.update_controls()
+        self.status(self.t("tui.loading"))
+        self.run_worker(self.operate(values), group="plan-change", exit_on_error=False)
+
+    async def operate(self, values: dict[str, Any]) -> None:
         try:
             if values["operation"] == "skip":
-                items = [a for a in await self.service.list_actions_all() if a.plan_id == plan_id]
+                items = [
+                    a
+                    for a in await self.service.list_actions_all()
+                    if a.plan_id == values["plan_id"]
+                ]
                 if not items:
                     self.status(self.t("tui.empty"))
                     return
@@ -696,6 +752,9 @@ class PlansScreen(WorkflowScreen):
             await self.load_data()
         except Exception as exc:
             self.status(error_text(exc, self.t))
+        finally:
+            self.busy = False
+            self.update_controls()
 
 
 class SavedFiltersScreen(WorkflowScreen):
@@ -703,6 +762,7 @@ class SavedFiltersScreen(WorkflowScreen):
         super().__init__(service)
         self.current_query = query
         self.rows: list[dict[str, Any]] = []
+        self.busy = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -738,22 +798,37 @@ class SavedFiltersScreen(WorkflowScreen):
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "saved-filter":
-            chosen = next((r for r in self.rows if r["name"] == event.value), None)
-            self.query_one("#filter-open", Button).disabled = (
-                chosen is None or not chosen["available"]
-            )
-            self.query_one("#filter-delete", Button).disabled = chosen is None
+            self.update_controls()
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def update_controls(self) -> None:
+        selected = cast(Select[str], self.query_one("#saved-filter", Select)).value
+        chosen = next((r for r in self.rows if r["name"] == selected), None)
+        self.query_one("#filter-open", Button).disabled = (
+            self.busy or chosen is None or not chosen["available"]
+        )
+        self.query_one("#filter-delete", Button).disabled = self.busy or chosen is None
+        self.query_one("#filter-save", Button).disabled = self.busy
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         choice = cast(Select[str], self.query_one("#saved-filter", Select)).value
+        ident = event.button.id
+        if ident == "filter-close":
+            self.dismiss(None)
+        elif ident == "filter-open" and not self.busy:
+            row = next(r for r in self.rows if r["name"] == choice)
+            self.dismiss(MailQuery.model_validate(row["query"]))
+        elif ident in {"filter-save", "filter-delete"} and not self.busy:
+            self.busy = True
+            self.update_controls()
+            self.status(self.t("tui.form_saving"))
+            self.run_worker(
+                self.operate(ident, str(choice)), group="filter-change", exit_on_error=False
+            )
+
+    async def operate(self, ident: str, choice: str) -> None:
         try:
-            if event.button.id == "filter-close":
-                self.dismiss(None)
-            elif event.button.id == "filter-open":
-                row = next(r for r in self.rows if r["name"] == choice)
-                self.dismiss(MailQuery.model_validate(row["query"]))
-            elif event.button.id == "filter-save":
+            if ident == "filter-save":
                 await self.service.workspace_call(
                     "save_filter",
                     {
@@ -762,12 +837,15 @@ class SavedFiltersScreen(WorkflowScreen):
                     },
                 )
                 await self.reload_rows()
-                self.status(self.t("experience.saved"))
-            elif event.button.id == "filter-delete":
-                await self.service.workspace_call("delete_filter", {"name": str(choice)})
+            elif ident == "filter-delete":
+                await self.service.workspace_call("delete_filter", {"name": choice})
                 await self.reload_rows()
+            self.status(self.t("experience.saved"))
         except Exception as exc:
             self.status(error_text(exc, self.t))
+        finally:
+            self.busy = False
+            self.update_controls()
 
 
 class ThreadScreen(WorkflowScreen):

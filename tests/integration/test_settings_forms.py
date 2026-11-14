@@ -40,7 +40,7 @@ async def test_mailbox_presets_are_selectable_and_save_real_server_settings(tmp_
                 form = EntryFormScreen(service, "accounts")
                 app.push_screen(form, results.append)
                 await pilot.pause()
-                preset = form.query_one("#extra-preset", Select)
+                preset = cast(Select[str], form.query_one("#extra-preset", Select))
                 preset.focus()
                 await pilot.press("enter", "down", "enter")
                 await pilot.pause()
@@ -359,7 +359,9 @@ async def test_language_change_propagates_to_other_tabs(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("language", ["en", "zh-CN"])
-async def test_escape_closes_settings_modals_without_changes(tmp_path: Path, language: str) -> None:
+async def test_settings_modals_cancel_by_keyboard_and_mouse_without_changes(
+    tmp_path: Path, language: str
+) -> None:
     from mailflow_tui.export import BotExportScreen
     from mailflow_tui.install import InstallScreen
     from mailflow_tui.repos import ReposScreen
@@ -370,7 +372,7 @@ async def test_escape_closes_settings_modals_without_changes(tmp_path: Path, lan
     original = service.config.model_dump()
     app = MailFlowApp(cast(Any, service), queue_module.Queue())
     try:
-        async with app.run_test(size=(140, 50)) as pilot:
+        async with app.run_test(size=(80, 30)) as pilot:
             for screen_type in (BotExportScreen, InstallScreen, ReposScreen, PluginScaffoldScreen):
                 results: list[Any] = []
                 modal = screen_type(service)
@@ -380,6 +382,17 @@ async def test_escape_closes_settings_modals_without_changes(tmp_path: Path, lan
                 await pilot.pause()
                 assert app.screen is not modal
                 assert results == [None]
+                assert service.config.model_dump() == original
+            await pilot.resize_terminal(60, 24)
+            for screen_type in (BotExportScreen, InstallScreen, ReposScreen, PluginScaffoldScreen):
+                modal = screen_type(service)
+                app.push_screen(modal)
+                await pilot.pause()
+                cancel = next(
+                    button for button in modal.query(Button) if str(button.id).endswith("-cancel")
+                )
+                assert await pilot.click(cancel)
+                await until(pilot, lambda modal=modal: app.screen is not modal)
                 assert service.config.model_dump() == original
     finally:
         await service.stop()

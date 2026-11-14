@@ -9,6 +9,7 @@ the user sees the confirmation next to the logs they exported.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -35,6 +36,7 @@ class LogExportScreen(ModalScreen[str | None]):
         super().__init__()
         self._service = service
         self._lines = lines
+        self._saving = False
         self._bindings.bind("escape", "cancel", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -57,13 +59,23 @@ class LogExportScreen(ModalScreen[str | None]):
     async def on_mount(self) -> None:
         self.query_one("#log-export-tree", DirectoryTree).focus()  # pyright: ignore[reportUnknownMemberType]
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "log-export-save":
-            await self._save()
+            if not self._saving:
+                self._saving = True
+                self.query_one("#log-export-save", Button).disabled = True
+                self.run_worker(self._save(), group="log-export", exit_on_error=False)
         elif event.button.id == "log-export-cancel":
             self.dismiss(None)
 
     async def _save(self) -> None:
+        try:
+            await self._write_log()
+        finally:
+            self._saving = False
+            self.query_one("#log-export-save", Button).disabled = False
+
+    async def _write_log(self) -> None:
         error = self.query_one("#log-export-error", Static)
         tree = self.query_one("#log-export-tree", DirectoryTree)
         node = tree.cursor_node
@@ -80,9 +92,12 @@ class LogExportScreen(ModalScreen[str | None]):
         if not name.endswith(".log"):
             name += ".log"
         target = base / name
+        error.update(self._t("tui.form_saving"))
         try:
-            target.write_text(
-                "\n".join(self._lines) + ("\n" if self._lines else ""), encoding="utf-8"
+            await asyncio.to_thread(
+                target.write_text,
+                "\n".join(self._lines) + ("\n" if self._lines else ""),
+                encoding="utf-8",
             )
         except OSError as exc:
             detail = escape(error_detail(self._service, exc))

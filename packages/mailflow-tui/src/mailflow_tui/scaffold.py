@@ -10,7 +10,7 @@ from typing import Any, ClassVar
 from mailflow.plugin_template import CATEGORIES, scaffold_plugin
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DirectoryTree, Select, Static
 
@@ -35,23 +35,24 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
         with Vertical(id="scaffold-dialog"):
             yield Static(self._t("tui.scaffold_title"), classes="scaffold-title")
             yield Static(self._t("tui.scaffold_pick_folder"), classes="scaffold-hint")
-            yield DirectoryTree(Path.cwd(), id="scaffold-tree")
-            yield Checkbox(self._t("tui.scaffold_subfolder"), id="scaffold-subfolder")
-            yield Input(
-                placeholder=self._t("tui.scaffold_folder_name"),
-                id="scaffold-folder-name",
-                disabled=True,
-            )
-            yield Input(
-                placeholder=self._t("tui.scaffold_plugin_id"),
-                id="scaffold-plugin-id",
-                value="mailflow-",
-            )
-            yield SafeSelect(
-                [(f"{c} — {self._t(f'plugin.template.{c}')}", c) for c in CATEGORIES],
-                id="scaffold-type",
-                value=CATEGORIES[3],
-            )
+            with ScrollableContainer(id="scaffold-fields"):
+                yield DirectoryTree(Path.cwd(), id="scaffold-tree")
+                yield Checkbox(self._t("tui.scaffold_subfolder"), id="scaffold-subfolder")
+                yield Input(
+                    placeholder=self._t("tui.scaffold_folder_name"),
+                    id="scaffold-folder-name",
+                    disabled=True,
+                )
+                yield Input(
+                    placeholder=self._t("tui.scaffold_plugin_id"),
+                    id="scaffold-plugin-id",
+                    value="mailflow-",
+                )
+                yield SafeSelect(
+                    [(f"{c} — {self._t(f'plugin.template.{c}')}", c) for c in CATEGORIES],
+                    id="scaffold-type",
+                    value=CATEGORIES[3],
+                )
             with ButtonRow(id="scaffold-actions"):
                 yield Button(self._t("tui.btn_generate"), id="scaffold-generate", variant="success")
                 yield Button(self._t("tui.btn_cancel"), id="scaffold-cancel", variant="primary")

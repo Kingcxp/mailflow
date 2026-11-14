@@ -30,6 +30,7 @@ class TodoCreateModal(ModalScreen[bool]):
         self._initial_summary = summary
         self._item: ActionItem | None = None
         self._saving = False
+        self._loading = False
         self._bindings.bind("escape", "cancel", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -102,7 +103,7 @@ class TodoCreateModal(ModalScreen[bool]):
                         value=self._item.completed_at is not None,
                         id="todo-completed",
                     )
-                yield Static("", id="todo-create-error")
+            yield Static("", id="todo-create-error")
             with ButtonRow(id="todo-create-buttons"):
                 yield Button(self._t("tui.btn_save"), id="todo-save", variant="primary")
                 yield Button(self._t("tui.btn_cancel"), id="todo-cancel", variant="default")
@@ -111,13 +112,13 @@ class TodoCreateModal(ModalScreen[bool]):
         self.query_one("#todo-summary", Input).focus()  # pyright: ignore[reportUnknownMemberType]
         self._repeat_visibility()
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "todo-save":
-            await self._save()
+            self.run_worker(self._save(), group="todo-save", exit_on_error=False)
         elif event.button.id == "todo-cancel":
             self.dismiss(False)
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
+    def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id in (
             "todo-summary",
             "todo-type",
@@ -127,7 +128,7 @@ class TodoCreateModal(ModalScreen[bool]):
             "todo-location",
             "todo-url",
         ):
-            await self._save()
+            self.run_worker(self._save(), group="todo-save", exit_on_error=False)
 
     def _repeat_visibility(self) -> None:
         whole = self._item is None or (self._item.preview if self._item else False)
@@ -149,7 +150,7 @@ class TodoCreateModal(ModalScreen[bool]):
             self._repeat_visibility()
 
     async def _save(self) -> None:
-        if self._saving:
+        if self._saving or self._loading:
             return
         self._saving = True
         self.query_one("#todo-save", Button).disabled = True
@@ -326,10 +327,57 @@ class TodoEditModal(TodoCreateModal):
 
     async def on_mount(self) -> None:
         await super().on_mount()
+        self._loading = True
+        self.query_one("#todo-save", Button).disabled = True
+        self.query_one("#todo-create-title", Static).update(self._t("tui.todo_edit_title"))
+        self.query_one("#todo-create-error", Static).update(self._t("tui.loading"))
+        self.run_worker(self._load_current_item(), group="todo-load", exit_on_error=False)
+
+    async def _load_current_item(self) -> None:
         item = self._item
         assert item is not None  # set by TodoEditModal.__init__
-        self.query_one("#todo-create-title", Static).update(self._t("tui.todo_edit_title"))
+        controls = [(node, node.disabled) for node in self.query("Input, Select, Checkbox")]
+        for node, _disabled in controls:
+            node.disabled = True
+        try:
+            current = next(
+                (
+                    row
+                    for row in await self._service.list_actions_all(
+                        preview_days=30 if item.preview else 0
+                    )
+                    if row.item_id == item.item_id
+                ),
+                None,
+            )
+            if current is None:
+                self.query_one("#todo-create-error", Static).update(
+                    self._t("action.not_found", item_id=item.item_id)
+                )
+                return
+            self._item = current
+            self._fill_item(current)
+        except Exception as exc:
+            self.query_one("#todo-create-error", Static).update(error_detail(self._service, exc))
+            return
+        self._loading = False
+        for node, disabled in controls:
+            node.disabled = disabled
+        self.query_one("#todo-save", Button).disabled = False
+        self.query_one("#todo-create-error", Static).update("")
+        self.query_one("#todo-summary", Input).focus()  # pyright: ignore[reportUnknownMemberType]
+
+    def _fill_item(self, item: ActionItem) -> None:
         self.query_one("#todo-summary", Input).value = item.summary
+        self.query_one("#todo-category", Input).value = item.category
+        self.query_one("#todo-tags", Input).value = ", ".join(item.tags)
+        self.query_one("#todo-reminder", Checkbox).value = item.reminder_enabled
+        reply = self.query_one_optional("#todo-reply-task", Checkbox)
+        if reply is not None:
+            reply.value = item.reply_task
+        completed = self.query_one_optional("#todo-completed", Checkbox)
+        if completed is not None:
+            completed.value = item.completed_at is not None
         self.query_one("#todo-due", Input).value = item.time_range_in(
             self._service.config.general.timezone
         ).split(" ~ ", 1)[0]
