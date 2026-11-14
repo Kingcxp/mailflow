@@ -1569,3 +1569,6 @@ UserProfileModal {
 .field-label, .option-key, #accounts-title, #llms-title, #history-title {
     height: auto;
 }
+
+#todo-weekdays { height: 9; }
+#profile-text, #profile-guidelines { height: 8; min-height: 5; }

@@ -42,9 +42,9 @@ class UserProfileModal(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical(id="profile-dialog"):
             yield Static(self._t("tui.profile_title"), id="profile-title")
-            yield Static(escape(self._t("tui.profile_hint")), id="profile-hint")
-            yield Static(self._t("tui.profile_label"), classes="todo-label")
             with ScrollableContainer(id="profile-scroll"):
+                yield Static(escape(self._t("tui.profile_hint")), id="profile-hint")
+                yield Static(self._t("tui.profile_label"), classes="todo-label")
                 yield TextArea(self._initial, id="profile-text")
                 yield Static(self._t("ux.preferences_hint"))
                 yield TextArea(self._guidelines, id="profile-guidelines")
@@ -59,7 +59,7 @@ class UserProfileModal(ModalScreen[bool]):
     def _dismiss_once(self, result: bool) -> None:
         """Dismiss at most once: Escape, ctrl+s and a click can race, and a
         second pop would take the whole screen stack down."""
-        if self.is_current:
+        if self.is_current and not self._saving:
             self.dismiss(result)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -72,9 +72,8 @@ class UserProfileModal(ModalScreen[bool]):
     async def _save(self) -> None:
         text = self.query_one("#profile-text", TextArea).text
         try:
-            stored = await self._service.set_user_profile(text)
-            await self._service.set_feedback_guidelines(
-                self.query_one("#profile-guidelines", TextArea).text
+            stored = await self._service.save_user_preferences(
+                text, self.query_one("#profile-guidelines", TextArea).text
             )
         except Exception as exc:
             self.query_one("#profile-status", Static).update(

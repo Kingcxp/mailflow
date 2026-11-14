@@ -604,6 +604,15 @@ class SQLiteStorage:
             )
             conn.commit()
 
+    async def set_preferences(self, values: dict[str, str]) -> None:
+        async with self._lock:
+            conn = self._check_conn()
+            with conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)",
+                    values.items(),
+                )
+
     # -- custom action items ---------------------------------------------------
 
     async def save_custom_action(self, item: ActionItem) -> None:

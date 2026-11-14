@@ -145,8 +145,8 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
             tabs = app.query_one(TabbedContent)
             tabs.active = "tab-assistant"
             await pilot.pause()
-            search = app.query_one("#assistant-input", Input)
-            search.value = "the student ID invitation"
+            search = app.query_one("#assistant-input", TextArea)
+            search.load_text("the student ID invitation")
             await pilot.pause()
             app.query_one("#assistant-send", Button).press()
             await until(pilot, router.started.is_set)
@@ -156,16 +156,16 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
             assert not router.cancelled.is_set()
             tabs.active = "tab-assistant"
             await pilot.pause()
-            search.value = "another request"
+            search.load_text("another request")
             assert not app.query_one("#assistant-stop", Button).disabled
             app.query_one("#assistant-stop", Button).press()
             await until(pilot, router.cancelled.is_set)
             await until(pilot, lambda: not app.query_one("#assistant-send", Button).disabled)
-            assert search.value == "another request"
+            assert search.text == "another request"
             progress = app.query_one("#assistant-progress", RichLog)
             assert not progress.display and not progress.lines
             router.release.set()
-            search.value = "the student ID invitation"
+            search.load_text("the student ID invitation")
             await pilot.pause()
             app.query_one("#assistant-send", Button).press()
             await until(
@@ -177,7 +177,7 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
             assert list(table.rows) == before and mail_search.value == "lecture"
             await service.set_language("zh-CN")
             await pilot.pause()
-            assert search.value == "the student ID invitation" and results.row_count == 1
+            assert search.text == "the student ID invitation" and results.row_count == 1
 
             async def fail_query(*args: Any, **kwargs: Any) -> Any:
                 raise OSError("private network details")
@@ -195,7 +195,7 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
             router.started.clear()
             router.release.clear()
             router.cancelled.clear()
-            search.value = "another query"
+            search.load_text("another query")
             await pilot.pause()
             app.query_one("#assistant-send", Button).press()
             await until(pilot, router.started.is_set)
@@ -306,8 +306,8 @@ async def test_smart_query_task_crud_requires_confirmation(
 
             app.query_one(TabbedContent).active = "tab-assistant"
             await pilot.pause()
-            search = app.query_one("#assistant-input", Input)
-            search.value = "查找包含 lecture 的邮件，并在2099年10月15日14:00添加项目复核待办"
+            search = app.query_one("#assistant-input", TextArea)
+            search.load_text("查找包含 lecture 的邮件，并在2099年10月15日14:00添加项目复核待办")
 
             def modal() -> SmartActionReviewModal | None:
                 screens = [
@@ -364,7 +364,7 @@ async def test_smart_query_task_crud_requires_confirmation(
             await until(pilot, lambda: modal() is None)
 
             router.mode = "edit"
-            search.value = "清除 Project review 待办的结束时间"
+            search.load_text("清除 Project review 待办的结束时间")
             await _assistant_review(app, pilot)
             await until(pilot, lambda: modal() is not None)
             prompt = modal()
@@ -386,7 +386,7 @@ async def test_smart_query_task_crud_requires_confirmation(
             assert edited.due_at == scheduled[0].due_at
 
             router.mode = "unschedule"
-            search.value = "清除 Project review 待办的截止时间"
+            search.load_text("清除 Project review 待办的截止时间")
             await _assistant_review(app, pilot)
             await until(pilot, lambda: modal() is not None)
             app.screen.query_one("#smart-review-edit-0", Button).press()
@@ -404,7 +404,7 @@ async def test_smart_query_task_crud_requires_confirmation(
             assert unscheduled.location == "Office 4"
 
             router.mode = "delete"
-            search.value = "删除 Project review 待办"
+            search.load_text("删除 Project review 待办")
             await _assistant_review(app, pilot)
             await until(pilot, lambda: modal() is not None)
             assert len(await service.storage.list_custom_actions()) == 1
@@ -485,8 +485,8 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
 
             app.query_one(TabbedContent).active = "tab-assistant"
             await pilot.pause()
-            search = app.query_one("#assistant-input", Input)
-            search.value = "把广告邮件都删掉"
+            search = app.query_one("#assistant-input", TextArea)
+            search.load_text("把广告邮件都删掉")
 
             def modal() -> SmartActionReviewModal | None:
                 screens = [
@@ -1425,12 +1425,16 @@ async def test_mail_bulk_buttons_purge_reanalyze_and_save_profile(tmp_path: Path
                 await pilot.pause(0.05)
             assert profile_dialog is not None
             profile_dialog.query_one("#profile-text", TextArea).text = "I am a CS master's student"
+            profile_dialog.query_one("#profile-guidelines", TextArea).load_text(
+                "Keep work deadlines important"
+            )
             profile_dialog.query_one("#profile-save", Button).press()
             for _ in range(80):
                 if await service.user_profile():
                     break
                 await pilot.pause(0.05)
             assert await service.user_profile() == "I am a CS master's student"
+            assert await service.feedback_guidelines() == "Keep work deadlines important"
             app.exit()
             await pilot.pause()
     finally:

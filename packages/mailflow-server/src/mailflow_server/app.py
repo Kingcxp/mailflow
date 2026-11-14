@@ -417,9 +417,11 @@ def create_app(service: MailFlowService) -> FastAPI:
     @app.put("/profile")
     async def save_profile(body: dict[str, Any], _: None = Depends(guard)) -> Any:
         require_admin(service.t)
-        if "profile" in body:
+        if "profile" in body and "guidelines" in body:
+            await service.save_user_preferences(str(body["profile"]), str(body["guidelines"]))
+        elif "profile" in body:
             await service.set_user_profile(str(body["profile"]))
-        if "guidelines" in body:
+        elif "guidelines" in body:
             await service.set_feedback_guidelines(str(body["guidelines"]))
         return await profile()
 

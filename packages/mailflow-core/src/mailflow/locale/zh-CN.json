@@ -1778,7 +1778,7 @@
       "choose_directory": "选择目录",
       "choose_date": "选择日期时间",
       "date_hint": "按配置时区填写；可使用日期选择器。",
-      "send_hint": "Enter 换行，Ctrl+Enter 发送；也可点击发送。",
+      "send_hint": "Enter 换行；Ctrl+Enter 或“执行”发送需求",
       "saved_draft": "保存草稿并返回",
       "details": "查看详情",
       "add_account": "添加邮箱",
@@ -1826,7 +1826,17 @@
       "collision": "本批次存在同名文件，是否全部覆盖？取消则跳过已有文件。",
       "parent_directory": "上级目录",
       "selected_priority": "修改当前邮件的重要程度",
-      "open_mail": "打开邮件"
+      "open_mail": "打开邮件",
+      "weekday_0": "星期一",
+      "weekday_1": "星期二",
+      "weekday_2": "星期三",
+      "weekday_3": "星期四",
+      "weekday_4": "星期五",
+      "weekday_5": "星期六",
+      "weekday_6": "星期日",
+      "view_original": "查看原文",
+      "back_to_correction": "返回纠正",
+      "occurrence": "选择要跳过的具体一期"
     }
   }
 }

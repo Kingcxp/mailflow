@@ -20,6 +20,7 @@ from mailflow.domain import MailRecord
 from mailflow.mail_body import mail_body_text
 from mailflow.service import MailFlowService
 from rich.text import Text as RichText
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
@@ -28,7 +29,7 @@ from textual.widgets import Button, Checkbox, Footer, Markdown, Static
 
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.labels import mail_status, urgency_label
-from mailflow_tui.widgets import Input
+from mailflow_tui.widgets import ButtonRow, Input
 
 if TYPE_CHECKING:
     from mailflow_tui.app import MailFlowApp
@@ -67,7 +68,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
                 yield Static(self._t("tui.ask_correct_chat_label"), id="ask-correct-chat-label")
                 with ScrollableContainer(id="ask-correct-scroll"):
                     yield Vertical(id="ask-correct-messages")
-            with Vertical(id="ask-correct-info"):
+            with ScrollableContainer(id="ask-correct-info"):
                 yield Static(self._t("tui.ask_correct_info_label"), id="ask-correct-info-label")
                 yield Static("", id="ask-correct-analysis-status")
                 yield Static("", id="ask-correct-urgency")
@@ -75,6 +76,8 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
                 yield Static("", id="ask-correct-reason")
                 yield Static("", id="ask-correct-original-body")
                 yield Static("", id="ask-correct-notes")
+        with ButtonRow():
+            yield Button(self._t("interface.view_original"), id="ask-correct-toggle")
         with Horizontal(id="ask-correct-input-row"):
             yield Input(placeholder=self._t("tui.ask_correct_placeholder"), id="ask-correct-input")
             yield Button(self._t("tui.ask_correct_send"), id="ask-correct-send", variant="primary")
@@ -84,8 +87,21 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
 
     async def on_mount(self) -> None:
         self._render_mail_info()
+        self._adapt_width()
         await self._render_chat()
         self.query_one("#ask-correct-input", Input).focus()  # pyright: ignore[reportUnknownMemberType]
+
+    def on_resize(self, event: events.Resize) -> None:
+        if self.is_mounted:
+            self._adapt_width()
+
+    def _adapt_width(self) -> None:
+        wide = self.size.width >= 110
+        self.query_one("#ask-correct-info").display = wide
+        self.query_one("#ask-correct-chat").display = True
+        self.query_one("#ask-correct-chat").styles.width = "60%" if wide else "100%"
+        self.query_one("#ask-correct-info").styles.width = "40%" if wide else "100%"
+        self.query_one("#ask-correct-toggle", Button).display = not wide
 
     def _render_mail_info(self) -> None:
         """Right pane: current analysis + original body (body never edited).
@@ -129,7 +145,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         )
         body = mail_body_text(record.mail)
         body_line = RichText(f"{self._t('tui.detail_body')}: ", style="dim bold")
-        body_line.append(body[:4000])
+        body_line.append(body)
         if record.mail.image_text:
             body_line.append(f"\n\n{self._t('mail.field_image_text')}: ", style="dim bold")
             body_line.append(record.mail.image_text)
@@ -173,7 +189,14 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
             await self._send()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "ask-correct-send":
+        if event.button.id == "ask-correct-toggle":
+            info = self.query_one("#ask-correct-info")
+            info.display = not info.display
+            self.query_one("#ask-correct-chat").display = not info.display
+            event.button.label = self._t(
+                "interface.back_to_correction" if info.display else "interface.view_original"
+            )
+        elif event.button.id == "ask-correct-send":
             await self._send()
         elif event.button.id == "ask-correct-close":
             self.action_close()

@@ -1013,6 +1013,26 @@ class MailFlowService:
         await self.events.emit("feedback.profile.changed")
         return profile
 
+    @admin_operation
+    async def save_user_preferences(self, profile: str, guidelines: str) -> str:
+        """Save the related form together, using a storage transaction when available."""
+        profile = profile.strip()[:_PROFILE_MAX_CHARS]
+        values = {_PROFILE_PREFERENCE: profile, "feedback.guidelines": guidelines.strip()}
+        batch = getattr(self.storage, "set_preferences", None)
+        if callable(batch):
+            await batch(values)
+        else:
+            previous = {key: await self.storage.get_preference(key) or "" for key in values}
+            try:
+                for key, value in values.items():
+                    await self.storage.set_preference(key, value)
+            except Exception:
+                for key, value in previous.items():
+                    await self.storage.set_preference(key, value)
+                raise
+        await self.events.emit("feedback.profile.changed")
+        return profile
+
     async def count_mails(self) -> int:
         return await self.storage.count_mails()
 

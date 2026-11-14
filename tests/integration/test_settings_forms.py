@@ -805,6 +805,9 @@ async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:
             assert isinstance(app.screen, TodoCreateModal)
             summary_input = app.screen.query_one("#todo-summary", Input)
             summary_input.value = "给导师发进度报告"
+            summary_input.focus()
+            await pilot.press("enter")
+            assert await service.storage.list_custom_actions() == []
             due_input = app.screen.query_one("#todo-due", Input)
             due_input.value = "2099-01-01 09:00"
             notes_input = app.screen.query_one("#todo-notes", Input)

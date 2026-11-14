@@ -372,12 +372,12 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         scoped_ids = keys(table)
         app.open_assistant({"record_ids": scoped_ids}, "Current results")
         scoped_ids.append("other")  # The handoff owns a snapshot of the original range.
-        instruction = app.query_one("#assistant-input", Input)
-        instruction.value = "Find matching mail"
+        instruction = app.query_one("#assistant-input", TextArea)
+        instruction.load_text("Find matching mail")
         await pilot.pause()
         app.query_one("#assistant-send", Button).press()
         await asyncio.wait_for(entered.wait(), 2)
-        instruction.value = "Next question, not executed yet"
+        instruction.load_text("Next question, not executed yet")
         app.query_one(TabbedContent).active = "tab-mail"
         await pilot.pause()
         search.value = "unrelated"
@@ -386,7 +386,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         await until(pilot, lambda: keys(table) == ["other"])
         app.query_one(TabbedContent).active = "tab-assistant"
         await pilot.pause()
-        assert instruction.value == "Next question, not executed yet"
+        assert instruction.text == "Next question, not executed yet"
         assert smart.await_count == 1 and not app.query_one("#assistant-stop", Button).disabled
         release.set()
         await settle(pilot)
@@ -402,7 +402,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         app.query_one("#assistant-stop", Button).press()
         await settle(pilot)
         assert service.t("assistant.cancelled") in text(app, "#assistant-status")
-        assert instruction.value == "Next question, not executed yet"
+        assert instruction.text == "Next question, not executed yet"
         assert keys(app.query_one("#assistant-results", DataTable)) == ["mail:target"]
         app.query_one(TabbedContent).active = "tab-mail"
         await pilot.pause()

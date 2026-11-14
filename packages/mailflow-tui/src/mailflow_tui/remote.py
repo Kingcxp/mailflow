@@ -664,6 +664,11 @@ class RemoteServiceAdapter:
     async def set_user_profile(self, text: str) -> str:
         return str((await self.client.profile({"profile": text}))["profile"])
 
+    async def save_user_preferences(self, profile: str, guidelines: str) -> str:
+        return str(
+            (await self.client.profile({"profile": profile, "guidelines": guidelines}))["profile"]
+        )
+
     async def feedback_guidelines(self) -> str:
         return str((await self.client.profile())["guidelines"])
 

@@ -12,9 +12,10 @@ from textual.app import ComposeResult
 from textual.containers import ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Select, Static
+from textual.widgets import Button, Checkbox, Select, SelectionList, Static
 
 from mailflow_tui.labels import error_detail
+from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.widgets import ButtonRow, Input, SafeSelect
 
 
@@ -32,6 +33,7 @@ class TodoCreateModal(ModalScreen[bool]):
         self._saving = False
         self._loading = False
         self._bindings.bind("escape", "cancel", self._t("tui.btn_cancel"))
+        self._bindings.bind("ctrl+s", "save", self._t("tui.btn_save"))
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -47,11 +49,40 @@ class TodoCreateModal(ModalScreen[bool]):
                     placeholder=self._t("tui.todo_summary_required"),
                 )
                 yield Static(self._t("tui.todo_type_label"), classes="todo-label")
-                yield Input(
-                    value="errand", id="todo-type", placeholder=self._t("tui.todo_type_placeholder")
+                yield AssistedInput(
+                    self._service,
+                    self._t("tui.action_type_errand"),
+                    id="todo-type",
+                    mode="choice",
+                    choices=[
+                        (self._t("tui.action_type_" + key), self._t("tui.action_type_" + key))
+                        for key in ("errand", "meeting", "exam", "other")
+                    ],
+                )
+                yield Static(self._t("tui.todo_due_label"), classes="todo-label")
+                yield AssistedInput(
+                    self._service,
+                    id="todo-due",
+                    mode="datetime",
+                    placeholder=self._t("tui.todo_due_placeholder"),
+                )
+                yield Static(self._t("tui.todo_end_label"), classes="todo-label")
+                yield AssistedInput(
+                    self._service,
+                    id="todo-due-end",
+                    mode="datetime",
+                    placeholder=self._t("tui.todo_due_placeholder"),
+                )
+                yield Static(
+                    self._t("interface.timezone", zone=self._service.config.general.timezone)
                 )
                 yield Static(self._t("recurrence.category"), classes="todo-label")
-                yield Input(value=self._item.category if self._item else "", id="todo-category")
+                yield AssistedInput(
+                    self._service,
+                    self._item.category if self._item else "",
+                    id="todo-category",
+                    mode="choice",
+                )
                 yield Static(self._t("recurrence.tags"), classes="todo-label")
                 yield Input(value=", ".join(self._item.tags) if self._item else "", id="todo-tags")
                 if self._item is not None and self._item.plan_id:
@@ -73,13 +104,17 @@ class TodoCreateModal(ModalScreen[bool]):
                         allow_blank=False,
                     )
                     yield Static(self._t("recurrence.weekdays"), id="todo-weekdays-label")
-                    yield Input(id="todo-weekdays", placeholder="1, 3, 5")
+                    yield SelectionList[int](
+                        *[(self._t("interface.weekday_" + str(day)), day) for day in range(7)],
+                        id="todo-weekdays",
+                    )
                     yield Static(self._t("recurrence.month_day"), id="todo-month-day-label")
-                    yield Input(id="todo-month-day", placeholder=self._t("recurrence.from_due"))
-                yield Static(self._t("tui.todo_due_label"), classes="todo-label")
-                yield Input(id="todo-due", placeholder=self._t("tui.todo_due_placeholder"))
-                yield Static(self._t("tui.todo_end_label"), classes="todo-label")
-                yield Input(id="todo-due-end", placeholder=self._t("tui.todo_due_placeholder"))
+                    yield SafeSelect(
+                        [(self._t("recurrence.from_due"), "")]
+                        + [(str(day), str(day)) for day in range(1, 32)],
+                        id="todo-month-day",
+                        allow_blank=False,
+                    )
                 yield Static(self._t("tui.todo_notes_label"), classes="todo-label")
                 yield Input(id="todo-notes")
                 yield Static(self._t("tui.todo_location_label"), classes="todo-label")
@@ -111,24 +146,28 @@ class TodoCreateModal(ModalScreen[bool]):
     async def on_mount(self) -> None:
         self.query_one("#todo-summary", Input).focus()  # pyright: ignore[reportUnknownMemberType]
         self._repeat_visibility()
+        self.run_worker(self._load_categories(), group="todo-categories", exit_on_error=False)
+
+    async def _load_categories(self) -> None:
+        try:
+            items = await self._service.list_actions_all()
+            categories = sorted({item.category for item in items if item.category})
+            if self.is_mounted:
+                field = self.query_one("#todo-category", Input).parent
+                assert isinstance(field, AssistedInput)
+                field.choices = [(value, value) for value in categories]
+        except Exception:
+            # Suggestions are optional; a custom category remains editable.
+            return
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "todo-save":
             self.run_worker(self._save(), group="todo-save", exit_on_error=False)
         elif event.button.id == "todo-cancel":
-            self.dismiss(False)
+            self.action_cancel()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id in (
-            "todo-summary",
-            "todo-type",
-            "todo-due",
-            "todo-due-end",
-            "todo-notes",
-            "todo-location",
-            "todo-url",
-        ):
-            self.run_worker(self._save(), group="todo-save", exit_on_error=False)
+    def action_save(self) -> None:
+        self.run_worker(self._save(), group="todo-save", exit_on_error=False)
 
     def _repeat_visibility(self) -> None:
         whole = self._item is None or (self._item.preview if self._item else False)
@@ -165,6 +204,14 @@ class TodoCreateModal(ModalScreen[bool]):
         error = self.query_one("#todo-create-error", Static)
         summary = str(self.query_one("#todo-summary", Input).value).strip()
         action_type = str(self.query_one("#todo-type", Input).value).strip()
+        action_type = next(
+            (
+                key
+                for key in ("errand", "meeting", "exam", "other")
+                if self._t("tui.action_type_" + key) == action_type
+            ),
+            action_type,
+        )
         if not summary:
             error.update(f"[yellow]{self._t('tui.todo_summary_required')}[/yellow]")
             return
@@ -212,11 +259,13 @@ class TodoCreateModal(ModalScreen[bool]):
             frequency = str(cast(Select[str], self.query_one("#todo-repeat", Select)).value)
             repeat = None
             if frequency != "once":
-                days = self.query_one("#todo-weekdays", Input).value.strip()
-                month = self.query_one("#todo-month-day", Input).value.strip()
+                days = cast(
+                    SelectionList[int], self.query_one("#todo-weekdays", SelectionList)
+                ).selected
+                month = str(cast(Select[str], self.query_one("#todo-month-day", Select)).value)
                 repeat = dict(
                     frequency=frequency,
-                    weekdays=[int(day.strip()) - 1 for day in days.split(",")] if days else [],
+                    weekdays=days,
                     month_day=int(month) if month else None,
                 )
             if self._item is not None and self._item.plan_id:
@@ -312,7 +361,8 @@ class TodoCreateModal(ModalScreen[bool]):
         self.dismiss(True)
 
     def action_cancel(self) -> None:
-        self.dismiss(False)
+        if not self._saving:
+            self.dismiss(False)
 
 
 class TodoEditModal(TodoCreateModal):
@@ -336,7 +386,9 @@ class TodoEditModal(TodoCreateModal):
     async def _load_current_item(self) -> None:
         item = self._item
         assert item is not None  # set by TodoEditModal.__init__
-        controls = [(node, node.disabled) for node in self.query("Input, Select, Checkbox")]
+        controls = [
+            (node, node.disabled) for node in self.query("Input, Select, Checkbox, SelectionList")
+        ]
         for node, _disabled in controls:
             node.disabled = True
         try:
@@ -386,14 +438,18 @@ class TodoEditModal(TodoCreateModal):
             if item.due_end is None
             else item.time_range_in(self._service.config.general.timezone).split(" ~ ", 1)[-1]
         )
-        self.query_one("#todo-type", Input).value = item.action_type
+        label = self._t("tui.action_type_" + item.action_type)
+        self.query_one("#todo-type", Input).value = (
+            item.action_type if label.startswith("tui.") else label
+        )
         self.query_one("#todo-notes", Input).value = item.notes
         self.query_one("#todo-location", Input).value = item.location
         self.query_one("#todo-url", Input).value = item.url
         if item.repeat is not None:
             self.query_one("#todo-repeat", Select).value = item.repeat.frequency
-            self.query_one("#todo-weekdays", Input).value = ", ".join(
-                str(day + 1) for day in item.repeat.weekdays
-            )
-            self.query_one("#todo-month-day", Input).value = str(item.repeat.month_day or "")
+            days = self.query_one("#todo-weekdays", SelectionList)
+            days.deselect_all()
+            for day in item.repeat.weekdays:
+                days.select(day)
+            self.query_one("#todo-month-day", Select).value = str(item.repeat.month_day or "")
         self._repeat_visibility()

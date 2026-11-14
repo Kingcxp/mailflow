@@ -307,8 +307,8 @@ class AttachmentLibraryScreen(WorkflowScreen):
         self.query_one("#library-table", SelectionTable).disabled = self.busy
         for field in self.query(Input):
             field.disabled = self.busy
-        for field in self.query(Select):
-            field.disabled = self.busy
+        for selector in self.query(Select):
+            selector.disabled = self.busy
 
     async def reload_rows(self) -> None:
         values: dict[str, Any] = {
@@ -718,12 +718,15 @@ class PlansScreen(WorkflowScreen):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__(service)
         self.rows: list[Any] = []
+        self.items: list[Any] = []
         self.busy = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.t("experience.plans"))
             yield SafeSelect([], id="plan-row", prompt=self.t("tui.entry_pick_first"))
+            yield Static(self.t("interface.occurrence"))
+            yield SafeSelect([], id="plan-occurrence", prompt=self.t("tui.entry_pick_first"))
             yield Static("", id="workflow-status", markup=False)
             with ButtonRow():
                 for op in ("pause", "resume", "skip", "back"):
@@ -731,6 +734,7 @@ class PlansScreen(WorkflowScreen):
 
     async def load_data(self) -> None:
         self.rows = await self.service.action_plans()
+        self.items = await self.service.list_actions_all()
         cast(Select[str], self.query_one("#plan-row", Select)).set_options(
             [
                 (
@@ -742,6 +746,17 @@ class PlansScreen(WorkflowScreen):
         )
 
     def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "plan-row":
+            cast(Select[str], self.query_one("#plan-occurrence", Select)).set_options(
+                [
+                    (
+                        a.summary + " · " + a.time_range_in(self.service.config.general.timezone),
+                        a.item_id,
+                    )
+                    for a in self.items
+                    if a.plan_id == str(event.value) and not a.preview
+                ]
+            )
         self.update_controls()
 
     def update_controls(self) -> None:
@@ -751,7 +766,10 @@ class PlansScreen(WorkflowScreen):
         self.query_one("#plan-resume", Button).disabled = (
             self.busy or plan is None or not plan.paused
         )
-        self.query_one("#plan-skip", Button).disabled = self.busy or plan is None or plan.paused
+        occurrence = cast(Select[str], self.query_one("#plan-occurrence", Select)).value
+        self.query_one("#plan-skip", Button).disabled = (
+            self.busy or plan is None or plan.paused or not isinstance(occurrence, str)
+        )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
@@ -765,6 +783,10 @@ class PlansScreen(WorkflowScreen):
             "plan_id": plan_id,
             "operation": str(event.button.id).removeprefix("plan-"),
         }
+        if values["operation"] == "skip":
+            values["item_id"] = str(
+                cast(Select[str], self.query_one("#plan-occurrence", Select)).value
+            )
         self.busy = True
         self.update_controls()
         self.status(self.t("tui.loading"))
@@ -772,16 +794,6 @@ class PlansScreen(WorkflowScreen):
 
     async def operate(self, values: dict[str, Any]) -> None:
         try:
-            if values["operation"] == "skip":
-                items = [
-                    a
-                    for a in await self.service.list_actions_all()
-                    if a.plan_id == values["plan_id"]
-                ]
-                if not items:
-                    self.status(self.t("tui.empty"))
-                    return
-                values["item_id"] = items[-1].item_id
             await self.service.workspace_call("plan_control", values)
             self.status(self.t("experience.saved"))
             await self.load_data()

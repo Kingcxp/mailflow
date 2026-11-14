@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from mailflow.domain import SmartActionResult
 from mailflow.errors import error_info
@@ -15,10 +15,12 @@ from textual.message import Message
 from textual.widgets import Button, DataTable, RichLog, Static
 
 from mailflow_tui.smart_action_review import SmartActionReviewModal
-from mailflow_tui.widgets import ButtonRow, Input
+from mailflow_tui.widgets import ButtonRow, TextArea
 
 
 class AssistantPane(Vertical):
+    BINDINGS: ClassVar[list[Any]] = [("ctrl+enter", "send", "Send")]
+
     class OpenResult(Message):
         def __init__(self, kind: str, identity: str) -> None:
             super().__init__()
@@ -29,7 +31,9 @@ class AssistantPane(Vertical):
     AssistantPane { padding: 0 1; }
     #assistant-scope, #assistant-status, #assistant-answer { height: auto; max-height: 12; overflow-y: auto; }
     #assistant-input-row, #assistant-controls { height: auto; }
-    #assistant-input { width: 1fr; }
+    #assistant-input { width: 1fr; height: 5; }
+    #assistant-send-hint { height: 1; color: $text-muted; }
+    #assistant-answer { max-height: 6; }
     #assistant-progress { height: 6; display: none; }
     #assistant-results { height: 1fr; min-height: 3; }
     #assistant-controls Button { min-width: 10; width: 1fr; }
@@ -51,7 +55,8 @@ class AssistantPane(Vertical):
     def compose(self) -> ComposeResult:
         yield Static("", id="assistant-scope", markup=False)
         with Horizontal(id="assistant-input-row"):
-            yield Input(placeholder=self._service.t("assistant.placeholder"), id="assistant-input")
+            yield TextArea(id="assistant-input", soft_wrap=True)
+        yield Static(self._service.t("interface.send_hint"), id="assistant-send-hint")
         with ButtonRow(id="assistant-controls"):
             yield Button(self._service.t("assistant.send"), id="assistant-send", variant="primary")
             yield Button(self._service.t("assistant.stop"), id="assistant-stop", disabled=True)
@@ -81,7 +86,10 @@ class AssistantPane(Vertical):
             self.query_one(f"#assistant-{ident}", Button).label = self._service.t(
                 f"assistant.{key}"
             )
-        self.query_one("#assistant-input", Input).placeholder = self._service.t(
+        self.query_one("#assistant-send-hint", Static).update(
+            self._service.t("interface.send_hint")
+        )
+        self.query_one("#assistant-input", TextArea).tooltip = self._service.t(
             "assistant.placeholder"
         )
         self.query_one("#assistant-configure", Button).label = self._service.t(
@@ -103,7 +111,7 @@ class AssistantPane(Vertical):
         self._result = None
         self._show_scope()
         self._render_result()
-        self.query_one("#assistant-input", Input).focus()
+        self.query_one("#assistant-input", TextArea).focus()
         return True
 
     def _show_scope(self) -> None:
@@ -129,7 +137,7 @@ class AssistantPane(Vertical):
 
     def _sync_controls(self) -> None:
         self.query_one("#assistant-send", Button).disabled = self._busy or not bool(
-            self.query_one("#assistant-input", Input).value.strip()
+            self.query_one("#assistant-input", TextArea).text.strip()
         )
         self.query_one("#assistant-stop", Button).disabled = (
             self._query_task is None or self._query_task.done()
@@ -142,10 +150,10 @@ class AssistantPane(Vertical):
             self._service.snapshot().llms
         )
 
-    def on_input_changed(self, event: Input.Changed) -> None:
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
         self._sync_controls()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    def action_send(self) -> None:
         if not self._busy:
             self.run_worker(self.execute(), group="assistant", exit_on_error=False)
 
@@ -171,7 +179,7 @@ class AssistantPane(Vertical):
             cast(Any, self).app.push_screen(AssistantHistoryScreen(self._service), opened)
 
     async def execute(self) -> None:
-        text = self.query_one("#assistant-input", Input).value.strip()
+        text = self.query_one("#assistant-input", TextArea).text.strip()
         if self._busy or not text:
             return
         self._busy = True

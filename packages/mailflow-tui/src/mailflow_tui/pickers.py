@@ -145,7 +145,8 @@ class DatePicker(ModalScreen[str | None]):
     DatePicker > Vertical { width: 64; max-width: 96%; height: 92%; max-height: 26; border: round $accent; background: $surface; padding: 0 1; }
     DatePicker ScrollableContainer { height: 1fr; }
     DatePicker Static { height: auto; }
-    DatePicker Select { height: 3; }
+    DatePicker Select { height: 3; width: 1fr; }
+    DatePicker Horizontal { height: 3; }
     """
 
     def __init__(self, service: Any, value: str, *, with_time: bool = False) -> None:

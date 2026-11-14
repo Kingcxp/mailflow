@@ -1778,7 +1778,7 @@
       "choose_directory": "Choose directory",
       "choose_date": "Choose date and time",
       "date_hint": "Uses the configured time zone; a date picker is available.",
-      "send_hint": "Enter for a new line; Ctrl+Enter or Send to submit.",
+      "send_hint": "Enter: new line · Ctrl+Enter or Send: run request",
       "saved_draft": "Save draft and back",
       "details": "View details",
       "add_account": "Add mailbox",
@@ -1826,7 +1826,17 @@
       "collision": "Replace all existing files with the same name in this batch? Cancel to skip these files.",
       "parent_directory": "Parent folder",
       "selected_priority": "Selected mail priority",
-      "open_mail": "Open mail"
+      "open_mail": "Open mail",
+      "weekday_0": "Monday",
+      "weekday_1": "Tuesday",
+      "weekday_2": "Wednesday",
+      "weekday_3": "Thursday",
+      "weekday_4": "Friday",
+      "weekday_5": "Saturday",
+      "weekday_6": "Sunday",
+      "view_original": "View original",
+      "back_to_correction": "Back to correction",
+      "occurrence": "Choose the occurrence to skip"
     }
   }
 }
