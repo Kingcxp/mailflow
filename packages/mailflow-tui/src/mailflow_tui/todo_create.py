@@ -9,13 +9,13 @@ from zoneinfo import ZoneInfo
 from mailflow.domain import ActionItem
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Select, Static
 
 from mailflow_tui.labels import error_detail
-from mailflow_tui.widgets import Input, SafeSelect
+from mailflow_tui.widgets import ButtonRow, Input, SafeSelect
 
 
 class TodoCreateModal(ModalScreen[bool]):
@@ -103,7 +103,7 @@ class TodoCreateModal(ModalScreen[bool]):
                         id="todo-completed",
                     )
                 yield Static("", id="todo-create-error")
-            with Horizontal(id="todo-create-buttons"):
+            with ButtonRow(id="todo-create-buttons"):
                 yield Button(self._t("tui.btn_save"), id="todo-save", variant="primary")
                 yield Button(self._t("tui.btn_cancel"), id="todo-cancel", variant="default")
 

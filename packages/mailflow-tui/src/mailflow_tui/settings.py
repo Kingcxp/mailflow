@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 
 from mailflow.config import LLMConfig
 from mailflow.domain import ComponentKind, MailMessage
+from mailflow.forms import FormField
 from mailflow.service import ConfigReloadError, MailFlowService
 from mailflow.settings import (
     LIVE_CONFIG_GROUPS,
@@ -47,6 +48,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import (
     Button,
     DataTable,
@@ -63,6 +65,7 @@ from textual.worker import WorkerCancelled
 from mailflow_tui.labels import (
     error_detail,
     error_message,
+    form_choice_label,
     redact_operation_logs,
     relabel_buttons,
     secret_values,
@@ -71,6 +74,7 @@ from mailflow_tui.labels import (
 from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.view_state import TableView
 from mailflow_tui.widgets import (
+    ButtonRow,
     Input,
     SafeSelect,
     SearchToggle,
@@ -215,7 +219,7 @@ class ListEditScreen(ModalScreen[str | None]):
             yield Static(self._t(hint), classes="dialog-hint")
             yield TextArea(as_editor_text(self._spec.editor, self._spec.value), id="list-edit-text")
             yield Static("", id="list-edit-status")
-            with Horizontal(classes="dialog-actions"):
+            with ButtonRow(classes="dialog-actions"):
                 yield Button(self._t("tui.btn_save"), id="list-edit-save", variant="success")
                 yield Button(self._t("tui.btn_back"), id="list-edit-back", variant="primary")
 
@@ -393,12 +397,12 @@ _IMAP_PRESET_HOSTS: dict[str, tuple[str, int, bool]] = {
 }
 
 
-def _imap_preset(options: dict[str, Any]) -> str:
+def _imap_preset(options: dict[str, Any], default: str = "qq") -> str:
     if options.get("preset"):
         return str(options["preset"])
     host = options.get("imap_host")
     if not host:
-        return "qq"
+        return default
     return next((key for key, values in _IMAP_PRESET_HOSTS.items() if values[0] == host), "custom")
 
 
@@ -525,6 +529,11 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         """Localized provider label (e.g. 'QQ (OneBot)' vs
         'QQ (NapCat auto-deploy)'); unknown ids stay raw."""
         value = str(choice)
+        if self._group == "accounts":
+            key = f"tui.mail_provider_{value}"
+            translated = self._t(key)
+            if translated != key:
+                return translated
         key = f"tui.bots_provider_{value}"
         translated = self._service.t(key)
         return translated if translated != key else value
@@ -569,15 +578,6 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             return plugin_extras
         if self._group == "llms":
             return _LLM_PROVIDER_FIELDS.get(provider, ())
-        if self._group == "accounts" and provider == "imap":
-            return (
-                _Extra("preset", default="qq"),
-                _Extra("username"),
-                _Extra("password", kind="password", secret=True, required=True),
-                _Extra("imap_folder", default="INBOX"),
-                _Extra("interval_seconds", default="300"),
-                _Extra("limit", default="20"),
-            )
         if self._group == "notifiers":
             if self._gateway_for(provider) is not None:
                 # gateway-backed platform (napcat auto-deploy): admins are
@@ -605,8 +605,15 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         if kind is None:
             return None
         fields = self._service.registry.form_fields(kind, provider)
+        if not fields and self._group == "accounts" and provider == "imap":
+            from mailflow_mail_imap.plugin import account_form
+
+            fields = account_form()
         if not fields:
             return None
+        return self._form_extras(provider, fields)
+
+    def _form_extras(self, provider: str, fields: tuple[FormField, ...]) -> tuple[_Extra, ...]:
         extras: list[_Extra] = []
         for field in fields:
             kind_map = {
@@ -618,6 +625,25 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 "select": "choice",
                 "textarea": "textarea",
             }
+            # Old installed mail plugins may still declare the preset as text.
+            # Its closed set uses the same contract as the bundled mail source.
+            if (
+                self._group == "accounts"
+                and provider in {"imap", "gmail", "outlook"}
+                and field.field_id == "preset"
+                and field.kind == "string"
+            ):
+                from mailflow_mail_imap.plugin import account_form
+
+                preset = account_form()[0]
+                field = FormField(
+                    field.field_id,
+                    kind="select",
+                    default=field.default or preset.default,
+                    choices=preset.choices,
+                    label_key=field.label_key,
+                    description_key=field.description_key,
+                )
             extras.append(
                 _Extra(
                     field.field_id,
@@ -715,7 +741,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 preset = str(pool.get("preset") or (provider if provider in PRESETS else "qq"))
                 raw = PRESETS.get(preset, {}).get(extra.field_id)
             if extra.field_id == "preset":
-                raw = _imap_preset(pool)
+                raw = _imap_preset(pool, extra.default)
             if raw is None or raw == "":
                 raw = extra.default
         if extra.kind == "lines" and isinstance(raw, (list, tuple)):
@@ -742,7 +768,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 with Vertical(id="entry-form-extras"):
                     yield from self._render_extras()
             yield Static("", id="entry-form-status")
-            with Horizontal(classes="dialog-actions"):
+            with ButtonRow(classes="dialog-actions"):
                 if self._group == "llms" or self._group == "accounts":
                     yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
                 if self._group == "notifiers":
@@ -824,16 +850,16 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             if translated_desc != desc_key:
                 yield Static(escape(translated_desc), classes="field-desc")
             if extra.kind == "choice":
-                _choice_names = tuple(extra.choices) or tuple(_IMAP_PRESET_HOSTS)
+                _choice_names = tuple(extra.choices)
                 value = self._extra_value(extra) or (_choice_names[0] if _choice_names else "")
+                if value not in _choice_names:
+                    _choice_names += (value,)
                 if extra.field_id == "preset":
                     self._preset_values[provider] = value
                 yield SafeSelect(
                     [
                         (
-                            self._t("ux.initial_" + name)
-                            if extra.field_id == "initial_sync"
-                            else name,
+                            form_choice_label(self._service, extra.field_id, name),
                             name,
                         )
                         for name in _choice_names
@@ -979,7 +1005,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                         ("imap_ssl", ssl_flag),
                     ):
                         target.setdefault(key, default)
-                elif preset != "custom":
+                else:
                     target["preset"] = preset
                 continue
             from mailflow_tui.list_editor import ListEditor
@@ -1407,25 +1433,33 @@ class OptionCard(Vertical):
         self._service = service
         self.spec = spec
         self._description = description
+        self._choice_signature: list[tuple[str, str]] = []
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
 
+    def _title(self) -> str:
+        key = f"tui.form_fields.{self.spec.label}"
+        label = self._t(key)
+        title = escape(self.spec.key if label == key else label)
+        if not self.spec.is_default():
+            title += f"  [dim]({self._t('tui.settings_modified')})[/dim]"
+        return f"[bold]{title}[/bold]"
+
     def compose(self) -> ComposeResult:
         spec = self.spec
         slug = _slug(spec.key)
-        title = f"[bold]{spec.key}[/bold]"
-        if not spec.is_default():
-            title += f"  [dim]({self._t('tui.settings_modified')})[/dim]"
-        yield Static(title, classes="option-key")
-        if self._description:
-            yield Static(self._description, classes="option-desc")
+        title = Static(self._title(), classes="option-key")
+        title.tooltip = spec.key
+        yield title
+        yield Static(escape(self._description), classes="option-desc")
         yield Static(
             self._t("tui.settings_default_hint", value=default_text(self._service, spec)),
             classes="option-default",
         )
-        with Horizontal(classes="option-row"):
+        with Vertical(classes="option-editor"):
             yield from self._editor_widgets(slug)
+        with ButtonRow(classes="option-row"):
             yield Button(
                 self._t("tui.btn_save"),
                 id=f"save-{slug}",
@@ -1445,11 +1479,16 @@ class OptionCard(Vertical):
         if spec.editor is EditorKind.BOOLEAN:
             yield Switch(value=bool(spec.value), id=widget_id, classes="option-input")
         elif spec.editor is EditorKind.CHOICE:
+            self._choice_signature = [
+                (form_choice_label(self._service, spec.label, choice), choice)
+                for choice in spec.choices
+            ]
             yield SafeSelect(
-                [(choice, choice) for choice in spec.choices],
+                self._choice_signature,
                 value=str(spec.value) if spec.value in spec.choices else Select.NULL,
                 id=widget_id,
                 classes="option-input",
+                allow_blank=False,
             )
         elif spec.editor in _MULTILINE_EDITORS:
             yield Static(spec.display_value(), id=widget_id, classes="option-summary")
@@ -1476,6 +1515,42 @@ class OptionCard(Vertical):
             return _select_text(self.query_one(selector, Select))
         return self.query_one(selector, Input).value
 
+    def update_spec(self, spec: OptionSpec, description: str, draft: Any) -> None:
+        """Update a card in place, retaining focus, selection and undo history."""
+        self.spec, self._description = spec, description
+        for selector, text in (
+            (".option-key", self._title()),
+            (".option-desc", escape(description)),
+            (
+                ".option-default",
+                self._t("tui.settings_default_hint", value=default_text(self._service, spec)),
+            ),
+        ):
+            text_node = self.query_one(selector, Static)
+            if text_node.content != text:
+                text_node.update(text)
+        slug = _slug(spec.key)
+        self.query_one(f"#save-{slug}", Button).label = self._t("tui.btn_save")
+        self.query_one(f"#reset-{slug}", Button).label = self._t("tui.btn_reset_default")
+        node = self.query_one(f"#value-{slug}")
+        if spec.editor in _MULTILINE_EDITORS:
+            cast(Static, node).update(spec.display_value())
+            self.query_one(f"#list-{slug}", Button).label = self._t("tui.btn_edit")
+        elif isinstance(node, Select):
+            choices = [
+                (form_choice_label(self._service, spec.label, value), value)
+                for value in spec.choices
+            ]
+            with node.prevent(Select.Changed):
+                if choices != self._choice_signature:
+                    node.set_options(choices)
+                    self._choice_signature = choices
+                node.value = draft if draft in spec.choices else Select.NULL
+        elif isinstance(node, (Input, Switch)):
+            with node.prevent(Input.Changed, Switch.Changed):
+                if node.value != draft:
+                    node.value = draft
+
 
 class SettingsPane(Vertical):
     """Sidebar of sections, a search box, and one card per option."""
@@ -1493,6 +1568,8 @@ class SettingsPane(Vertical):
         self._drafts: dict[str, Any] = {}
         self._saved_keys: set[str] = set()
         self._saving = False
+        self._saving_key = ""
+        self._sidebar_signature: list[tuple[str, str]] = []
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -1504,6 +1581,7 @@ class SettingsPane(Vertical):
             )
             yield SearchToggle("regex", ident="settings-search-regex")
             yield SearchToggle("case", ident="settings-search-case")
+        with ButtonRow(id="settings-tools"):
             yield Button(self._t("ux.backup_title"), id="settings-backup")
             if not getattr(self._service, "remote", False):
                 yield Button(self._t("ux.remote_connection"), id="settings-connection")
@@ -1527,6 +1605,10 @@ class SettingsPane(Vertical):
             "tui.settings_search_placeholder"
         )
         self.query_one("#settings-sidebar-title", Static).update(self._t("tui.settings_sections"))
+        relabel_buttons(
+            self,
+            {"settings-backup": "ux.backup_title", "settings-connection": "ux.remote_connection"},
+        )
         await self.reload()
 
     # -- language ----------------------------------------------------------
@@ -1591,17 +1673,22 @@ class SettingsPane(Vertical):
         ids = {section.section_id for section in self._sections}
         if self._active not in ids:
             self._active = self._sections[0].section_id
-        await listing.clear()
-        if not listing.is_attached:
-            return
-        await listing.extend(ListItem(Static(self._section_title(s))) for s in self._sections)
-        if not listing.is_attached:
-            return
-        listing.index = next(
+        signature = [(s.section_id, self._section_title(s)) for s in self._sections]
+        if signature != self._sidebar_signature:
+            await listing.clear()
+            if not listing.is_attached:
+                return
+            await listing.extend(ListItem(Static(title)) for _, title in signature)
+            if not listing.is_attached:
+                return
+            self._sidebar_signature = signature
+        index = next(
             index
             for index, section in enumerate(self._sections)
             if section.section_id == self._active
         )
+        if listing.index != index:
+            listing.index = index
         await self._render_options()
 
     def _current_matcher(self) -> SearchMatcher:
@@ -1651,37 +1738,48 @@ class SettingsPane(Vertical):
                     self._drafts[key] = value
             self._saved_keys.clear()
             options = self._visible_options(matcher)
-            await container.remove_children()
-            if not container.is_attached:
-                return
+            wanted = {spec.key for spec in options}
+            cards = {card.spec.key: card for card in container.query(OptionCard)}
+            obsolete: list[Widget] = [card for key, card in cards.items() if key not in wanted]
+            obsolete.extend(container.query(".settings-empty"))
+            if obsolete:
+                await container.remove_children(obsolete)
+                if not container.is_attached:
+                    return
             if not options:
                 await container.mount(
                     Static(self._t("tui.settings_no_matches"), classes="settings-empty")
                 )
                 return
-            for offset in range(0, len(options), 50):
+            for index, spec in enumerate(options):
                 if not container.is_attached:
                     return
-                batch = [
-                    OptionCard(self._service, spec, self._describe(spec))
-                    for spec in options[offset : offset + 50]
-                ]
-                await container.mount_all(batch)
-                for card in batch:
-                    for node in card.query(".option-button, .option-input"):
-                        node.disabled = self._saving
-                    if card.spec.key in self._drafts:
-                        node = card.query_one(f"#value-{_slug(card.spec.key)}")
-                        if isinstance(node, (Input, Switch, Select)):
-                            with node.prevent(Select.Changed, Switch.Changed, Input.Changed):
-                                node.value = self._drafts[card.spec.key]
-                if offset + 50 < len(options):
-                    await asyncio.sleep(0)
-            container.call_after_refresh(
-                lambda: container.scroll_to(
-                    x=scroll_offset[0], y=scroll_offset[1], animate=False, force=True
+                existing_card = cards.get(spec.key)
+                if existing_card is None:
+                    card = OptionCard(self._service, spec, self._describe(spec))
+                    await container.mount(
+                        card, before=index if index < len(container.children) else None
+                    )
+                else:
+                    card = existing_card
+                    if container.children[index] is not card:
+                        container.move_child(card, before=index)
+                current = (
+                    spec.value
+                    if spec.editor is EditorKind.BOOLEAN
+                    else str(spec.value if spec.value is not None else "")
                 )
-            )
+                card.update_spec(spec, self._describe(spec), self._drafts.get(spec.key, current))
+                for node in card.query(".option-button"):
+                    node.disabled = self._saving
+                for node in card.query(".option-input"):
+                    node.disabled = self._saving_key == spec.key
+            if obsolete:
+                container.call_after_refresh(
+                    lambda: container.scroll_to(
+                        x=scroll_offset[0], y=scroll_offset[1], animate=False, force=True
+                    )
+                )
 
     def _schedule_settings_filter(self) -> None:
         self._settings_filter_generation += 1
@@ -1775,13 +1873,16 @@ class SettingsPane(Vertical):
                 raise RuntimeError(self._t("tui.form_saving"))
             return
         self._saving = True
+        self._saving_key = key
         secrets = secret_values({key: value})
         spec = self._service.settings_option(key)
         if spec is not None:
             with contextlib.suppress(SettingsError):
                 secrets.update(secret_values({spec.label: coerce_value(spec, value)}))
         self._set_status(self._t("tui.form_saving"))
-        for node in self.query(".option-button, .option-input"):
+        for node in self.query(".option-button"):
+            node.disabled = True
+        for node in self.query(f"#card-{_slug(key)} .option-input"):
             node.disabled = True
         try:
             warning = ""
@@ -1813,6 +1914,7 @@ class SettingsPane(Vertical):
                 raise
         finally:
             self._saving = False
+            self._saving_key = ""
             for node in self.query(".option-button, .option-input"):
                 node.disabled = False
 
@@ -1926,7 +2028,7 @@ class LLMPane(Vertical):
         yield Static(self._t("tui.llms_title"), id="llms-title")
         yield Static(self._t("tui.llms_help"), id="llms-help")
         yield DataTable(id="llms-table")
-        with Horizontal(id="llms-actions"):
+        with ButtonRow(id="llms-actions"):
             yield Button(self._t("tui.btn_new"), id="llm-add", variant="success")
             yield Button(self._t("tui.btn_edit"), id="llm-edit", variant="primary", disabled=True)
             yield Button(self._t("tui.btn_delete"), id="llm-delete", variant="error", disabled=True)
@@ -2217,7 +2319,7 @@ class AccountsPane(Vertical):
         yield Static(self._t("tui.accounts_title"), id="accounts-title")
         yield Static(self._t("tui.accounts_help"), id="accounts-help")
         yield DataTable(id="accounts-table")
-        with Horizontal(id="accounts-actions"):
+        with ButtonRow(id="accounts-actions"):
             yield Button(self._t("tui.btn_new"), id="account-add", variant="success")
             yield Button(
                 self._t("tui.btn_edit"), id="account-edit", variant="primary", disabled=True
@@ -2232,7 +2334,7 @@ class AccountsPane(Vertical):
         yield Static(self._t("tui.history_title"), id="history-title")
         yield Static(self._t("tui.history_select_hint"), id="history-help")
         yield SelectionTable(t=self._t, id="history-table")
-        with Horizontal(id="history-actions"):
+        with ButtonRow(id="history-actions"):
             yield Button(
                 self._t("tui.history_analyze"),
                 id="history-analyze",

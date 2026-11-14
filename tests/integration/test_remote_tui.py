@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import queue
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from mailflow.i18n import I18n
+from mailflow_tui.app import MailFlowApp
 from mailflow_tui.remote import LoginScreen, RemoteServiceAdapter
+from mailflow_tui.workspace_screens import AssistantHistoryScreen
 from textual.app import App
 from textual.widgets import Button, Static
+
+from mailflow_test_support.settings import start_service_quiet
+from mailflow_test_support.ui import until
 
 
 class _RemoteClientStub:
@@ -61,3 +69,30 @@ async def test_remote_login_uses_saved_language_and_validates_required_fields() 
 
         status = str(screen.query_one("#login-status", Static).render())
         assert I18n("zh-CN").t("tui.remote_fields_required") in status
+
+
+@pytest.mark.asyncio
+async def test_slow_dialog_load_can_be_closed_without_waiting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = await start_service_quiet(tmp_path)
+    entered, released = asyncio.Event(), asyncio.Event()
+
+    async def slow_history(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        try:
+            await asyncio.Future[None]()
+        finally:
+            released.set()
+
+    monkeypatch.setattr(service, "workspace_call", slow_history)
+    app = MailFlowApp(service, queue.Queue())
+    try:
+        async with app.run_test(size=(80, 30)) as pilot:
+            dialog = AssistantHistoryScreen(service)
+            app.push_screen(dialog)
+            await until(pilot, entered.is_set)
+            await pilot.press("escape")
+            await until(pilot, lambda: app.screen is not dialog and released.is_set())
+    finally:
+        await service.stop()

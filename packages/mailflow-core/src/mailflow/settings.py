@@ -40,6 +40,14 @@ _CORE_GROUPS = ("general", "logging", "plugins", "storage", "i18n")
 _LIST_GROUPS = ("accounts", "llms", "processors", "notifiers")
 """Groups whose value is a list of entries, each editable as a form."""
 
+_OPTION_CHOICES = {
+    "general.browser_mode": ("auto", "system", "disabled"),
+    **{
+        "logging." + name: ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "NOTSET")
+        for name in ("level", "console_level", "file_level", "jsonl_level")
+    },
+}
+
 _PROVIDER_FIELD = {
     "accounts": "provider",
     "llms": "provider",
@@ -176,6 +184,11 @@ def _spec_for_field(
     if key == "general.language" and language_choices:
         editor = EditorKind.CHOICE
         choices = tuple(language_choices)
+    elif key in _OPTION_CHOICES:
+        editor = EditorKind.CHOICE
+        choices = _OPTION_CHOICES[key]
+        if value not in choices:
+            choices += (str(value),)  # Keep existing configuration values editable.
     item_fields: tuple[OptionSpec, ...] = ()
     if editor is EditorKind.STRUCT_LIST and item_model is not None:
         item_fields = tuple(entry_field_specs(item_model, section=section))
@@ -433,6 +446,8 @@ def coerce_value(spec: OptionSpec, raw: Any) -> Any:
             return raw
         return str(raw).strip().lower() in ("1", "true", "yes", "on")
     if spec.editor is EditorKind.INTEGER:
+        if not spec.required and spec.default is None and (raw is None or str(raw).strip() == ""):
+            return None
         if isinstance(raw, int):
             return raw
         try:
@@ -440,6 +455,8 @@ def coerce_value(spec: OptionSpec, raw: Any) -> Any:
         except ValueError as exc:
             raise SettingsError(spec.key, f"{spec.label}: expected a whole number") from exc
     if spec.editor is EditorKind.NUMBER:
+        if not spec.required and spec.default is None and (raw is None or str(raw).strip() == ""):
+            return None
         if isinstance(raw, (int, float)):
             return float(raw)
         try:

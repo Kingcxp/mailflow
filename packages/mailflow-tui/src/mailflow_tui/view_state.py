@@ -10,6 +10,24 @@ from textual.widgets import DataTable
 from textual.widgets._data_table import RowKey
 
 
+def update_table(table: DataTable[Any], rows: list[tuple[str, tuple[Any, ...]]]) -> bool:
+    """Change only differing cells; replace rows together when their order changes."""
+    reordered = [key.value for key in table.rows] != [key for key, _ in rows]
+    with table.app.batch_update(), table.prevent(DataTable.RowHighlighted, DataTable.RowSelected):
+        if reordered:
+            table.clear()
+            for key, cells in rows:
+                table.add_row(*cells, key=key)
+        else:
+            columns = list(table.columns)
+            for key, cells in rows:
+                previous = table.get_row(key)
+                for column, old, new in zip(columns, previous, cells, strict=True):
+                    if old != new:
+                        table.update_cell(key, column, new, update_width=True)
+    return reordered
+
+
 class TableRowEvent(Protocol):
     data_table: DataTable[Any]
     row_key: RowKey

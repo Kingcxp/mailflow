@@ -9,11 +9,12 @@ from typing import Any, ClassVar
 
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DirectoryTree, Static
 
 from mailflow_tui.labels import error_message
+from mailflow_tui.widgets import ButtonRow
 
 
 class InstallScreen(ModalScreen[list[str] | None]):
@@ -34,7 +35,7 @@ class InstallScreen(ModalScreen[list[str] | None]):
             yield Static(self._t("tui.install_title"), classes="scaffold-title")
             yield Static(self._t("tui.install_pick_folder"), classes="scaffold-hint")
             yield DirectoryTree(Path.cwd(), id="install-tree")
-            with Horizontal(id="install-actions"):
+            with ButtonRow(id="install-actions"):
                 yield Button(self._t("tui.btn_install"), id="install-run", variant="success")
                 yield Button(self._t("tui.btn_cancel"), id="install-cancel", variant="primary")
 

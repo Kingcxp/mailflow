@@ -863,6 +863,8 @@ def account_form(preset: str = "qq") -> tuple[FormField, ...]:
             kind="select",
             default=preset,
             choices=("qq", "163", "gmail", "outlook", "custom"),
+            label_key="tui.form_fields.preset",
+            description_key="tui.extras_preset",
         ),
         FormField("username"),
         FormField("password", kind="password", required=True, secret=True),

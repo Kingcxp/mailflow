@@ -79,8 +79,9 @@ from mailflow_tui.scaffold import PluginScaffoldScreen
 from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
-from mailflow_tui.view_state import TableRowEvent, TableView
+from mailflow_tui.view_state import TableRowEvent, TableView, update_table
 from mailflow_tui.widgets import (
+    ButtonRow,
     Input,
     SafeSelect,
     SearchToggle,
@@ -714,7 +715,7 @@ class ActionModal(ModalScreen[Any]):
             # the source mail's own details load asynchronously below
             yield Static("", id="action-mail-detail")
         # outside the scroll box: always visible, never scrolls away
-        with Horizontal(id="action-footer"):
+        with ButtonRow(id="action-footer"):
             yield Button(self._service.t("tui.btn_edit"), id="action-edit", variant="primary")
             yield Button(self._service.t("tui.btn_close"), id="action-close", variant="default")
 
@@ -1020,14 +1021,13 @@ class MailPane(Vertical):
         self._rendering = True
         try:
             with table.prevent(DataTable.RowHighlighted, DataTable.RowSelected):
-                table.clear()
                 self._ensure_columns()
                 self._refresh_view_options()
-                for position, record in enumerate(records, start=1):
-                    table.add_row(*self._mail_cells(record), key=record.record_id)
-                    if position % 50 == 0:
-                        await asyncio.sleep(0)
-                self._selected_id = view.restore(table)
+                reordered = update_table(
+                    table, [(record.record_id, self._mail_cells(record)) for record in records]
+                )
+                if reordered:
+                    self._selected_id = view.restore(table)
         finally:
             self._rendering = False
         hint = self.query_one_optional("#mail-empty-hint", Static)
@@ -1513,7 +1513,8 @@ class MailPane(Vertical):
         node = self.query_one_optional(selector, Static)
         if node is None:
             return
-        node.update(content)
+        if node.content != content:
+            node.update(content)
         node.display = bool(content.plain)
 
     def _sync_urgency_select(self, record: MailRecord) -> None:
@@ -2349,7 +2350,7 @@ class ActionsPane(Vertical):
                 allow_blank=False,
             )
         yield SelectionTable(t=self._service.t, id="actions-table")
-        with Horizontal(id="actions-buttons"):
+        with ButtonRow(id="actions-buttons"):
             yield Button(
                 self._service.t("tui.btn_add_todo"),
                 id="actions-add",
@@ -2369,7 +2370,7 @@ class ActionsPane(Vertical):
                 disabled=True,
             )
         yield Button(self._service.t("assistant.handoff"), id="actions-assistant")
-        with Horizontal():
+        with ButtonRow():
             yield Button(self._service.t("experience.action_filters"), id="actions-filters")
             yield Button(self._service.t("experience.plans"), id="actions-plans")
         yield Static(self._service.t("tui.empty"), id="actions-hint")
@@ -2470,7 +2471,6 @@ class ActionsPane(Vertical):
         # remember the cursor row and scroll offset, restore them below when
         # the row still exists
         view = TableView.capture(table)
-        table.clear()
         self._ensure_columns()
         table.unselectable_keys = {item.item_id for item in loaded if item.preview}
         table.retain_checks({item.item_id for item in loaded if not item.preview})
@@ -2553,31 +2553,39 @@ class ActionsPane(Vertical):
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
-        for position, item in enumerate(items, start=1):
+        rows: list[tuple[str, tuple[Any, ...]]] = []
+        for item in items:
             # an entry that is over is styled dim instead of being hidden: the
             # user still needs to see what happened, but must not mistake it
             # for something still ahead
             style = "dim" if item.preview or self._service.is_action_expired(item) else ""
-            table.add_row(
-                RichText("·", style="dim") if item.preview else table.check_label(item.item_id),
-                RichText(_action_time_range(self._service, item), style=style),
-                RichText(_action_type_label(self._service, item.action_type), style=style),
-                RichText(
-                    (self._service.t("recurrence.preview") + " · " if item.preview else "")
-                    + item.summary,
-                    style=style,
-                ),
-                RichText(
-                    " · ".join(filter(None, [item.category, ", ".join(item.tags), item.notes]))
-                    or "-",
-                    style=style,
-                ),
-                RichText(item.source_subject or item.mail_id, style=style),
-                key=item.item_id,
+            rows.append(
+                (
+                    item.item_id,
+                    (
+                        RichText("·", style="dim")
+                        if item.preview
+                        else table.check_label(item.item_id),
+                        RichText(_action_time_range(self._service, item), style=style),
+                        RichText(_action_type_label(self._service, item.action_type), style=style),
+                        RichText(
+                            (self._service.t("recurrence.preview") + " · " if item.preview else "")
+                            + item.summary,
+                            style=style,
+                        ),
+                        RichText(
+                            " · ".join(
+                                filter(None, [item.category, ", ".join(item.tags), item.notes])
+                            )
+                            or "-",
+                            style=style,
+                        ),
+                        RichText(item.source_subject or item.mail_id, style=style),
+                    ),
+                )
             )
-            if position % 50 == 0:
-                await asyncio.sleep(0)
-        view.restore(table)
+        if update_table(table, rows):
+            view.restore(table)
         self._sync_action_controls()
 
     def on_selection_table_selection_changed(self, event: SelectionTable.SelectionChanged) -> None:
@@ -2914,7 +2922,7 @@ class RuntimePane(Vertical):
                 cursor_type="row",
             )  # pyright: ignore[reportUnknownMemberType]
             yield Static(self._service.t("tui.runtime_plugins_help"), id="runtime-plugins-hint")
-            with Horizontal(id="runtime-plugin-actions"):
+            with ButtonRow(id="runtime-plugin-actions"):
                 yield Button(
                     self._service.t("tui.btn_disable"), id="runtime-plugin-disable", variant="error"
                 )
@@ -2965,7 +2973,7 @@ class RuntimePane(Vertical):
 
     def _set_static(self, selector: str, content: str) -> None:
         node = self.query_one_optional(selector, Static)
-        if node is not None:
+        if node is not None and node.content != content:
             node.update(content)
 
     def _plugins_table(self) -> DataTable[Any] | None:
@@ -3008,8 +3016,8 @@ class RuntimePane(Vertical):
         if table is None:
             return
         view = TableView.capture(table)
-        table.clear()
         self._ensure_columns()
+        rows: list[tuple[str, tuple[Any, ...]]] = []
         for plugin in snapshot.plugins:
             status_key = service.plugin_status(plugin.plugin_id)
             status_text = {
@@ -3018,14 +3026,19 @@ class RuntimePane(Vertical):
                 "not_loaded": service.t("tui.plugin_status_not_loaded"),
                 "error": service.t("tui.plugin_status_error"),
             }.get(status_key, status_key)
-            table.add_row(
-                escape(plugin.plugin_id),
-                escape(plugin.name),
-                ",".join(k.value for k in plugin.kinds) or "-",
-                status_text,
-                key=plugin.plugin_id,
+            rows.append(
+                (
+                    plugin.plugin_id,
+                    (
+                        escape(plugin.plugin_id),
+                        escape(plugin.name),
+                        ",".join(k.value for k in plugin.kinds) or "-",
+                        status_text,
+                    ),
+                )
             )
-        self._selected_plugin = view.restore(table)
+        if update_table(table, rows):
+            self._selected_plugin = view.restore(table)
         adapters = "\n".join(
             escape(f"  {c.component_id} (plugin: {c.plugin_id})")
             for c in snapshot.components
@@ -3702,7 +3715,7 @@ class MarketDetailScreen(ModalScreen[Any]):
             with ScrollableContainer(id="market-detail-scroll"):
                 yield Markdown(self._t("tui.loading"), id="market-detail-readme")
             yield Static("", id="market-detail-status")
-            with Horizontal(id="market-detail-actions"):
+            with ButtonRow(id="market-detail-actions"):
                 yield Button(
                     self._service.t("tui.btn_install"),
                     id="detail-install",
@@ -3883,7 +3896,7 @@ class MarketPane(Vertical):
                     id="market-sort",
                     allow_blank=False,
                 )
-            with Horizontal(id="market-controls-buttons"):
+            with ButtonRow(id="market-controls-buttons"):
                 yield Button(
                     self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary"
                 )
@@ -3904,7 +3917,7 @@ class MarketPane(Vertical):
             with ScrollableContainer(id="market-detail-scroll"):
                 yield Markdown("", id="market-readme")
             yield Static("", id="market-status")
-            with Horizontal(id="market-actions"):
+            with ButtonRow(id="market-actions"):
                 yield Button(
                     self._service.t("tui.btn_install"), id="market-install", variant="success"
                 )
@@ -4322,6 +4335,10 @@ class MailFlowApp(App[None]):
         if session is not None:
             session.bind(self)
         self._log_timer: Any = None
+        self._refresh_lock = asyncio.Lock()
+        self._dirty_tabs: set[str] = set()
+        self._reload_requested = False
+        self._reload_scheduled = False
         # shared plugin-entry cache: the single source of truth for the
         # detail dialog. MarketPane writes its fetched entries here, and
         # the Runtime tab reads from here, so both tabs show the exact
@@ -4489,7 +4506,6 @@ class MailFlowApp(App[None]):
         self.run_worker(
             self._eager_market_fetch(), exclusive=True, group="market-eager", exit_on_error=False
         )
-        self._refresh_lock = asyncio.Lock()
         self._subscriptions = [self._service.on("*", self._on_service_event)]
         if self._splash:
             from mailflow_tui.splash import SplashScreen
@@ -4566,7 +4582,23 @@ class MailFlowApp(App[None]):
                 "mailflow.records.",
             )
         ):
-            self._schedule_reload()
+            if event.startswith(("config.", "plugin.", "backup.restored")):
+                affected = {
+                    "tab-mail",
+                    "tab-actions",
+                    "tab-runtime",
+                    "tab-mailboxes",
+                    "tab-llms",
+                    "tab-notifications",
+                    "tab-settings",
+                }
+            elif event.startswith("gateway."):
+                affected = {"tab-runtime", "tab-notifications"}
+            elif event.startswith("action."):
+                affected = {"tab-mail", "tab-actions"}
+            else:
+                affected = {"tab-mail", "tab-actions", "tab-runtime", "tab-mailboxes"}
+            self._schedule_reload(affected)
 
     def _pane_factories(self) -> dict[str, tuple[Callable[[Any], Any], str]]:
         return {
@@ -4658,9 +4690,12 @@ class MailFlowApp(App[None]):
         """
         self._schedule_reload()
 
-    def _schedule_reload(self) -> None:
+    def _schedule_reload(self, affected: set[str] | None = None) -> None:
         # a bulk re-analysis emits one event per mail: coalesce the burst
         # into a single refresh instead of queueing a full reload per mail
+        self._dirty_tabs.update(
+            affected if affected is not None else {"tab-mail", "tab-actions", "tab-runtime"}
+        )
         self._reload_requested = True
         if getattr(self, "_reload_scheduled", False):
             return
@@ -4672,14 +4707,41 @@ class MailFlowApp(App[None]):
         try:
             while self._reload_requested:
                 self._reload_requested = False
+                await asyncio.sleep(0.15)
                 async with self._refresh_lock:
                     await self._reload_all()
         finally:
             self._reload_scheduled = False
 
     async def _reload_all(self) -> None:
-        for pane_type in (MailPane, ActionsPane, RuntimePane):
-            panes = self.query(pane_type)
+        tabs = self.query_one(TabbedContent)
+        active = tabs.active
+        if active not in self._dirty_tabs:
+            return
+        self._dirty_tabs.discard(active)
+        # Hidden panes catch up on activation. Receiving a mail must not rebuild
+        # tables and forms behind the page the user is currently editing.
+        if self._remote and active in {"tab-mail", "tab-actions"}:
+            try:
+                await self._service.refresh_snapshot()
+            except Exception as exc:
+                self._dirty_tabs.add(active)
+                status = self.query_one_optional(
+                    "#mail-operation-status" if active == "tab-mail" else "#actions-hint", Static
+                )
+                if status is not None:
+                    status.update(_load_error(self._service, exc))
+                return
+        for pane_type in (
+            MailPane,
+            ActionsPane,
+            RuntimePane,
+            AccountsPane,
+            LLMPane,
+            NotificationsPane,
+            SettingsPane,
+        ):
+            panes = self.query(f"#{active} {pane_type.__name__}")
             if not panes:
                 continue
             pane = panes.first()
@@ -4687,12 +4749,24 @@ class MailFlowApp(App[None]):
                 await pane.refresh_mail()
             elif isinstance(pane, ActionsPane):
                 await pane.refresh_actions()
-            else:
-                await pane.refresh_runtime()  # type: ignore[attr-defined]
+            elif isinstance(pane, RuntimePane):
+                await pane.refresh_runtime()
+            elif isinstance(pane, NotificationsPane):
+                pane.refresh_data()
+            elif isinstance(pane, (AccountsPane, LLMPane, SettingsPane)):
+                await pane.reload()
         # The remote runtime pane updates the shared snapshot; reflect its
         # latest queue/paused state in the mail controls in this same refresh.
         for mail_pane in self.query(MailPane):
             mail_pane.sync_analysis_controls()
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        active = event.tabbed_content.active
+        if active in self._dirty_tabs:
+            self._schedule_reload(set())
+        if active == "tab-notifications":
+            for pane in self.query(NotificationsPane):
+                pane._periodic_check()
 
     def _drain_logs(self) -> None:
         log_query = self.query(LogsPane)

@@ -20,13 +20,13 @@ from mailflow.mail_body import mail_body_text
 from mailflow.mail_query import MailQuery
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Select, Static
 
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.view_state import TableView
-from mailflow_tui.widgets import Input, SafeSelect, SelectionTable, TextArea
+from mailflow_tui.widgets import ButtonRow, Input, SafeSelect, SelectionTable, TextArea
 
 
 def save_attachment(target: Path, data: bytes) -> None:
@@ -63,10 +63,22 @@ class WorkflowScreen(ModalScreen[Any]):
         return self.service.t(key, **params)
 
     async def on_mount(self) -> None:
+        self.run_worker(
+            self._load_initial_data(), group="workflow-load", exclusive=True, exit_on_error=False
+        )
+
+    async def _load_initial_data(self) -> None:
+        status = self.query_one_optional("#workflow-status", Static)
+        loading = self.t("tui.loading")
+        if status is not None:
+            status.update(loading)
         try:
             await self.load_data()
         except Exception as exc:
             self.status(error_text(exc, self.t))
+        else:
+            if status is not None and status.content == loading:
+                status.update("")
 
     async def load_data(self) -> None:
         """Load dialog data after mounting; keep connection errors inside the dialog."""
@@ -88,7 +100,9 @@ class WorkflowScreen(ModalScreen[Any]):
         )
 
     def status(self, text: str) -> None:
-        self.query_one("#workflow-status", Static).update(text)
+        node = self.query_one_optional("#workflow-status", Static)
+        if node is not None and node.content != text:
+            node.update(text)
 
 
 class TrashChoiceScreen(WorkflowScreen):
@@ -102,7 +116,7 @@ class TrashChoiceScreen(WorkflowScreen):
             with ScrollableContainer():
                 yield Static(self.preview, markup=False)
                 yield Checkbox(self.t("ux.delete_linked_tasks"), id="trash-linked-actions")
-            with Horizontal():
+            with ButtonRow():
                 yield Button(self.t("tui.btn_trash"), id="trash-confirm", variant="error")
                 yield Button(self.t("tui.btn_cancel"), id="trash-cancel")
 
@@ -172,7 +186,7 @@ class MailMenu(WorkflowScreen):
                 id="workflow-choice",
                 allow_blank=False,
             )
-            with Horizontal():
+            with ButtonRow():
                 yield Button(self.t("tui.btn_apply"), id="workflow-apply", variant="primary")
                 yield Button(self.t("tui.btn_back"), id="workflow-close")
 
@@ -214,7 +228,7 @@ class SyncScreen(WorkflowScreen):
                 )
                 yield Input(value="30", type="integer", id="sync-days", disabled=True)
                 yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
+            with ButtonRow():
                 yield Button(
                     self.t("sync.start"),
                     id="sync-start",
@@ -366,7 +380,7 @@ class MailFilter(WorkflowScreen):
                     id="filter-relative",
                 )
                 yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
+            with ButtonRow():
                 yield Button(self.t("tui.btn_apply"), id="filter-apply", variant="primary")
                 yield Button(self.t("ux.reset_filter"), id="filter-reset")
                 yield Button(self.t("tui.btn_cancel"), id="filter-cancel")
@@ -428,7 +442,7 @@ class MailReader(WorkflowScreen):
             )
             yield TextArea(self.body[:20000], read_only=True, id="reader-body")
             yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
+            with ButtonRow():
                 yield Button(self.t("ux.previous"), id="reader-prev")
                 yield Button(self.t("ux.next"), id="reader-next")
                 yield Button(self.t("tui.btn_back"), id="reader-close")
@@ -490,7 +504,7 @@ class AttachmentsScreen(WorkflowScreen):
                 yield Static(self.t("ux.save_path"))
                 yield Input(id="attachment-path")
                 yield Static("", id="workflow-status", markup=False)
-                with Horizontal():
+                with ButtonRow():
                     yield Button(self.t("ux.download"), id="attachment-download", variant="primary")
                     yield Button(
                         self.t("ux.open_saved"),
@@ -602,7 +616,7 @@ class TrashScreen(WorkflowScreen):
             yield Input(placeholder=self.t("tui.mail_search_placeholder"), id="trash-search")
             yield SelectionTable(t=self.t, id="trash-table")
             yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
+            with ButtonRow():
                 yield Button(
                     self.t("ux.restore"), id="trash-restore", variant="primary", disabled=True
                 )
@@ -618,7 +632,9 @@ class TrashScreen(WorkflowScreen):
         for column in ("selected", "subject", "account", "deleted", "expires"):
             table.add_column(self.t("ux." + column), key=column)
         table.cursor_type = "row"
-        await self.refresh_rows()
+        self.run_worker(
+            self.refresh_rows(), group="trash-load", exclusive=True, exit_on_error=False
+        )
 
     async def refresh_rows(self) -> None:
         try:
@@ -756,7 +772,7 @@ class DraftsScreen(WorkflowScreen):
             yield DataTable(id="draft-table")
             yield TextArea(read_only=True, id="draft-body")
             yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
+            with ButtonRow():
                 yield Button(
                     self.t("ux.continue_reply"),
                     id="draft-continue",
@@ -770,7 +786,9 @@ class DraftsScreen(WorkflowScreen):
         for key in ("subject", "account", "state", "updated"):
             table.add_column(self.t("ux." + key))
         table.cursor_type = "row"
-        await self.refresh_rows()
+        self.run_worker(
+            self.refresh_rows(), group="drafts-load", exclusive=True, exit_on_error=False
+        )
 
     async def refresh_rows(self) -> None:
         try:
@@ -866,7 +884,7 @@ class TaskMenu(MailMenu):
                 id="workflow-choice",
                 allow_blank=False,
             )
-            with Horizontal():
+            with ButtonRow():
                 yield Button(self.t("tui.btn_apply"), id="workflow-apply", variant="primary")
                 yield Button(self.t("tui.btn_back"), id="workflow-close")
 
@@ -950,7 +968,7 @@ class DeliveriesScreen(WorkflowScreen):
             yield Static(self.t("ux.failed_deliveries"))
             yield SelectionTable(t=self.t, id="delivery-table")
             yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
+            with ButtonRow():
                 yield Button(self.t("ux.retry_delivery"), id="delivery-retry", disabled=True)
                 yield Button(self.t("tui.btn_refresh"), id="delivery-refresh")
                 yield Button(self.t("tui.btn_back"), id="delivery-close")
@@ -960,7 +978,9 @@ class DeliveriesScreen(WorkflowScreen):
         table.add_column("[ ]", key="selected", width=3)
         for key in ("kind", "channel", "target", "reason", "updated", "source"):
             table.add_column(self.t("ux." + key))
-        await self.reload_rows()
+        self.run_worker(
+            self.reload_rows(), group="deliveries-load", exclusive=True, exit_on_error=False
+        )
 
     async def reload_rows(self) -> None:
         try:
@@ -1040,7 +1060,7 @@ class DataManagementScreen(WorkflowScreen):
                 id="backup-path",
             )
             yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
+            with ButtonRow():
                 yield Button(self.t("ux.create_backup"), id="backup-create")
                 yield Button(self.t("ux.restore_backup"), id="backup-restore", variant="warning")
                 yield Button(self.t("tui.btn_back"), id="backup-close")

@@ -7,12 +7,12 @@ from typing import Any, ClassVar
 
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Static
 
 from mailflow_tui.labels import error_message
-from mailflow_tui.widgets import Input
+from mailflow_tui.widgets import ButtonRow, Input
 
 
 class ReposScreen(ModalScreen[bool | None]):
@@ -37,7 +37,7 @@ class ReposScreen(ModalScreen[bool | None]):
             with Vertical(id="repos-form"):
                 yield Input(placeholder=self._t("tui.repos_name"), id="repos-name")
                 yield Input(placeholder=self._t("tui.repos_url"), id="repos-url")
-            with Horizontal(id="repos-actions"):
+            with ButtonRow(id="repos-actions"):
                 yield Button(self._t("tui.btn_add"), id="repos-add", variant="success")
                 yield Button(self._t("tui.btn_remove"), id="repos-remove", variant="warning")
                 yield Button(self._t("tui.btn_back"), id="repos-cancel", variant="primary")
@@ -109,6 +109,7 @@ class ReposScreen(ModalScreen[bool | None]):
         name = str(row_values[0])
         self._editing_name = name
         self.query_one("#repos-name", Input).value = name
+        self.query_one("#repos-url", Input).value = str(row_values[1])
         add_button = self.query_one("#repos-add", Button)
         add_button.label = self._t("tui.repos_update")
         add_button.variant = "primary"

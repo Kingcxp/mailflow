@@ -13,13 +13,13 @@ from typing import Any, ClassVar
 
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
 from mailflow_tui.labels import error_detail
-from mailflow_tui.widgets import TextArea
+from mailflow_tui.widgets import ButtonRow, TextArea
 
 
 class UserProfileModal(ModalScreen[bool]):
@@ -48,7 +48,7 @@ class UserProfileModal(ModalScreen[bool]):
                 yield Static(self._t("ux.preferences_hint"))
                 yield TextArea(self._guidelines, id="profile-guidelines")
             yield Static("", id="profile-status")
-            with Horizontal(id="profile-buttons"):
+            with ButtonRow(id="profile-buttons"):
                 yield Button(self._t("tui.btn_save"), id="profile-save", variant="success")
                 yield Button(self._t("tui.btn_cancel"), id="profile-cancel", variant="default")
 

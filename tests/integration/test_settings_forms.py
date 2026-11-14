@@ -6,16 +6,69 @@ from __future__ import annotations
 
 import asyncio
 import queue as queue_module
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from mailflow.commands import CommandRouter
+from mailflow.domain import ComponentKind
 from mailflow_tui.app import MailFlowApp, MailPane
 from mailflow_tui.ask_correct import AskCorrectModal
 from textual.widgets import Button, Input, Select, Static, TabbedContent
 
 from mailflow_test_support.settings import start_service_quiet
+from mailflow_test_support.ui import until
+
+
+async def test_mailbox_presets_are_selectable_and_save_real_server_settings(tmp_path: Path) -> None:
+    from mailflow_mail_imap.plugin import PRESETS, account_form
+    from mailflow_tui.settings import EntryFormScreen
+
+    service = await start_service_quiet(tmp_path)
+    service.i18n.set_language("zh-CN")
+    app = MailFlowApp(service, queue_module.Queue())
+    try:
+        async with app.run_test(size=(80, 30)) as pilot:
+            for fields in (
+                account_form(),
+                (replace(account_form()[0], kind="string", choices=()), *account_form()[1:]),
+                (),
+            ):
+                service.registry.set_form_fields(ComponentKind.MAIL_SOURCE, "imap", fields)
+                results: list[dict[str, Any] | None] = []
+                form = EntryFormScreen(service, "accounts")
+                app.push_screen(form, results.append)
+                await pilot.pause()
+                preset = form.query_one("#extra-preset", Select)
+                preset.focus()
+                await pilot.press("enter", "down", "enter")
+                await pilot.pause()
+                assert preset.value == "163"
+                assert (
+                    form.query_one("#extra-imap-host", Input).value == PRESETS["163"]["imap_host"]
+                )
+                preset.value = "outlook"
+                await pilot.pause()
+                assert form.query_one("#extra-smtp-port", Input).value == "587"
+                form.query_one("#field-account-id", Input).value = "work"
+                form.query_one("#field-email", Input).value = "user@example.com"
+                form.query_one("#extra-password", Input).value = "fake-password"
+                preset.value = "custom"
+                await pilot.pause()
+                form.query_one("#extra-imap-host", Input).value = "imap.example.com"
+                form.query_one("#extra-smtp-host", Input).value = "smtp.example.com"
+                form.query_one("#entry-form-save", Button).press()
+                await until(pilot, lambda results=results: bool(results))
+                payload = results[0]
+                assert payload is not None
+                assert payload["options"]["preset"] == "custom"
+                assert payload["options"]["imap_host"] == "imap.example.com"
+                assert payload["options"]["smtp_host"] == "smtp.example.com"
+                assert payload["options"]["smtp_port"] == 587
+                await pilot.pause()
+    finally:
+        await service.stop()
 
 
 def _result_collector(results: list[dict[str, Any]]) -> Any:
@@ -356,6 +409,15 @@ async def test_entry_form_fields_scroll(tmp_path: Path) -> None:
             fields.scroll_down()
             await pilot.pause(0.1)
             assert fields.scroll_y > 0
+            for width in (80, 60):
+                await pilot.resize_terminal(width, 24)
+                await pilot.pause()
+                inputs = list(app.screen.query("#entry-form-fields Input"))
+                assert len({(node.region.x, node.region.width) for node in inputs}) == 1
+                back = app.screen.query_one("#entry-form-back", Button)
+                assert back.region.right <= app.size.width
+            assert await pilot.click(back)
+            await until(pilot, lambda: not isinstance(app.screen, EntryFormScreen))
     finally:
         await service.stop()
 

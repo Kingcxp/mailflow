@@ -18,12 +18,16 @@ from mailflow.settings import (
 
 
 class TestApplyValue:
-    def test_optional_string_can_be_set_and_cleared(self) -> None:
+    def test_optional_settings_can_be_set_and_cleared(self) -> None:
         config = MailFlowConfig()
         updated = apply_value(config, "logging.console_redirect", "logs/console.log")
         assert updated.logging.console_redirect == "logs/console.log"
         cleared = apply_value(updated, "logging.console_redirect", "")
         assert cleared.logging.console_redirect is None
+        timed = apply_value(cleared, "general.daily_digest_hour", "14")
+        assert timed.general.daily_digest_hour == 14
+        cleared = apply_value(timed, "general.daily_digest_hour", "")
+        assert cleared.general.daily_digest_hour is None
 
     def test_string_list_from_lines(self) -> None:
         updated = apply_value(MailFlowConfig(), "plugins.disabled", "a\n\nb\n")

@@ -27,6 +27,22 @@ def urgency_label(service: Any, urgency: Urgency | str) -> str:
     return service.t(key) if key else value
 
 
+def form_choice_label(service: Any, field: str, value: str) -> str:
+    """Translate menu choices while preserving their stored plugin values."""
+    if field == "initial_sync":
+        return str(service.t("ux.initial_" + value))
+    if field == "minimum_urgency":
+        return urgency_label(service, value)
+    if field == "language":
+        return next(
+            (info.name for info in service.i18n.available_languages() if info.code == value),
+            value,
+        )
+    key = f"tui.form_choices.{field}.{value}"
+    label = str(service.t(key))
+    return value if label == key else label
+
+
 def remote_connection_status(service: Any) -> str:
     if not getattr(service, "remote", False):
         return ""

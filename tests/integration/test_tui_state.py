@@ -482,7 +482,12 @@ async def test_events_language_and_refresh_keep_reading_state(host: Any) -> None
         await service.storage.save_mail(incoming)
         await emit("mailflow.mail.processed", record=incoming)
         await settle(pilot)
+        # Hidden pages catch up when opened, without refreshing behind an editor.
+        app.query_one(TabbedContent).active = "tab-mail"
+        await settle(pilot)
         assert table.row_count == 41
+        app.query_one(TabbedContent).active = "tab-runtime"
+        await settle(pilot)
         service.i18n.set_language("zh-CN")
         await emit("language.changed", language="zh-CN")
         await settle(pilot)

@@ -23,7 +23,7 @@ from mailflow.errors import error_text
 from mailflow.service import ConfigReloadError, MailFlowService
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.widgets import Button, DataTable, Select, Static
 
@@ -35,8 +35,8 @@ from mailflow_tui.labels import (
     relabel_buttons,
     urgency_label,
 )
-from mailflow_tui.view_state import TableView
-from mailflow_tui.widgets import SafeSelect
+from mailflow_tui.view_state import TableView, update_table
+from mailflow_tui.widgets import ButtonRow, SafeSelect
 
 _URGENCY_ORDER = (Urgency.AD, Urgency.INFO, Urgency.IMPORTANT, Urgency.URGENT)
 
@@ -157,6 +157,7 @@ class NotificationsPane(Vertical):
         self._timer: Any = None
         self._syncing_urgency = False
         self._mutating = False
+        self._checking = False
         self._statuses: dict[str, str] = {}
 
     def _urgency_options(self) -> list[tuple[str, str]]:
@@ -169,7 +170,7 @@ class NotificationsPane(Vertical):
         yield Static(escape(self._service.t("tui.notifications_help")), id="notifications-help")
         with ScrollableContainer(id="notifications-table-wrap"):
             yield DataTable(id="notifications-table", cursor_type="row")  # pyright: ignore[reportUnknownMemberType]
-        with Horizontal(id="notifications-actions"):
+        with ButtonRow(id="notifications-actions"):
             yield Button(self._service.t("tui.btn_add"), id="notif-add", variant="success")
             yield Button(self._service.t("tui.btn_edit"), id="notif-edit", variant="primary")
             yield Button(
@@ -235,7 +236,7 @@ class NotificationsPane(Vertical):
         statuses = self._statuses
         table: DataTable[Any] = self.query_one("#notifications-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         view = TableView.capture(table, self._selected_id)
-        table.clear()  # pyright: ignore[reportUnknownMemberType]
+        rows: list[tuple[str, tuple[Any, ...]]] = []
         for entry in self._all_notifiers():
             notifier_id = str(entry["notifier_id"])
             from mailflow.config import NotifierConfig
@@ -249,22 +250,27 @@ class NotificationsPane(Vertical):
                 )
             )
             targets = ", ".join(str(t) for t in raw_targets) or "-"
-            table.add_row(
-                notifier_id,
-                str(entry["provider"]),
+            rows.append(
                 (
-                    self._service.t("tui.notifications_on")
-                    if entry["enabled"]
-                    else self._service.t("tui.notifications_off")
-                ),
-                urgency_label(self._service, str(entry["urgency"])),
-                escape(targets),
-                Text(error_detail(self._service, statuses.get(notifier_id, "-"))),
-                key=notifier_id,
+                    notifier_id,
+                    (
+                        notifier_id,
+                        str(entry["provider"]),
+                        (
+                            self._service.t("tui.notifications_on")
+                            if entry["enabled"]
+                            else self._service.t("tui.notifications_off")
+                        ),
+                        urgency_label(self._service, str(entry["urgency"])),
+                        escape(targets),
+                        Text(error_detail(self._service, statuses.get(notifier_id, "-"))),
+                    ),
+                )
             )
         # re-rendering clears the table and drops the cursor: restore the
         # previously selected row so in-place actions keep targeting it
-        self._selected_id = view.restore(table)
+        if update_table(table, rows):
+            self._selected_id = view.restore(table)
         if table.row_count == 0:
             self.query_one("#notifications-status", Static).update(self._service.t("tui.empty"))
 
@@ -310,7 +316,12 @@ class NotificationsPane(Vertical):
         self._sync_selection_controls()
 
     def _periodic_check(self) -> None:
-        if not self.is_mounted:
+        if (
+            not self.is_on_screen
+            or self._mutating
+            or self._checking
+            or self.app.screen is not self.screen
+        ):
             return
         self.run_worker(self._check_all(), exclusive=True, group="notif-check", exit_on_error=False)
 
@@ -386,7 +397,8 @@ class NotificationsPane(Vertical):
 
             self._syncing_urgency = True
             try:
-                urgency.value = entry.minimum_urgency.value  # pyright: ignore[reportUnknownMemberType]
+                with urgency.prevent(Select.Changed):
+                    urgency.value = entry.minimum_urgency.value  # pyright: ignore[reportUnknownMemberType]
             except QueryError:
                 pass
             finally:
@@ -732,8 +744,14 @@ class NotificationsPane(Vertical):
         )
 
     async def _check_all(self) -> None:
-        with redact_operation_logs(self._service):
-            await self._check_connections()
+        if self._checking:
+            return
+        self._checking = True
+        try:
+            with redact_operation_logs(self._service):
+                await self._check_connections()
+        finally:
+            self._checking = False
 
     async def _check_connections(self) -> None:
         status_node = self.query_one("#notifications-status", Static)

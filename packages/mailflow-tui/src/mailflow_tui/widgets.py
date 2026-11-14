@@ -83,6 +83,7 @@ class SafeSelect(Select[object]):  # pyright: ignore[reportUnsafeMultipleInherit
 
 
 __all__ = [
+    "ButtonRow",
     "Input",
     "SafeSelect",
     "SearchToggle",
@@ -91,6 +92,36 @@ __all__ = [
     "ShortcutHelp",
     "TextArea",
 ]
+
+
+class ButtonRow(Horizontal):
+    """Keep action buttons aligned and wrap them at small terminal widths."""
+
+    DEFAULT_CSS = """
+    ButtonRow {
+        layout: grid;
+        grid-size: 2;
+        grid-columns: 1fr 1fr;
+        grid-rows: auto;
+        grid-gutter: 0 1;
+        height: auto;
+        align-vertical: middle;
+    }
+    ButtonRow > Button { width: 1fr; min-width: 0; margin: 0; }
+    """
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._reflow)
+
+    def on_resize(self) -> None:
+        self._reflow()
+
+    def _reflow(self) -> None:
+        count = sum(child.display for child in self.children)
+        columns = max(1, min(count, self.content_size.width // 18))
+        if self.styles.grid_size_columns != columns:
+            self.styles.grid_size_columns = columns
+            self.styles.grid_columns = " ".join(["1fr"] * columns)
 
 
 class Input(TextualInput):

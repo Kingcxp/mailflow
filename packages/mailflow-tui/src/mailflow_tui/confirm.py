@@ -16,9 +16,11 @@ from typing import Any, ClassVar, Literal
 
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
+
+from mailflow_tui.widgets import ButtonRow
 
 _ConfirmVariant = Literal["default", "primary", "success", "warning", "error"]
 
@@ -61,7 +63,7 @@ class ConfirmModal(ModalScreen[bool]):
             # leaving no visible way to confirm
             with ScrollableContainer(id="confirm-body-scroll"):
                 yield Static(self._body, id="confirm-body", markup=False)
-            with Horizontal(id="confirm-buttons"):
+            with ButtonRow(id="confirm-buttons"):
                 yield Button(self._confirm_label, id="confirm-run", variant=self._variant)
                 yield Button(self._service.t("tui.btn_cancel"), id="confirm-cancel")
 

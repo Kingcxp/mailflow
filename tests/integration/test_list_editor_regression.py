@@ -83,7 +83,19 @@ async def test_napcat_admins_list_editor_is_usable(tmp_path: Path) -> None:
             # Delete the original row by its stable token, then focus the next surviving row.
             token = (row0.id or "").removeprefix("list-editor-input-")
             del0: Button = editor.query_one(f"#list-editor-del-{token}", Button)
-            del0.press()
+            for width in (80, 60):
+                await pilot.resize_terminal(width, 30)
+                del0.focus()  # pyright: ignore[reportUnknownMemberType]
+                await pilot.pause()
+                await pilot.wait_for_scheduled_animations()
+                del0.scroll_visible(animate=False, force=True, immediate=True)
+                await pilot.pause()
+                assert del0.region.right <= app.size.width
+                assert row0.region.right < del0.region.x
+            assert await pilot.click(del0), (
+                del0.region,
+                app.screen.get_widget_at(del0.region.x, del0.region.y)[0],
+            )
             await until(pilot, lambda: editor.value() == [])
             await until(
                 pilot,

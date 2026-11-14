@@ -15,7 +15,7 @@ from textual.message import Message
 from textual.widgets import Button, DataTable, RichLog, Static
 
 from mailflow_tui.smart_action_review import SmartActionReviewModal
-from mailflow_tui.widgets import Input
+from mailflow_tui.widgets import ButtonRow, Input
 
 
 class AssistantPane(Vertical):
@@ -52,7 +52,7 @@ class AssistantPane(Vertical):
         yield Static("", id="assistant-scope", markup=False)
         with Horizontal(id="assistant-input-row"):
             yield Input(placeholder=self._service.t("assistant.placeholder"), id="assistant-input")
-        with Horizontal(id="assistant-controls"):
+        with ButtonRow(id="assistant-controls"):
             yield Button(self._service.t("assistant.send"), id="assistant-send", variant="primary")
             yield Button(self._service.t("assistant.stop"), id="assistant-stop", disabled=True)
             yield Button(self._service.t("assistant.review"), id="assistant-review", disabled=True)

@@ -20,6 +20,25 @@ Button {
     color: $text;
 }
 
+ListEditor .list-editor-row Input {
+    width: 1fr;
+    min-width: 0;
+    height: 1;
+    padding: 0 1;
+    border: none;
+}
+
+ListEditor .list-editor-row Button {
+    width: 8;
+    min-width: 8;
+    height: 1;
+    padding: 0 1;
+}
+
+ListEditor #list-editor-add {
+    min-width: 0;
+}
+
 Button.-default {
     background: $surface-lighten-2;
     color: $text;
@@ -1011,7 +1030,9 @@ MarketDetailScreen {
 }
 
 #settings-sidebar {
-    width: 28;
+    width: 26%;
+    min-width: 16;
+    max-width: 28;
     border: round $primary;
     margin: 0 1 0 1;
 }
@@ -1073,6 +1094,20 @@ MarketDetailScreen {
 .option-row {
     height: auto;
     align-vertical: middle;
+}
+
+.option-editor {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.option-editor .option-input, .option-editor .option-summary {
+    width: 100%;
+    margin-right: 0;
+}
+
+#settings-tools {
+    margin: 0 1 1 1;
 }
 
 .option-input {
@@ -1505,11 +1540,45 @@ UserProfileModal {
     max-width: 78;
 }
 
-#entry-form-fields Input, #entry-form-fields Select, #entry-form-fields .secret-row {
+#entry-form-fields > Input, #entry-form-extras > Input,
+#entry-form-fields Select, #entry-form-fields .secret-row {
     width: 100%;
     margin: 0 0 1 0;
 }
 #entry-form-fields .secret-row Input {
     width: 100%;
     margin-bottom: 0;
+}
+
+/* Action rows share the available width and wrap instead of clipping.
+   Keep these after the older per-dialog fixed button widths. */
+.dialog-actions Button,
+.option-row Button,
+#llms-actions Button, #accounts-actions Button, #history-actions Button,
+#actions-buttons Button, #runtime-plugin-actions Button,
+#market-controls-buttons Button, #market-actions Button, #market-detail-actions Button,
+#notifications-actions Button, #reply-buttons Button,
+#repos-actions Button, #export-actions Button, #install-actions Button,
+#scaffold-actions Button, #log-export-actions Button, #todo-create-buttons Button,
+#smart-review-buttons Button, #smart-review-edit-buttons Button,
+#confirm-buttons Button, #profile-buttons Button {
+    width: 1fr;
+    min-width: 0;
+    margin: 0;
+}
+
+#list-edit-dialog, #login-dialog, #confirm-dialog, #profile-dialog,
+#scaffold-dialog, #install-dialog, #export-dialog, #repos-dialog, #market-detail-dialog {
+    max-width: 96%;
+    max-height: 92%;
+}
+
+#notifications-status, #runtime-status, #market-status, #actions-hint, #guide-status,
+#market-detail-status, #login-status {
+    height: auto;
+    min-height: 1;
+}
+
+.field-label, .option-key, #accounts-title, #llms-title, #history-title {
+    height: auto;
 }

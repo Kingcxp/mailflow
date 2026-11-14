@@ -24,7 +24,7 @@ from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.remote import LoginScreen
 from mailflow_tui.settings import EntryFormScreen, ListEditScreen, LLMPane, SettingsPane
 from textual.app import App, ComposeResult
-from textual.widgets import Button, DataTable, Input, ListView, Select, Static, TextArea
+from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 from textual.worker import WorkerCancelled
 
 from mailflow_test_support.commands import commands_service
@@ -344,12 +344,13 @@ async def test_mailbox_probe_uses_account_options_and_cancel_closes_connection(
         form.query_one("#entry-form-test", Button).press()
         await settle(pilot)
         assert clients[-1].credentials == ("display@example.test", "mail-secret")
-        form.query_one("#extra-preset", Input).value = "gmail"
+        form.query_one("#extra-preset", Select).value = "gmail"
+        await pilot.pause()
         form.query_one("#entry-form-save", Button).press()
         await settle(pilot)
         assert results[0]["options"]["preset"] == "gmail"
         assert results[0]["options"]["imap_host"] == "imap.gmail.com"
-        assert "smtp_host" not in results[0]["options"]
+        assert results[0]["options"]["smtp_host"] == "smtp.gmail.com"
 
 
 async def test_notifier_probe_uses_edited_token_and_does_not_gate_save(
@@ -649,15 +650,17 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         assert "read only" not in rendered(pane, "#settings-status")
         assert not pane.query_one("#save-general-workers", Button).disabled
 
-        listing = pane.query_one("#settings-sections", ListView)
-        clear = listing.clear
-
-        async def close_during_refresh() -> None:
-            await clear()
-            await pane.remove()
-
-        monkeypatch.setattr(listing, "clear", close_during_refresh)
-        await pane.relabel()
+        draft = pane.query_one("#value-general-workers", Input)
+        draft.focus()
+        await pilot.press("end", "8")
+        await pane.reload()
+        await settle(pilot)
+        assert pilot.app.focused is draft
+        assert draft.value == "78" and draft.cursor_position == 2
+        await pilot.press("ctrl+z")
+        assert draft.value == "7"
+        await pane.remove()
+        await pane.reload()
         assert not pane.is_attached
 
 
