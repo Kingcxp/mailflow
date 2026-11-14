@@ -17,10 +17,10 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, DirectoryTree, Static
+from textual.widgets import Button, DirectoryTree, Select, Static
 
 from mailflow_tui.labels import error_detail
-from mailflow_tui.widgets import ButtonRow, Input
+from mailflow_tui.widgets import ButtonRow, Input, SafeSelect
 
 
 class LogExportScreen(ModalScreen[str | None]):
@@ -32,10 +32,13 @@ class LogExportScreen(ModalScreen[str | None]):
 
     BINDINGS: ClassVar[list[Any]] = []
 
-    def __init__(self, service: Any, lines: list[str]) -> None:
+    def __init__(
+        self, service: Any, lines: list[str], *, filtered: list[str] | None = None
+    ) -> None:
         super().__init__()
         self._service = service
         self._lines = lines
+        self._filtered = lines if filtered is None else filtered
         self._saving = False
         self._bindings.bind("escape", "cancel", self._t("tui.btn_cancel"))
 
@@ -45,6 +48,15 @@ class LogExportScreen(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="log-export-dialog"):
             yield Static(self._t("tui.log_export_title"), id="log-export-title")
+            yield SafeSelect(
+                [
+                    (self._t("interface.current_filter"), "filtered"),
+                    (self._t("interface.all_buffer"), "all"),
+                ],
+                value="filtered",
+                allow_blank=False,
+                id="log-export-scope",
+            )
             yield Static(self._t("tui.log_export_pick_folder"), classes="scaffold-hint")
             yield DirectoryTree(Path.cwd(), id="log-export-tree")
             yield Input(
@@ -93,10 +105,15 @@ class LogExportScreen(ModalScreen[str | None]):
             name += ".log"
         target = base / name
         error.update(self._t("tui.form_saving"))
+        lines = (
+            self._lines
+            if self.query_one("#log-export-scope", Select).value == "all"
+            else self._filtered
+        )
         try:
             await asyncio.to_thread(
                 target.write_text,
-                "\n".join(self._lines) + ("\n" if self._lines else ""),
+                "\n".join(lines) + ("\n" if lines else ""),
                 encoding="utf-8",
             )
         except OSError as exc:

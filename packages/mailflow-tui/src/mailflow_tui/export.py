@@ -4,6 +4,7 @@ framework plugin package via the registered exporter plugins."""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -28,6 +29,7 @@ class BotExportScreen(ModalScreen[Path | None]):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
+        self._exporting = False
         self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -50,6 +52,7 @@ class BotExportScreen(ModalScreen[Path | None]):
                 id="export-folder-name",
                 disabled=True,
             )
+            yield Static("", id="export-status", markup=False)
             with ButtonRow(id="export-actions"):
                 yield Button(self._t("tui.btn_generate"), id="export-run", variant="success")
                 yield Button(self._t("tui.btn_cancel"), id="export-cancel", variant="primary")
@@ -75,6 +78,8 @@ class BotExportScreen(ModalScreen[Path | None]):
             self._generate()
 
     def _generate(self) -> None:
+        if self._exporting:
+            return
         tree = self.query_one("#export-tree", DirectoryTree)
         node = tree.cursor_node
         if node is None or node.data is None:
@@ -84,8 +89,8 @@ class BotExportScreen(ModalScreen[Path | None]):
         if base.is_file():
             base = base.parent
         framework_select: Select[Any] = self.query_one("#export-framework", Select)  # pyright: ignore[reportUnknownVariableType]
-        framework = str(framework_select.value)
-        if not framework:
+        framework = framework_select.value
+        if not isinstance(framework, str) or not framework:
             self._notify_error(self._t("tui.export_no_framework"))
             return
         target = base
@@ -95,7 +100,12 @@ class BotExportScreen(ModalScreen[Path | None]):
                 self._notify_error(self._t("tui.scaffold_folder_name"))
                 return
             target = base / folder_name
-        self.run_worker(self._export(target, framework))
+        self._exporting = True
+        self.query_one("#export-run", Button).disabled = True
+        self.query_one("#export-status", Static).update(self._t("tui.form_saving"))
+        self.run_worker(
+            self._export(target, framework), group="bot-export", exclusive=True, exit_on_error=False
+        )
 
     async def _export(self, target: Path, framework: str) -> None:
         try:
@@ -106,7 +116,8 @@ class BotExportScreen(ModalScreen[Path | None]):
                 for info in service.plugin_manager.enabled_infos()
                 if ComponentKind.BOT_EXPORTER not in info.kinds
             ]
-            result = export_bot_plugin(
+            result = await asyncio.to_thread(
+                export_bot_plugin,
                 service.registry,
                 service.config,
                 framework=framework,
@@ -116,12 +127,14 @@ class BotExportScreen(ModalScreen[Path | None]):
                 language=service.i18n.language,
             )
         except Exception as exc:
-            self.notify(
-                self._t("tui.export_failed", message=error_detail(self._service, exc)),
-                severity="error",
-                timeout=6,
+            self.query_one("#export-status", Static).update(
+                self._t("tui.export_failed", message=error_detail(self._service, exc))
             )
             return
+        finally:
+            self._exporting = False
+            if self.is_mounted:
+                self.query_one("#export-run", Button).disabled = False
         self.notify(
             self._t("tui.export_created", count=len(result.created), path=str(target)),
             timeout=5,

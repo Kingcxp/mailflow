@@ -157,24 +157,16 @@ async def run_local_host(
 async def _run_remote() -> None:
     from mailflow.i18n import I18n
     from mailflow_server.client import RemoteClient
-    from textual.app import App as _BaseApp
 
     from mailflow_tui.app import MailFlowApp
     from mailflow_tui.remote import (
-        LoginScreen,
+        LoginApp,
         RemoteServiceAdapter,
         basic_header,
         clear_password,
         load_session,
         pump_async_to_thread,
     )
-
-    class _Bootstrap(_BaseApp[dict[str, str] | None]):
-        def compose(self) -> Any:
-            from textual.containers import Vertical
-
-            with Vertical():
-                yield LoginScreen(load_session())
 
     async def _validate(url: str, user: str, password: str) -> tuple[dict[str, Any] | None, bool]:
         """Return the snapshot and whether authentication specifically failed."""
@@ -207,13 +199,11 @@ async def _run_remote() -> None:
         if snapshot is None and credentials_rejected:
             clear_password()
     if snapshot is None:
-        bootstrap = _Bootstrap()
+        bootstrap = LoginApp(load_session())
         creds = await bootstrap.run_async()
         if creds is None:
             return
-        snapshot, _credentials_rejected = await _validate(
-            creds["url"], creds["username"], creds["password"]
-        )
+        snapshot = bootstrap.login.snapshot
         if snapshot is None:
             return
 

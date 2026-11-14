@@ -46,11 +46,15 @@ class WorkflowScreen(ModalScreen[Any]):
     BINDINGS: ClassVar[list[Any]] = []
     DEFAULT_CSS = """
     WorkflowScreen { align: center middle; }
-    WorkflowScreen > Vertical { width: 85%; height: 85%; background: $surface; border: round $accent; padding: 1 2; }
+    WorkflowScreen > Vertical { width: 96%; max-width: 104; height: 92%; background: $surface; border: round $accent; padding: 0 1; }
     WorkflowScreen ScrollableContainer { height: 1fr; }
     WorkflowScreen DataTable { height: 1fr; }
     WorkflowScreen TextArea { height: 1fr; }
     WorkflowScreen Horizontal { height: auto; }
+    WorkflowScreen Input, WorkflowScreen Select { height: 3; }
+    WorkflowScreen Static { height: auto; }
+    WorkflowScreen #workflow-status { height: auto; max-height: 4; overflow-y: auto; }
+    WorkflowScreen .workflow-form { height: auto; max-height: 45%; }
     WorkflowScreen Button { margin: 0 1 0 0; min-width: 0; width: 1fr; }
     """
 

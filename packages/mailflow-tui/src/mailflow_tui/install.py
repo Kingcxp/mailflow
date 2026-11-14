@@ -25,6 +25,7 @@ class InstallScreen(ModalScreen[list[str] | None]):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
+        self._installing = False
         self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -35,6 +36,7 @@ class InstallScreen(ModalScreen[list[str] | None]):
             yield Static(self._t("tui.install_title"), classes="scaffold-title")
             yield Static(self._t("tui.install_pick_folder"), classes="scaffold-hint")
             yield DirectoryTree(Path.cwd(), id="install-tree")
+            yield Static("", id="install-status", markup=False)
             with ButtonRow(id="install-actions"):
                 yield Button(self._t("tui.btn_install"), id="install-run", variant="success")
                 yield Button(self._t("tui.btn_cancel"), id="install-cancel", variant="primary")
@@ -53,6 +55,8 @@ class InstallScreen(ModalScreen[list[str] | None]):
             self._run_install()
 
     def _run_install(self) -> None:
+        if self._installing:
+            return
         tree = self.query_one("#install-tree", DirectoryTree)
         node = tree.cursor_node
         if node is None or node.data is None:
@@ -61,13 +65,20 @@ class InstallScreen(ModalScreen[list[str] | None]):
         base = Path(node.data.path)
         if base.is_file():
             base = base.parent
-        self.run_worker(self._install(base))
+        self._installing = True
+        self.query_one("#install-run", Button).disabled = True
+        self.query_one("#install-status", Static).update(self._t("interface.loading"))
+        self.run_worker(
+            self._install(base), group="local-install", exclusive=True, exit_on_error=False
+        )
 
     async def _install(self, base: Path) -> None:
         try:
-            output = await self._service.plugin_install_local(base)
-            self.notify(output, timeout=8)
+            await self._service.plugin_install_local(base)
             self.dismiss([])
         except Exception as exc:
-            self.notify(error_message(self._service, exc), severity="error", timeout=8)
-            self.dismiss(None)
+            self.query_one("#install-status", Static).update(error_message(self._service, exc))
+        finally:
+            self._installing = False
+            if self.is_mounted:
+                self.query_one("#install-run", Button).disabled = False

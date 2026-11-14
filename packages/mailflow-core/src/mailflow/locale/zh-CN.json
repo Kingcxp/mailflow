@@ -1763,6 +1763,37 @@
     },
     "source": {
       "usage": "source <status|detect|refresh|on/off ACCOUNT|delete/restore MAIL_ID...|confirm TOKEN|retry OPERATION_ID CONFIRM>"
+    },
+    "interface": {
+      "current_filter": "当前筛选结果",
+      "all_buffer": "全部缓存日志",
+      "advanced": "高级选项",
+      "common": "常用设置",
+      "custom": "自定义",
+      "unsaved": "尚未保存",
+      "save_section": "保存本区修改",
+      "discard_section": "撤销本区修改",
+      "choose_file": "选择文件",
+      "choose_directory": "选择目录",
+      "choose_date": "选择日期时间",
+      "date_hint": "按配置时区填写；可使用日期选择器。",
+      "send_hint": "Enter 换行，Ctrl+Enter 发送；也可点击发送。",
+      "saved_draft": "保存草稿并返回",
+      "details": "查看详情",
+      "add_account": "添加邮箱",
+      "no_account": "先添加邮箱即可收信和阅读，模型为可选功能。",
+      "all": "全部",
+      "filter": "筛选条件",
+      "selected": "已选 {count} 项",
+      "custom_type": "自定义类型",
+      "timezone": "当前时区：{zone}",
+      "today": "今天",
+      "tomorrow": "明天",
+      "no_deadline": "不设截止时间",
+      "browse": "浏览",
+      "follow_logs": "跟随最新",
+      "retry": "重试",
+      "loading": "正在处理，可继续操作其他页面…"
     }
   }
 }

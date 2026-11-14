@@ -94,6 +94,14 @@ async def test_log_burst_retains_recent_lines_filters_and_exports(tmp_path: Path
             await until(pilot, lambda: "burst-2999" in log_text(app))
             assert "burst-0000" not in log_text(app)
             assert "info-only-marker" not in log_text(app)
+            log_queue.put("10:00|ERROR|mailflow.llm|model-only-marker")
+            await until(pilot, lambda: "model-only-marker" in log_text(app))
+            app.query_one("#log-source", Select).value = "llm"
+            await until(
+                pilot,
+                lambda: "model-only-marker" in log_text(app) and "burst-2999" not in log_text(app),
+            )
+            app.query_one("#log-source", Select).value = ""
             app.query_one("#log-search", Input).value = "burst-2999"
             await until(
                 pilot, lambda: "burst-2999" in log_text(app) and "burst-2998" not in log_text(app)
@@ -114,8 +122,19 @@ async def test_log_burst_retains_recent_lines_filters_and_exports(tmp_path: Path
             target = tmp_path / "burst-export.log"
             await until(pilot, target.is_file)
             exported = target.read_text(encoding="utf-8")
-            assert "burst-2999" in exported and "info-only-marker" in exported
-            assert "burst-0000" not in exported
-            assert len(exported.splitlines()) < 3001
+            assert "info-only-marker" in exported and "burst-2999" not in exported
+            await until(pilot, lambda: not isinstance(app.screen, LogExportScreen))
+            app.query_one("#logs-export", Button).press()
+            await until(pilot, lambda: isinstance(app.screen, LogExportScreen))
+            app.screen.query_one("#log-export-scope", Select).value = "all"
+            tree = app.screen.query_one("#log-export-tree", DirectoryTree)
+            tree.path = tmp_path
+            await pilot.pause(0.3)
+            tree.cursor_line = 0
+            app.screen.query_one("#log-export-filename", Input).value = "all-export"
+            app.screen.query_one("#log-export-save", Button).press()
+            await until(pilot, (tmp_path / "all-export.log").is_file)
+            exported = (tmp_path / "all-export.log").read_text(encoding="utf-8")
+            assert "burst-2999" in exported and "burst-0000" not in exported
     finally:
         await service.stop()

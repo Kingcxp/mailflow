@@ -39,7 +39,8 @@ from mailflow.permissions import AccessDenied
 from mailflow.replies import ReplyError
 from mailflow.settings import EditorKind, OptionSpec, SettingsSection
 from mailflow_server.client import RemoteClient, RemoteUnsupported
-from textual.containers import Horizontal, Vertical
+from textual.app import App
+from textual.containers import ScrollableContainer, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label, Static, Switch
@@ -47,7 +48,7 @@ from textual.worker import WorkerCancelled
 
 from mailflow_tui import credentials
 from mailflow_tui.labels import error_detail, redact_operation_logs
-from mailflow_tui.widgets import Input
+from mailflow_tui.widgets import ButtonRow, Input
 
 _SESSION_FILE = Path.home() / ".mailflow" / "tui-session.json"
 
@@ -144,7 +145,9 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
     }
     #login-dialog {
         width: 56;
-        height: auto;
+        max-width: 96%;
+        height: 90%;
+        max-height: 30;
         border: round $accent;
         background: $surface;
         padding: 1 2;
@@ -158,9 +161,13 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         margin-top: 0;
     }
     #login-status {
-        height: 1;
-        margin-top: 1;
+        height: auto;
+        max-height: 4;
+        overflow-y: auto;
     }
+    #login-fields { height: 1fr; }
+    #login-fields Label, #login-hint { height: auto; }
+    #login-dialog ButtonRow { height: auto; }
     .field-label {
         color: $text-muted;
     }
@@ -175,6 +182,7 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         self._i18n = I18n(language=str(session.get("language") or "en"))
         self._connection: Any = None
         self._connecting = False
+        self.snapshot: dict[str, Any] | None = None
         self._bindings.bind("escape", "cancel_connection", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -184,22 +192,23 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         # centered bordered panel like every other standalone dialog
         with Vertical(id="login-dialog"):
             yield Label(self._t("tui.remote_login_title"), id="login-title")
-            yield Label(self._t("tui.remote_server_url"), classes="field-label")
-            yield Input(
-                value=str(self._session.get("url", "")),
-                placeholder=self._t("tui.remote_url_placeholder"),
-                id="login-url",
-            )
-            yield Label(self._t("tui.remote_username"), classes="field-label")
-            yield Input(value=str(self._session.get("username", "")), id="login-user")
-            yield Label(self._t("tui.remote_password"), classes="field-label")
-            yield Input(password=True, id="login-pass")
-            yield Switch(value=bool(self._session.get("autologin")), id="login-save-password")
-            yield Static(self._t("tui.remote_save_password"), id="login-hint")
-            with Horizontal(classes="dialog-actions"):
+            with ScrollableContainer(id="login-fields"):
+                yield Label(self._t("tui.remote_server_url"), classes="field-label")
+                yield Input(
+                    value=str(self._session.get("url", "")),
+                    placeholder=self._t("tui.remote_url_placeholder"),
+                    id="login-url",
+                )
+                yield Label(self._t("tui.remote_username"), classes="field-label")
+                yield Input(value=str(self._session.get("username", "")), id="login-user")
+                yield Label(self._t("tui.remote_password"), classes="field-label")
+                yield Input(password=True, id="login-pass")
+                yield Switch(value=bool(self._session.get("autologin")), id="login-save-password")
+                yield Static(self._t("tui.remote_save_password"), id="login-hint")
+            yield Static("", id="login-status")
+            with ButtonRow(classes="dialog-actions"):
                 yield Button(self._t("tui.remote_connect"), id="login-connect", variant="success")
                 yield Button(self._t("tui.btn_quit"), id="login-quit", variant="error")
-            yield Static("", id="login-status")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "login-connect" and self._connecting:
@@ -226,6 +235,8 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
             self.query_one("#login-status", Static).update(self._t("tui.form_cancelled"))
             for node in self.query("Input, Switch"):
                 node.disabled = False
+        elif self.is_current:
+            self.dismiss(None)
 
     async def _connect(self) -> None:
         self._connecting = True
@@ -309,9 +320,21 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
             session["language"] = str(language)
         if save:
             session["saved_password"] = password
-        save_session(session)
+        await asyncio.to_thread(save_session, session)
+        self.snapshot = cast(dict[str, Any], payload)
         status.update(self._t("tui.remote_connected"))
         self.dismiss({"url": url, "username": user, "password": password})
+
+
+class LoginApp(App[dict[str, str] | None]):
+    """The disconnected entry point uses the same modal as an attached client."""
+
+    def __init__(self, session: dict[str, Any]) -> None:
+        super().__init__()
+        self.login = LoginScreen(session)
+
+    def on_mount(self) -> None:
+        self.push_screen(self.login, self.exit)
 
 
 class RemoteServiceAdapter:

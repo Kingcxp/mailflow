@@ -117,8 +117,11 @@ class ButtonRow(Horizontal):
         self._reflow()
 
     def _reflow(self) -> None:
-        count = sum(child.display for child in self.children)
-        columns = max(1, min(count, self.content_size.width // 18))
+        buttons = [child for child in self.children if isinstance(child, Button) and child.display]
+        width = max(
+            (Text.from_markup(str(button.label)).cell_len + 4 for button in buttons), default=18
+        )
+        columns = max(1, min(len(buttons), (self.content_size.width + 1) // (max(14, width) + 1)))
         if self.styles.grid_size_columns != columns:
             self.styles.grid_size_columns = columns
             self.styles.grid_columns = " ".join(["1fr"] * columns)
@@ -126,6 +129,8 @@ class ButtonRow(Horizontal):
 
 class Input(TextualInput):
     """Desktop editing keys and local undo, shared by every single-line field."""
+
+    DEFAULT_CSS = "Input { height: 3; min-height: 1; }"
 
     BINDINGS: ClassVar[list[Any]] = [
         Binding("ctrl+a,f7", "select_all", show=False),

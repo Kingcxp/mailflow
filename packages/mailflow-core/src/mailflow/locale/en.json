@@ -1763,6 +1763,37 @@
     },
     "source": {
       "usage": "source <status|detect|refresh|on/off ACCOUNT|delete/restore MAIL_ID...|confirm TOKEN|retry OPERATION_ID CONFIRM>"
+    },
+    "interface": {
+      "current_filter": "Current filtered results",
+      "all_buffer": "All buffered logs",
+      "advanced": "Advanced options",
+      "common": "Common settings",
+      "custom": "Custom",
+      "unsaved": "Unsaved changes",
+      "save_section": "Save section",
+      "discard_section": "Discard section changes",
+      "choose_file": "Choose file",
+      "choose_directory": "Choose directory",
+      "choose_date": "Choose date and time",
+      "date_hint": "Uses the configured time zone; a date picker is available.",
+      "send_hint": "Enter for a new line; Ctrl+Enter or Send to submit.",
+      "saved_draft": "Save draft and back",
+      "details": "View details",
+      "add_account": "Add mailbox",
+      "no_account": "Add a mailbox to receive and read mail. A model is optional.",
+      "all": "All",
+      "filter": "Filters",
+      "selected": "{count} selected",
+      "custom_type": "Custom type",
+      "timezone": "Time zone: {zone}",
+      "today": "Today",
+      "tomorrow": "Tomorrow",
+      "no_deadline": "No deadline",
+      "browse": "Browse",
+      "follow_logs": "Follow latest",
+      "retry": "Retry",
+      "loading": "Working; other pages remain available…"
     }
   }
 }

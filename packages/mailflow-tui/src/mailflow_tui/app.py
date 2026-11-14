@@ -3433,7 +3433,11 @@ class LogsPane(Vertical):
             self._append_new_lines([self._buffer[-1]])
 
         cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
-            LogExportScreen(self._service, list(self._buffer)),
+            LogExportScreen(
+                self._service,
+                list(self._buffer),
+                filtered=[line for line in self._buffer if self._line_to_text(line) is not None],
+            ),
             callback=_on_saved,
         )
 
@@ -3441,7 +3445,7 @@ class LogsPane(Vertical):
         # remounts (language switch, tab re-compose) can tick the interval
         # while the widget tree is detached — never crash the app for it
         pulled: list[str] = []
-        while True:
+        for _ in range(200):
             try:
                 line = self._log_queue.get_nowait()
             except queue_module.Empty:
@@ -3455,6 +3459,8 @@ class LogsPane(Vertical):
             return
         self._refresh_source_options()
         self._append_new_lines(pulled)
+        if not self._log_queue.empty():
+            self.call_after_refresh(self.drain)
 
     def _current_log_matcher(self) -> SearchMatcher:
         regex = self.query_one_optional("#log-search-regex", SearchToggle)
@@ -3520,7 +3526,11 @@ class LogsPane(Vertical):
         line is filtered out (or is a non-log line that passes through)."""
         parts = line.split("|", 3)
         if len(parts) != 4:
-            return line
+            return (
+                line
+                if not self._source and (not self._query or self._log_matcher.matches(line))
+                else None
+            )
         time_part, level, logger_name, message = parts
         if self._LEVEL_RANK.get(level, 0) < self._LEVEL_RANK.get(
             self._min_level, self._LEVEL_RANK[self._DEFAULT_MIN_LEVEL]
@@ -3531,6 +3541,8 @@ class LogsPane(Vertical):
         from rich.text import Text
 
         category = self._category_of(logger_name)
+        if self._source and category != self._source:
+            return None
         cat_label = self._service.t(f"tui.logs_cat_{category}")
         cat_style = self._CATEGORY_STYLES.get(category, "")
         # chat category: append the concrete platform (napcat/openwechat/...)

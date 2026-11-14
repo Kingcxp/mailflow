@@ -11,10 +11,9 @@ import pytest
 from mailflow.i18n import I18n
 from mailflow.mail_query import MailQuery
 from mailflow_tui.app import MailFlowApp
-from mailflow_tui.remote import LoginScreen, RemoteServiceAdapter
+from mailflow_tui.remote import LoginApp, LoginScreen, RemoteServiceAdapter
 from mailflow_tui.widgets import Input
 from mailflow_tui.workspace_screens import AssistantHistoryScreen, SavedFiltersScreen
-from textual.app import App
 from textual.widgets import Button, Static
 
 from mailflow_test_support.settings import start_service_quiet
@@ -55,13 +54,13 @@ def test_remote_adapter_follows_server_language_event() -> None:
 async def test_remote_login_uses_saved_language_and_validates_required_fields() -> None:
     """A saved language localizes the disconnected login surface too."""
 
-    app = App[None]()
-    async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(LoginScreen({"language": "zh-CN"}))
+    app = LoginApp({"language": "zh-CN"})
+    async with app.run_test(size=(60, 24)) as pilot:
         await pilot.pause()
 
         screen = app.screen
         assert isinstance(screen, LoginScreen)
+        assert screen.query_one("#login-connect", Button).region.bottom <= 24
         assert str(screen.query_one("#login-connect", Button).label) == I18n("zh-CN").t(
             "tui.remote_connect"
         )
