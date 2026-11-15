@@ -51,6 +51,7 @@ from textual.widgets import (
     Static,
     TabbedContent,
     TextArea,
+    Tooltip,
 )
 
 from mailflow_test_support.commands import MemoryStorage, commands_service, make_record
@@ -732,13 +733,17 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
 
 
 async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any) -> None:
-    service, view, app, _emit, _failures = host
+    service, view, app, emit, _failures = host
     await service.add_action("Finish review")
     for index in range(3):
         await service.storage.save_mail(make_record(f"select-{index}", subject=f"Select {index}"))
-    async with app.run_test(size=(80, 24)) as pilot:
+    async with app.run_test(size=(80, 24), tooltips=True) as pilot:
         await settle(pilot)
         table = app.query_one("#mail-table", SelectionTable)
+        assert table.region.height >= 12  # Keep the mail list usable on a 24-row terminal.
+        await pilot.hover(table, offset=(10, 2))
+        await pilot.pause(app.TOOLTIP_DELAY + 0.1)
+        assert not app.screen.query_one(Tooltip).visible
         table.focus()
         await pilot.press("f1")
         assert isinstance(app.screen, ShortcutHelp)
@@ -767,6 +772,55 @@ async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any)
         assert not service.snapshot().analysis_paused
         assert not view.snapshot().analysis_paused
         app.query_one(TabbedContent).active = "tab-actions"
+        await pilot.pause()
+        action_table = app.query_one("#actions-table", DataTable)
+        assert action_table.region.height >= 12
+        # The compact toolbar still opens the category filter and preserves it.
+        for category in ("not present", ""):
+            app.query_one("#actions-more", Button).press()
+            await until(pilot, lambda: bool(app.screen.query("#picker-results")))
+            app.screen.query_one("#picker-results", DataTable).focus()
+            await pilot.press("enter")
+            await until(pilot, lambda: bool(app.screen.query("#action-category")))
+            field = app.screen.query_one("#action-category", Input)
+            assert field.value == ("" if category else "not present")
+            field.value = category
+            app.screen.query_one("#action-filter-apply", Button).press()
+            await settle(pilot)
+            assert action_table.row_count == (0 if category else 1)
+        app.query_one("#actions-more", Button).press()
+        await until(pilot, lambda: bool(app.screen.query("#picker-results")))
+        app.screen.query_one("#picker-results", DataTable).focus()
+        await pilot.press("down", "down", "enter")
+        await until(
+            pilot,
+            lambda: (
+                app.query_one(TabbedContent).active == "tab-assistant"
+                and app.query_one("#assistant-input", EditingTextArea).region.height > 0
+            ),
+        )
+        assert view.t("assistant.task_scope") in text(app, "#assistant-scope")
+        instruction = app.query_one("#assistant-input", EditingTextArea)
+        assert instruction.region.height == 3
+        assert not app.query_one("#assistant-stop", Button).display
+        assert not app.query_one("#assistant-review", Button).display
+        instruction.load_text("First line\nSecond line\nThird line\nFourth line")
+        await pilot.pause()
+        assert instruction.region.height == 5
+        service.i18n.set_language("zh-CN")
+        await emit("language.changed", language="zh-CN")
+        await settle(pilot)
+        # Default options must translate even when their selection never changes.
+        for selector, key in (
+            ("#mail-sort", "tui.sort_time"),
+            ("#mail-urgency-filter", "tui.filter_all_urgencies"),
+            ("#actions-range", "ux.range_open"),
+            ("#actions-type-filter", "tui.filter_all_types"),
+        ):
+            assert view.t(key) in text(app, selector + " SelectCurrent #label")
+        assert instruction.text == "First line\nSecond line\nThird line\nFourth line"
+        app.query_one(TabbedContent).active = "tab-actions"
+        await pilot.pause()
         status = app.query_one("#actions-status", Button)
         status.press()
         await until(pilot, lambda: bool(app.screen.query("#workflow-choice")))

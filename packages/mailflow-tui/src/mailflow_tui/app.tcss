@@ -271,9 +271,8 @@ Footer {
 }
 
 Tooltip {
-    max-width: 60;
-    max-height: 70%;
-    padding: 1;
+    /* Use F1 for help; mouse hover must not cover the content being read. */
+    visibility: hidden;
 }
 
 #mail-table {
@@ -308,14 +307,14 @@ ActionModal {
     margin-top: 1;
 }
 
-#mail-controls { height: auto; padding: 0 1; }
+#mail-controls { height: auto; padding: 0 1; align-vertical: middle; }
 #mail-content { height: 1fr; min-height: 3; }
 #mail-filter-controls, #mail-selection-controls { height: 3; align-vertical: middle; }
+#mail-filter-controls { width: 40; }
 #mail-filter-controls Select { width: 1fr; margin-right: 1; }
-#mail-filter-controls Button { width: auto; min-width: 10; }
-#mail-selection-label { width: auto; height: 1; margin-right: 1; color: $text-muted; }
-#mail-selection-controls Select { width: 1fr; }
-#mail-actions-buttons { height: auto; }
+#mail-selection-controls { width: 20; }
+#mail-selection-controls Select { width: 1fr; margin-right: 1; }
+#mail-actions-buttons { height: auto; width: 1fr; }
 #mail-actions-buttons Button { height: 1; min-width: 0; text-overflow: clip; }
 
 /* Todo create modal: centered bordered panel (reply/entry-dialog chrome) */
@@ -394,13 +393,11 @@ TodoCreateModal {
 }
 
 #actions-controls {
-    height: auto;
+    height: 3;
     padding: 0 1;
 }
 
-#actions-type-filter {
-    width: 24;
-}
+#actions-controls Select { width: 1fr; margin-right: 1; }
 
 #actions-table {
     width: 100%;
@@ -416,9 +413,13 @@ TodoCreateModal {
 }
 
 #actions-hint {
-    height: 1;
+    height: auto;
+    max-height: 2;
+    overflow-y: auto;
     color: $text-muted;
 }
+
+.compact-actions Button { height: 1; }
 
 #runtime-plugins, #runtime-adapters, #runtime-accounts,
 #runtime-llms, #runtime-bindings, #runtime-storage {
@@ -1599,4 +1600,5 @@ UserProfileModal {
 
 #reply-templates Button, #reply-toolbar Button, #reply-actions Button { width: 1fr; min-width: 0; margin: 0; }
 
-#btn-assistant, #btn-filter, AssistedInput > Button { height: 3; content-align: center middle; }
+#btn-assistant { width: auto; min-width: 10; height: 3; content-align: center middle; }
+AssistedInput > Button { height: 3; content-align: center middle; }

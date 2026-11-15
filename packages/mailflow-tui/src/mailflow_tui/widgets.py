@@ -59,17 +59,26 @@ class SafeSelect(Select[object]):  # pyright: ignore[reportUnsafeMultipleInherit
             self.call_after_refresh(self._init_selected_option, hint)
             return
         self.value = hint  # pyright: ignore[reportUnknownMemberType]
+        # set_options may keep the same value while translating its label.
+        # Refresh the label without emitting a second selection change.
+        self._render_value(hint)
 
     def _watch_value(self, value: object) -> None:
         """Textual's watcher body, guarded against a missing ``#label``."""
         self._value = value  # pyright: ignore[reportUnknownMemberType]
+        if not self._render_value(value):
+            return
+        changed = cast(Any, Select.Changed)(self, cast(Any, value))
+        self.post_message(changed)
+
+    def _render_value(self, value: object) -> bool:
         try:
             select_current = self.query_one(SelectCurrent)
             select_overlay = self.query_one(SelectOverlay)
             if not select_current.query("#label"):
-                return
+                return False
         except QueryError:
-            return
+            return False
         if value == Select.NULL:
             select_current.update(Select.NULL)
         else:
@@ -78,8 +87,7 @@ class SafeSelect(Select[object]):  # pyright: ignore[reportUnsafeMultipleInherit
                     select_overlay.highlighted = index
                     select_current.update(cast(Any, _prompt))
                     break
-        changed = cast(Any, Select.Changed)(self, cast(Any, value))
-        self.post_message(changed)
+        return True
 
 
 __all__ = [

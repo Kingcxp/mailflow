@@ -915,7 +915,7 @@ class MailPane(Vertical):
             )
             yield SearchToggle("regex", ident="mail-search-regex")
             yield SearchToggle("case", ident="mail-search-case")
-            yield Button(self._service.t("assistant.handoff"), id="btn-assistant")
+            yield Button(self._service.t("assistant.tab"), id="btn-assistant")
         yield Static("", id="mail-empty-hint")
         yield Static("", id="mail-filter-summary", markup=False)
         yield Button(self._service.t("interface.add_account"), id="mail-add-account")
@@ -936,7 +936,7 @@ class MailPane(Vertical):
                     "mail-notes",
                 ):
                     yield Static("", id=ident)
-        with Vertical(id="mail-controls"):
+        with Horizontal(id="mail-controls"):
             with Horizontal(id="mail-filter-controls"):
                 yield SafeSelect(
                     self._urgency_filter_options(), id="mail-urgency-filter", allow_blank=False
@@ -949,11 +949,7 @@ class MailPane(Vertical):
                     id="mail-sort",
                     allow_blank=False,
                 )
-                yield Button(self._service.t("ux.filter"), id="btn-filter")
             with Horizontal(id="mail-selection-controls"):
-                yield Static(
-                    self._service.t("interface.selected_priority"), id="mail-selection-label"
-                )
                 yield SafeSelect(self._urgency_options(), id="urgency-select", allow_blank=False)
             with ButtonRow(id="mail-actions-buttons"):
                 yield Button(
@@ -961,7 +957,6 @@ class MailPane(Vertical):
                     id="btn-full",
                     tooltip=self._service.t("ux.full_mail"),
                 )
-                yield Button(self._service.t("tui.urgency_label"), id="btn-priority")
                 yield Button(
                     self._service.t("experience.compose"), id="btn-compose", variant="primary"
                 )
@@ -977,30 +972,28 @@ class MailPane(Vertical):
                     for ident, key, variant in row:
                         if ident not in maintenance:
                             yield Button(self._service.t(key), id=ident, variant=variant)
-            with (
-                Collapsible(
-                    title=self._service.t("interface.mail_maintenance"),
-                    id="mail-maintenance",
-                    collapsed=True,
-                ),
-                ButtonRow(),
-            ):
-                for row in self._button_rows():
-                    for ident, key, variant in row:
-                        if ident not in maintenance:
-                            continue
-                        if getattr(self._service, "remote", False) and ident.startswith(
-                            "btn-reparse"
-                        ):
-                            continue
-                        yield Button(self._service.t(key), id=ident, variant=variant)
+        with (
+            Collapsible(
+                title=self._service.t("interface.mail_maintenance"),
+                id="mail-maintenance",
+                collapsed=True,
+            ),
+            ButtonRow(classes="compact-actions"),
+        ):
+            for row in self._button_rows():
+                for ident, key, variant in row:
+                    if ident not in maintenance:
+                        continue
+                    if getattr(self._service, "remote", False) and ident.startswith("btn-reparse"):
+                        continue
+                    yield Button(self._service.t(key), id=ident, variant=variant)
 
     @staticmethod
     def _button_rows() -> tuple[tuple[tuple[str, str, Any], ...], ...]:
         return (
             (
                 ("btn-refresh", "tui.btn_refresh", "primary"),
-                ("btn-trash", "tui.btn_trash", "error"),
+                ("btn-trash", "tui.btn_delete", "error"),
                 ("btn-ask-correct", "tui.btn_ask_correct", "warning"),
             ),
             (
@@ -1012,7 +1005,7 @@ class MailPane(Vertical):
                 ("btn-purge-expired", "tui.btn_purge_expired", "warning"),
                 ("btn-reparse-all", "tui.btn_reparse_all", "primary"),
                 ("btn-profile", "tui.btn_profile", "success"),
-                ("btn-more", "ux.mail_tools", "default"),
+                ("btn-more", "interface.more", "default"),
             ),
         )
 
@@ -1035,6 +1028,16 @@ class MailPane(Vertical):
         selection = self.query_one_optional("#mail-selection-controls")
         if selection is not None:
             selection.display = wide
+        controls = self.query_one_optional("#mail-controls")
+        filters = self.query_one_optional("#mail-filter-controls")
+        buttons = self.query_one_optional("#mail-actions-buttons")
+        narrow = self.size.width < 76
+        if controls is not None:
+            controls.styles.layout = "vertical" if narrow else "horizontal"
+        if filters is not None:
+            filters.styles.width = "100%" if narrow else 40
+        if buttons is not None:
+            buttons.styles.width = "100%" if narrow else "1fr"
         if table is not None:
             table.styles.width = "60%" if wide else "100%"
 
@@ -1100,14 +1103,19 @@ class MailPane(Vertical):
         _relabel_buttons(
             self,
             {
-                ident: key
-                for row in self._button_rows()
-                for ident, key, _variant in row
-                if not (
-                    ident.startswith("btn-reparse")
-                    and self._reparse_worker is not None
-                    and self._reparse_worker.is_running
-                )
+                "btn-full": "interface.open_mail",
+                "btn-compose": "experience.compose",
+                "btn-assistant": "assistant.tab",
+                **{
+                    ident: key
+                    for row in self._button_rows()
+                    for ident, key, _variant in row
+                    if not (
+                        ident.startswith("btn-reparse")
+                        and self._reparse_worker is not None
+                        and self._reparse_worker.is_running
+                    )
+                },
             },
         )
         search = self.query_one_optional("#mail-search", Input)
@@ -1364,7 +1372,7 @@ class MailPane(Vertical):
             trash.label = (
                 self._service.t("tui.btn_delete_selected", count=count)
                 if count
-                else self._service.t("tui.btn_trash")
+                else self._service.t("tui.btn_delete")
             )
             trash.disabled = self._trash_busy or not (count or has_selected)
             trash.tooltip = self._service.t("tui.selection_delete_help")
@@ -1376,9 +1384,6 @@ class MailPane(Vertical):
             if button is not None:
                 button.tooltip = self._service.t("tui.selection_current_help")
                 button.disabled = self._trash_busy or not has_selected
-        priority = self.query_one_optional("#btn-priority", Button)
-        if priority is not None:
-            priority.disabled = self._trash_busy or not has_selected
         table.disabled = self._trash_busy
         reparse = self.query_one_optional("#btn-reparse", Button)
         if reparse is not None and (reparse_idle or not self._reparse_active()):
@@ -1393,7 +1398,6 @@ class MailPane(Vertical):
                 button = self.query_one_optional(ident, Button)
                 if button is not None:
                     button.disabled = self._trash_busy or not bool(self._mail_cache)
-        self._set_static("#mail-selection-label", self._service.t("interface.selected_priority"))
         urgency = self._urgency_select()
         if urgency is not None:
             urgency.disabled = not has_selected or self._trash_busy
@@ -1715,17 +1719,12 @@ class MailPane(Vertical):
 
     async def _handle_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
-        if button_id == "btn-priority":
-            self.run_worker(
-                self._pick_priority(), group="mail-priority", exclusive=True, exit_on_error=False
-            )
-            return
         if button_id == "mail-add-account":
             app = cast(MailFlowApp, cast(Any, self).app)
             app.query_one(TabbedContent).active = "tab-mailboxes"
             app.query_one(AccountsPane).add_account()
             return
-        direct = {"btn-full": "full_mail", "btn-compose": "compose", "btn-filter": "filter"}
+        direct = {"btn-full": "full_mail", "btn-compose": "compose"}
         if button_id in direct:
             self.run_worker(
                 self._mail_tools(direct[button_id]),
@@ -1841,7 +1840,10 @@ class MailPane(Vertical):
         if not choice:
             return
         try:
-            if choice == "undo_delete":
+            if choice == "priority":
+                await self._pick_priority()
+                return
+            elif choice == "undo_delete":
                 await self._undo_trash()
                 return
             elif choice == "sync_mail":
@@ -2543,7 +2545,7 @@ class ActionsPane(Vertical):
                 allow_blank=False,
             )
         yield SelectionTable(t=self._service.t, id="actions-table")
-        with ButtonRow(id="actions-buttons"):
+        with ButtonRow(id="actions-buttons", classes="compact-actions"):
             yield Button(
                 self._service.t("tui.btn_add_todo"),
                 id="actions-add",
@@ -2555,17 +2557,16 @@ class ActionsPane(Vertical):
                 variant="primary",
                 disabled=True,
             )
-            yield Button(self._service.t("ux.task_operations"), id="actions-status", disabled=True)
             yield Button(
-                self._service.t("tui.btn_delete_todo"),
+                self._service.t("interface.action_status"), id="actions-status", disabled=True
+            )
+            yield Button(
+                self._service.t("tui.btn_delete"),
                 id="actions-delete",
                 variant="error",
                 disabled=True,
             )
-        yield Button(self._service.t("assistant.handoff"), id="actions-assistant")
-        with ButtonRow():
-            yield Button(self._service.t("experience.action_filters"), id="actions-filters")
-            yield Button(self._service.t("experience.plans"), id="actions-plans")
+            yield Button(self._service.t("interface.more"), id="actions-more")
         yield Static(self._service.t("tui.empty"), id="actions-hint")
 
     async def on_mount(self) -> None:
@@ -2605,8 +2606,8 @@ class ActionsPane(Vertical):
                 "actions-add": "tui.btn_add_todo",
                 "actions-edit": "tui.btn_edit",
                 "actions-delete": "tui.btn_delete",
-                "actions-filters": "experience.action_filters",
-                "actions-plans": "experience.plans",
+                "actions-status": "interface.action_status",
+                "actions-more": "interface.more",
             },
         )
         search = self.query_one_optional("#actions-search", Input)
@@ -2797,7 +2798,7 @@ class ActionsPane(Vertical):
             button.label = (
                 self._service.t("tui.btn_delete_selected", count=count)
                 if count
-                else self._service.t("tui.btn_delete_todo")
+                else self._service.t("tui.btn_delete")
             )
             button.disabled = self._delete_busy or (not real and not count)
             button.tooltip = self._service.t("tui.selection_help")
@@ -2904,17 +2905,46 @@ class ActionsPane(Vertical):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         try:
-            await self._handle_button_pressed(event)
+            await self._handle_action(event.button.id)
         except Exception as exc:
             message = f"[red]{escape(error_message(self._service, exc))}[/red]"
             self.query_one("#actions-hint", Static).update(message)
 
-    async def _handle_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id in {"actions-filters", "actions-plans"}:
+    async def _more_actions(self) -> None:
+        from mailflow_tui.pickers import ChoicePicker
+
+        choice = await cast(Any, self).app.push_screen_wait(
+            ChoicePicker(
+                self._service,
+                [
+                    (self._service.t(key), ident)
+                    for key, ident in (
+                        ("experience.action_filters", "actions-filters"),
+                        ("experience.plans", "actions-plans"),
+                        ("assistant.handoff", "actions-assistant"),
+                    )
+                ],
+            )
+        )
+        if choice is not None:
+            try:
+                await self._handle_action(choice)
+            except Exception as exc:
+                hint = self.query_one("#actions-hint", Static)
+                hint.update(escape(error_message(self._service, exc)))
+                hint.display = True
+
+    async def _handle_action(self, button_id: str | None) -> None:
+        if button_id == "actions-more":
+            self.run_worker(
+                self._more_actions(), group="actions-menu", exclusive=True, exit_on_error=False
+            )
+            return
+        if button_id in {"actions-filters", "actions-plans"}:
             from mailflow_tui.workspace_screens import ActionFiltersScreen, PlansScreen
 
             def closed(value: Any) -> None:
-                if value is not None and event.button.id == "actions-filters":
+                if value is not None and button_id == "actions-filters":
                     self._category_filter, self._tag_filter = value
                 self.run_worker(
                     self.refresh_actions(), group="actions-refresh", exit_on_error=False
@@ -2922,12 +2952,12 @@ class ActionsPane(Vertical):
 
             cast(Any, self).app.push_screen(
                 ActionFiltersScreen(self._service, self._category_filter, self._tag_filter)
-                if event.button.id == "actions-filters"
+                if button_id == "actions-filters"
                 else PlansScreen(self._service),
                 closed,
             )
             return
-        if event.button.id == "actions-assistant":
+        if button_id == "actions-assistant":
             table = self._actions_table()
             ids = list(table.checked_keys) if table is not None and table.checked_keys else []
             item = self._selected_item()
@@ -2939,7 +2969,7 @@ class ActionsPane(Vertical):
             )
             return
 
-        if event.button.id == "actions-status":
+        if button_id == "actions-status":
             if self._delete_busy:
                 return
             self._delete_busy = True
@@ -2951,10 +2981,10 @@ class ActionsPane(Vertical):
                 exit_on_error=False,
             )
             return
-        if event.button.id == "actions-edit":
+        if button_id == "actions-edit":
             self.edit_selected()
             return
-        if event.button.id == "actions-add":
+        if button_id == "actions-add":
 
             def _refresh_after_create(_result: bool | None) -> None:
                 self.run_worker(
@@ -2969,7 +2999,7 @@ class ActionsPane(Vertical):
                 callback=_refresh_after_create,
             )
             return
-        if event.button.id != "actions-delete":
+        if button_id != "actions-delete":
             return
         if self._delete_busy:
             return

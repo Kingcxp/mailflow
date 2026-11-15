@@ -226,7 +226,8 @@ class MailMenu(WorkflowScreen):
                         "drafts",
                         "cleanup_preview",
                     )
-                ],
+                ]
+                + [(self.t("tui.urgency_label"), "priority")],
                 id="workflow-choice",
                 allow_blank=False,
             )

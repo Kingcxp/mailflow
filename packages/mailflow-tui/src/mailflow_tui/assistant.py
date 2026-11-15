@@ -15,7 +15,7 @@ from textual.message import Message
 from textual.widgets import Button, DataTable, RichLog, Static
 
 from mailflow_tui.smart_action_review import SmartActionReviewModal
-from mailflow_tui.widgets import ButtonRow, TextArea
+from mailflow_tui.widgets import TextArea
 
 
 class AssistantPane(Vertical):
@@ -30,13 +30,16 @@ class AssistantPane(Vertical):
     DEFAULT_CSS = """
     AssistantPane { padding: 0 1; }
     #assistant-scope, #assistant-status { height: auto; max-height: 3; overflow-y: auto; }
-    #assistant-input-row, #assistant-controls { height: auto; }
-    #assistant-input { width: 1fr; height: 5; }
+    #assistant-input-row { height: auto; align-vertical: middle; }
+    #assistant-input { width: 1fr; height: 3; }
+    #assistant-send { width: auto; min-width: 8; height: 3; margin-left: 1; content-align: center middle; }
+    #assistant-controls { height: 1; }
+    #assistant-controls Button { width: auto; min-width: 0; height: 1; margin-right: 2; }
     #assistant-send-hint { height: 1; color: $text-muted; }
-    #assistant-answer { height: 4; display: none; }
+    #assistant-output { height: 1fr; }
+    #assistant-answer { height: 1fr; min-height: 3; display: none; }
     #assistant-progress { height: 3; display: none; }
-    #assistant-results { height: 1fr; min-height: 3; }
-    #assistant-controls Button { min-width: 10; width: 1fr; }
+    #assistant-results { height: 1fr; min-height: 3; display: none; }
     """
 
     def __init__(self, service: MailFlowService) -> None:
@@ -56,49 +59,52 @@ class AssistantPane(Vertical):
         yield Static("", id="assistant-scope", markup=False)
         with Horizontal(id="assistant-input-row"):
             yield TextArea(id="assistant-input", soft_wrap=True)
-        yield Static(self._service.t("interface.send_hint"), id="assistant-send-hint")
-        with ButtonRow(id="assistant-controls"):
             yield Button(self._service.t("assistant.send"), id="assistant-send", variant="primary")
+        yield Static(self._service.t("interface.send_hint"), id="assistant-send-hint")
+        with Horizontal(id="assistant-controls"):
             yield Button(self._service.t("assistant.stop"), id="assistant-stop", disabled=True)
             yield Button(self._service.t("assistant.review"), id="assistant-review", disabled=True)
-            yield Button(self._service.t("assistant.all"), id="assistant-all")
-            yield Button(self._service.t("experience.history"), id="assistant-history")
+            yield Button(self._service.t("interface.all_scope"), id="assistant-all")
+            yield Button(self._service.t("interface.history"), id="assistant-history")
+            yield Button(self._service.t("assistant.configure_model"), id="assistant-configure")
         yield Static("", id="assistant-status", markup=False)
-        yield Button(self._service.t("assistant.configure_model"), id="assistant-configure")
         yield RichLog(id="assistant-progress", max_lines=100, wrap=True, markup=False)
-        yield TextArea("", id="assistant-answer", read_only=True, soft_wrap=True)
-        yield DataTable(id="assistant-results", cursor_type="row")
+        with Vertical(id="assistant-output"):
+            yield TextArea("", id="assistant-answer", read_only=True, soft_wrap=True)
+            yield DataTable(id="assistant-results", cursor_type="row")
 
     async def on_mount(self) -> None:
         self.on_resize()
         await self.relabel()
 
     def on_resize(self) -> None:
-        answer = self.query_one_optional("#assistant-answer", TextArea)
-        if answer is not None:
-            answer.styles.height = 4 if self.size.height < 30 else 6
-            self.query_one("#assistant-progress", RichLog).styles.height = (
-                3 if self.size.height < 30 else 6
-            )
+        self._size_input()
+
+    def _size_input(self) -> None:
+        editor = self.query_one_optional("#assistant-input", TextArea)
+        if editor is not None:
+            # Start with one editable line; grow for a longer request without
+            # reserving a large blank editor every time the page is opened.
+            editor.styles.height = min(5, max(3, editor.wrapped_document.height + 2))
 
     async def on_unmount(self) -> None:
         await self.stop()
 
     async def relabel(self) -> None:
-        self.query_one("#assistant-history", Button).label = self._service.t("experience.history")
+        self.query_one("#assistant-history", Button).label = self._service.t("interface.history")
         for ident, key in (
             ("send", "send"),
             ("stop", "stop"),
             ("review", "review"),
-            ("all", "all"),
         ):
             self.query_one(f"#assistant-{ident}", Button).label = self._service.t(
                 f"assistant.{key}"
             )
+        self.query_one("#assistant-all", Button).label = self._service.t("interface.all_scope")
         self.query_one("#assistant-send-hint", Static).update(
             self._service.t("interface.send_hint")
         )
-        self.query_one("#assistant-input", TextArea).tooltip = self._service.t(
+        self.query_one("#assistant-input", TextArea).border_title = self._service.t(
             "assistant.placeholder"
         )
         self.query_one("#assistant-configure", Button).label = self._service.t(
@@ -151,16 +157,24 @@ class AssistantPane(Vertical):
         self.query_one("#assistant-stop", Button).disabled = (
             self._query_task is None or self._query_task.done()
         )
+        self.query_one("#assistant-stop", Button).display = self._busy
         self.query_one("#assistant-all", Button).disabled = self._busy
+        self.query_one("#assistant-all", Button).display = bool(self._scope)
         self.query_one("#assistant-review", Button).disabled = self._busy or not bool(
             self._result and self._result.pending
         )
-        self.query_one("#assistant-configure", Button).display = not bool(
-            self._service.snapshot().llms
+        self.query_one("#assistant-review", Button).display = bool(
+            self._result and self._result.pending
+        )
+        self.query_one("#assistant-configure", Button).display = (
+            not self._busy
+            and not (self._result and self._result.pending)
+            and not self._service.snapshot().llms
         )
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id == "assistant-input":
+            self._size_input()
             self._sync_controls()
 
     def action_send(self) -> None:
@@ -281,6 +295,7 @@ class AssistantPane(Vertical):
         if editor.text != answer:
             editor.load_text(answer)
         editor.display = bool(answer)
+        table.display = bool(table.row_count)
         if table.row_count:
             table.move_cursor(row=min(cursor, table.row_count - 1))
         self._sync_controls()
