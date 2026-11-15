@@ -4882,6 +4882,7 @@ class MailFlowApp(App[None]):
         self._apply_language()
 
     async def on_unmount(self) -> None:
+        self._reload_requested = False
         for unsubscribe in getattr(self, "_subscriptions", []):
             if callable(unsubscribe):
                 unsubscribe()
@@ -5017,6 +5018,8 @@ class MailFlowApp(App[None]):
         self._schedule_reload()
 
     def _schedule_reload(self, affected: set[str] | None = None) -> None:
+        if not self.is_running:
+            return
         # a bulk re-analysis emits one event per mail: coalesce the burst
         # into a single refresh instead of queueing a full reload per mail
         self._dirty_tabs.update(
@@ -5040,7 +5043,9 @@ class MailFlowApp(App[None]):
             self._reload_scheduled = False
 
     async def _reload_all(self) -> None:
-        tabs = self.query_one(TabbedContent)
+        tabs = self.query_one_optional(TabbedContent)
+        if tabs is None or not self.is_running:
+            return
         active = tabs.active
         if active not in self._dirty_tabs:
             return

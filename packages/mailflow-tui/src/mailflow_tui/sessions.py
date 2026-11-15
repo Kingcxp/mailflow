@@ -122,6 +122,16 @@ def _pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    if sys.platform.startswith("linux"):
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+        # kill(pid, 0) also succeeds for an exited process awaiting its parent.
+        # An attaching/stopping frontend may not be that parent and cannot reap it.
+        return state not in {"Z", "X"}
     return True
 
 
@@ -130,11 +140,13 @@ def _wait_for_exit(pid: int, *, cleanup_complete: bool = False) -> None:
     # the host confirms service cleanup, such threads must not keep it alive.
     deadline = time.monotonic() + (2 if cleanup_complete else 10)
     terminated = False
-    while _pid_alive(pid):
+    while True:
         if os.name != "nt":
             with contextlib.suppress(ChildProcessError):
                 if os.waitpid(pid, cast(Any, os).WNOHANG)[0] == pid:
                     return
+        if not _pid_alive(pid):
+            return
         if time.monotonic() >= deadline:
             if not cleanup_complete or terminated:
                 raise SessionError("sessions.stop_timeout")

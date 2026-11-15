@@ -155,7 +155,8 @@ async def test_stored_html_is_readable_in_mail_reader_and_related_task(host: Any
         await until(
             pilot,
             lambda: (
-                "First paragraph"
+                bool(action_detail.query("#action-mail-detail"))
+                and "First paragraph"
                 in str(action_detail.query_one("#action-mail-detail", Static).render())
             ),
         )

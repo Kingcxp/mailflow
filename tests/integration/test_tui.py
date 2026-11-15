@@ -670,7 +670,7 @@ async def test_bot_export_wizard(tmp_path: Path) -> None:
             await pilot.pause()
             market_pane = app.query_one(MarketPane)
             cast(Button, market_pane.query_one("#market-export")).press()
-            await pilot.pause(0.1)
+            await until(pilot, lambda: bool(app.screen.query("#export-tree")))
             assert isinstance(app.screen, BotExportScreen)
             # the exporter plugin is registered -> the framework select defaults to nonebot
             framework_select = cast(Select[Any], app.screen.query_one("#export-framework", Select))
@@ -681,14 +681,13 @@ async def test_bot_export_wizard(tmp_path: Path) -> None:
             assert framework_select.value == "nonebot"
             tree = app.screen.query_one("#export-tree", DirectoryTree)
             tree.path = tmp_path
-            await pilot.pause(0.2)
+            await until(
+                pilot, lambda: tree.root.data is not None and tree.root.data.path == tmp_path
+            )
             tree.move_cursor(tree.root, animate=False)  # pyright: ignore[reportUnknownMemberType]
-            await pilot.pause(0.05)
+            await until(pilot, lambda: tree.cursor_node is tree.root)
             app.screen.query_one("#export-run", Button).press()
-            for _ in range(100):
-                if (tmp_path / "pyproject.toml").is_file():
-                    break
-                await pilot.pause(0.05)
+            await until(pilot, lambda: not isinstance(app.screen, BotExportScreen))
             assert (tmp_path / "pyproject.toml").is_file()
             assert (tmp_path / "src" / "nonebot_plugin_mailflow" / "config.toml").is_file()
             app.exit()
@@ -982,16 +981,14 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
             market_table.move_cursor(row=0, animate=False)  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause(0.1)
             market_table.action_select_cursor()  # equivalent of pressing Enter
-            await pilot.pause(0.2)
+            await until(pilot, lambda: bool(app.screen.query("#market-detail-readme")))
             assert isinstance(app.screen, MarketDetailScreen)
             # the readme renders in a worker now: poll until it lands
             readme = app.screen.query_one("#market-detail-readme", Markdown)  # pyright: ignore[reportUnknownMemberType]
-            content = ""
-            for _ in range(40):
-                content = str(getattr(readme, "_markdown", ""))  # pyright: ignore[reportUnknownMemberType]
-                if "Full markdown body" in content:
-                    break
-                await pilot.pause(0.05)
+            await until(
+                pilot, lambda: "Full markdown body" in str(getattr(readme, "_markdown", ""))
+            )
+            content = str(getattr(readme, "_markdown", ""))
             assert "Test Author" in content
             assert "2026-08-01" in content
             assert "Full markdown body" in content
