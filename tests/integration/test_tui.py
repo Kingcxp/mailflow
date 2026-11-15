@@ -973,13 +973,18 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
     try:
         async with app.run_test() as pilot:
             await pilot.pause()
+            app.query_one(TabbedContent).active = "tab-market"
             market_pane = app.query_one(MarketPane)
             await market_pane.refresh_market()
+            await cast(Any, app.workers).wait_for_complete()
             market_table = cast(DataTable[Any], app.query_one("#market-table", DataTable))
+            await until(pilot, lambda: "mailflow-demo-notify" in market_table.rows)
             # select the row -> full-screen detail modal
             market_table.focus()
-            market_table.move_cursor(row=0, animate=False)  # pyright: ignore[reportUnknownMemberType]
-            await pilot.pause(0.1)
+            market_table.move_cursor(
+                row=market_table.get_row_index("mailflow-demo-notify"), animate=False
+            )
+            await pilot.pause()
             market_table.action_select_cursor()  # equivalent of pressing Enter
             await until(pilot, lambda: bool(app.screen.query("#market-detail-readme")))
             assert isinstance(app.screen, MarketDetailScreen)
@@ -1742,35 +1747,46 @@ async def test_llm_move_up_follows_the_entry_and_repeats(tmp_path: Path) -> None
         async with app.run_test(size=(140, 45)) as pilot:
             tabs = app.query_one(TabbedContent)
             tabs.active = "tab-llms"  # pyright: ignore[reportUnknownMemberType]
-            for _ in range(60):
-                if app.query(LLMPane):
-                    break
-                await pilot.pause(0.05)
+            await until(pilot, lambda: bool(app.query(LLMPane)))
             pane = app.query_one(LLMPane)
-            await pilot.pause(0.3)
+            await cast(Any, app.workers).wait_for_complete()
             table = cast(DataTable[Any], pane.query_one("#llms-table", DataTable))
+            await until(pilot, lambda: table.row_count == 3)
 
             # select the third entry (index 2) and move it up twice
             table.move_cursor(row=2, animate=False)  # pyright: ignore[reportUnknownMemberType]
-            await pilot.pause(0.1)
-            assert pane._selected == 2  # pyright: ignore[reportPrivateUsage]
+            await until(pilot, lambda: not app.query_one("#llm-up", Button).disabled)
 
             app.query_one("#llm-up", Button).press()
-            await pilot.pause(0.4)
+            await until(
+                pilot,
+                lambda: (
+                    [llm.llm_id for llm in service.config.llms] == ["llm-0", "llm-2", "llm-1"]
+                    and table.cursor_row == 1
+                    and not app.query_one("#llm-up", Button).disabled
+                ),
+            )
             assert [llm.llm_id for llm in service.config.llms] == ["llm-0", "llm-2", "llm-1"]
-            assert pane._selected == 1, "the cursor must follow the moved entry"  # pyright: ignore[reportPrivateUsage]
+            assert table.cursor_row == 1, "the cursor must follow the moved entry"
 
             app.query_one("#llm-up", Button).press()
-            await pilot.pause(0.4)
+            await until(
+                pilot,
+                lambda: (
+                    [llm.llm_id for llm in service.config.llms] == ["llm-2", "llm-0", "llm-1"]
+                    and table.cursor_row == 0
+                    and app.query_one("#llm-up", Button).disabled
+                ),
+            )
             assert [llm.llm_id for llm in service.config.llms] == ["llm-2", "llm-0", "llm-1"]
-            assert pane._selected == 0  # pyright: ignore[reportPrivateUsage]
+            assert table.cursor_row == 0
 
             # At the first row, moving up is unavailable.
             assert app.query_one("#llm-up", Button).disabled
             app.query_one("#llm-up", Button).press()
-            await pilot.pause(0.3)
+            await pilot.pause()
             assert [llm.llm_id for llm in service.config.llms] == ["llm-2", "llm-0", "llm-1"]
-            assert pane._selected == 0  # pyright: ignore[reportPrivateUsage]
+            assert table.cursor_row == 0
             app.exit()
             await pilot.pause()
     finally:

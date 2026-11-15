@@ -754,8 +754,10 @@ async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any)
         await pilot.press("space", "down", "down", "f3")
         assert len(table.checked_keys) == 3
         await pilot.press("escape", "f2")
+        await settle(pilot)
         await pilot.click(table, offset=(25, 2))
         assert len(table.checked_keys) == 1
+        await settle(pilot)
         await pilot.click(table, offset=(25, 3))
         assert len(table.checked_keys) == 2
         await pilot.press("f4")
@@ -822,7 +824,7 @@ async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any)
         await pilot.pause()
         status = app.query_one("#actions-status", Button)
         status.press()
-        await until(pilot, lambda: bool(app.screen.query("#workflow-choice")))
+        await until(pilot, lambda: bool(app.screen.query("#workflow-apply")))
         assert status.disabled
         app.screen.query_one("#workflow-apply", Button).press()
         await settle(pilot)
