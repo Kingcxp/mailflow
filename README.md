@@ -20,7 +20,7 @@ search and rule processing work without one.
 | Area | What you can do |
 | --- | --- |
 | Mail | Read full messages before analysis finishes; filter by account and date, save rolling filters, view conversations, star and archive mail |
-| Search and assistant | Search text, attachment names and extracted image text; use a separate assistant tab for natural-language requests, progress and confirmed changes |
+| Search and assistant | Search text, attachment names and extracted image text; use the mail page’s smart-action button for natural-language requests, progress and confirmed changes |
 | Writing | Compose, reply, reply all or forward with To/Cc/Bcc and attachments; keep drafts, preview and confirm before sending |
 | Tasks | Use optional deadlines, categories, tags and daily/weekly/monthly plans; postpone one occurrence, pause a plan or snooze its reminders |
 | Notifications | Connect supported bots or delivery plugins; choose presets, quiet hours and targets; inspect and retry failed deliveries |
@@ -89,9 +89,10 @@ entire mailbox. See [account setup](docs/configuration/overview.md#accounts-and-
 `mailflow tui stop inbox` stops a background instance. Single commands and the
 command shell do not start automatic mail, reminder or backup loops.
 
-Save forms with their Save button or Ctrl+S. The assistant accepts multiple lines;
-use Send or Ctrl+Enter to execute. In narrow windows, Enter opens mail details;
-analysis and cleanup live under Analysis and maintenance. See
+Save forms with their Save button or Ctrl+S. The terminal pages use the main
+branch layout: enter text in the mail search field, then click Smart action to
+execute a natural-language request. Analysis and cleanup use the original mail
+page buttons. See
 [terminal controls](docs/configuration/overview.md#terminal-controls).
 
 Set server credentials before remote use. The remote terminal operates on server

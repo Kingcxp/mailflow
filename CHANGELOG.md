@@ -8,7 +8,7 @@ for artifacts and Git history for individual commits.
 
 ### Added
 
-- Independent assistant tab with scoped requests, live progress, confirmed changes,
+- Smart mail actions with scoped requests, live progress, confirmed changes,
   source references and private, searchable session history.
 - Saved rolling filters, account-isolated mail conversations, full composition
   with To/Cc/Bcc and attachments, and shared draft/confirmation state.
@@ -25,12 +25,12 @@ for artifacts and Git history for individual commits.
 ### Changed
 
 - Forms offer presets, date/file pickers and advanced settings with grouped saving.
-  Narrow terminals use full mail dialogs, while the assistant supports multiline
-  requests. Send previews show the persisted recipients, body and attachments.
+  Terminal pages and smart-action controls use the main branch layout.
+  Send previews show the persisted recipients, body and attachments.
 - Mail originals appear before background analysis. History import and reanalysis
   are quiet by default; cancelled analysis is not resumed on the next launch.
-- The assistant is separate from ordinary mail filtering; editing input or
-  switching tabs does not silently execute or cancel a request.
+- Smart actions run only when requested; editing input or switching tabs does
+  not silently execute or cancel a request.
 - Generated analysis follows the interface language. Analysis in another language
   is eligible for failed-mail reanalysis without hiding the original mail.
 - Mail retention is unlimited by default, source synchronization and automatic
@@ -79,13 +79,13 @@ confirmed reply drafts and workspace build/check tooling.
 `Unreleased` 记录当前 `dev` 分支中尚未发布的变化，不代表已发布版本；
 实际产物见发布页面，逐次修改见 Git 历史。
 
-本轮主要补齐独立智能助手、会话记录、邮件往来、完整写信与附件、周期待办、
+本轮主要补齐智能操作、会话记录、邮件往来、完整写信与附件、周期待办、
 通知预设与免打扰、后台终端实例、备份和主动开启的原邮箱联动。
 邮件先可读再分析，历史导入与重析默认静默；完成待办永久移除当期，周期计划继续。
 总结跟随界面语言，切换语言后可重析旧语言结果。
 
 逐页整理表单与弹窗：预设和日期、文件提供选择，常用与高级设置分开，关联修改成组保存。
-小窗口使用完整邮件详情，助手支持多行输入，发送前集中核对正文、收件人与附件。
+标签页和智能操作入口恢复 main 分支布局，发送前集中核对正文、收件人与附件。
 修复远程启动登录空白、按钮截断及日志来源筛选，保留筛选期间的新日志和阅读位置。
 
 同时修复日期筛选、来源操作核对与重试、附件多选及失败恢复、通知按目标重试、

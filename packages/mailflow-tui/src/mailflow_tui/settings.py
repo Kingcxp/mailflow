@@ -1552,7 +1552,8 @@ class OptionCard(Vertical):
             + self._t("tui.settings_default_hint", value=default_text(self._service, spec))
         )
         yield title
-        yield Static(escape(self._description), classes="option-desc")
+        if self._description:
+            yield Static(escape(self._description), classes="option-desc")
         yield Static(
             self._t("tui.settings_default_hint", value=default_text(self._service, spec)),
             classes="option-default",
@@ -1708,12 +1709,13 @@ class SettingsPane(Vertical):
             )
             yield SearchToggle("regex", ident="settings-search-regex")
             yield SearchToggle("case", ident="settings-search-case")
-            yield Button(self._t("interface.more"), id="settings-more")
         with Horizontal(id="settings-body"):
             with Vertical(id="settings-sidebar"):
                 yield Static(self._t("tui.settings_sections"), id="settings-sidebar-title")
                 yield ListView(id="settings-sections")
             with Vertical(id="settings-main"):
+                # language switching lives in the general.language option
+                # card (dropdown of loaded packs) — no separate row
                 yield Static("", id="settings-status")
                 yield ScrollableContainer(id="settings-options")
 
@@ -2266,12 +2268,10 @@ class LLMPane(Vertical):
         yield DataTable(id="llms-table")
         with Horizontal(id="llms-actions"):
             yield Button(self._t("tui.btn_new"), id="llm-add", variant="success")
-            yield Button(self._t("tui.btn_edit"), id="llm-edit", variant="primary", disabled=True)
-            yield Button(self._t("tui.btn_delete"), id="llm-delete", variant="error", disabled=True)
-            yield Button(self._t("tui.btn_move_up"), id="llm-up", variant="primary", disabled=True)
-            yield Button(
-                self._t("tui.btn_move_down"), id="llm-down", variant="primary", disabled=True
-            )
+            yield Button(self._t("tui.btn_edit"), id="llm-edit", variant="primary")
+            yield Button(self._t("tui.btn_delete"), id="llm-delete", variant="error")
+            yield Button(self._t("tui.btn_move_up"), id="llm-up", variant="primary")
+            yield Button(self._t("tui.btn_move_down"), id="llm-down", variant="primary")
         with Vertical(id="notify-wrap"):
             yield Static(self._t("tui.notify_title"), id="notify-title")
             yield RichLog(id="notify-feed", wrap=True, markup=False, highlight=False)
@@ -2346,8 +2346,8 @@ class LLMPane(Vertical):
                 table.remove_column(key)
         table.add_column(self._t("tui.llms_column_order"), key="order")
         table.add_column(self._t("plugin.header_id"), key="llm")
-        table.add_column(self._t("llm.header_backend"), key="provider")
         table.add_column(self._t("llm.header_model"), key="model")
+        table.add_column(self._t("llm.header_backend"), key="provider")
         table.add_column(self._t("tui.llms_column_default"), key="default_col")
         table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
         self._columns_done = True
@@ -2367,8 +2367,8 @@ class LLMPane(Vertical):
             table.add_row(
                 str(position + 1),
                 escape(llm.llm_id),
-                escape(llm.provider),
                 escape(llm.model),
+                escape(llm.provider),
                 default_marker,
                 key=str(position),
             )
@@ -2560,35 +2560,18 @@ class AccountsPane(Vertical):
         yield DataTable(id="accounts-table")
         with Horizontal(id="accounts-actions"):
             yield Button(self._t("tui.btn_new"), id="account-add", variant="success")
-            yield Button(
-                self._t("tui.btn_edit"), id="account-edit", variant="primary", disabled=True
-            )
-            yield Button(
-                self._t("tui.btn_delete"), id="account-delete", variant="error", disabled=True
-            )
-            yield Button(
-                self._t("tui.history_load"), id="account-history", variant="primary", disabled=True
-            )
-            yield Button(self._t("ux.sync_mail"), id="account-sync", disabled=True)
+            yield Button(self._t("tui.btn_edit"), id="account-edit", variant="primary")
+            yield Button(self._t("tui.btn_delete"), id="account-delete", variant="error")
+            yield Button(self._t("tui.history_load"), id="account-history", variant="primary")
         yield Static(self._t("tui.history_title"), id="history-title")
         yield Static(self._t("tui.history_select_hint"), id="history-help")
         yield SelectionTable(t=self._t, id="history-table")
         with Horizontal(id="history-actions"):
+            yield Button(self._t("tui.history_analyze"), id="history-analyze", variant="success")
             yield Button(
-                self._t("tui.history_analyze"),
-                id="history-analyze",
-                variant="success",
-                disabled=True,
+                self._t("tui.history_select_all"), id="history-select-all", variant="primary"
             )
-            yield Button(
-                self._t("tui.history_select_all"),
-                id="history-select-all",
-                variant="primary",
-                disabled=True,
-            )
-            yield Button(
-                self._t("tui.history_more"), id="history-more", variant="primary", disabled=True
-            )
+            yield Button(self._t("tui.history_more"), id="history-more", variant="primary")
             yield Static(self._t("tui.history_count_label"), id="history-count-label")
             yield Input(
                 value=str(self._DEFAULT_HISTORY_BATCH_SIZE), type="integer", id="history-count"
@@ -2712,8 +2695,8 @@ class AccountsPane(Vertical):
             with contextlib.suppress(Exception):
                 table.remove_column(key)
         table.add_column(self._t("account.header_id"), key="account")
-        table.add_column(self._t("account.header_provider"), key="provider")
         table.add_column(self._t("account.header_email"), key="email")
+        table.add_column(self._t("account.header_provider"), key="provider")
         table.add_column(self._t("tui.accounts_column_status"), key="status")
         table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
         self._columns_done = True
@@ -2722,10 +2705,10 @@ class AccountsPane(Vertical):
         table = self._history_table()
         if table is None or getattr(self, "_history_columns_done", False):
             return
-        for key in ("selected", "subject", "sender", "date", "state"):
+        for key in ("pick", "subject", "sender", "date", "state"):
             with contextlib.suppress(Exception):
                 table.remove_column(key)
-        table.add_column("[ ]", key="selected", width=3)
+        table.add_column(self._t("tui.history_column_selected"), key="pick")
         table.add_column(self._t("tui.column_subject"), key="subject")
         table.add_column(self._t("tui.column_sender"), key="sender")
         table.add_column(self._t("tui.column_date"), key="date")
@@ -2744,8 +2727,8 @@ class AccountsPane(Vertical):
         for position, account in enumerate(accounts):
             table.add_row(
                 escape(account.account_id),
-                escape(account.provider),
                 escape(account.email or "-"),
+                escape(account.provider),
                 self._t("sync.state_" + self._service.runtime.account_status(account.account_id)),
                 key=str(position),
             )
@@ -2785,7 +2768,9 @@ class AccountsPane(Vertical):
                 else self._t("tui.history_marked_new")
             )
             table.add_row(
-                table.check_label(record_id) if isinstance(table, SelectionTable) else "",
+                self._t("tui.history_picked")
+                if record_id in self._picked
+                else self._t("tui.history_unpicked"),
                 subject,
                 sender,
                 date_text,
@@ -2804,6 +2789,14 @@ class AccountsPane(Vertical):
     def on_selection_table_selection_changed(self, event: SelectionTable.SelectionChanged) -> None:
         if event.table.id == "history-table":
             self._picked = set(event.table.checked_keys)
+            for identity in event.table.visible_keys():
+                event.table.update_cell(
+                    identity,
+                    "pick",
+                    self._t(
+                        "tui.history_picked" if identity in self._picked else "tui.history_unpicked"
+                    ),
+                )
             self._sync_controls()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -2819,6 +2812,10 @@ class AccountsPane(Vertical):
             table = self._history_table()
             if isinstance(table, SelectionTable):
                 table.action_toggle_check()
+            elif event.row_key.value is not None:
+                identity = str(event.row_key.value)
+                self._picked.symmetric_difference_update({identity})
+                self._render_history()
 
     async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if _table_id(event) == "accounts-table" and event.row_key.value is not None:

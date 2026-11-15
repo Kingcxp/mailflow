@@ -40,11 +40,10 @@ from mailflow_test_support.ui import until
 # retired by the schedule-expiry sweep, which is not what this fixture tests.
 
 
-async def _assistant_review(app: MailFlowApp, pilot: Any) -> None:
+async def _smart_review(app: MailFlowApp, pilot: Any) -> None:
     await pilot.pause()
-    app.query_one("#assistant-send", Button).press()
-    await until(pilot, lambda: not app.query_one("#assistant-review", Button).disabled)
-    app.query_one("#assistant-review", Button).press()
+    app.query_one("#smart-action", Button).press()
+    await until(pilot, lambda: bool(app.screen.query("#smart-review-apply")))
 
 
 @pytest.mark.asyncio
@@ -141,63 +140,66 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
                     table.row_count == 1 and "Optional Friday lecture" in str(table.get_row_at(0))
                 ),
             )
-            before = list(table.rows)
             tabs = app.query_one(TabbedContent)
-            tabs.active = "tab-assistant"
+            search = mail_search
+            search.value = "the student ID invitation"
             await pilot.pause()
-            search = app.query_one("#assistant-input", TextArea)
-            search.load_text("the student ID invitation")
-            await pilot.pause()
-            app.query_one("#assistant-send", Button).press()
+            app.query_one("#smart-action", Button).press()
             await until(pilot, router.started.is_set)
-            tabs.active = "tab-mail"
+            progress = app.query_one("#smart-action-progress", RichLog)
+            assert progress.display and progress.lines
+            tabs.active = "tab-actions"
             await pilot.pause()
-            assert list(table.rows) == before and mail_search.value == "lecture"
             assert not router.cancelled.is_set()
-            tabs.active = "tab-assistant"
+            tabs.active = "tab-mail"
+            search.value = "another request"
             await pilot.pause()
-            search.load_text("another request")
-            assert not app.query_one("#assistant-stop", Button).disabled
-            app.query_one("#assistant-stop", Button).press()
+            app.query_one("#smart-action", Button).press()
             await until(pilot, router.cancelled.is_set)
-            await until(pilot, lambda: not app.query_one("#assistant-send", Button).disabled)
-            assert search.text == "another request"
-            progress = app.query_one("#assistant-progress", RichLog)
-            assert not progress.display and not progress.lines
+            await until(pilot, lambda: not progress.display)
+            assert search.value == "another request"
+            assert not progress.lines
             router.release.set()
-            search.load_text("the student ID invitation")
+            search.value = "the student ID invitation"
             await pilot.pause()
-            app.query_one("#assistant-send", Button).press()
+            app.query_one("#smart-action", Button).press()
             await until(
-                pilot, lambda: app.query_one("#assistant-results", DataTable).row_count == 1
+                pilot,
+                lambda: (
+                    not progress.display
+                    and table.row_count == 1
+                    and "Pick up your student ID card" in str(table.get_row_at(0))
+                ),
             )
-            results = cast(DataTable[str], app.query_one("#assistant-results", DataTable))
-            assert "Pick up your student ID card" in str(results.get_row_at(0))
-            assert "Answered." in app.query_one("#assistant-answer", TextArea).text
-            assert list(table.rows) == before and mail_search.value == "lecture"
+            assert "Pick up your student ID card" in str(table.get_row_at(0))
+            assert "Answered." in str(app.query_one("#mail-empty-hint", Static).render())
             await service.set_language("zh-CN")
             await pilot.pause()
-            assert search.text == "the student ID invitation" and results.row_count == 1
+            assert search.value == "the student ID invitation" and table.row_count == 1
+
+            failed = asyncio.Event()
 
             async def fail_query(*args: Any, **kwargs: Any) -> Any:
+                failed.set()
                 raise OSError("private network details")
 
             original = service.smart_action
             monkeypatch.setattr(service, "smart_action", fail_query)
             await pilot.pause()
-            app.query_one("#assistant-send", Button).press()
-            await until(pilot, lambda: not app.query_one("#assistant-send", Button).disabled)
+            app.query_one("#smart-action", Button).press()
+            await until(pilot, failed.is_set)
+            await until(pilot, lambda: not app.query_one("#smart-action-progress", RichLog).display)
             assert "private network details" not in str(
-                app.query_one("#assistant-status", Static).render()
+                app.query_one("#mail-empty-hint", Static).render()
             )
             monkeypatch.setattr(service, "smart_action", original)
             router.held = False
             router.started.clear()
             router.release.clear()
             router.cancelled.clear()
-            search.load_text("another query")
+            search.value = "another query"
             await pilot.pause()
-            app.query_one("#assistant-send", Button).press()
+            app.query_one("#smart-action", Button).press()
             await until(pilot, router.started.is_set)
             app.exit()
             await pilot.pause()
@@ -304,10 +306,10 @@ async def test_smart_query_task_crud_requires_confirmation(
                     break
                 await pilot.pause(0.05)
 
-            app.query_one(TabbedContent).active = "tab-assistant"
+            app.query_one(TabbedContent).active = "tab-mail"
             await pilot.pause()
-            search = app.query_one("#assistant-input", TextArea)
-            search.load_text("查找包含 lecture 的邮件，并在2099年10月15日14:00添加项目复核待办")
+            search = app.query_one("#mail-search", Input)
+            search.value = "查找包含 lecture 的邮件，并在2099年10月15日14:00添加项目复核待办"
 
             def modal() -> SmartActionReviewModal | None:
                 screens = [
@@ -317,7 +319,7 @@ async def test_smart_query_task_crud_requires_confirmation(
                 ]
                 return screens[-1] if screens else None
 
-            await _assistant_review(app, pilot)
+            await _smart_review(app, pilot)
             for _ in range(120):
                 if modal() is not None:
                     break
@@ -337,15 +339,15 @@ async def test_smart_query_task_crud_requires_confirmation(
                 pilot,
                 lambda: (
                     service.t("errors.connection")
-                    in str(app.query_one("#assistant-status", Static).render())
+                    in str(app.query_one("#mail-empty-hint", Static).render())
                 ),
             )
             assert not await service.storage.list_custom_actions()
             assert "private connection details" not in str(
-                app.query_one("#assistant-status", Static).render()
+                app.query_one("#mail-empty-hint", Static).render()
             )
             monkeypatch.setattr(service, "apply_smart_plan", apply_plan)
-            app.query_one("#assistant-review", Button).press()
+            app.query_one("#smart-action", Button).press()
             await until(pilot, lambda: modal() is not None)
             app.screen.query_one("#smart-review-apply", Button).press()
             for _ in range(120):
@@ -364,8 +366,8 @@ async def test_smart_query_task_crud_requires_confirmation(
             await until(pilot, lambda: modal() is None)
 
             router.mode = "edit"
-            search.load_text("清除 Project review 待办的结束时间")
-            await _assistant_review(app, pilot)
+            search.value = "清除 Project review 待办的结束时间"
+            await _smart_review(app, pilot)
             await until(pilot, lambda: modal() is not None)
             prompt = modal()
             assert prompt is not None
@@ -388,8 +390,8 @@ async def test_smart_query_task_crud_requires_confirmation(
             assert edited.due_at == scheduled[0].due_at
 
             router.mode = "unschedule"
-            search.load_text("清除 Project review 待办的截止时间")
-            await _assistant_review(app, pilot)
+            search.value = "清除 Project review 待办的截止时间"
+            await _smart_review(app, pilot)
             await until(pilot, lambda: modal() is not None)
             app.screen.query_one("#smart-review-edit-0", Button).press()
             await until(pilot, lambda: isinstance(app.screen, SmartOperationEditModal))
@@ -406,17 +408,15 @@ async def test_smart_query_task_crud_requires_confirmation(
             assert unscheduled.location == "Office 4"
 
             router.mode = "delete"
-            search.load_text("删除 Project review 待办")
-            await _assistant_review(app, pilot)
+            search.value = "删除 Project review 待办"
+            await _smart_review(app, pilot)
             await until(pilot, lambda: modal() is not None)
             assert len(await service.storage.list_custom_actions()) == 1
             app.screen.query_one("#smart-review-apply", Button).press()
             await until(pilot, lambda: modal() is None)
             await pilot.pause()
             assert await service.storage.list_custom_actions() == []
-            await until(
-                pilot, lambda: app.query_one("#assistant-results", DataTable).row_count == 0
-            )
+            await until(pilot, lambda: not app.query_one("#smart-action-progress", RichLog).display)
             app.exit()
             await pilot.pause()
     finally:
@@ -485,10 +485,10 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
                     break
                 await pilot.pause(0.05)
 
-            app.query_one(TabbedContent).active = "tab-assistant"
+            app.query_one(TabbedContent).active = "tab-mail"
             await pilot.pause()
-            search = app.query_one("#assistant-input", TextArea)
-            search.load_text("把广告邮件都删掉")
+            search = app.query_one("#mail-search", Input)
+            search.value = "把广告邮件都删掉"
 
             def modal() -> SmartActionReviewModal | None:
                 screens = [
@@ -500,7 +500,7 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
                 ]
                 return screens[-1] if screens else None
 
-            await _assistant_review(app, pilot)
+            await _smart_review(app, pilot)
             for _ in range(120):
                 if modal() is not None:
                     break
@@ -522,7 +522,7 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
             assert await service.count_mails() == 3
 
             # a second run, this time confirmed
-            await _assistant_review(app, pilot)
+            await _smart_review(app, pilot)
             for _ in range(120):
                 if modal() is not None:
                     break
@@ -543,7 +543,7 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
             assert [item.mail.subject for item in trash] == ["Huge promotion sale"]
             # the pane reports the real number moved (written after the
             # deferred reload, so it survives the re-render)
-            hint = app.query_one("#assistant-status", Static)
+            hint = app.query_one("#mail-empty-hint", Static)
             for _ in range(60):
                 if "1" in str(hint.render()):
                     break

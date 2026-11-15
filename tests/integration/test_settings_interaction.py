@@ -652,7 +652,6 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         assert service.t("errors.storage") in rendered(pane, "#settings-status")
         assert "read only" not in rendered(pane, "#settings-status")
         assert not pane.query_one("#save-general-workers", Button).disabled
-        assert not pane.query_one("#settings-more", Button).disabled
 
         draft = pane.query_one("#value-general-workers", Input)
         draft.focus()
@@ -670,13 +669,9 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         assert (service.config.general.workers, service.config.general.queue_size) == (7, 65)
         draft.value = "9"
         await settle(pilot)
-        pane.query_one("#settings-more", Button).press()
+        await pane._settings_operation("settings-discard-section")  # pyright: ignore[reportPrivateUsage]
         await settle(pilot)
-        picker = pilot.app.screen
-        table = cast("DataTable[Any]", picker.query_one("#picker-results", DataTable))
-        table.move_cursor(row=1)
-        await pilot.press("enter")
-        await settle(pilot)
+        draft = pane.query_one("#value-general-workers", Input)
         assert draft.value == "7" and service.config.general.workers == 7
         await pane.remove()
         await pane.reload()

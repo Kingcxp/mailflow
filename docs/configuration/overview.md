@@ -32,19 +32,17 @@ reference for secrets. An unset referenced variable fails loading; embedded
 | Task | Operation |
 | --- | --- |
 | Save a form | Save or Ctrl+S; Enter does not submit multi-field forms |
-| Edit settings | Save or discard the current section together; default, saved custom and unsaved values are distinct; search also finds advanced settings |
-| Read mail | At 110 columns or wider, use the split reader; below that, Enter or Open mail opens full details |
+| Edit settings | Save individual options or use Ctrl+S to save the section; search also finds advanced settings |
+| Read mail | The original split view shows the mail list and the selected message together |
 | Send mail | Prepare displays recipients, body and attachments together; Edit returns to the draft, and changes invalidate the old confirmation |
-| Ask the assistant | Enter adds a line; Send or Ctrl+Enter executes; scope stays fixed until explicitly changed |
-| Read logs | Combine source, level and keyword filters; turn off Follow latest to read older entries; export defaults to the current filter |
+| Ask the assistant | Enter a request in the mail search field and click Smart action; click again to cancel; changes require confirmation |
+| Read logs | Combine source, level and keyword filters; scroll up to read older entries without following new ones; export defaults to the current filter |
 | Select values or files | Use Browse beside dates, times, timezones and paths; custom text remains editable |
 
-Mail, Actions, Settings and the other existing pages retain the main branch's
-panel, form and button-row design. New capabilities remain available through
-More menus and dialogs; the assistant keeps its own tab. Mouse hover does not
-open help overlays; use F1 for keyboard and selection help. Settings can be
-saved individually or together with Ctrl+S; More also provides discard, backup
-and connection actions. Backup destination and restore file are separate fields.
+The tab order, panels, filters and button rows follow the main branch layout.
+Smart actions use the original mail-page entry point. Mouse hover does not open
+help overlays; use F1 for keyboard and selection help. Settings can be saved
+individually or together with Ctrl+S.
 
 ## Accounts and startup
 
@@ -266,18 +264,16 @@ for safe issue reports.
 | 用途 | 操作 |
 | --- | --- |
 | 保存表单 | 保存按钮或 Ctrl+S；多字段表单不会因 Enter 意外提交 |
-| 修改设置 | 本区修改可一起保存或撤销；区分默认、已保存的自定义值和未保存修改；搜索也包含高级设置 |
-| 阅读邮件 | 110 列及以上显示列表与详情；小窗口通过 Enter 或打开邮件进入完整详情 |
+| 修改设置 | 逐项保存，或通过 Ctrl+S 保存本区修改；搜索也包含高级设置 |
+| 阅读邮件 | 使用原有左右分栏，同时查看邮件列表与所选邮件详情 |
 | 发送邮件 | 准备后集中预览收件人、正文和附件；编辑可返回草稿，改动使旧确认失效 |
-| 使用助手 | Enter 换行，发送按钮或 Ctrl+Enter 执行；作用范围保持固定，直至主动调整 |
-| 阅读日志 | 来源、等级和关键词可以组合筛选；关闭跟随最新后阅读旧内容；导出默认使用当前筛选 |
+| 使用助手 | 在邮件搜索框填写需求，点击智能操作执行；再次点击可取消；修改操作先确认 |
+| 阅读日志 | 来源、等级和关键词可以组合筛选；向上滚动可阅读旧内容并暂停跟随新日志；导出默认使用当前筛选 |
 | 选择填写内容 | 日期、时间、时区和路径旁提供选择入口，也可继续填写自定义值 |
 
-邮件、待办、设置等已有页面沿用 main 分支的面板、表单和按钮行设计。
-新增能力保留在“更多”菜单和弹窗中，智能助手继续使用独立标签页。
+标签顺序、面板、筛选栏和按钮行恢复 main 分支布局，智能操作恢复邮件页原有入口。
 鼠标悬停不弹出提示，快捷键和多选说明通过 F1 查看。
-设置可逐项保存，也可通过 Ctrl+S 一起保存；“更多”提供撤销本区修改、备份和连接信息。
-备份保存位置与恢复文件分别选择。
+设置可逐项保存，也可通过 Ctrl+S 保存本区修改。
 
 ### 账户与启动
 

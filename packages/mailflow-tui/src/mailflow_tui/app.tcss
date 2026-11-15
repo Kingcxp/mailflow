@@ -1473,14 +1473,7 @@ UserProfileModal {
     max-width: 78;
 }
 
-/* Existing capabilities added after main use the same panel and row styles. */
-Tooltip { visibility: hidden; }
-#mail-content { height: 1fr; }
-#mail-filter-summary { height: auto; max-height: 2; color: $text-muted; }
-#mail-processing-controls { height: auto; }
-#mail-processing-status { height: auto; width: 1fr; color: $text-muted; }
-#btn-assistant { height: 100%; margin-left: 1; }
-#runtime-summary { height: auto; margin: 0 1; }
+/* Existing dialogs: keep their fields and cancel controls within the viewport. */
 #reply-form { height: 1fr; }
 #reply-form Label, #reply-title { height: auto; }
 #reply-status { height: auto; max-height: 4; overflow-y: auto; }
@@ -1488,12 +1481,8 @@ Tooltip { visibility: hidden; }
 #todo-create-form { height: 1fr; }
 #todo-weekdays { height: 9; }
 #profile-text, #profile-guidelines { height: 8; }
-#actions-buttons Button { width: 1fr; min-width: 0; }
-#settings-more { min-width: 8; }
 #guide-view-qr { height: 1; min-height: 1; }
 AssistedInput > Button { height: 3; }
-
-/* Keep the original dialogs usable when the terminal is smaller than the panel. */
 #export-dialog, #install-dialog, #repos-dialog, #scaffold-dialog,
 #entry-form-dialog, #list-edit-dialog {
     max-width: 95%;

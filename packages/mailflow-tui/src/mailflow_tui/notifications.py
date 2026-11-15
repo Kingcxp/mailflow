@@ -171,7 +171,6 @@ class NotificationsPane(Vertical):
         with ScrollableContainer(id="notifications-table-wrap"):
             yield DataTable(id="notifications-table", cursor_type="row")  # pyright: ignore[reportUnknownMemberType]
         with Horizontal(id="notifications-actions"):
-            yield SafeSelect(self._urgency_options(), id="notif-urgency", allow_blank=False)
             yield Button(self._service.t("tui.btn_add"), id="notif-add", variant="success")
             yield Button(self._service.t("tui.btn_edit"), id="notif-edit", variant="primary")
             yield Button(
@@ -181,12 +180,9 @@ class NotificationsPane(Vertical):
             yield Button(
                 self._service.t("tui.notifications_toggle"), id="notif-toggle", variant="primary"
             )
+            yield SafeSelect(self._urgency_options(), id="notif-urgency", allow_blank=False)
             yield Button(
                 self._service.t("tui.notifications_check"), id="notif-check", variant="primary"
-            )
-            yield Button(self._service.t("ux.failed_deliveries"), id="notif-failed")
-            yield Button(
-                self._service.t("experience.notification_preferences"), id="notif-preferences"
             )
         yield Static("", id="notifications-status")
 
@@ -281,6 +277,15 @@ class NotificationsPane(Vertical):
         self._render_rows()
         self._refresh_urgency_options()
         self._sync_selection_controls()
+        if getattr(self._service, "remote", False):
+            self.query_one("#notifications-status", Static).update(
+                self._service.t(
+                    "remote.unsupported", operation=self._service.t("tui.tab_notifications")
+                )
+            )
+            for control in self.query("Button, Select"):
+                control.disabled = True
+            return
         # auto-connect every enabled notifier on startup (bounded,
         # non-blocking); failures render as "offline: <reason>" in the
         # status column
@@ -288,9 +293,6 @@ class NotificationsPane(Vertical):
         self._timer = self.set_interval(self._PROBE_INTERVAL, self.check_if_visible)
 
     async def relabel(self) -> None:
-        self.query_one("#notif-preferences", Button).label = self._service.t(
-            "experience.notification_preferences"
-        )
         relabel_buttons(
             self,
             {
@@ -366,6 +368,10 @@ class NotificationsPane(Vertical):
 
     def _sync_selection_controls(self) -> None:
         """Mirror the selected row's enabled/urgency into the action controls."""
+        if getattr(self._service, "remote", False):
+            for control in self.query("Button, Select"):
+                control.disabled = True
+            return
         index = self._selected_index()
         for ident in ("notif-edit", "notif-delete", "notif-relogin"):
             button = self.query_one_optional("#" + ident, Button)
@@ -746,6 +752,8 @@ class NotificationsPane(Vertical):
         )
 
     async def _check_all(self) -> None:
+        if getattr(self._service, "remote", False):
+            return
         if self._checking:
             return
         self._checking = True

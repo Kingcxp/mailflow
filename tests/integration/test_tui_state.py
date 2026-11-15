@@ -44,6 +44,7 @@ from textual.containers import ScrollableContainer
 from textual.coordinate import Coordinate
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Input,
     RichLog,
@@ -253,7 +254,7 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         assert set(keys(table)) == {"old-1", "old-2"}
         await pilot.click("#mail-table", offset=(2, 2))
         await pilot.click("#mail-table", offset=(2, 3), shift=True)
-        assert all(str(table.get_cell(key, "selected")) == "[x]" for key in keys(table))
+        assert table.checked_keys == set(keys(table))
         app.query_one("#mail-search", Input).value = "old-1"
         await settle(pilot)
         await emit("language.changed", language="zh-CN")
@@ -284,7 +285,7 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         assert "private storage failure" not in text(app, "#mail-operation-status")
         app.query_one("#mail-search", Input).value = ""
         await settle(pilot)
-        assert keys(table) == ["old-2"] and str(table.get_cell("old-2", "selected")) == "[x]"
+        assert keys(table) == ["old-2"] and table.checked_keys == {"old-2"}
         failing.clear()
         app.query_one("#btn-trash", Button).press()
         await settle(pilot)
@@ -304,7 +305,7 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         assert await service.storage.get_mail("keep") is not None
         # The same selection controls operate on the current task filter.
         app.query_one(TabbedContent).active = "tab-actions"
-        app.query_one("#actions-range", Select).value = "expired"
+        app.query_one("#actions-search", Input).value = "Expired"
         await settle(pilot)
         todos = app.query_one("#actions-table", SelectionTable)
         assert set(keys(todos)) == {item.item_id for item in actions}
@@ -381,40 +382,38 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         scoped_ids = keys(table)
         app.open_assistant({"record_ids": scoped_ids}, "Current results")
         scoped_ids.append("other")  # The handoff owns a snapshot of the original range.
-        instruction = app.query_one("#assistant-input", TextArea)
-        instruction.load_text("Find matching mail")
+        instruction = search
+        instruction.value = "Find matching mail"
         await pilot.pause()
-        app.query_one("#assistant-send", Button).press()
+        app.query_one("#smart-action", Button).press()
         await asyncio.wait_for(entered.wait(), 2)
-        instruction.load_text("Next question, not executed yet")
-        app.query_one(TabbedContent).active = "tab-mail"
+        instruction.value = "Next question, not executed yet"
+        app.query_one(TabbedContent).active = "tab-actions"
         await pilot.pause()
-        search.value = "unrelated"
         service.i18n.set_language("zh-CN")
         await emit("language.changed", language="zh-CN")
-        await until(pilot, lambda: keys(table) == ["other"])
-        app.query_one(TabbedContent).active = "tab-assistant"
         await pilot.pause()
-        assert instruction.text == "Next question, not executed yet"
-        assert smart.await_count == 1 and not app.query_one("#assistant-stop", Button).disabled
+        app.query_one(TabbedContent).active = "tab-mail"
+        await pilot.pause()
+        assert instruction.value == "Next question, not executed yet"
+        assert smart.await_count == 1
+        assert app.query_one("#smart-action-progress", RichLog).display
         release.set()
         await settle(pilot)
         assert smart.await_args is not None
         assert smart.await_args.kwargs["record_ids"] == ["target"]
-        assert keys(app.query_one("#assistant-results", DataTable)) == ["mail:target"]
-        assert not app.query_one("#assistant-progress", RichLog).display
+        assert keys(table) == ["target"]
+        assert not app.query_one("#smart-action-progress", RichLog).display
         # Stopping a follow-up keeps the previous result and the draft input.
         release.clear()
         entered.clear()
-        app.query_one("#assistant-send", Button).press()
+        app.query_one("#smart-action", Button).press()
         await asyncio.wait_for(entered.wait(), 2)
-        app.query_one("#assistant-stop", Button).press()
+        app.query_one("#smart-action", Button).press()
         await settle(pilot)
-        assert service.t("assistant.cancelled") in text(app, "#assistant-status")
-        assert instruction.text == "Next question, not executed yet"
-        assert keys(app.query_one("#assistant-results", DataTable)) == ["mail:target"]
-        app.query_one(TabbedContent).active = "tab-mail"
-        await pilot.pause()
+        assert service.t("assistant.cancelled") in text(app, "#mail-empty-hint")
+        assert instruction.value == "Next question, not executed yet"
+        assert keys(table) == ["target"]
         regex.press()
         app.query_one("#btn-refresh", Button).press()
         search.value = "no matching mail"
@@ -437,7 +436,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         await app.query_one(ActionsPane).refresh_actions()
         assert "Dismiss me" not in text(app, "#mail-actions")
         assert app.query_one("#actions-table", DataTable).row_count == 0
-        assert app.query_one("#actions-status", Button).disabled
+        assert app.query_one("#actions-edit", Button).disabled
         assert not (await view.get_mail("target")).action_items
         assert not (await service.runtime._approaching_actions(now, 1, now=now))
         # Visibility is a view; the saved analysis remains available for reanalysis.
@@ -649,9 +648,9 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         assert app.query_one("#mail-search", Input).value == "Exam"
         for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
             assert "offline" not in text(app, ident)
-        assert not app.query("#btn-reparse")
-        assert app.query("#assistant-send, #btn-ask-correct, #btn-profile")
-        assert not app.query("#tab-mailboxes, #tab-llms, #tab-notifications, #tab-market")
+        assert app.query_one("#btn-reparse", Button).disabled
+        assert app.query("#smart-action, #btn-ask-correct, #btn-profile")
+        assert not app.query("#tab-mailboxes, #tab-llms, #tab-market")
         app.query_one("#btn-reply", Button).press()
         await until(
             pilot,
@@ -733,7 +732,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         assert not drafts.query_one("#draft-continue", Button).disabled
 
 
-async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any) -> None:
+async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
     service, view, app, emit, _failures = host
     await service.add_action("Finish review")
     for index in range(3):
@@ -764,71 +763,36 @@ async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any)
         assert len(table.checked_keys) == 3
         await pilot.press("escape", "f2")
         assert not table.checked_keys
-        await view.set_analysis_paused(True)
-        app.schedule_reload()
-        await settle(pilot)
-        button = app.query_one("#analysis-toggle", Button)
-        assert button.display and view.snapshot().analysis_paused
-        button.press()
-        await settle(pilot)
-        assert not service.snapshot().analysis_paused
-        assert not view.snapshot().analysis_paused
         app.query_one(TabbedContent).active = "tab-actions"
         await pilot.pause()
         action_table = app.query_one("#actions-table", DataTable)
-        # The original button row still opens the category filter and preserves it.
-        for category in ("not present", ""):
-            app.query_one("#actions-more", Button).press()
-            await until(pilot, lambda: bool(app.screen.query("#picker-results")))
-            app.screen.query_one("#picker-results", DataTable).focus()
-            await pilot.press("enter")
-            await until(pilot, lambda: bool(app.screen.query("#action-category")))
-            field = app.screen.query_one("#action-category", Input)
-            assert field.value == ("" if category else "not present")
-            field.value = category
-            app.screen.query_one("#action-filter-apply", Button).press()
-            await settle(pilot)
-            assert action_table.row_count == (0 if category else 1)
-        app.query_one("#actions-more", Button).press()
-        await until(pilot, lambda: bool(app.screen.query("#picker-results")))
-        app.screen.query_one("#picker-results", DataTable).focus()
-        await pilot.press("down", "down", "enter")
-        await until(
-            pilot,
-            lambda: (
-                app.query_one(TabbedContent).active == "tab-assistant"
-                and app.query_one("#assistant-input", EditingTextArea).region.height > 0
-            ),
-        )
-        assert view.t("assistant.task_scope") in text(app, "#assistant-scope")
-        instruction = app.query_one("#assistant-input", EditingTextArea)
-        assert instruction.region.height == 3
-        assert not app.query_one("#assistant-stop", Button).display
-        assert not app.query_one("#assistant-review", Button).display
-        instruction.load_text("First line\nSecond line\nThird line\nFourth line")
-        await pilot.pause()
-        assert instruction.region.height == 5
+        search = app.query_one("#actions-search", Input)
+        search.value = "not present"
+        await settle(pilot)
+        assert action_table.row_count == 0
+        assert app.query_one("#actions-edit", Button).disabled
+        search.value = "Finish review"
+        await settle(pilot)
+        assert action_table.row_count == 1
         service.i18n.set_language("zh-CN")
         await emit("language.changed", language="zh-CN")
         await settle(pilot)
-        # Default options must translate even when their selection never changes.
         for selector, key in (
             ("#mail-sort", "tui.sort_time"),
             ("#mail-urgency-filter", "tui.filter_all_urgencies"),
-            ("#actions-range", "ux.range_open"),
+            ("#actions-range", "tui.range_all"),
             ("#actions-type-filter", "tui.filter_all_types"),
         ):
             assert view.t(key) in text(app, selector + " SelectCurrent #label")
-        assert instruction.text == "First line\nSecond line\nThird line\nFourth line"
-        app.query_one(TabbedContent).active = "tab-actions"
-        await pilot.pause()
-        status = app.query_one("#actions-status", Button)
-        status.press()
-        await until(pilot, lambda: bool(app.screen.query("#workflow-apply")))
-        assert status.disabled
-        app.screen.query_one("#workflow-apply", Button).press()
+        assert search.value == "Finish review"
+        app.query_one("#actions-edit", Button).press()
+        await until(pilot, lambda: bool(app.screen.query("#todo-completed")))
         await settle(pilot)
-        assert not await service.list_actions() and status.disabled
-        assert keys(app.query_one("#actions-table", DataTable)) == []
+        app.screen.query_one("#todo-completed", Checkbox).value = True
+        app.screen.query_one("#todo-save", Button).press()
+        await settle(pilot)
+        assert not await service.list_actions()
+        assert keys(action_table) == []
+        assert app.query_one("#actions-edit", Button).disabled
         assert await service.list_actions_all() == []
         assert not await service.runtime.run_reminder_tick()

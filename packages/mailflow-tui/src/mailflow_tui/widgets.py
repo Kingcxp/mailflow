@@ -222,7 +222,6 @@ class ShortcutHelp(ModalScreen[None]):
         table.add_column(ratio=1)
         for key, description in (
             ("Tab / Shift+Tab", "help_focus"),
-            ("Ctrl+0", "help_assistant"),
             ("Enter / Space", "help_activate"),
             ("Ctrl+A / F7", "help_edit_select"),
             ("Ctrl+C / Ctrl+Insert", "help_edit_copy"),
@@ -284,8 +283,8 @@ class SelectionTable(DataTable[Any]):
         self.relabel()
 
     def relabel(self) -> None:
-        self._bindings.bind("f2", "selection_mode", self._t("tui.selection_mode"))
-        self._bindings.bind("f3", "select_range", self._t("tui.selection_range"))
+        self._bindings.bind("f2", "selection_mode", self._t("tui.selection_mode"), show=False)
+        self._bindings.bind("f3", "select_range", self._t("tui.selection_range"), show=False)
         self.tooltip = self._t("tui.selection_help")
 
     def action_selection_mode(self) -> None:
@@ -313,8 +312,9 @@ class SelectionTable(DataTable[Any]):
         if keys == self.checked_keys:
             return
         self.checked_keys = set(keys)
-        for key in self.visible_keys():
-            self.update_cell(key, "selected", self.check_label(key))
+        if "selected" in self.columns:
+            for key in self.visible_keys():
+                self.update_cell(key, "selected", self.check_label(key))
         self.post_message(self.SelectionChanged(self))
 
     def _key_at(self, row: int) -> str | None:
@@ -361,9 +361,10 @@ class SelectionTable(DataTable[Any]):
         row, column = meta.get("row"), meta.get("column")
         if event.button != 1 or not isinstance(row, int):
             return
-        if row == -1 and column == 0:
+        checkbox = column == 0 and "selected" in self.columns
+        if row == -1 and checkbox:
             self.action_toggle_all()
-        elif row >= 0 and (column == 0 or event.ctrl or event.shift or self.selection_mode):
+        elif row >= 0 and (checkbox or event.ctrl or event.shift or self.selection_mode):
             key = self._key_at(row)
             if key is None:
                 return
