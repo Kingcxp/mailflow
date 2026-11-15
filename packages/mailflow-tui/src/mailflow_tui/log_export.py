@@ -13,13 +13,13 @@ from pathlib import Path
 from typing import Any, ClassVar, cast
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, DirectoryTree, Select, Static
 
 from mailflow_tui.labels import error_detail
-from mailflow_tui.widgets import ButtonRow, Input, SafeSelect
+from mailflow_tui.widgets import Input, SafeSelect
 
 
 class LogExportScreen(ModalScreen[str | None]):
@@ -63,7 +63,7 @@ class LogExportScreen(ModalScreen[str | None]):
                 id="log-export-filename",
             )
             yield Static("", id="log-export-error")
-            with ButtonRow(id="log-export-actions"):
+            with Horizontal(id="log-export-actions"):
                 yield Button(self._t("tui.btn_save"), id="log-export-save", variant="primary")
                 yield Button(self._t("tui.btn_cancel"), id="log-export-cancel", variant="default")
 

@@ -1034,9 +1034,9 @@
       "gateway_phase_cancelled": "Gateway setup cancelled.",
       "gateway_phase_ready": "Gateway ready.",
       "form_fields": {
-        "account_id": "Account ID",
-        "llm_id": "Model ID",
-        "notifier_id": "Notifier ID",
+        "account_id": "Account name",
+        "llm_id": "Model name",
+        "notifier_id": "Channel name",
         "provider": "Provider",
         "model": "Model",
         "email": "Email address",

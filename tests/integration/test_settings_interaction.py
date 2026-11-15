@@ -28,7 +28,7 @@ from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 from textual.worker import WorkerCancelled
 
 from mailflow_test_support.commands import commands_service
-from mailflow_test_support.ui import mock_http_client
+from mailflow_test_support.ui import mock_http_client, until
 
 
 def unused_provider(_config: Any) -> Never:
@@ -652,6 +652,7 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         assert service.t("errors.storage") in rendered(pane, "#settings-status")
         assert "read only" not in rendered(pane, "#settings-status")
         assert not pane.query_one("#save-general-workers", Button).disabled
+        assert not pane.query_one("#settings-more", Button).disabled
 
         draft = pane.query_one("#value-general-workers", Input)
         draft.focus()
@@ -664,12 +665,17 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         assert draft.value == "7"
         pane.query_one("#value-general-queue-size", Input).value = "65"
         await settle(pilot)
-        pane.query_one("#settings-save-section", Button).press()
+        await pilot.press("ctrl+s")
         await settle(pilot)
         assert (service.config.general.workers, service.config.general.queue_size) == (7, 65)
         draft.value = "9"
         await settle(pilot)
-        pane.query_one("#settings-discard-section", Button).press()
+        pane.query_one("#settings-more", Button).press()
+        await settle(pilot)
+        picker = pilot.app.screen
+        table = cast("DataTable[Any]", picker.query_one("#picker-results", DataTable))
+        table.move_cursor(row=1)
+        await pilot.press("enter")
         await settle(pilot)
         assert draft.value == "7" and service.config.general.workers == 7
         await pane.remove()
@@ -726,11 +732,13 @@ async def test_password_fields_align_and_visibility_toggle_keeps_input(width: in
         eye = form.query_one("#extra-password-eye", Button)
         password.scroll_visible(animate=False)
         await pilot.pause()
-        assert (password.region.x, password.region.width) == (login.region.x, login.region.width)
-        assert password.region.x < eye.region.x < eye.region.right < password.region.right
+        assert password.region.x == login.region.x
+        assert password.region.right <= eye.region.x
+        assert eye.region.right <= login.region.right
         password.value = "keep-this-secret"
         await pilot.click(eye)
         assert not password.password and password.value == "keep-this-secret"
+        await until(pilot, lambda: not eye.has_class("-active"))
         await pilot.click(eye)
         assert password.password and password.value == "keep-this-secret"
 

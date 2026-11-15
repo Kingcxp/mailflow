@@ -7,13 +7,13 @@ from typing import Any, ClassVar
 
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Static
 
 from mailflow_tui.labels import error_message
 from mailflow_tui.view_state import TableView, update_table
-from mailflow_tui.widgets import ButtonRow, Input
+from mailflow_tui.widgets import Input
 
 
 class ReposScreen(ModalScreen[bool | None]):
@@ -39,7 +39,7 @@ class ReposScreen(ModalScreen[bool | None]):
             with Vertical(id="repos-form"):
                 yield Input(placeholder=self._t("tui.repos_name"), id="repos-name")
                 yield Input(placeholder=self._t("tui.repos_url"), id="repos-url")
-            with ButtonRow(id="repos-actions"):
+            with Horizontal(id="repos-actions"):
                 yield Button(self._t("tui.btn_add"), id="repos-add", variant="success")
                 yield Button(self._t("tui.btn_remove"), id="repos-remove", variant="warning")
                 yield Button(self._t("tui.btn_back"), id="repos-cancel", variant="primary")

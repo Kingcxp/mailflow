@@ -77,15 +77,7 @@ from mailflow_tui.labels import (
 from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.view_state import TableView
-from mailflow_tui.widgets import (
-    ButtonRow,
-    Input,
-    SafeSelect,
-    SearchToggle,
-    SecretRow,
-    SelectionTable,
-    TextArea,
-)
+from mailflow_tui.widgets import Input, SafeSelect, SearchToggle, SelectionTable, TextArea
 
 _SECTION_LABELS = {
     "general": "tui.settings_section_general",
@@ -242,7 +234,7 @@ class ListEditScreen(ModalScreen[str | None]):
             yield Static(self._t(hint), classes="dialog-hint")
             yield TextArea(as_editor_text(self._spec.editor, self._spec.value), id="list-edit-text")
             yield Static("", id="list-edit-status")
-            with ButtonRow(classes="dialog-actions"):
+            with Horizontal(classes="dialog-actions"):
                 yield Button(self._t("tui.btn_save"), id="list-edit-save", variant="success")
                 yield Button(self._t("tui.btn_back"), id="list-edit-back", variant="primary")
 
@@ -831,7 +823,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 with Vertical(id="entry-form-extras"):
                     yield from self._render_extras()
             yield Static("", id="entry-form-status")
-            with ButtonRow(classes="dialog-actions"):
+            with Horizontal(classes="dialog-actions"):
                 if self._group == "llms" or self._group == "accounts":
                     yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
                 if self._group == "notifiers":
@@ -893,7 +885,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 as_editor_text(spec.editor, current), id=widget_id, classes="field-multiline"
             )
         elif spec.secret:
-            with SecretRow(classes="secret-row"):
+            with Horizontal(classes="secret-row"):
                 yield Input(
                     value="" if current is None else str(current),
                     id=widget_id,
@@ -980,7 +972,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         elif extra.secret:
             # mounted via mount_all (outside compose), so children are
             # attached explicitly instead of with-block composition
-            row = SecretRow(classes="secret-row")
+            row = Horizontal(classes="secret-row")
             row.compose_add_child(
                 Input(
                     value=self._extra_value(extra),
@@ -1565,9 +1557,8 @@ class OptionCard(Vertical):
             self._t("tui.settings_default_hint", value=default_text(self._service, spec)),
             classes="option-default",
         )
-        with Vertical(classes="option-editor"):
+        with Horizontal(classes="option-row"):
             yield from self._editor_widgets(slug)
-        with ButtonRow(classes="option-row"):
             yield Button(
                 self._t("tui.btn_save"),
                 id=f"save-{slug}",
@@ -1705,7 +1696,7 @@ class SettingsPane(Vertical):
         self._saving = False
         self._saving_key = ""
         self._sidebar_signature: list[tuple[str, str]] = []
-        self._show_advanced = False
+        self._show_advanced = True
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -1717,32 +1708,14 @@ class SettingsPane(Vertical):
             )
             yield SearchToggle("regex", ident="settings-search-regex")
             yield SearchToggle("case", ident="settings-search-case")
-        with ButtonRow(id="settings-tools"):
-            yield Button(self._t("ux.backup_title"), id="settings-backup")
-            if not getattr(self._service, "remote", False):
-                yield Button(self._t("ux.remote_connection"), id="settings-connection")
-            yield Button(self._t("interface.show_advanced"), id="settings-advanced")
+            yield Button(self._t("interface.more"), id="settings-more")
         with Horizontal(id="settings-body"):
             with Vertical(id="settings-sidebar"):
                 yield Static(self._t("tui.settings_sections"), id="settings-sidebar-title")
                 yield ListView(id="settings-sections")
             with Vertical(id="settings-main"):
-                # language switching lives in the general.language option
-                # card (dropdown of loaded packs) — no separate row
                 yield Static("", id="settings-status")
                 yield ScrollableContainer(id="settings-options")
-                with ButtonRow(id="settings-section-actions"):
-                    yield Button(
-                        self._t("interface.save_section"),
-                        id="settings-save-section",
-                        variant="success",
-                        disabled=True,
-                    )
-                    yield Button(
-                        self._t("interface.discard_section"),
-                        id="settings-discard-section",
-                        disabled=True,
-                    )
 
     async def on_mount(self) -> None:
         # settings_sections + card construction are heavy: paint the pane
@@ -1750,9 +1723,6 @@ class SettingsPane(Vertical):
         self.run_worker(self.reload(), exclusive=True, group="settings-reload", exit_on_error=False)
 
     async def relabel(self) -> None:
-        self.query_one("#settings-advanced", Button).label = self._t(
-            "interface.hide_advanced" if self._show_advanced else "interface.show_advanced"
-        )
         self.query_one("#settings-search", Input).placeholder = self._t(
             "tui.settings_search_placeholder"
         )
@@ -1760,10 +1730,7 @@ class SettingsPane(Vertical):
         relabel_buttons(
             self,
             {
-                "settings-backup": "ux.backup_title",
-                "settings-connection": "ux.remote_connection",
-                "settings-save-section": "interface.save_section",
-                "settings-discard-section": "interface.discard_section",
+                "settings-more": "interface.more",
             },
         )
         await self.reload()
@@ -1975,16 +1942,18 @@ class SettingsPane(Vertical):
         self._sync_section_controls()
 
     def _sync_section_controls(self) -> None:
-        dirty = any([card.refresh_dirty() for card in self.query(OptionCard) if card.is_attached])
-        for ident in ("settings-save-section", "settings-discard-section"):
-            button = self.query_one_optional("#" + ident, Button)
-            if button is not None:
-                button.disabled = self._saving or not dirty
+        for card in self.query(OptionCard):
+            if card.is_attached:
+                card.refresh_dirty()
+        more = self.query_one_optional("#settings-more", Button)
+        if more is not None:
+            more.disabled = self._saving
 
     def action_save_section(self) -> None:
-        button = self.query_one_optional("#settings-save-section", Button)
-        if button is not None and not button.disabled:
-            button.press()
+        if not self._saving and any(card.refresh_dirty() for card in self.query(OptionCard)):
+            self.run_worker(
+                self._save_section(), group="settings-save", exclusive=True, exit_on_error=False
+            )
 
     async def _save_section(self) -> None:
         if self._saving:
@@ -2051,42 +2020,55 @@ class SettingsPane(Vertical):
             node = node.parent
         return node
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "settings-advanced":
+    async def _settings_operation(self, operation: str | None) -> None:
+        if operation == "settings-advanced":
             self._show_advanced = not self._show_advanced
-            event.button.label = self._t(
-                "interface.hide_advanced" if self._show_advanced else "interface.show_advanced"
-            )
-            for visible_card in self.query(OptionCard):
-                visible_card.display = (
+            for card in self.query(OptionCard):
+                card.display = (
                     bool(self._query)
                     or self._show_advanced
-                    or visible_card.spec.key not in _ADVANCED_SETTINGS
+                    or card.spec.key not in _ADVANCED_SETTINGS
                 )
-            return
-        if event.button.id == "settings-save-section":
-            self.run_worker(
-                self._save_section(), group="settings-save", exclusive=True, exit_on_error=False
-            )
-            return
-        if event.button.id == "settings-discard-section":
+        elif operation == "settings-save-section":
+            self.action_save_section()
+        elif operation == "settings-discard-section" and not self._saving:
             keys = {card.spec.key for card in self.query(OptionCard)}
             self._saved_keys.update(keys)
             for key in keys:
                 self._drafts.pop(key, None)
             await self._render_options()
-            return
-        if event.button.id in {"settings-backup", "settings-connection"}:
+        elif operation in {"settings-backup", "settings-connection"}:
             from mailflow_tui.mail_workflows import DataManagementScreen, RemoteConnectionScreen
 
             screen = (
-                DataManagementScreen
-                if event.button.id == "settings-backup"
-                else RemoteConnectionScreen
+                DataManagementScreen if operation == "settings-backup" else RemoteConnectionScreen
             )
             cast("Any", self).app.push_screen(screen(self._service))
-            return
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
+        if button_id == "settings-more":
+            from mailflow_tui.pickers import ChoicePicker
+
+            choices = [
+                (self._t("interface.save_section"), "settings-save-section"),
+                (self._t("interface.discard_section"), "settings-discard-section"),
+                (self._t("ux.backup_title"), "settings-backup"),
+                (
+                    self._t(
+                        "interface.hide_advanced"
+                        if self._show_advanced
+                        else "interface.show_advanced"
+                    ),
+                    "settings-advanced",
+                ),
+            ]
+            if not getattr(self._service, "remote", False):
+                choices.append((self._t("ux.remote_connection"), "settings-connection"))
+            cast("Any", self).app.push_screen(
+                ChoicePicker(self._service, choices), self._settings_operation
+            )
+            return
         card = self._card_of(event.button)
         if card is None:
             return
@@ -2170,6 +2152,7 @@ class SettingsPane(Vertical):
             self._saving_key = ""
             for node in self.query(".option-button, .option-input"):
                 node.disabled = False
+            self._sync_section_controls()
 
 
 class _NotifyFeed:
@@ -2281,7 +2264,7 @@ class LLMPane(Vertical):
         yield Static(self._t("tui.llms_title"), id="llms-title")
         yield Static(self._t("tui.llms_help"), id="llms-help")
         yield DataTable(id="llms-table")
-        with ButtonRow(id="llms-actions"):
+        with Horizontal(id="llms-actions"):
             yield Button(self._t("tui.btn_new"), id="llm-add", variant="success")
             yield Button(self._t("tui.btn_edit"), id="llm-edit", variant="primary", disabled=True)
             yield Button(self._t("tui.btn_delete"), id="llm-delete", variant="error", disabled=True)
@@ -2289,7 +2272,7 @@ class LLMPane(Vertical):
             yield Button(
                 self._t("tui.btn_move_down"), id="llm-down", variant="primary", disabled=True
             )
-        with Collapsible(title=self._t("tui.notify_title"), collapsed=True, id="notify-wrap"):
+        with Vertical(id="notify-wrap"):
             yield Static(self._t("tui.notify_title"), id="notify-title")
             yield RichLog(id="notify-feed", wrap=True, markup=False, highlight=False)
         yield Static("", id="llms-status")
@@ -2575,7 +2558,7 @@ class AccountsPane(Vertical):
         yield Static(self._t("tui.accounts_title"), id="accounts-title")
         yield Static(self._t("tui.accounts_help"), id="accounts-help")
         yield DataTable(id="accounts-table")
-        with ButtonRow(id="accounts-actions"):
+        with Horizontal(id="accounts-actions"):
             yield Button(self._t("tui.btn_new"), id="account-add", variant="success")
             yield Button(
                 self._t("tui.btn_edit"), id="account-edit", variant="primary", disabled=True
@@ -2590,12 +2573,7 @@ class AccountsPane(Vertical):
         yield Static(self._t("tui.history_title"), id="history-title")
         yield Static(self._t("tui.history_select_hint"), id="history-help")
         yield SelectionTable(t=self._t, id="history-table")
-        with Horizontal(id="history-batch"):
-            yield Static(self._t("tui.history_count_label"), id="history-count-label")
-            yield Input(
-                value=str(self._DEFAULT_HISTORY_BATCH_SIZE), type="integer", id="history-count"
-            )
-        with ButtonRow(id="history-actions"):
+        with Horizontal(id="history-actions"):
             yield Button(
                 self._t("tui.history_analyze"),
                 id="history-analyze",
@@ -2610,6 +2588,10 @@ class AccountsPane(Vertical):
             )
             yield Button(
                 self._t("tui.history_more"), id="history-more", variant="primary", disabled=True
+            )
+            yield Static(self._t("tui.history_count_label"), id="history-count-label")
+            yield Input(
+                value=str(self._DEFAULT_HISTORY_BATCH_SIZE), type="integer", id="history-count"
             )
         yield Static("", id="accounts-status")
 

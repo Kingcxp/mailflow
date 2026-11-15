@@ -40,7 +40,7 @@ from mailflow.replies import ReplyError
 from mailflow.settings import EditorKind, OptionSpec, SettingsSection
 from mailflow_server.client import RemoteClient, RemoteUnsupported
 from textual.app import App
-from textual.containers import ScrollableContainer, Vertical
+from textual.containers import Horizontal, Vertical
 from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label, Static, Switch
@@ -48,7 +48,7 @@ from textual.worker import WorkerCancelled
 
 from mailflow_tui import credentials
 from mailflow_tui.labels import error_detail, redact_operation_logs
-from mailflow_tui.widgets import ButtonRow, Input
+from mailflow_tui.widgets import Input
 
 _SESSION_FILE = Path.home() / ".mailflow" / "tui-session.json"
 
@@ -145,9 +145,8 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
     }
     #login-dialog {
         width: 56;
-        max-width: 96%;
-        height: 90%;
-        max-height: 30;
+        max-width: 95%;
+        height: auto;
         border: round $accent;
         background: $surface;
         padding: 1 2;
@@ -161,18 +160,22 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         margin-top: 0;
     }
     #login-status {
-        height: auto;
-        max-height: 4;
-        overflow-y: auto;
+        height: 1;
+        margin-top: 1;
     }
-    #login-fields { height: 1fr; }
-    #login-fields Label, #login-hint { height: auto; }
-    #login-dialog ButtonRow { height: auto; }
     .field-label {
         color: $text-muted;
     }
     #login-url, #login-user, #login-pass {
-        margin-bottom: 1;
+        margin-bottom: 0;
+    }
+    #login-dialog .dialog-actions {
+        height: auto;
+    }
+    #login-dialog Button {
+        height: 1;
+        min-height: 1;
+        border: none;
     }
     """
 
@@ -192,23 +195,22 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         # centered bordered panel like every other standalone dialog
         with Vertical(id="login-dialog"):
             yield Label(self._t("tui.remote_login_title"), id="login-title")
-            with ScrollableContainer(id="login-fields"):
-                yield Label(self._t("tui.remote_server_url"), classes="field-label")
-                yield Input(
-                    value=str(self._session.get("url", "")),
-                    placeholder=self._t("tui.remote_url_placeholder"),
-                    id="login-url",
-                )
-                yield Label(self._t("tui.remote_username"), classes="field-label")
-                yield Input(value=str(self._session.get("username", "")), id="login-user")
-                yield Label(self._t("tui.remote_password"), classes="field-label")
-                yield Input(password=True, id="login-pass")
-                yield Switch(value=bool(self._session.get("autologin")), id="login-save-password")
-                yield Static(self._t("tui.remote_save_password"), id="login-hint")
-            yield Static("", id="login-status")
-            with ButtonRow(classes="dialog-actions"):
+            yield Label(self._t("tui.remote_server_url"), classes="field-label")
+            yield Input(
+                value=str(self._session.get("url", "")),
+                placeholder=self._t("tui.remote_url_placeholder"),
+                id="login-url",
+            )
+            yield Label(self._t("tui.remote_username"), classes="field-label")
+            yield Input(value=str(self._session.get("username", "")), id="login-user")
+            yield Label(self._t("tui.remote_password"), classes="field-label")
+            yield Input(password=True, id="login-pass")
+            yield Switch(value=bool(self._session.get("autologin")), id="login-save-password")
+            yield Static(self._t("tui.remote_save_password"), id="login-hint")
+            with Horizontal(classes="dialog-actions"):
                 yield Button(self._t("tui.remote_connect"), id="login-connect", variant="success")
                 yield Button(self._t("tui.btn_quit"), id="login-quit", variant="error")
+            yield Static("", id="login-status")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "login-connect" and self._connecting:

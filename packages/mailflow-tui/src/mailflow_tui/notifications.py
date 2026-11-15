@@ -36,7 +36,7 @@ from mailflow_tui.labels import (
     urgency_label,
 )
 from mailflow_tui.view_state import TableView, update_table
-from mailflow_tui.widgets import ButtonRow, SafeSelect
+from mailflow_tui.widgets import SafeSelect
 
 _URGENCY_ORDER = (Urgency.AD, Urgency.INFO, Urgency.IMPORTANT, Urgency.URGENT)
 
@@ -170,12 +170,8 @@ class NotificationsPane(Vertical):
         yield Static(escape(self._service.t("tui.notifications_help")), id="notifications-help")
         with ScrollableContainer(id="notifications-table-wrap"):
             yield DataTable(id="notifications-table", cursor_type="row")  # pyright: ignore[reportUnknownMemberType]
-        with Horizontal(id="notifications-level-row"):
-            yield Static(
-                self._service.t("interface.minimum_notification"), id="notification-level-label"
-            )
+        with Horizontal(id="notifications-actions"):
             yield SafeSelect(self._urgency_options(), id="notif-urgency", allow_blank=False)
-        with ButtonRow(id="notifications-actions"):
             yield Button(self._service.t("tui.btn_add"), id="notif-add", variant="success")
             yield Button(self._service.t("tui.btn_edit"), id="notif-edit", variant="primary")
             yield Button(
@@ -189,8 +185,10 @@ class NotificationsPane(Vertical):
                 self._service.t("tui.notifications_check"), id="notif-check", variant="primary"
             )
             yield Button(self._service.t("ux.failed_deliveries"), id="notif-failed")
+            yield Button(
+                self._service.t("experience.notification_preferences"), id="notif-preferences"
+            )
         yield Static("", id="notifications-status")
-        yield Button(self._service.t("experience.notification_preferences"), id="notif-preferences")
 
     # -- data -----------------------------------------------------------------
 
@@ -290,9 +288,6 @@ class NotificationsPane(Vertical):
         self._timer = self.set_interval(self._PROBE_INTERVAL, self.check_if_visible)
 
     async def relabel(self) -> None:
-        self.query_one("#notification-level-label", Static).update(
-            self._service.t("interface.minimum_notification")
-        )
         self.query_one("#notif-preferences", Button).label = self._service.t(
             "experience.notification_preferences"
         )

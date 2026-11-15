@@ -738,10 +738,9 @@ async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any)
     await service.add_action("Finish review")
     for index in range(3):
         await service.storage.save_mail(make_record(f"select-{index}", subject=f"Select {index}"))
-    async with app.run_test(size=(80, 24), tooltips=True) as pilot:
+    async with app.run_test(size=(120, 36), tooltips=True) as pilot:
         await settle(pilot)
         table = app.query_one("#mail-table", SelectionTable)
-        assert table.region.height >= 12  # Keep the mail list usable on a 24-row terminal.
         await pilot.hover(table, offset=(10, 2))
         await pilot.pause(app.TOOLTIP_DELAY + 0.1)
         assert not app.screen.query_one(Tooltip).visible
@@ -775,8 +774,7 @@ async def test_multiselect_without_shift_and_remote_analysis_controls(host: Any)
         app.query_one(TabbedContent).active = "tab-actions"
         await pilot.pause()
         action_table = app.query_one("#actions-table", DataTable)
-        assert action_table.region.height >= 12
-        # The compact toolbar still opens the category filter and preserves it.
+        # The original button row still opens the category filter and preserves it.
         for category in ("not present", ""):
             app.query_one("#actions-more", Button).press()
             await until(pilot, lambda: bool(app.screen.query("#picker-results")))

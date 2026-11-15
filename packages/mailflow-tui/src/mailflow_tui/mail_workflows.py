@@ -20,14 +20,14 @@ from mailflow.mail_body import mail_body_text
 from mailflow.mail_query import MailQuery
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import ScrollableContainer, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Select, Static
 
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.view_state import TableView
-from mailflow_tui.widgets import ButtonRow, Input, SafeSelect, SelectionTable, TextArea
+from mailflow_tui.widgets import Input, SafeSelect, SelectionTable, TextArea
 
 
 def save_attachment(target: Path, data: bytes) -> None:
@@ -47,7 +47,7 @@ class WorkflowScreen(ModalScreen[Any]):
     BINDINGS: ClassVar[list[Any]] = []
     DEFAULT_CSS = """
     WorkflowScreen { align: center middle; }
-    WorkflowScreen > Vertical { width: 96%; max-width: 104; height: 92%; background: $surface; border: round $accent; padding: 0 1; }
+    WorkflowScreen > Vertical { width: 88; max-width: 95%; height: 85%; background: $surface; border: round $accent; padding: 1 2; }
     WorkflowScreen ScrollableContainer { height: 1fr; }
     WorkflowScreen DataTable { height: 1fr; }
     WorkflowScreen TextArea { height: 1fr; }
@@ -160,7 +160,7 @@ class TrashChoiceScreen(WorkflowScreen):
             with ScrollableContainer():
                 yield Static(self.preview, markup=False)
                 yield Checkbox(self.t("ux.delete_linked_tasks"), id="trash-linked-actions")
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_trash"), id="trash-confirm", variant="error")
                 yield Button(self.t("tui.btn_cancel"), id="trash-cancel")
 
@@ -231,7 +231,7 @@ class MailMenu(WorkflowScreen):
                 id="workflow-choice",
                 allow_blank=False,
             )
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_apply"), id="workflow-apply", variant="primary")
                 yield Button(self.t("tui.btn_back"), id="workflow-close")
 
@@ -273,7 +273,7 @@ class SyncScreen(WorkflowScreen):
                 )
                 yield Input(value="30", type="integer", id="sync-days", disabled=True)
                 yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(
                     self.t("sync.start"),
                     id="sync-start",
@@ -433,7 +433,7 @@ class MailFilter(WorkflowScreen):
                     id="filter-relative",
                 )
                 yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_apply"), id="filter-apply", variant="primary")
                 yield Button(self.t("ux.reset_filter"), id="filter-reset")
                 yield Button(self.t("tui.btn_cancel"), id="filter-cancel")
@@ -495,7 +495,7 @@ class MailReader(WorkflowScreen):
             )
             yield TextArea(self.body[:20000], read_only=True, id="reader-body")
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("ux.previous"), id="reader-prev")
                 yield Button(self.t("ux.next"), id="reader-next")
                 yield Button(self.t("tui.btn_back"), id="reader-close")
@@ -557,7 +557,7 @@ class AttachmentsScreen(WorkflowScreen):
                 yield Static(self.t("ux.save_path"))
                 yield Input(id="attachment-path")
                 yield Static("", id="workflow-status", markup=False)
-                with ButtonRow():
+                with Horizontal():
                     yield Button(self.t("ux.download"), id="attachment-download", variant="primary")
                     yield Button(
                         self.t("ux.open_saved"),
@@ -669,7 +669,7 @@ class TrashScreen(WorkflowScreen):
             yield Input(placeholder=self.t("tui.mail_search_placeholder"), id="trash-search")
             yield SelectionTable(t=self.t, id="trash-table")
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(
                     self.t("ux.restore"), id="trash-restore", variant="primary", disabled=True
                 )
@@ -825,7 +825,7 @@ class DraftsScreen(WorkflowScreen):
             yield DataTable(id="draft-table")
             yield TextArea(read_only=True, id="draft-body")
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(
                     self.t("ux.continue_reply"),
                     id="draft-continue",
@@ -937,7 +937,7 @@ class TaskMenu(MailMenu):
                 id="workflow-choice",
                 allow_blank=False,
             )
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_apply"), id="workflow-apply", variant="primary")
                 yield Button(self.t("tui.btn_back"), id="workflow-close")
 
@@ -1021,7 +1021,7 @@ class DeliveriesScreen(WorkflowScreen):
             yield Static(self.t("ux.failed_deliveries"))
             yield SelectionTable(t=self.t, id="delivery-table")
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("ux.retry_delivery"), id="delivery-retry", disabled=True)
                 yield Button(self.t("experience.source"), id="delivery-source", disabled=True)
                 yield Button(
@@ -1195,7 +1195,7 @@ class DataManagementScreen(WorkflowScreen):
                 yield Static(self.t("interface.restore_file"))
                 yield AssistedInput(self.service, id="restore-path")
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("ux.create_backup"), id="backup-create")
                 yield Button(self.t("ux.restore_backup"), id="backup-restore", variant="warning")
                 yield Button(self.t("tui.btn_back"), id="backup-close")
@@ -1291,7 +1291,7 @@ class RemoteConnectionScreen(WorkflowScreen):
                 )
                 yield Input(server.password, password=True, id="connection-password")
                 yield Checkbox(self.t("ux.show_password"), id="connection-show-password")
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_back"), id="connection-close")
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:

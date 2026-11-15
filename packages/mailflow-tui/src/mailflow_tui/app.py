@@ -41,7 +41,6 @@ from textual.widget import MountError
 from textual.widgets import (
     Button,
     Checkbox,
-    Collapsible,
     DataTable,
     Footer,
     Header,
@@ -83,7 +82,6 @@ from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 from mailflow_tui.view_state import TableRowEvent, TableView, update_table
 from mailflow_tui.widgets import (
-    ButtonRow,
     Input,
     SafeSelect,
     SearchToggle,
@@ -277,7 +275,7 @@ class ReplyModal(ModalScreen[Any]):
                     id="reply-subject",
                     markup=False,
                 )
-                with ButtonRow(id="reply-templates"):
+                with Horizontal(id="reply-templates"):
                     yield Button(self._t("tui.reply_tpl_cn"), id="reply-tpl-cn", variant="primary")
                     yield Button(self._t("tui.reply_tpl_en"), id="reply-tpl-en", variant="primary")
                 yield Static(self._t("tui.reply_tpl_hint"), id="reply-tpl-hint")
@@ -285,7 +283,7 @@ class ReplyModal(ModalScreen[Any]):
                     placeholder=self._service.t("tui.reply_body_placeholder"),
                     id="reply-body",
                 )
-                with ButtonRow(id="reply-toolbar"):
+                with Horizontal(id="reply-toolbar"):
                     yield Button(
                         self._t("tui.reply_toolbar_bold"),
                         id="reply-bold",
@@ -318,7 +316,7 @@ class ReplyModal(ModalScreen[Any]):
                     )
                 yield Static(self._t("tui.reply_markup_hint"), id="reply-markup-hint")
             yield DraftPreview(self._service, id="reply-preview")
-            with ButtonRow(id="reply-actions"):
+            with Horizontal(id="reply-actions"):
                 yield Button(self._t("tui.reply_save"), id="reply-save", variant="primary")
                 yield Button(self._t("tui.reply_prepare"), id="reply-prepare", variant="warning")
                 yield Button(
@@ -797,7 +795,7 @@ class ActionModal(ModalScreen[Any]):
             # the source mail's own details load asynchronously below
             yield Static("", id="action-mail-detail")
         # outside the scroll box: always visible, never scrolls away
-        with ButtonRow(id="action-footer"):
+        with Horizontal(id="action-footer"):
             yield Button(self._service.t("tui.btn_edit"), id="action-edit", variant="primary")
             yield Button(self._service.t("tui.btn_close"), id="action-close", variant="default")
 
@@ -937,56 +935,27 @@ class MailPane(Vertical):
                 ):
                     yield Static("", id=ident)
         with Horizontal(id="mail-controls"):
-            with Horizontal(id="mail-filter-controls"):
-                yield SafeSelect(
-                    self._urgency_filter_options(), id="mail-urgency-filter", allow_blank=False
-                )
-                yield SafeSelect(
-                    [
-                        (self._service.t("tui.sort_time"), "time"),
-                        (self._service.t("tui.sort_urgency"), "urgency"),
-                    ],
-                    id="mail-sort",
-                    allow_blank=False,
-                )
-            with Horizontal(id="mail-selection-controls"):
-                yield SafeSelect(self._urgency_options(), id="urgency-select", allow_blank=False)
-            with ButtonRow(id="mail-actions-buttons"):
-                yield Button(
-                    self._service.t("interface.open_mail"),
-                    id="btn-full",
-                    tooltip=self._service.t("ux.full_mail"),
-                )
-                yield Button(
-                    self._service.t("experience.compose"), id="btn-compose", variant="primary"
-                )
-                maintenance = {
-                    "btn-ask-correct",
-                    "btn-reparse",
-                    "btn-reparse-failed",
-                    "btn-purge-expired",
-                    "btn-reparse-all",
-                    "btn-profile",
-                }
-                for row in self._button_rows():
-                    for ident, key, variant in row:
-                        if ident not in maintenance:
+            yield SafeSelect(self._urgency_options(), id="urgency-select", allow_blank=False)
+            yield SafeSelect(
+                self._urgency_filter_options(), id="mail-urgency-filter", allow_blank=False
+            )
+            yield SafeSelect(
+                [
+                    (self._service.t("tui.sort_time"), "time"),
+                    (self._service.t("tui.sort_urgency"), "urgency"),
+                ],
+                id="mail-sort",
+                allow_blank=False,
+            )
+            with Vertical(id="mail-actions-buttons"):
+                for index, row in enumerate(self._button_rows(), 1):
+                    with Horizontal(id=f"mail-actions-row{index}"):
+                        for ident, key, variant in row:
+                            if getattr(self._service, "remote", False) and ident.startswith(
+                                "btn-reparse"
+                            ):
+                                continue
                             yield Button(self._service.t(key), id=ident, variant=variant)
-        with (
-            Collapsible(
-                title=self._service.t("interface.mail_maintenance"),
-                id="mail-maintenance",
-                collapsed=True,
-            ),
-            ButtonRow(classes="compact-actions"),
-        ):
-            for row in self._button_rows():
-                for ident, key, variant in row:
-                    if ident not in maintenance:
-                        continue
-                    if getattr(self._service, "remote", False) and ident.startswith("btn-reparse"):
-                        continue
-                    yield Button(self._service.t(key), id=ident, variant=variant)
 
     @staticmethod
     def _button_rows() -> tuple[tuple[tuple[str, str, Any], ...], ...]:
@@ -1012,37 +981,11 @@ class MailPane(Vertical):
     async def on_mount(self) -> None:
         self._urgency_suppress = False
         self._sync_selection_controls()
-        self._adapt_width()
         # never block startup on storage reads + row rendering: the pane
         # paints empty and fills in as the exclusive worker delivers
         self.run_worker(
             self.refresh_mail(), exclusive=True, group="mail-refresh", exit_on_error=False
         )
-
-    def _adapt_width(self) -> None:
-        detail = self.query_one_optional("#mail-detail", ScrollableContainer)
-        table = self._mail_table()
-        wide = self.size.width >= 110
-        if detail is not None:
-            detail.display = wide
-        selection = self.query_one_optional("#mail-selection-controls")
-        if selection is not None:
-            selection.display = wide
-        controls = self.query_one_optional("#mail-controls")
-        filters = self.query_one_optional("#mail-filter-controls")
-        buttons = self.query_one_optional("#mail-actions-buttons")
-        narrow = self.size.width < 76
-        if controls is not None:
-            controls.styles.layout = "vertical" if narrow else "horizontal"
-        if filters is not None:
-            filters.styles.width = "100%" if narrow else 40
-        if buttons is not None:
-            buttons.styles.width = "100%" if narrow else "1fr"
-        if table is not None:
-            table.styles.width = "60%" if wide else "100%"
-
-    def on_resize(self) -> None:
-        self._adapt_width()
 
     async def on_unmount(self) -> None:
         self._stop_reparse()
@@ -1096,15 +1039,10 @@ class MailPane(Vertical):
         self._columns_done = True
 
     async def relabel(self) -> None:
-        self.query_one("#mail-maintenance", Collapsible).title = self._service.t(
-            "interface.mail_maintenance"
-        )
         self._columns_done = False
         _relabel_buttons(
             self,
             {
-                "btn-full": "interface.open_mail",
-                "btn-compose": "experience.compose",
                 "btn-assistant": "assistant.tab",
                 **{
                     ident: key
@@ -1379,7 +1317,7 @@ class MailPane(Vertical):
         purge = self.query_one_optional("#btn-purge-expired", Button)
         if purge is not None:
             purge.disabled = self._trash_busy or not bool(self._mail_cache)
-        for ident in ("#btn-full", "#btn-reply", "#btn-ask-correct"):
+        for ident in ("#btn-reply", "#btn-ask-correct"):
             button = self.query_one_optional(ident, Button)
             if button is not None:
                 button.tooltip = self._service.t("tui.selection_current_help")
@@ -1723,15 +1661,6 @@ class MailPane(Vertical):
             app = cast(MailFlowApp, cast(Any, self).app)
             app.query_one(TabbedContent).active = "tab-mailboxes"
             app.query_one(AccountsPane).add_account()
-            return
-        direct = {"btn-full": "full_mail", "btn-compose": "compose"}
-        if button_id in direct:
-            self.run_worker(
-                self._mail_tools(direct[button_id]),
-                group="mail-tools",
-                exclusive=True,
-                exit_on_error=False,
-            )
             return
         if button_id == "analysis-toggle":
             self.run_worker(self._toggle_analysis(), group="analysis-control", exit_on_error=False)
@@ -2545,7 +2474,7 @@ class ActionsPane(Vertical):
                 allow_blank=False,
             )
         yield SelectionTable(t=self._service.t, id="actions-table")
-        with ButtonRow(id="actions-buttons", classes="compact-actions"):
+        with Horizontal(id="actions-buttons", classes="compact-actions"):
             yield Button(
                 self._service.t("tui.btn_add_todo"),
                 id="actions-add",
@@ -3139,14 +3068,14 @@ class RuntimePane(Vertical):
     def compose(self) -> ComposeResult:
         with ScrollableContainer(id="runtime-scroll"):
             yield Static("", id="runtime-summary", markup=False)
-            yield Static(self._runtime_title(), id="runtime-plugins")
+            yield Static(self._service.t("tui.runtime_plugins"), id="runtime-plugins")
             yield _RuntimePluginTable(
                 self._open_plugin_detail,
                 id="runtime-plugins-table",
                 cursor_type="row",
             )  # pyright: ignore[reportUnknownMemberType]
             yield Static(self._service.t("tui.runtime_plugins_help"), id="runtime-plugins-hint")
-            with ButtonRow(id="runtime-plugin-actions"):
+            with Horizontal(id="runtime-plugin-actions"):
                 yield Button(
                     self._service.t("tui.btn_disable"), id="runtime-plugin-disable", variant="error"
                 )
@@ -3159,16 +3088,11 @@ class RuntimePane(Vertical):
                     variant="warning",
                 )
             yield Static("", id="runtime-status")
+            yield Static("", id="runtime-adapters")
             yield Static("", id="runtime-accounts")
-            with Collapsible(
-                title=self._service.t("interface.component_details"),
-                id="runtime-details",
-                collapsed=True,
-            ):
-                yield Static("", id="runtime-adapters")
-                yield Static("", id="runtime-llms")
-                yield Static("", id="runtime-bindings")
-                yield Static("", id="runtime-storage")
+            yield Static("", id="runtime-llms")
+            yield Static("", id="runtime-bindings")
+            yield Static("", id="runtime-storage")
 
     async def on_mount(self) -> None:
         self.run_worker(
@@ -3251,9 +3175,6 @@ class RuntimePane(Vertical):
                     "experience.paused" if snapshot.analysis_paused else "experience.enabled"
                 ),
             ),
-        )
-        self.query_one("#runtime-details", Collapsible).title = service.t(
-            "interface.component_details"
         )
         scroll = self.query_one_optional("#runtime-scroll", ScrollableContainer)
         offset = (scroll.scroll_x, scroll.scroll_y) if scroll is not None else (0.0, 0.0)
@@ -4021,7 +3942,7 @@ class MarketDetailScreen(ModalScreen[Any]):
             with ScrollableContainer(id="market-detail-scroll"):
                 yield Markdown(self._t("tui.loading"), id="market-detail-readme")
             yield Static("", id="market-detail-status")
-            with ButtonRow(id="market-detail-actions"):
+            with Horizontal(id="market-detail-actions"):
                 yield Button(
                     self._service.t("tui.btn_install"),
                     id="detail-install",
@@ -4203,9 +4124,15 @@ class MarketPane(Vertical):
                     id="market-sort",
                     allow_blank=False,
                 )
-            with ButtonRow(id="market-controls-buttons"):
+            with Horizontal(id="market-controls-buttons"):
                 yield Button(
                     self._service.t("tui.btn_refresh"), id="market-refresh", variant="primary"
+                )
+                yield Button(
+                    self._service.t("tui.btn_new_plugin"), id="market-create", variant="primary"
+                )
+                yield Button(
+                    self._service.t("tui.btn_export"), id="market-export", variant="success"
                 )
                 yield Button(
                     self._service.t("tui.btn_install_local"),
@@ -4213,26 +4140,12 @@ class MarketPane(Vertical):
                     variant="primary",
                 )
                 yield Button(self._service.t("tui.btn_repos"), id="market-repos", variant="primary")
-            with (
-                Collapsible(
-                    title=self._service.t("interface.developer_tools"),
-                    id="market-development",
-                    collapsed=True,
-                ),
-                ButtonRow(),
-            ):
-                yield Button(
-                    self._service.t("tui.btn_new_plugin"), id="market-create", variant="default"
-                )
-                yield Button(
-                    self._service.t("tui.btn_export"), id="market-export", variant="default"
-                )
         yield DataTable(id="market-table")
         with Vertical(id="market-detail"):
             with ScrollableContainer(id="market-detail-scroll"):
                 yield Markdown("", id="market-readme")
             yield Static("", id="market-status")
-            with ButtonRow(id="market-actions"):
+            with Horizontal(id="market-actions"):
                 yield Button(
                     self._service.t("tui.btn_install"), id="market-install", variant="success"
                 )
@@ -4297,9 +4210,6 @@ class MarketPane(Vertical):
 
     async def relabel(self) -> None:
         self._columns_done = False
-        self.query_one("#market-development", Collapsible).title = self._service.t(
-            "interface.developer_tools"
-        )
         self._categories = None
         await self._render_entries()
 

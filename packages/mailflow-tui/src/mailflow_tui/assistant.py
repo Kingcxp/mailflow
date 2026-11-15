@@ -32,7 +32,7 @@ class AssistantPane(Vertical):
     #assistant-scope, #assistant-status { height: auto; max-height: 3; overflow-y: auto; }
     #assistant-input-row { height: auto; align-vertical: middle; }
     #assistant-input { width: 1fr; height: 3; }
-    #assistant-send { width: auto; min-width: 8; height: 3; margin-left: 1; content-align: center middle; }
+    #assistant-send { width: auto; min-width: 16; height: auto; margin-left: 1; content-align: center middle; }
     #assistant-controls { height: 1; }
     #assistant-controls Button { width: auto; min-width: 0; height: 1; margin-right: 2; }
     #assistant-send-hint { height: 1; color: $text-muted; }

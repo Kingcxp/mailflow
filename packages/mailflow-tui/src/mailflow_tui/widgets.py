@@ -27,7 +27,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import ScrollableContainer, Vertical
 from textual.css.query import QueryError
 from textual.message import Message
 from textual.screen import ModalScreen
@@ -91,50 +91,13 @@ class SafeSelect(Select[object]):  # pyright: ignore[reportUnsafeMultipleInherit
 
 
 __all__ = [
-    "ButtonRow",
     "Input",
     "SafeSelect",
     "SearchToggle",
-    "SecretRow",
     "SelectionTable",
     "ShortcutHelp",
     "TextArea",
 ]
-
-
-class ButtonRow(Horizontal):
-    """Keep action buttons aligned and wrap them at small terminal widths."""
-
-    DEFAULT_CSS = """
-    ButtonRow {
-        layout: grid;
-        grid-size: 2;
-        grid-columns: 1fr 1fr;
-        grid-rows: auto;
-        grid-gutter: 0 1;
-        height: auto;
-        align-vertical: middle;
-    }
-    ButtonRow > Button { width: 1fr; min-width: 0; margin: 0; }
-    """
-
-    def on_mount(self) -> None:
-        for button in self.query_children(Button):
-            self.watch(button, "label", self._reflow, init=False)
-        self.call_after_refresh(self._reflow)
-
-    def on_resize(self) -> None:
-        self._reflow()
-
-    def _reflow(self) -> None:
-        buttons = [child for child in self.children if isinstance(child, Button) and child.display]
-        width = max(
-            (Text.from_markup(str(button.label)).cell_len + 4 for button in buttons), default=18
-        )
-        columns = max(1, min(len(buttons), (self.content_size.width + 1) // (max(14, width) + 1)))
-        if self.styles.grid_size_columns != columns:
-            self.styles.grid_size_columns = columns
-            self.styles.grid_columns = " ".join(["1fr"] * columns)
 
 
 class Input(TextualInput):
@@ -286,21 +249,6 @@ class ShortcutHelp(ModalScreen[None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         self.dismiss()
-
-
-class SecretRow(Horizontal):
-    """Place the visibility control inside a full-width password input."""
-
-    def on_mount(self) -> None:
-        self._place_toggle()
-
-    def on_resize(self) -> None:
-        self._place_toggle()
-
-    def _place_toggle(self) -> None:
-        for button in self.query(Button):
-            button.active_effect_duration = 0
-            button.styles.offset = (max(0, self.size.width - 7), 1)
 
 
 class SelectionTable(DataTable[Any]):

@@ -31,7 +31,7 @@ from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
 
 from mailflow_tui.labels import error_detail, redact_operation_logs, secret_values
 from mailflow_tui.mail_workflows import WorkflowScreen
-from mailflow_tui.widgets import ButtonRow, Input
+from mailflow_tui.widgets import Input
 
 _LEVEL_COLORS = {
     "DEBUG": "dim",
@@ -51,7 +51,7 @@ class QRScreen(WorkflowScreen):
             yield Static(self.t("interface.login_qr"))
             with ScrollableContainer():
                 yield Static(self.text, id="qr-code")
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_back"), id="qr-close")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -68,13 +68,11 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     }
     #guide-dialog {
         width: 92%;
-        height: 92%;
-        border: round $accent;
-        background: $surface;
+        height: 100%;
         padding: 0 1;
     }
     #guide-title {
-        height: auto;
+        height: 1;
         padding: 0 1;
         margin: 0 0 0 0;
     }
@@ -84,23 +82,19 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         content-align: center middle;
         text-align: center;
     }
-    #guide-content { height: 1fr; }
-    #guide-log-wrap { height: auto; min-height: 4; }
     #guide-log {
-        height: 8;
-        min-height: 4;
+        height: 1fr;
+        min-height: 0;
     }
     #guide-status {
-        height: auto;
-        max-height: 3;
-        overflow-y: auto;
+        height: 1;
         padding: 0 1;
     }
     #guide-actions {
         height: auto;
         padding: 0 1;
         align: center middle;
-        grid-gutter: 0 1;
+        grid-gutter: 2 2;
     }
     #guide-progress-row {
         display: none;
@@ -149,7 +143,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         height: 3;
         margin-left: 1;
     }
-    #guide-actions Button {
+    #guide-done, #guide-logged-in, #guide-cancel {
         height: 1;
         min-height: 1;
         padding: 0 2;
@@ -196,12 +190,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._t("tui.bots_guide_title", provider=self._provider),
                 id="guide-title",
             )
-            with ScrollableContainer(id="guide-content"):
-                yield Static("", id="guide-qr")
-                with Vertical(id="guide-log-wrap"):
-                    yield RichLog(
-                        id="guide-log", wrap=True, highlight=True, markup=True, max_lines=5000
-                    )
+            # QR panel above the log: the QR (up to 33 rows) must stay
+            # visible without scrolling the log pane
+            yield Static("", id="guide-qr")
+            with Vertical(id="guide-log-wrap"):
+                yield RichLog(
+                    id="guide-log", wrap=True, highlight=True, markup=True, max_lines=5000
+                )
             # live install progress: real bar + phase label, shown while
             # the provisioner works
             with Horizontal(id="guide-progress-row"):
@@ -224,7 +219,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     )
                     yield Button(self._t("tui.btn_ok"), id="sudo-prompt-ok", variant="primary")
             yield Static("", id="guide-status")
-            with ButtonRow(id="guide-actions"):
+            with Horizontal(id="guide-actions"):
                 yield Button(
                     self._t("tui.btn_done"),
                     id="guide-done",

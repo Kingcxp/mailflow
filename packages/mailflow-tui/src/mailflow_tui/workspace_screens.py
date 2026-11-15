@@ -14,12 +14,12 @@ from mailflow.errors import error_text
 from mailflow.mail_query import MailQuery
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import ScrollableContainer, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Button, Checkbox, Collapsible, Select, Static
 
 from mailflow_tui.mail_workflows import WorkflowScreen, save_attachment
 from mailflow_tui.pickers import AssistedInput
-from mailflow_tui.widgets import ButtonRow, Input, SafeSelect, SelectionTable, TextArea
+from mailflow_tui.widgets import Input, SafeSelect, SelectionTable, TextArea
 
 
 class SourceSyncScreen(WorkflowScreen):
@@ -58,7 +58,7 @@ class SourceSyncScreen(WorkflowScreen):
                     ("back", "back"),
                 ],
             ]:
-                with ButtonRow():
+                with Horizontal():
                     for op, key in row:
                         yield Button(
                             self.t("experience." + key) if op != "save" else self.t("tui.btn_save"),
@@ -271,7 +271,7 @@ class AttachmentLibraryScreen(WorkflowScreen):
             )
             yield SelectionTable(t=self.t, id="library-table")
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("experience.search"), id="library-search")
                 yield Button(
                     self.t("experience.download_selected"), id="library-download", disabled=True
@@ -461,7 +461,7 @@ class NotificationPreferencesScreen(WorkflowScreen):
                 [], id="connection-setting", prompt=self.t("experience.connection_settings")
             )
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_save"), id="notification-save")
                 yield Button(self.t("experience.connection_check"), id="notification-check")
                 yield Button(
@@ -598,7 +598,7 @@ class AssistantHistoryScreen(WorkflowScreen):
                 [("open", "source"), ("delete", "delete"), ("clear", "clear")],
                 [("toggle", "history_toggle"), ("close", "back")],
             ]:
-                with ButtonRow():
+                with Horizontal():
                     for name, key in row:
                         yield Button(
                             self.t("experience." + key),
@@ -718,7 +718,7 @@ class ActionFiltersScreen(WorkflowScreen):
                         [], id="action-choose-" + name, prompt=self.t("tui.entry_pick_first")
                     )
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_apply"), id="action-filter-apply")
                 yield Button(self.t("tui.btn_back"), id="action-filter-close")
 
@@ -768,7 +768,7 @@ class PlansScreen(WorkflowScreen):
             yield Static(self.t("interface.occurrence"))
             yield SafeSelect([], id="plan-occurrence", prompt=self.t("tui.entry_pick_first"))
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 for op in ("pause", "resume", "skip", "back"):
                     yield Button(self.t("experience." + op), id="plan-" + op, disabled=op != "back")
 
@@ -857,7 +857,7 @@ class SavedFiltersScreen(WorkflowScreen):
             yield SafeSelect([], id="saved-filter", prompt=self.t("tui.entry_pick_first"))
             yield Input(placeholder=self.t("experience.filter_name"), id="filter-name")
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_apply"), id="filter-open", disabled=True)
                 yield Button(self.t("tui.btn_save"), id="filter-save")
                 yield Button(self.t("tui.btn_delete"), id="filter-delete", disabled=True)
@@ -947,7 +947,7 @@ class ThreadScreen(WorkflowScreen):
             yield SafeSelect([], id="thread-message", prompt=self.t("tui.entry_pick_first"))
             yield TextArea(read_only=True, id="thread-body")
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("ux.full_mail"), id="thread-open", disabled=True)
                 yield Button(self.t("tui.btn_back"), id="thread-close")
 
@@ -1041,12 +1041,12 @@ class ComposeScreen(WorkflowScreen):
                 yield AssistedInput(
                     self.service, placeholder=self.t("experience.upload_path"), id="compose-path"
                 )
-                with ButtonRow():
+                with Horizontal():
                     yield Button(self.t("experience.add_file"), id="compose-upload")
                     yield Button(self.t("experience.choose_files"), id="compose-choose-files")
             yield DraftPreview(self.service, id="compose-preview")
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_save"), id="compose-save", variant="primary")
                 yield Button(
                     self.t("tui.reply_prepare"),
@@ -1308,7 +1308,7 @@ class FileSelectionScreen(WorkflowScreen):
             yield Static(self.t("experience.choose_files"))
             yield SelectionTable(t=self.t, id="files-table")
             yield Static("", id="workflow-status", markup=False)
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.t("tui.btn_apply"), id="files-apply", disabled=True)
                 yield Button(self.t("tui.btn_cancel"), id="files-close")
 

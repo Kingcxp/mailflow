@@ -15,6 +15,7 @@ from mailflow.commands import CommandRouter
 from mailflow.domain import ComponentKind
 from mailflow_tui.app import MailFlowApp, MailPane
 from mailflow_tui.ask_correct import AskCorrectModal
+from textual.widget import Widget
 from textual.widgets import Button, Input, Select, Static, TabbedContent
 
 from mailflow_test_support.settings import start_service_quiet
@@ -430,7 +431,14 @@ async def test_entry_form_fields_scroll(tmp_path: Path) -> None:
                     for node in app.screen.query("#entry-form-fields Input")
                     if node.region.width
                 ]
-                assert len({(node.region.x, node.region.width) for node in inputs}) == 1
+                # The main design puts the password reveal button beside its input.
+                rows = [
+                    cast("Widget", node.parent)
+                    if node.parent and node.parent.has_class("secret-row")
+                    else node
+                    for node in inputs
+                ]
+                assert len({(node.region.x, node.region.width) for node in rows}) == 1
                 back = app.screen.query_one("#entry-form-back", Button)
                 assert back.region.right <= app.size.width
             assert await pilot.click(back)

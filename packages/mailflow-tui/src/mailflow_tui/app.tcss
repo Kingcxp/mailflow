@@ -20,25 +20,6 @@ Button {
     color: $text;
 }
 
-ListEditor .list-editor-row Input {
-    width: 1fr;
-    min-width: 0;
-    height: 1;
-    padding: 0 1;
-    border: none;
-}
-
-ListEditor .list-editor-row Button {
-    width: 8;
-    min-width: 8;
-    height: 1;
-    padding: 0 1;
-}
-
-ListEditor #list-editor-add {
-    min-width: 0;
-}
-
 Button.-default {
     background: $surface-lighten-2;
     color: $text;
@@ -130,20 +111,6 @@ SearchToggle.-active {
     text-style: italic;
 }
 
-#mail-filter-summary { height: auto; max-height: 2; color: $text-muted; }
-
-#mail-processing-controls {
-    height: auto;
-    padding: 0 1;
-    align-vertical: middle;
-}
-
-#mail-processing-status {
-    width: 1fr;
-    height: auto;
-    color: $text-muted;
-}
-
 #mail-search-row Checkbox,
 #actions-search-row Checkbox,
 #market-search-row Checkbox,
@@ -166,7 +133,6 @@ SearchToggle {
 }
 
 #smart-action-progress {
-    display: none;
     height: auto;
     max-height: 8;
     min-height: 0;
@@ -270,11 +236,6 @@ Footer {
     color: $foreground;
 }
 
-Tooltip {
-    /* Use F1 for help; mouse hover must not cover the content being read. */
-    visibility: hidden;
-}
-
 #mail-table {
     width: 60%;
     height: 1fr;
@@ -307,15 +268,41 @@ ActionModal {
     margin-top: 1;
 }
 
-#mail-controls { height: auto; padding: 0 1; align-vertical: middle; }
-#mail-content { height: 1fr; min-height: 3; }
-#mail-filter-controls, #mail-selection-controls { height: 3; align-vertical: middle; }
-#mail-filter-controls { width: 40; }
-#mail-filter-controls Select { width: 1fr; margin-right: 1; }
-#mail-selection-controls { width: 20; }
-#mail-selection-controls Select { width: 1fr; margin-right: 1; }
-#mail-actions-buttons { height: auto; width: 1fr; }
-#mail-actions-buttons Button { height: 1; min-width: 0; text-overflow: clip; }
+#mail-controls {
+    dock: bottom;
+    height: auto;
+    padding: 0 1;
+    align-vertical: middle;
+}
+
+#mail-actions-buttons {
+    height: auto;
+    width: 3fr;
+}
+
+#mail-actions-row1,
+#mail-actions-row2,
+#mail-actions-row3 {
+    height: auto;
+    align-vertical: middle;
+}
+
+/* The three selects take two thirds of the row (2fr each) and the button
+   container one third; every button stretches to the same width inside its
+   row and min-width 0 keeps the container from overflowing the screen. */
+#mail-controls Select {
+    width: 2fr;
+    min-width: 0;
+    margin-right: 1;
+}
+
+#mail-actions-row1 Button,
+#mail-actions-row2 Button,
+#mail-actions-row3 Button {
+    width: 1fr;
+    min-width: 0;
+    margin-right: 1;
+}
 
 /* Todo create modal: centered bordered panel (reply/entry-dialog chrome) */
 TodoCreateModal {
@@ -323,19 +310,18 @@ TodoCreateModal {
 }
 #todo-create-dialog {
     width: 64;
-    max-width: 96%;
-    height: 92%;
-    max-height: 92%;
+    height: auto;
+    max-height: 90%;
     border: round $accent;
     background: $surface;
-    padding: 0 1;
+    padding: 1 2;
 }
 #todo-create-title {
     text-style: bold;
-    margin-bottom: 0;
+    margin-bottom: 1;
 }
 #todo-create-form {
-    height: 1fr;
+    height: auto;
     padding: 0 1;
 }
 .todo-label {
@@ -344,16 +330,16 @@ TodoCreateModal {
 }
 #todo-create-form Input,
 #todo-create-form Select {
-    margin-bottom: 0;
+    margin-bottom: 1;
 }
 #todo-create-error {
     height: auto;
     color: $text-muted;
-    margin-bottom: 0;
+    margin-bottom: 1;
 }
 #todo-create-buttons {
     height: auto;
-    margin-top: 0;
+    margin-top: 1;
 }
 #todo-create-buttons Button {
     margin-right: 1;
@@ -393,11 +379,14 @@ TodoCreateModal {
 }
 
 #actions-controls {
-    height: 3;
+    height: auto;
     padding: 0 1;
 }
 
-#actions-controls Select { width: 1fr; margin-right: 1; }
+#actions-type-filter {
+    width: 24;
+}
+
 
 #actions-table {
     width: 100%;
@@ -413,13 +402,9 @@ TodoCreateModal {
 }
 
 #actions-hint {
-    height: auto;
-    max-height: 2;
-    overflow-y: auto;
+    height: 1;
     color: $text-muted;
 }
-
-.compact-actions Button { height: 1; }
 
 #runtime-plugins, #runtime-adapters, #runtime-accounts,
 #runtime-llms, #runtime-bindings, #runtime-storage {
@@ -432,9 +417,8 @@ TodoCreateModal {
 }
 
 #log-view {
-    border: none;
+    border: round $accent;
     height: 100%;
-    padding: 0;
 }
 
 /* Log export modal */
@@ -514,8 +498,7 @@ BotExportScreen {
 #log-scroll {
     height: 1fr;
     margin: 0 1;
-    border: none;
-    padding: 0;
+    border: round $accent;
 }
 
 #settings-label {
@@ -639,11 +622,10 @@ LogExportScreen {
 
 #reply-dialog {
     width: 90;
-    height: 92%;
+    height: 80%;
     border: round $accent;
     background: $surface;
     padding: 0 1;
-    max-width: 96%;
 }
 
 #reply-templates {
@@ -662,8 +644,8 @@ LogExportScreen {
 }
 
 #reply-body {
-    height: 10;
-    min-height: 6;
+    height: auto;
+    min-height: 10;
     margin: 0 1;
     border: round $primary;
 }
@@ -686,15 +668,12 @@ LogExportScreen {
 
 #reply-actions {
     height: auto;
-    margin: 0;
+    margin: 1;
 }
 
 #reply-status {
     margin: 0 1;
     color: $text-muted;
-    height: auto;
-    max-height: 4;
-    overflow-y: auto;
 }
 
 #reply-confirm {
@@ -832,10 +811,6 @@ PluginScaffoldScreen {
     margin-bottom: 1;
 }
 
-#scaffold-fields {
-    height: 1fr;
-}
-
 #scaffold-dialog Input,
 #scaffold-dialog Select,
 #scaffold-dialog Checkbox {
@@ -879,8 +854,7 @@ InstallScreen {
 }
 
 #install-tree {
-    height: 1fr;
-    min-height: 3;
+    height: 20;
     border: round $primary;
     margin-bottom: 1;
 }
@@ -937,20 +911,13 @@ ReposScreen {
 }
 
 #repos-table {
-    height: 1fr;
-    min-height: 3;
+    height: 10;
     border: round $primary;
     margin-bottom: 1;
 }
 
 #repos-form {
     height: auto;
-}
-
-#repos-esc-hint {
-    height: auto;
-    max-height: 3;
-    overflow-y: auto;
 }
 
 #repos-form Input {
@@ -1021,9 +988,7 @@ MarketDetailScreen {
 }
 
 #settings-sidebar {
-    width: 26%;
-    min-width: 16;
-    max-width: 28;
+    width: 28;
     border: round $primary;
     margin: 0 1 0 1;
 }
@@ -1066,7 +1031,6 @@ MarketDetailScreen {
     height: auto;
     padding: 0 1 1 1;
     border-bottom: solid $panel;
-    padding-bottom: 0;
 }
 
 .option-key {
@@ -1081,26 +1045,11 @@ MarketDetailScreen {
 .option-default {
     height: auto;
     color: $text-disabled;
-    display: none;
 }
 
 .option-row {
     height: auto;
     align-vertical: middle;
-}
-
-.option-editor {
-    height: auto;
-    margin-bottom: 0;
-}
-
-.option-editor .option-input, .option-editor .option-summary {
-    width: 100%;
-    margin-right: 0;
-}
-
-#settings-tools {
-    margin: 0 1 1 1;
 }
 
 .option-input {
@@ -1139,22 +1088,20 @@ ListEditScreen, EntryFormScreen {
 
 #entry-form-dialog {
     width: 88;
-    max-width: 96%;
-    height: 94%;
+    height: 85%;
     border: round $accent;
     background: $surface;
-    padding: 0 1;
+    padding: 1 2;
 }
 
 #entry-form-fields {
     height: 1fr;
+    border: round $primary;
     padding: 0 1;
 }
 
 #entry-form-status {
     height: auto;
-    max-height: 4;
-    overflow-y: auto;
     color: $error;
 }
 
@@ -1182,10 +1129,8 @@ ListEditScreen, EntryFormScreen {
 
 .field-label {
     text-style: bold;
-    margin-top: 0;
+    margin-top: 1;
 }
-
-#entry-form-dialog .dialog-title { height: 1; margin-bottom: 0; }
 
 .field-desc {
     height: auto;
@@ -1224,15 +1169,7 @@ ListEditScreen, EntryFormScreen {
     border: round $secondary;
 }
 
-#history-batch { height: 3; padding: 0 1; align-vertical: middle; }
-#history-count-label { width: auto; height: 1; margin-right: 1; }
-#history-count { width: 12; }
-
 #accounts-actions, #llms-actions, #history-actions {
-    layout: grid;
-    grid-size: 3;
-    grid-columns: 1fr 1fr 1fr;
-    grid-gutter: 1;
     height: auto;
     padding: 0 1;
     align-vertical: middle;
@@ -1248,15 +1185,14 @@ ListEditScreen, EntryFormScreen {
     color: $text-muted;
 }
 
+
 .secret-row {
-    height: 3;
-    align: right middle;
+    height: auto;
+    align-vertical: middle;
 }
 
 .secret-row Input {
-    width: 100%;
-    padding-right: 7;
-    margin-bottom: 0;
+    width: 1fr;
 }
 
 .eye-btn {
@@ -1277,16 +1213,16 @@ ListEditScreen, EntryFormScreen {
     height: auto;
 }
 
+
 .secret-row Input {
     height: 3;
 }
 
 .secret-row .eye-btn {
-    position: absolute;
-    height: 1;
-    margin-right: 1;
+    height: 3;
     content-align: center middle;
 }
+
 
 #notify-title {
     margin-bottom: 1;
@@ -1295,11 +1231,11 @@ ListEditScreen, EntryFormScreen {
 }
 
 #notify-wrap {
-    height: auto;
+    height: 1fr;
 }
 
 #notify-feed {
-    height: 8;
+    height: 1fr;
     border: round $secondary;
     background: #181825;
     padding: 0 1;
@@ -1442,7 +1378,7 @@ UserProfileModal {
 }
 #profile-dialog {
     width: 90;
-    height: 85%;
+    height: auto;
     max-height: 90%;
     border: round $accent;
     background: $surface;
@@ -1458,8 +1394,7 @@ UserProfileModal {
     margin-bottom: 1;
 }
 #profile-scroll {
-    height: 1fr;
-    min-height: 3;
+    height: 12;
     border: round $secondary;
     margin-bottom: 1;
 }
@@ -1538,67 +1473,33 @@ UserProfileModal {
     max-width: 78;
 }
 
-#entry-form-fields > Input, #entry-form-extras > Input,
-#entry-form-fields Select, #entry-form-fields .secret-row {
-    width: 100%;
-    margin: 0 0 1 0;
-}
-#entry-form-fields .secret-row Input {
-    width: 100%;
-    margin-bottom: 0;
-}
-
-/* Action rows share the available width and wrap instead of clipping.
-   Keep these after the older per-dialog fixed button widths. */
-.dialog-actions Button,
-.option-row Button,
-#llms-actions Button, #accounts-actions Button, #history-actions Button,
-#actions-buttons Button, #runtime-plugin-actions Button,
-#market-controls-buttons Button, #market-actions Button, #market-detail-actions Button,
-#notifications-actions Button, #reply-buttons Button,
-#repos-actions Button, #export-actions Button, #install-actions Button,
-#scaffold-actions Button, #log-export-actions Button, #todo-create-buttons Button,
-#smart-review-buttons Button, #smart-review-edit-buttons Button,
-#confirm-buttons Button, #profile-buttons Button {
-    width: 1fr;
-    min-width: 0;
-    margin: 0;
-}
-
-#list-edit-dialog, #login-dialog, #confirm-dialog, #profile-dialog,
-#scaffold-dialog, #install-dialog, #export-dialog, #repos-dialog, #market-detail-dialog {
-    max-width: 96%;
-    max-height: 92%;
-}
-
-#notifications-status, #runtime-status, #market-status, #actions-hint, #guide-status,
-#market-detail-status, #login-status {
-    height: auto;
-    min-height: 1;
-}
-
-.field-label, .option-key, #accounts-title, #llms-title, #history-title {
-    height: auto;
-}
-
-#todo-weekdays { height: 9; }
-#profile-text, #profile-guidelines { height: 8; min-height: 5; }
-
-#notifications-level-row { height: 3; }
-#notifications-level-row > Static { width: auto; height: 3; content-align: left middle; padding-right: 1; }
-#notifications-level-row Select { width: 1fr; }
-#runtime-summary { height: auto; margin-bottom: 1; }
-#runtime-details { height: auto; }
-#log-follow { height: 1; border: none; padding: 0; margin: 0; }
-
-#mail-maintenance, #market-development { height: auto; border: none; padding: 0; }
-#mail-maintenance > Contents, #market-development > Contents { padding: 0; }
-
-#reply-title { height: auto; }
+/* Existing capabilities added after main use the same panel and row styles. */
+Tooltip { visibility: hidden; }
+#mail-content { height: 1fr; }
+#mail-filter-summary { height: auto; max-height: 2; color: $text-muted; }
+#mail-processing-controls { height: auto; }
+#mail-processing-status { height: auto; width: 1fr; color: $text-muted; }
+#btn-assistant { height: 100%; margin-left: 1; }
+#runtime-summary { height: auto; margin: 0 1; }
 #reply-form { height: 1fr; }
-#reply-form Label { height: auto; }
+#reply-form Label, #reply-title { height: auto; }
+#reply-status { height: auto; max-height: 4; overflow-y: auto; }
+#todo-create-dialog { height: 85%; }
+#todo-create-form { height: 1fr; }
+#todo-weekdays { height: 9; }
+#profile-text, #profile-guidelines { height: 8; }
+#actions-buttons Button { width: 1fr; min-width: 0; }
+#settings-more { min-width: 8; }
+#guide-view-qr { height: 1; min-height: 1; }
+AssistedInput > Button { height: 3; }
 
-#reply-templates Button, #reply-toolbar Button, #reply-actions Button { width: 1fr; min-width: 0; margin: 0; }
-
-#btn-assistant { width: auto; min-width: 10; height: 3; content-align: center middle; }
-AssistedInput > Button { height: 3; content-align: center middle; }
+/* Keep the original dialogs usable when the terminal is smaller than the panel. */
+#export-dialog, #install-dialog, #repos-dialog, #scaffold-dialog,
+#entry-form-dialog, #list-edit-dialog {
+    max-width: 95%;
+    max-height: 90%;
+}
+#export-fields, #scaffold-fields { height: 1fr; }
+#install-tree, #repos-table { height: 1fr; min-height: 3; }
+#repos-actions Button { width: 1fr; min-width: 0; }
+ListEditor .list-editor-row Button { min-width: 8; height: 1; }

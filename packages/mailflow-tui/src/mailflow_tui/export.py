@@ -13,12 +13,12 @@ from mailflow.bot_export import export_bot_plugin
 from mailflow.domain import ComponentKind
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DirectoryTree, Select, Static
 
 from mailflow_tui.labels import error_detail
-from mailflow_tui.widgets import ButtonRow, Input, SafeSelect
+from mailflow_tui.widgets import Input, SafeSelect
 
 
 class BotExportScreen(ModalScreen[Path | None]):
@@ -39,21 +39,22 @@ class BotExportScreen(ModalScreen[Path | None]):
         frameworks = self._service.registry.component_ids(ComponentKind.BOT_EXPORTER)
         with Vertical(id="export-dialog"):
             yield Static(self._t("tui.export_title"), classes="scaffold-title")
-            yield SafeSelect(
-                [(fw, fw) for fw in frameworks],
-                id="export-framework",
-                value=frameworks[0] if frameworks else None,
-            )
-            yield Static(self._t("tui.export_pick_folder"), classes="scaffold-hint")
-            yield DirectoryTree(Path.cwd(), id="export-tree")
-            yield Checkbox(self._t("tui.scaffold_subfolder"), id="export-subfolder")
-            yield Input(
-                placeholder=self._t("tui.scaffold_folder_name"),
-                id="export-folder-name",
-                disabled=True,
-            )
+            with ScrollableContainer(id="export-fields"):
+                yield SafeSelect(
+                    [(fw, fw) for fw in frameworks],
+                    id="export-framework",
+                    value=frameworks[0] if frameworks else None,
+                )
+                yield Static(self._t("tui.export_pick_folder"), classes="scaffold-hint")
+                yield DirectoryTree(Path.cwd(), id="export-tree")
+                yield Checkbox(self._t("tui.scaffold_subfolder"), id="export-subfolder")
+                yield Input(
+                    placeholder=self._t("tui.scaffold_folder_name"),
+                    id="export-folder-name",
+                    disabled=True,
+                )
             yield Static("", id="export-status", markup=False)
-            with ButtonRow(id="export-actions"):
+            with Horizontal(id="export-actions"):
                 yield Button(self._t("tui.btn_generate"), id="export-run", variant="success")
                 yield Button(self._t("tui.btn_cancel"), id="export-cancel", variant="primary")
 

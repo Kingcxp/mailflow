@@ -14,7 +14,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Static
 
 from mailflow_tui.pickers import AssistedInput
-from mailflow_tui.widgets import ButtonRow, Input, TextArea
+from mailflow_tui.widgets import Input, TextArea
 
 
 class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
@@ -119,7 +119,7 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
                                 self._t("tui.smart_review_edit"), id=f"smart-review-edit-{index}"
                             )
             yield Static("", id="smart-review-error")
-            with ButtonRow(id="smart-review-buttons"):
+            with Horizontal(id="smart-review-buttons"):
                 yield Button(self._t("tui.btn_apply"), id="smart-review-apply", variant="primary")
                 yield Button(self._t("tui.smart_review_cancel"), id="smart-review-cancel")
 
@@ -236,7 +236,7 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
                     yield Static(self._t(f"tui.smart_review_{field}"), classes="todo-label")
                     yield Input(value=str(args.get(field) or ""), id=f"smart-review-{field}")
             yield Static("", id="smart-review-edit-error")
-            with ButtonRow(id="smart-review-edit-buttons"):
+            with Horizontal(id="smart-review-edit-buttons"):
                 yield Button(
                     self._t("tui.smart_review_save_edit"),
                     id="smart-review-save-edit",

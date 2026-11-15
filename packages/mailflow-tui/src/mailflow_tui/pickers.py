@@ -14,7 +14,7 @@ from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, DirectoryTree, Select, Static
 
-from mailflow_tui.widgets import ButtonRow, Input, SafeSelect
+from mailflow_tui.widgets import Input, SafeSelect
 
 
 class ChoicePicker(ModalScreen[str | None]):
@@ -38,7 +38,7 @@ class ChoicePicker(ModalScreen[str | None]):
                 placeholder=self.service.t("tui.settings_search_placeholder"), id="picker-query"
             )
             yield DataTable(id="picker-results", cursor_type="row")
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.service.t("tui.btn_apply"), id="picker-apply", variant="primary")
                 yield Button(self.service.t("tui.btn_back"), id="picker-back")
 
@@ -68,6 +68,10 @@ class ChoicePicker(ModalScreen[str | None]):
             self.filter()
 
     def on_data_table_row_selected(self, event: Any) -> None:
+        self.choose()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
         self.choose()
 
     def choose(self) -> None:
@@ -109,7 +113,7 @@ class PathPicker(ModalScreen[str | None]):
             )
             yield DirectoryTree(Path.home(), id="path-tree")
             yield Input(self.value or str(Path.home()), id="path-value")
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.service.t("interface.parent_directory"), id="path-parent")
                 yield Button(self.service.t("tui.btn_apply"), id="path-apply", variant="primary")
                 yield Button(self.service.t("tui.btn_back"), id="path-back")
@@ -204,11 +208,11 @@ class DatePicker(ModalScreen[str | None]):
                             allow_blank=False,
                             id="date-minute",
                         )
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.service.t("interface.today"), id="date-today")
                 yield Button(self.service.t("interface.tomorrow"), id="date-tomorrow")
                 yield Button(self.service.t("interface.clear"), id="date-clear")
-            with ButtonRow():
+            with Horizontal():
                 yield Button(self.service.t("tui.btn_apply"), id="date-apply", variant="primary")
                 yield Button(self.service.t("tui.btn_back"), id="date-back")
 

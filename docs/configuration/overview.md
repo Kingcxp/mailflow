@@ -39,19 +39,19 @@ reference for secrets. An unset referenced variable fails loading; embedded
 | Read logs | Combine source, level and keyword filters; turn off Follow latest to read older entries; export defaults to the current filter |
 | Select values or files | Use Browse beside dates, times, timezones and paths; custom text remains editable |
 
-Mail filters and common actions share the compact bottom toolbar. More on the
-Actions page opens category/tag filters, recurring plans and assistant handoff.
-Assistant Stop and Review appear when needed; results keep the remaining space.
-Mouse hover does not open help overlays; use F1 for keyboard and selection help.
-Analysis and maintenance contains mail reanalysis and cleanup. Plugin development
-and export is separate from ordinary installation. Login QR codes have a separate
-view for small windows. Backup destination and restore file are separate fields.
+Mail, Actions, Settings and the other existing pages retain the main branch's
+panel, form and button-row design. New capabilities remain available through
+More menus and dialogs; the assistant keeps its own tab. Mouse hover does not
+open help overlays; use F1 for keyboard and selection help. Settings can be
+saved individually or together with Ctrl+S; More also provides discard, backup
+and connection actions. Backup destination and restore file are separate fields.
 
 ## Accounts and startup
 
 The account form generates an internal ID and offers mailbox presets as a menu.
-Start with the address, mailbox type and credentials; expand advanced settings
-for custom servers. Existing IDs remain unchanged when editing.
+The account name and login name remain visible with the other basic fields;
+expand advanced settings for custom servers. Existing IDs remain unchanged when
+editing.
 
 Keep `account_id` stable: it is part of mail identity. An IMAP account can use a
 preset (`qq`, `163`, `gmail`, `outlook`) or explicit server settings. Receiving
@@ -273,14 +273,15 @@ for safe issue reports.
 | 阅读日志 | 来源、等级和关键词可以组合筛选；关闭跟随最新后阅读旧内容；导出默认使用当前筛选 |
 | 选择填写内容 | 日期、时间、时区和路径旁提供选择入口，也可继续填写自定义值 |
 
-邮件筛选与常用操作集中在底部；待办的分类筛选、周期计划和交给助手入口在“更多”中。
-助手仅在执行或等待确认时显示对应按钮，结果使用其余空间。鼠标悬浮不再弹出提示，
-快捷键和多选说明通过 F1 查看。邮件重析与清理在“分析与维护”中，插件开发和导出与普通安装分开。
-登录二维码可以单独打开，避免小窗口看不到操作按钮。备份保存位置与恢复文件分别选择。
+邮件、待办、设置等已有页面沿用 main 分支的面板、表单和按钮行设计。
+新增能力保留在“更多”菜单和弹窗中，智能助手继续使用独立标签页。
+鼠标悬停不弹出提示，快捷键和多选说明通过 F1 查看。
+设置可逐项保存，也可通过 Ctrl+S 一起保存；“更多”提供撤销本区修改、备份和连接信息。
+备份保存位置与恢复文件分别选择。
 
 ### 账户与启动
 
-账户表单自动生成内部标识，邮箱预设通过菜单选择。先填写邮箱、类型与凭据，
+账户表单自动生成内部标识，邮箱预设通过菜单选择。账户名称和登录用户名直接显示，
 自定义服务器等参数在高级设置中展开；编辑已有账户不会改变其标识。
 
 账户标识 `account_id` 参与邮件去重，请保持稳定。IMAP 可选择预设或填写服务器；
