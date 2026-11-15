@@ -139,6 +139,8 @@ async def run_local_host(
         try:
             await app.run_async()
         finally:
+            if session is not None:
+                session.stopping = True
             if server is not None:
                 server.should_exit = True
             if server_task is not None:

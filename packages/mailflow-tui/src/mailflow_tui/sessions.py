@@ -125,15 +125,27 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _wait_for_exit(pid: int) -> None:
-    deadline = time.monotonic() + 10
+def _wait_for_exit(pid: int, *, cleanup_complete: bool = False) -> None:
+    # Cancelling asyncio.to_thread does not stop its synchronous work. Once
+    # the host confirms service cleanup, such threads must not keep it alive.
+    deadline = time.monotonic() + (2 if cleanup_complete else 10)
+    terminated = False
     while _pid_alive(pid):
         if os.name != "nt":
             with contextlib.suppress(ChildProcessError):
                 if os.waitpid(pid, cast(Any, os).WNOHANG)[0] == pid:
                     return
         if time.monotonic() >= deadline:
-            raise SessionError("sessions.stop_timeout")
+            if not cleanup_complete or terminated:
+                raise SessionError("sessions.stop_timeout")
+            try:
+                os.kill(pid, signal.SIGTERM if os.name == "nt" else cast(Any, signal).SIGKILL)
+            except ProcessLookupError:
+                return
+            except OSError as exc:
+                raise SessionError("sessions.stop_timeout") from exc
+            terminated = True
+            deadline = time.monotonic() + 2
         time.sleep(0.05)
 
 
@@ -326,19 +338,26 @@ async def attach_instance(info: SessionInfo, *, takeover: bool = False) -> str:
     reader, writer, _response = await connect(info, "attach", takeover=takeover)
     result = await attach_terminal(reader, writer)
     if result == "stopped":
-        await asyncio.to_thread(_wait_for_exit, info.pid)
+        await asyncio.to_thread(_wait_for_exit, info.pid, cleanup_complete=True)
     return result
 
 
 async def stop_instance(info: SessionInfo) -> None:
     reader, writer, _response = await connect(info, "stop")
+    cleanup_complete = False
     try:
         async with asyncio.timeout(30):
-            await reader.read()
+            try:
+                frame = await read_frame(reader)
+                cleanup_complete = frame.get("event") == "stopped"
+            except EOFError:
+                pass  # Older hosts close the connection without an acknowledgement.
+    except TimeoutError as exc:
+        raise SessionError("sessions.stop_timeout") from exc
     finally:
         writer.close()
         await writer.wait_closed()
-    await asyncio.to_thread(_wait_for_exit, info.pid)
+    await asyncio.to_thread(_wait_for_exit, info.pid, cleanup_complete=cleanup_complete)
 
 
 class SessionHost:
@@ -382,6 +401,8 @@ class SessionHost:
             client.close()
 
     def stop(self) -> None:
+        if self.stopping:
+            return
         self.stopping = True
         if self.app is not None and self.app.is_running:
             self.app.exit()
@@ -421,6 +442,8 @@ class SessionHost:
             elif command == "stop":
                 self.stop()
                 await self.closed.wait()
+                send_frame(writer, {"event": "stopped"})
+                await writer.drain()
             elif command == "attach":
                 assert self.app is not None
                 self.app.screen.refresh(repaint=True, layout=True)

@@ -243,6 +243,79 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
             await stop_instance(remaining)
 
 
+async def test_tui_exit_and_stop_finish_despite_lingering_sync_io(
+    cli_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mailflow_tui import sessions
+    from mailflow_tui.session_terminal import read_frame, send_frame
+
+    monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(cli_config.parent / "sessions"))
+    config_before = await asyncio.to_thread(cli_config.read_bytes)
+    # Run the real TUI and service. Simulate a synchronous network request
+    # which outlives coroutine cancellation, without contacting any service.
+    host_code = """
+import asyncio, sys, time
+from mailflow_tui import runner, sessions
+original = runner.run_local_host
+async def run(*args, **kwargs):
+    try:
+        await original(*args, **kwargs)
+    finally:
+        asyncio.get_running_loop().run_in_executor(None, time.sleep, 15)
+runner.run_local_host = run
+sessions.host_main(sys.argv[1])
+"""
+    children: list[subprocess.Popen[bytes]] = []
+
+    def spawn(info: sessions.SessionInfo) -> subprocess.Popen[bytes]:
+        with info.log.open("ab") as log:
+            child = subprocess.Popen(
+                [sys.executable, "-X", "utf8", "-B", "-c", host_code, info.id],
+                cwd=info.cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+        children.append(child)
+        return child
+
+    async def exit_from_terminal(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> str:
+        try:
+            send_frame(writer, {"event": "Key", "key": "ctrl+q", "character": None})
+            async with asyncio.timeout(10):
+                while True:
+                    frame = await read_frame(reader)
+                    if frame.get("event") == "stopped":
+                        return "stopped"
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    monkeypatch.setattr(sessions, "_spawn", spawn)
+    monkeypatch.setattr(sessions, "has_terminal", lambda: True)
+    monkeypatch.setattr(sessions, "attach_terminal", exit_from_terminal)
+    try:
+        for action in ("exit", "stop"):
+            info = await sessions.start_instance(str(cli_config), name="shutdown")
+            child = children[-1]
+            if action == "exit":
+                assert await sessions.attach_instance(info) == "stopped"
+            else:
+                await asyncio.to_thread(run_cli, cli_config, "tui", "stop", "shutdown")
+            await asyncio.to_thread(child.wait, timeout=3)
+            assert not info.path.exists()
+            assert await sessions.list_instances() == []
+            with pytest.raises(OSError):
+                await asyncio.open_connection("127.0.0.1", info.port)
+        assert await asyncio.to_thread(cli_config.read_bytes) == config_before
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            await asyncio.to_thread(child.wait, timeout=5)
+
+
 def test_cli_restarts_preserve_account_scoped_mail_priority_and_actions(cli_config: Path) -> None:
     first = run_cli(cli_config, "command", "mail list").stdout
     for label in ("alpha", "beta"):
