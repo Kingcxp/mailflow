@@ -1852,6 +1852,65 @@
       "minimum_notification": "最低通知等级",
       "login_qr": "查看登录二维码",
       "connection_address": "本机连接地址：{address}\n用户名：{username}\n远程终端请将地址中的主机替换为这台电脑可访问的地址，并确保服务正在运行且允许远程连接。"
+    },
+    "make": {
+      "title": "MailFlow 开发命令",
+      "usage": "make <命令> [参数=值]",
+      "sections": {
+        "setup": "环境准备",
+        "checks": "质量检查",
+        "run": "运行与后台实例",
+        "package": "构建",
+        "bots": "机器人插件",
+        "cleanup": "清理",
+        "help": "帮助"
+      },
+      "targets": {
+        "sync": "安装或更新项目环境与开发工具",
+        "test": "运行全部测试",
+        "test-unit": "运行隔离组件、数据规则与接口测试",
+        "test-integration": "运行组件组合、数据库、远程接口与终端交互测试",
+        "test-e2e": "使用临时配置与数据库验证命令行完整流程",
+        "validate-plugins": "使用模拟输入输出验证内置插件接口",
+        "coverage": "运行全部测试并生成覆盖率结果",
+        "lint": "检查代码规范",
+        "format": "自动整理代码格式",
+        "format-check": "检查代码格式，不修改文件",
+        "mypy": "检查核心、插件和工具的类型",
+        "pyright": "检查整个项目的类型",
+        "typecheck": "运行两种类型检查",
+        "check": "依次运行测试、插件验证、规范、格式和类型检查",
+        "run": "在前台启动服务",
+        "tui": "启动或连接终端界面；F8 退到后台",
+        "tui-background": "在后台启动终端界面",
+        "tui-list": "列出运行中的终端实例",
+        "tui-attach": "连接终端实例；多个实例时用 SESSION 指定",
+        "tui-detach": "断开终端连接，保留后台实例",
+        "tui-stop": "停止终端实例并释放其资源",
+        "build": "构建所有项目包，保存到 dist/wheels",
+        "exe-standalone": "构建独立目录程序，试运行后再构建单文件版",
+        "exe-onefile": "构建单文件程序，需先试运行独立目录版",
+        "bot-plugin": "导出机器人插件；需指定 FRAMEWORK 和 OUTPUT",
+        "bot-plugin-nonebot": "导出 NoneBot 插件到 dist/nonebot_plugin_mailflow",
+        "bot-plugin-astrbot": "导出 AstrBot 插件到 dist/astrbot_plugin_mailflow",
+        "clean": "清理构建产物、测试结果与缓存，保留环境和用户数据",
+        "clean-records": "邮件移入本地回收站，移除待办",
+        "clean-trash": "永久清空本地回收站，无法撤销",
+        "clean-gateways": "确认后删除 data/gateways/ 中的网关安装",
+        "clean-config": "确认后删除本地配置文件",
+        "help": "显示此帮助"
+      },
+      "options_title": "常用参数",
+      "options": {
+        "VENV": "环境路径；默认使用 UV_PROJECT_ENVIRONMENT 或 .venv",
+        "CONFIG": "配置文件；默认使用 configs/development.toml",
+        "SESSION": "要启动、连接、断开或停止的终端实例名称",
+        "FRAMEWORK": "机器人导出框架：nonebot 或 astrbot",
+        "OUTPUT": "机器人插件的导出目录",
+        "HELP_LANG": "帮助语言：en 或 zh-CN"
+      },
+      "environment_note": "只有 make sync 同步环境。make clean 保留环境、配置和邮件。",
+      "examples": "示例：make test VENV=.venv312；make help HELP_LANG=zh-CN"
     }
   }
 }

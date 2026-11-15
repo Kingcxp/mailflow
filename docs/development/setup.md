@@ -21,6 +21,9 @@ environment produces setup instructions rather than an automatic installation.
 Use `VENV=...` to select another environment, for example
 `make test VENV=.venv312`. The default is `UV_PROJECT_ENVIRONMENT` when set,
 otherwise `.venv`; `PYTHON=...` selects the system Python for Make's helpers.
+Relative environment paths are resolved from the checkout, including when
+using `make -f /path/to/Makefile` from another directory. Quote paths containing
+spaces in your shell, for example `make test "VENV=C:/Python environments/mailflow"`.
 
 On Windows, the same Python commands work in PowerShell without Make.
 Use fake sources and temporary databases for development; connect actual
@@ -62,7 +65,10 @@ only protects the lockfile and still allows environment synchronization.
 An explicit `make sync` restores locked workspace sources; it can replace a
 manually installed same-name plugin and remove extra packages.
 
-Use `make help` for all targets. Coverage output goes to `build/reports` and
+Use `make help` for grouped targets and options, or `make help HELP_LANG=zh-CN`
+for Chinese. Terminal output uses colors and wraps to fit; redirected output is
+plain text. Set `NO_COLOR=1` to disable colors in a terminal.
+Coverage output goes to `build/reports` and
 wheels to `dist/wheels`; both are ignored. Data-modifying `clean-*` targets are
 not quality checks and must not run against someone else's configuration.
 For a build using only cached build dependencies, pass `--offline` explicitly
@@ -129,6 +135,7 @@ Export a configured instance without starting its mail runtime:
 ```bash
 uv run --no-sync mailflow export --framework nonebot --output dist/nonebot_plugin_mailflow -c configs/local.toml
 uv run --no-sync mailflow export --framework astrbot --output dist/astrbot_plugin_mailflow -c configs/local.toml
+make bot-plugin FRAMEWORK=nonebot OUTPUT=dist/nonebot_plugin_mailflow CONFIG=configs/local.toml
 ```
 
 The generated framework host owns startup/shutdown and permissions. Install it
@@ -154,6 +161,10 @@ Make 是便捷入口，Windows 可直接用指定环境的 Python 执行上表�
 只有 `make sync` 同步依赖；日常命令直接使用现有环境，帮助和清理只需要系统 Python。
 环境缺失时提示安装，不会擅自创建或重装。默认使用 `.venv`，也支持
 `UV_PROJECT_ENVIRONMENT` 或 `make test VENV=.venv312`；`PYTHON=...` 指定辅助脚本的系统 Python。
+相对环境路径始终以项目目录为准；路径含空格时，在终端为整个参数加引号，
+例如 `make test "VENV=C:/Python environments/mailflow"`。
+`make help` 按用途分组展示命令和参数，`make help HELP_LANG=zh-CN` 显示中文。
+终端输出支持颜色和自动换行，重定向时使用纯文本；`NO_COLOR=1` 可关闭颜色。
 初次同步后，普通 uv 命令使用 `uv run --no-sync ...`，避免覆盖本地插件和可选依赖。
 `--frozen` 只锁定文件，不禁止同步；主动执行 `make sync` 会恢复锁定来源，可能替换同名插件或移除额外包。
 日常测试使用假邮件源、临时配置和数据库，不接触真实用户数据。

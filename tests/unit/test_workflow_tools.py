@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from rich.cells import cell_len
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,9 +36,22 @@ def test_make_help_and_cleanup_need_no_project_environment(tmp_path: Path) -> No
     root = tmp_path / "checkout with spaces"
     (root / "tools").mkdir(parents=True)
     shutil.copyfile(ROOT / "Makefile", root / "Makefile")
-    shutil.copyfile(ROOT / "tools/clean.py", root / "tools/clean.py")
-    env = {**os.environ, "PYTHONUTF8": "1", "UV_OFFLINE": "1", "UV_PYTHON_DOWNLOADS": "never"}
+    for name in ("clean", "make_help"):
+        shutil.copyfile(ROOT / f"tools/{name}.py", root / f"tools/{name}.py")
+    locales = Path("packages/mailflow-core/src/mailflow/locale")
+    (root / locales).mkdir(parents=True)
+    for language in ("en", "zh-CN"):
+        shutil.copyfile(ROOT / locales / f"{language}.json", root / locales / f"{language}.json")
+    env = {
+        **os.environ,
+        "PYTHONUTF8": "1",
+        "UV_OFFLINE": "1",
+        "UV_PYTHON_DOWNLOADS": "never",
+        "FORCE_COLOR": "0",
+        "COLUMNS": "60",
+    }
     env.pop("UV_PROJECT_ENVIRONMENT", None)
+    env.pop("NO_COLOR", None)
     for key in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "MAKELEVEL"):
         env.pop(key, None)
     command = [
@@ -45,14 +59,16 @@ def test_make_help_and_cleanup_need_no_project_environment(tmp_path: Path) -> No
         "--no-print-directory",
         "-f",
         str(root / "Makefile"),
-        f'PYTHON="{sys.executable}"',
+        f"PYTHON={sys.executable}",
     ]
 
-    def run(*args: str) -> subprocess.CompletedProcess[str]:
+    def run(
+        *args: str, extra_env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [*command, *args],
             cwd=tmp_path,
-            env=env,
+            env={**env, **(extra_env or {})},
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -62,6 +78,24 @@ def test_make_help_and_cleanup_need_no_project_environment(tmp_path: Path) -> No
     help_result = run("help")
     assert help_result.returncode == 0, help_result.stdout + help_result.stderr
     assert "clean-records" in help_result.stdout and "test-integration" in help_result.stdout
+    assert "\x1b[" not in help_result.stdout
+    assert max(map(cell_len, help_result.stdout.splitlines())) <= 60
+    assert run().stdout == help_result.stdout
+    chinese = run("help", "HELP_LANG=zh-CN")
+    assert chinese.returncode == 0, chinese.stdout + chinese.stderr
+    messages = json.loads((root / locales / "zh-CN.json").read_text("utf-8"))["messages"]["make"]
+    assert messages["sections"]["setup"] in chinese.stdout
+    assert messages["options_title"] in chinese.stdout
+    assert all(
+        target in chinese.stdout and target in help_result.stdout for target in messages["targets"]
+    )
+    assert max(map(cell_len, chinese.stdout.splitlines())) <= 60
+    assert "\x1b[" in run("help", extra_env={"FORCE_COLOR": "1"}).stdout
+    assert "\x1b[" not in run("help", extra_env={"FORCE_COLOR": "1", "NO_COLOR": "1"}).stdout
+    if os.name == "nt":
+        native = run("help", "SHELL=cmd.exe", ".SHELLFLAGS=/c")
+        assert native.returncode == 0, native.stdout + native.stderr
+        assert native.stdout == help_result.stdout
     assert not (root / ".venv").exists() and not (root / "uv.lock").exists()
     missing = run("lint")
     assert missing.returncode != 0 and "make sync" in missing.stdout
@@ -103,7 +137,8 @@ def test_make_targets_use_selected_environment_without_sync(tmp_path: Path) -> N
     stub = (
         "import json, os, sys\nfrom pathlib import Path\n"
         "with Path(os.environ['MAILFLOW_MAKE_CALLS']).open('a', encoding='utf-8') as f:\n"
-        " f.write(json.dumps({'args':sys.argv,'cwd':str(Path.cwd()),'python':sys.executable})+'\\n')\n"
+        " f.write(json.dumps({'args':sys.argv,'cwd':str(Path.cwd()),'python':sys.executable,"
+        "'environment':os.environ.get('UV_PROJECT_ENVIRONMENT')})+'\\n')\n"
     )
     for module in ("pytest", "ruff", "mypy", "pyright"):
         (Path(site) / f"{module}.py").write_text(stub, encoding="utf-8")
@@ -151,19 +186,20 @@ def test_make_targets_use_selected_environment_without_sync(tmp_path: Path) -> N
         "clean-records",
         "clean-trash",
     ]
-    for target in targets:
-        result = subprocess.run(
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
             [
                 make,
                 "--no-print-directory",
                 "-f",
                 str(root / "Makefile"),
-                f'PYTHON="{sys.executable}"',
+                f"PYTHON={python}",
                 "CONFIG=configs/test config.toml",
                 "SESSION=test inbox",
                 "FRAMEWORK=nonebot",
                 "OUTPUT=exports/bot plugin",
-                target,
+                *args,
             ],
             cwd=tmp_path,
             env=env,
@@ -172,7 +208,20 @@ def test_make_targets_use_selected_environment_without_sync(tmp_path: Path) -> N
             encoding="utf-8",
             timeout=30,
         )
+
+    for target in targets:
+        result = run(target)
         assert result.returncode == 0, (target, result.stdout, result.stderr)
+    for missing in ("FRAMEWORK=", "OUTPUT="):
+        before = calls.read_text(encoding="utf-8")
+        result = run("bot-plugin", missing)
+        assert result.returncode != 0 and "FRAMEWORK=nonebot OUTPUT=dist/plugin" in result.stderr
+        assert calls.read_text(encoding="utf-8") == before
+    sync = run("sync", f'UV="{python}" -m pytest', "VENV=relative environment")
+    assert sync.returncode == 0, sync.stdout + sync.stderr
+    if os.name == "nt":
+        native = run("lint", "SHELL=cmd.exe", ".SHELLFLAGS=/c")
+        assert native.returncode == 0, native.stdout + native.stderr
     rows = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
     assert rows and all(Path(row["python"]) == python and Path(row["cwd"]) == root for row in rows)
     assert all(
@@ -182,6 +231,11 @@ def test_make_targets_use_selected_environment_without_sync(tmp_path: Path) -> N
     )
     assert any("test inbox" in row["args"] for row in rows)
     assert any("exports/bot plugin" in row["args"] for row in rows)
+    installs = [row for row in rows if "sync" in row["args"]]
+    assert len(installs) == 1
+    assert installs[0]["environment"] == "relative environment"
+    assert {"--locked", "--all-packages", "--group", "dev"}.issubset(installs[0]["args"])
+    assert Path(installs[0]["args"][installs[0]["args"].index("--project") + 1]) == root
     assert retained.read_text(encoding="utf-8") == 'VERSION = "2.0"\n'
     assert not (root / ".venv").exists() and not (root / "uv.lock").exists()
 

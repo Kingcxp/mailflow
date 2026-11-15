@@ -1852,6 +1852,65 @@
       "minimum_notification": "Minimum notification level",
       "login_qr": "View login QR code",
       "connection_address": "On this computer: {address}\nUsername: {username}\nFor a remote terminal, replace the host with this computer's reachable address. The service must be running and allow remote connections."
+    },
+    "make": {
+      "title": "MailFlow development commands",
+      "usage": "make <target> [NAME=value]",
+      "sections": {
+        "setup": "Setup",
+        "checks": "Quality checks",
+        "run": "Run",
+        "package": "Build",
+        "bots": "Bot plugins",
+        "cleanup": "Cleanup",
+        "help": "Help"
+      },
+      "targets": {
+        "sync": "Install/update the workspace and dev toolchain",
+        "test": "Run the full test suite (pytest)",
+        "test-unit": "Run isolated component, domain and transport-contract tests",
+        "test-integration": "Run component, SQLite, ASGI and headless TUI integration tests",
+        "test-e2e": "Run real CLI processes against temporary configuration and databases",
+        "validate-plugins": "Check bundled plugins against core contracts with simulated I/O",
+        "coverage": "Run all tests with coverage for the current packages and plugins",
+        "lint": "Ruff lint check",
+        "format": "Auto-format all sources with Ruff",
+        "format-check": "Verify formatting without changing files",
+        "mypy": "Strict mypy type check (packages/plugins/tools)",
+        "pyright": "Strict pyright type check (whole workspace)",
+        "typecheck": "Run both type checkers",
+        "check": "Full quality gate: tests, plugins, lint, format and types",
+        "run": "Start the service in the foreground",
+        "tui": "Launch or reconnect to the TUI (optional SESSION=<name>; F8 detaches)",
+        "tui-background": "Start a TUI in the background (optional SESSION=<name>)",
+        "tui-list": "List running TUI instances",
+        "tui-attach": "Reconnect to a TUI (SESSION=<name> when multiple instances exist)",
+        "tui-detach": "Detach a terminal while keeping its TUI running (optional SESSION=<name>)",
+        "tui-stop": "Stop a TUI and release its resources (optional SESSION=<name>)",
+        "build": "Build every workspace wheel under dist/wheels",
+        "exe-standalone": "Build the Nuitka standalone executable (smoke test before onefile)",
+        "exe-onefile": "Build the Nuitka onefile executable (only after a standalone smoke test)",
+        "bot-plugin": "Export MailFlow as a chatbot-framework plugin (FRAMEWORK=<id> OUTPUT=<dir>)",
+        "bot-plugin-nonebot": "Export the NoneBot plugin to dist/nonebot_plugin_mailflow",
+        "bot-plugin-astrbot": "Export the AstrBot plugin to dist/astrbot_plugin_mailflow",
+        "clean": "Remove build output, test reports and caches; keep environments and user data",
+        "clean-records": "Move local mail to trash and remove schedule entries",
+        "clean-trash": "Permanently empty the local trash; cannot be undone",
+        "clean-gateways": "Delete data/gateways/ after confirmation",
+        "clean-config": "Delete local config files after confirmation",
+        "help": "Show this help"
+      },
+      "options_title": "Options",
+      "options": {
+        "VENV": "Environment path; defaults to UV_PROJECT_ENVIRONMENT or .venv",
+        "CONFIG": "Config file; defaults to configs/development.toml",
+        "SESSION": "Name of the TUI instance to start, connect, detach or stop",
+        "FRAMEWORK": "Bot export framework: nonebot or astrbot",
+        "OUTPUT": "Directory for the exported bot plugin",
+        "HELP_LANG": "Help language: en or zh-CN"
+      },
+      "environment_note": "Only make sync synchronizes the environment. make clean keeps environments, configuration and mail.",
+      "examples": "Examples: make test VENV=.venv312; make help HELP_LANG=zh-CN"
     }
   }
 }
