@@ -866,7 +866,7 @@ def account_form(preset: str = "qq") -> tuple[FormField, ...]:
             label_key="tui.form_fields.preset",
             description_key="tui.extras_preset",
         ),
-        FormField("username", advanced=True),
+        FormField("username"),
         FormField("password", kind="password", required=True, secret=True),
         FormField("imap_host", advanced=True),
         FormField("imap_port", kind="number", default=993, advanced=True),

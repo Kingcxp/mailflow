@@ -826,28 +826,10 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         with Vertical(id="entry-form-dialog"):
             yield Static(self._t(title_key, group=group_label), classes="dialog-title")
             with ScrollableContainer(id="entry-form-fields"):
-                advanced = {
-                    "account_id",
-                    "llm_id",
-                    "notifier_id",
-                    "enabled",
-                    "state_sync",
-                    "timeout_seconds",
-                    "max_retries",
-                    "name",
-                }
-                for spec in sorted(
-                    self._specs, key=lambda s: (s.label != "email", s.label != "provider")
-                ):
-                    if spec.label in advanced:
-                        continue
+                for spec in self._specs:
                     yield from self._field_widgets(spec)
                 with Vertical(id="entry-form-extras"):
                     yield from self._render_extras()
-                with Collapsible(title=self._t("interface.advanced"), collapsed=True):
-                    for spec in self._specs:
-                        if spec.label in advanced:
-                            yield from self._field_widgets(spec)
             yield Static("", id="entry-form-status")
             with ButtonRow(classes="dialog-actions"):
                 if self._group == "llms" or self._group == "accounts":

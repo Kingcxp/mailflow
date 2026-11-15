@@ -95,6 +95,9 @@ async def test_provider_drafts_do_not_cross_and_save_failure_keeps_input(
     async with app.run_test() as pilot:
         app.push_screen(form, results.append)
         await settle(pilot)
+        # Account/model/channel names are ordinary fields, not hidden settings.
+        await pilot.click(f"#field-{id_field.replace('_', '-')}")
+        assert app.focused is form.query_one(f"#field-{id_field.replace('_', '-')}", Input)
         form.query_one("#extra-legacy", Input).value = "unsaved old"
         form.query_one("#field-provider", Select).value = "fresh"
         await settle(pilot)
