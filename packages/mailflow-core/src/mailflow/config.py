@@ -90,6 +90,10 @@ def _interpolate_sequence(
 
 
 class GeneralConfig(BaseModel):
+    theme: str = Field(
+        default="catppuccin-macchiato",
+        description="Terminal color scheme from built-ins or enabled theme plugins",
+    )
     language: str = Field(
         default="en", description="Default display language code (en, zh-CN, or an external pack)"
     )

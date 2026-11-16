@@ -32,6 +32,7 @@ from mailflow.contracts import (
 from mailflow.domain import ComponentKind, ComponentSnapshot
 from mailflow.forms import FormField
 from mailflow.plugin_validation import checked_factory
+from mailflow.themes import ColorScheme
 
 SourceFactory = Callable[[MailAccountConfig], MailSource]
 LLMFactory = Callable[[LLMConfig], LLMBackend]
@@ -41,6 +42,7 @@ StorageFactory = Callable[[StorageConfig], StorageBackend]
 BotExporterFactory = BotExporter
 LLMEnhancerFactory = Callable[[ProcessorConfig], LLMEnhancer]
 GatewayProvisionerFactory = Callable[[], GatewayProvisioner]
+ThemeFactory = Callable[[], ColorScheme]
 
 Factory = (
     SourceFactory
@@ -51,6 +53,7 @@ Factory = (
     | BotExporterFactory
     | LLMEnhancerFactory
     | GatewayProvisionerFactory
+    | ThemeFactory
 )
 
 
@@ -134,6 +137,9 @@ class ComponentRegistry:
             self.factory(ComponentKind.GATEWAY_PROVISIONER, component_id),
         )
 
+    def theme_factory(self, component_id: str) -> ThemeFactory:
+        return cast(ThemeFactory, self.factory(ComponentKind.THEME, component_id))
+
     def plugin_for(self, component_id: str, kind: ComponentKind | None = None) -> str | None:
         for snapshot in self._snapshots.values():
             if snapshot.component_id == component_id and (kind is None or snapshot.kind == kind):
@@ -189,6 +195,10 @@ class PluginRegistrar:
 
     def add_source(self, component_id: str, factory: SourceFactory) -> None:
         self._register(ComponentKind.MAIL_SOURCE, component_id, factory)
+
+    def add_theme(self, component_id: str, factory: ThemeFactory) -> None:
+        """Register a data-only color scheme without any runtime resources."""
+        self._register(ComponentKind.THEME, component_id, factory)
 
     def add_llm(self, component_id: str, factory: LLMFactory) -> None:
         self._register(ComponentKind.LLM_BACKEND, component_id, factory)
@@ -260,4 +270,5 @@ __all__ = [
     "ProcessorFactory",
     "SourceFactory",
     "StorageFactory",
+    "ThemeFactory",
 ]

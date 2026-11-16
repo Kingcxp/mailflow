@@ -123,6 +123,7 @@ from mailflow.settings import (
     reset_value,
     update_entry,
 )
+from mailflow.themes import ColorScheme, builtin_themes
 from mailflow.updates import UpdateReport
 
 logger = logging.getLogger("mailflow.service")
@@ -714,6 +715,25 @@ class MailFlowService:
 
     # -- queries -------------------------------------------------------------------
 
+    def color_schemes(self) -> dict[str, ColorScheme]:
+        """Load pure theme data once per registry, honoring plugin enable/disable."""
+        if getattr(self, "_theme_registry", None) is not self.registry:
+            schemes = builtin_themes()
+            for component_id in self.registry.component_ids(ComponentKind.THEME):
+                try:
+                    if component_id in schemes:
+                        raise ValueError("theme IDs must not replace built-in themes")
+                    schemes[component_id] = self.registry.theme_factory(component_id)()
+                except Exception:
+                    logger.exception(
+                        "theme %s from plugin %s failed to load",
+                        component_id,
+                        self.registry.plugin_for(component_id, ComponentKind.THEME),
+                    )
+            self._theme_registry = self.registry
+            self._color_schemes = schemes
+        return dict(self._color_schemes)
+
     def snapshot(self) -> RuntimeSnapshot:
         account_snapshots = [
             AccountSnapshot(
@@ -738,6 +758,8 @@ class MailFlowService:
             version=__version__,
             language=self.i18n.language,
             timezone=self.config.general.timezone,
+            theme=self.config.general.theme,
+            color_schemes=self.color_schemes(),
             started_at=self.runtime.started_at or utcnow(),
             plugins=plugins,
             components=self.registry.snapshots(),
@@ -2866,6 +2888,7 @@ Return every candidate in this batch."""
         return {
             "registry": self.registry,
             "language_choices": tuple(self.i18n.available_codes()),
+            "theme_choices": tuple(self.color_schemes()),
         }
 
     def settings_sections(self) -> list[SettingsSection]:
@@ -2929,7 +2952,7 @@ Return every candidate in this batch."""
                 if (
                     groups <= {"notifiers", "general"}
                     and "notifiers" in groups
-                    and changed_general <= notification_fields
+                    and changed_general <= notification_fields | {"theme"}
                 ):
                     self.runtime.update_config(updated)
                     await self._rebuild_notifiers()
@@ -2939,7 +2962,8 @@ Return every candidate in this batch."""
                     and [a.model_dump(exclude={"state_sync"}) for a in previous.accounts]
                     == [a.model_dump(exclude={"state_sync"}) for a in updated.accounts]
                 ) or (
-                    groups == {"general"} and changed_general <= notification_fields | {"language"}
+                    groups == {"general"}
+                    and changed_general <= notification_fields | {"language", "theme"}
                 ):
                     self.runtime.update_config(updated)
                 else:
@@ -3257,6 +3281,9 @@ Return every candidate in this batch."""
             return self.t("plugin.already_installed", plugin_id=plugin.id), True
         await self.record_plugin_source(plugin.id, source)
         await self.storage.set_preference(f"plugin.package.{plugin.id}", plugin.package)
+        self.plugin_manager.discover(self.config)
+        if self._refresh_theme_registry(self.config):
+            await self.events.emit("plugin.installed", plugin_id=plugin.id)
         return str(output or ""), False
 
     @admin_operation
@@ -3379,6 +3406,16 @@ Return every candidate in this batch."""
         from mailflow.config import write_config
 
         previous = self.config
+        # A palette has no source tasks, network sessions or gateway resources.
+        if self._refresh_theme_registry(updated):
+            try:
+                await asyncio.to_thread(write_config, updated, cast(Path, self.config_path))
+            except Exception:
+                self._refresh_theme_registry(previous)
+                raise
+            self.config = updated
+            self.runtime.update_config(updated)
+            return
         self.config = updated
         try:
             await self.reload_runtime(restart_sources=True)
@@ -3387,6 +3424,17 @@ Return every candidate in this batch."""
             self.config = previous
             await self.reload_runtime(restart_sources=True)
             raise
+
+    def _refresh_theme_registry(self, config: MailFlowConfig) -> bool:
+        registry = self.plugin_manager.build_registry(config)
+        register_builtin_processors(registry)
+        before = [c for c in self.registry.snapshots() if c.kind is not ComponentKind.THEME]
+        after = [c for c in registry.snapshots() if c.kind is not ComponentKind.THEME]
+        if before != after:
+            self.plugin_manager.build_registry(self.config)
+            return False
+        self.registry = registry
+        return True
 
     def _auto_instances_for(
         self, plugin_id: str, config: MailFlowConfig, registry: ComponentRegistry
@@ -3498,6 +3546,7 @@ Return every candidate in this batch."""
         ):
             raise translated_error(ValueError, self.t, "plugin.active_storage", plugin_id=plugin_id)
         owned = self._plugin_components(plugin_id)
+        theme_only = bool(owned) and all(kind is ComponentKind.THEME for kind, _ in owned)
         if self.config_path is None and any(
             (kind, entry.provider) in owned
             for group, kind in self._PLUGIN_CONFIG_KINDS.items()
@@ -3521,7 +3570,11 @@ Return every candidate in this batch."""
             if removed:
                 await self._persist_config(self.config, f"plugin.{plugin_id}")
             self.plugin_manager.unregister(plugin_id)
-            await self.reload_runtime(restart_sources=True)
+            if theme_only:
+                self._refresh_theme_registry(self.config)
+                await self.events.emit("plugin.uninstalled", plugin_id=plugin_id)
+            else:
+                await self.reload_runtime(restart_sources=True)
             return self.t("plugin.not_installed_id", plugin_id=plugin_id)
         try:
             output = await self.market.uninstall(plugin)
@@ -3541,7 +3594,11 @@ Return every candidate in this batch."""
                 len(removed),
                 ", ".join(removed),
             )
-        await self.reload_runtime(restart_sources=True)
+        if theme_only:
+            self._refresh_theme_registry(self.config)
+            await self.events.emit("plugin.uninstalled", plugin_id=plugin_id)
+        else:
+            await self.reload_runtime(restart_sources=True)
         return output
 
     async def _drop_config_entries_for(self, owned: set[tuple[ComponentKind, str]]) -> list[str]:

@@ -27,6 +27,7 @@ from mailflow.contracts import (
     TextNotifier,
 )
 from mailflow.domain import ComponentKind
+from mailflow.themes import ColorScheme
 
 _PROTOCOLS: dict[ComponentKind, type[Any]] = {
     ComponentKind.MAIL_SOURCE: MailSource,
@@ -65,6 +66,11 @@ def _check_method(component: Any, name: str, contract: Callable[..., Any]) -> No
 
 def validate_component(kind: ComponentKind, component: Any) -> None:
     """Check the methods the host actually calls, without running them."""
+    if kind is ComponentKind.THEME:
+        if not isinstance(component, ColorScheme):
+            raise TypeError("theme factory must return ColorScheme")
+        component.palette()
+        return
     if kind is ComponentKind.BOT_EXPORTER:
         if not isinstance(component, BotExportResult):
             raise TypeError("exporter must return BotExportResult")
@@ -100,12 +106,12 @@ def checked_factory(kind: ComponentKind, factory: Any, plugin_id: str, component
         raise TypeError(f"{label}: factory must be callable")
     if inspect.iscoroutinefunction(factory):
         raise TypeError(f"{label}: factory must be synchronous")
-    if kind is ComponentKind.BOT_EXPORTER:
+    if kind in (ComponentKind.BOT_EXPORTER, ComponentKind.THEME):
         try:
-            inspect.signature(factory).bind(None)
+            inspect.signature(factory).bind(*(() if kind is ComponentKind.THEME else (None,)))
         except (TypeError, ValueError) as exc:
             raise TypeError(f"{label}: {exc}") from exc
-    if inspect.isclass(factory) and kind is not ComponentKind.BOT_EXPORTER:
+    if inspect.isclass(factory) and kind not in (ComponentKind.BOT_EXPORTER, ComponentKind.THEME):
         try:
             validate_component(kind, factory)
         except (TypeError, ValueError) as exc:
@@ -145,7 +151,7 @@ def _matches(value: Any, annotation: Any) -> bool:
 
 def validate_result(kind: ComponentKind, method: str, result: Any) -> None:
     """Check a sample's actual return value against the public protocol."""
-    if kind is ComponentKind.BOT_EXPORTER:
+    if kind in (ComponentKind.BOT_EXPORTER, ComponentKind.THEME):
         validate_component(kind, result)
         return
     protocol = _PROTOCOLS[kind]

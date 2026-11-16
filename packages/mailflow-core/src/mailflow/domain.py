@@ -19,6 +19,8 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
+from mailflow.themes import DEFAULT_THEME, ColorScheme
+
 # ---------------------------------------------------------------------------
 # Urgency
 # ---------------------------------------------------------------------------
@@ -675,6 +677,7 @@ class ComponentKind(StrEnum):
     STORAGE = "storage"
     BOT_EXPORTER = "bot_exporter"
     GATEWAY_PROVISIONER = "gateway_provisioner"
+    THEME = "theme"
 
 
 class PluginSnapshot(BaseModel):
@@ -741,6 +744,8 @@ class RuntimeSnapshot(BaseModel):
     version: str = ""
     language: str = "en"
     timezone: str = "UTC"
+    theme: str = DEFAULT_THEME
+    color_schemes: dict[str, ColorScheme] = Field(default_factory=dict)
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     plugins: list[PluginSnapshot] = Field(default_factory=lambda: [])
     components: list[ComponentSnapshot] = Field(default_factory=lambda: [])

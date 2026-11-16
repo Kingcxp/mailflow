@@ -16,6 +16,8 @@ from mailflow.plugin_api import define_plugin
 from mailflow.plugin_validation import validate_result
 from mailflow.plugins import PluginInfo, PluginManager
 from mailflow.registry import ComponentRegistry, PluginRegistrar
+from mailflow.settings import EditorKind, apply_value, find_spec
+from mailflow.themes import DEFAULT_THEME, ColorScheme, builtin_themes
 from mailflow_bundled import create_plugin_manager
 
 
@@ -55,6 +57,34 @@ def install_fake_entry_point(monkeypatch: pytest.MonkeyPatch, plugin: Any) -> No
         group="mailflow.plugins",
     )
     monkeypatch.setattr(metadata, "entry_points", lambda: metadata.EntryPoints([entry]))
+
+
+def test_theme_plugins_discover_select_and_disable(monkeypatch: pytest.MonkeyPatch) -> None:
+    builder = define_plugin("mailflow-theme-local")
+
+    @builder.theme("local-light")
+    def local_theme() -> ColorScheme:
+        return ColorScheme(name="Local light", base="latte", colors={"blue": "#8839ef"})
+
+    install_fake_entry_point(monkeypatch, builder.build())
+    config = MailFlowConfig()
+    assert config.general.theme == DEFAULT_THEME
+    manager = PluginManager(config)
+    manager.discover()
+    registry = manager.build_registry()
+    scheme = registry.theme_factory("local-light")()
+    assert not scheme.is_dark
+    assert scheme.palette()["blue"] == "#8839ef"
+    assert scheme.palette()["base"] == builtin_themes()["catppuccin-latte"].palette()["base"]
+    choices = (*builtin_themes(), *registry.component_ids(ComponentKind.THEME))
+    spec = find_spec(config, "general.theme", theme_choices=choices)
+    assert spec is not None and spec.editor is EditorKind.CHOICE and "local-light" in spec.choices
+    config = apply_value(config, "general.theme", "local-light", theme_choices=choices)
+    assert config.general.theme == "local-light"
+    config.plugins.disabled.append("mailflow-theme-local")
+    assert not manager.build_registry(config).component_ids(ComponentKind.THEME)
+    with pytest.raises(TypeError, match="ColorScheme"):
+        validate_result(ComponentKind.THEME, "palette", {"base": "#000000"})
 
 
 async def test_real_router_passes_all_chat_parameters() -> None:

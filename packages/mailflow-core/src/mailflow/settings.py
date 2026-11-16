@@ -25,6 +25,7 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 
 from mailflow.config import MailFlowConfig, is_secret_key
+from mailflow.themes import builtin_themes
 
 # ---------------------------------------------------------------------------
 # Sections
@@ -177,6 +178,7 @@ def _spec_for_field(
     info: FieldInfo,
     value: Any,
     language_choices: tuple[str, ...] = (),
+    theme_choices: tuple[str, ...] = (),
 ) -> OptionSpec:
     editor, choices, item_model = _editor_for(info.annotation)
     if editor is EditorKind.TEXT and is_secret_key(name):
@@ -184,6 +186,11 @@ def _spec_for_field(
     if key == "general.language" and language_choices:
         editor = EditorKind.CHOICE
         choices = tuple(language_choices)
+    elif key == "general.theme":
+        editor = EditorKind.CHOICE
+        choices = theme_choices or tuple(builtin_themes())
+        if value not in choices:
+            choices += (str(value),)
     elif key in _OPTION_CHOICES:
         editor = EditorKind.CHOICE
         choices = _OPTION_CHOICES[key]
@@ -241,7 +248,11 @@ def entry_field_specs(model: type[BaseModel], *, section: str = "") -> list[Opti
 
 
 def _group_specs(
-    config: MailFlowConfig, group: str, *, language_choices: tuple[str, ...] = ()
+    config: MailFlowConfig,
+    group: str,
+    *,
+    language_choices: tuple[str, ...] = (),
+    theme_choices: tuple[str, ...] = (),
 ) -> list[OptionSpec]:
     model: Any = getattr(config, group)
     if not isinstance(model, BaseModel):
@@ -254,6 +265,7 @@ def _group_specs(
             info=info,
             value=getattr(model, name),
             language_choices=language_choices,
+            theme_choices=theme_choices,
         )
         for name, info in _fields_of(type(model)).items()
         if (group, name) != ("general", "summary_language")
@@ -288,6 +300,7 @@ def build_sections(
     *,
     registry: Any = None,
     language_choices: tuple[str, ...] = (),
+    theme_choices: tuple[str, ...] = (),
 ) -> list[SettingsSection]:
     """Sidebar model: MailFlow's own sections first, then one per plugin.
 
@@ -305,7 +318,9 @@ def build_sections(
         SettingsSection(
             section_id=group,
             title=group,
-            options=_group_specs(config, group, language_choices=language_choices),
+            options=_group_specs(
+                config, group, language_choices=language_choices, theme_choices=theme_choices
+            ),
         )
         for group in _CORE_GROUPS
     ]

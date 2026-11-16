@@ -36,6 +36,7 @@ CATEGORIES = (
     "bot_exporter",
     "llm_enhancer",
     "gateway",
+    "theme",
 )
 
 _CATEGORY_LABEL = {
@@ -47,6 +48,7 @@ _CATEGORY_LABEL = {
     "bot_exporter": "Bot exporter",
     "llm_enhancer": "LLM enhancer",
     "gateway": "Gateway provisioner",
+    "theme": "Color scheme",
 }
 
 _DESCRIPTION = {
@@ -58,6 +60,7 @@ _DESCRIPTION = {
     "bot_exporter": "MailFlow bot exporter: turns a configured instance into a chatbot-framework plugin",
     "llm_enhancer": "MailFlow LLM enhancer: bounded customization of the built-in LLM analysis",
     "gateway": "MailFlow gateway provisioner: installs/start/supervises a chat-platform bot runtime",
+    "theme": "MailFlow color scheme: a shared palette for every terminal page",
 }
 
 # Usage guidance for a newly generated development scaffold.
@@ -204,6 +207,7 @@ PLUGIN = define_plugin(
         "bot_exporter": _BOT_EXPORTER_BODY,
         "llm_enhancer": _LLM_ENHANCER_BODY,
         "gateway": _GATEWAY_PROVISIONER_BODY,
+        "theme": _THEME_BODY,
     }
     body = (
         module_by_category[category]
@@ -426,6 +430,18 @@ class {Category}Enhancer:
 
 
 '''.replace("{Category}", "LLM")
+
+_THEME_BODY = '''from mailflow.themes import ColorScheme
+
+
+@PLUGIN.theme("{component_id}")
+def color_scheme():
+    return ColorScheme(
+        name="{component_id}",
+        base="macchiato",
+        colors={"blue": "#b7bdf8"},
+    )
+'''
 
 _GATEWAY_PROVISIONER_BODY = '''@PLUGIN.gateway_provisioner("{component_id}")
 class {Category}Provisioner:

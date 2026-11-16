@@ -98,6 +98,9 @@ class PluginBuilder:
     def storage(self, component_id: str | None = None) -> Callable[[Factory], Factory]:
         return self._register(ComponentKind.STORAGE, component_id)
 
+    def theme(self, component_id: str | None = None) -> Callable[[Factory], Factory]:
+        return self._register(ComponentKind.THEME, component_id)
+
     def bot_exporter(self, component_id: str | None = None) -> Callable[[Factory], Factory]:
         return self._register(ComponentKind.BOT_EXPORTER, component_id)
 
@@ -134,6 +137,7 @@ class PluginBuilder:
                         ComponentKind.LLM_BACKEND: registrar.add_llm,
                         ComponentKind.NOTIFIER: registrar.add_notifier,
                         ComponentKind.STORAGE: registrar.add_storage,
+                        ComponentKind.THEME: registrar.add_theme,
                         ComponentKind.BOT_EXPORTER: registrar.add_bot_exporter,
                         ComponentKind.LLM_ENHANCER: registrar.add_llm_enhancer,
                         ComponentKind.GATEWAY_PROVISIONER: registrar.add_gateway_provisioner,

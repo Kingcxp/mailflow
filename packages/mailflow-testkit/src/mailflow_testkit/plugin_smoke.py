@@ -518,13 +518,17 @@ async def validate(
             )
         else:
             config = None
-        args: tuple[Any, ...] = () if kind is ComponentKind.GATEWAY_PROVISIONER else (config,)
+        args: tuple[Any, ...] = (
+            () if kind in (ComponentKind.GATEWAY_PROVISIONER, ComponentKind.THEME) else (config,)
+        )
         if kind is ComponentKind.MAIL_PROCESSOR:
             args = (config, NullRouter())
         try:
             factory: Any = registry.factory(kind, component_id)
             instance: Any = factory(*args)
-            if kind is ComponentKind.BOT_EXPORTER:
+            if kind is ComponentKind.THEME:
+                validate_result(kind, "palette", instance)
+            elif kind is ComponentKind.BOT_EXPORTER:
                 validate_result(kind, "export", instance)
                 if not instance.created or not all(
                     (cast(BotExportContext, config).output_dir / f).is_file()
