@@ -42,6 +42,19 @@ def model_provider_label(service: Any, provider: str) -> str:
     return provider if label == key else label
 
 
+def plugin_text(service: Any, plugin: Any, field: str, *, language: str | None = None) -> str:
+    """Prefer publisher translations, with bundled text available offline."""
+    language = language or service.i18n.language
+    default = str(getattr(plugin, field, "") or "")
+    translations = getattr(
+        plugin, {"name": "names", "description": "descriptions", "readme": "readmes"}[field], {}
+    )
+    translated = translations.get(language, "")
+    if translated and (translated != default or language.startswith("en")):
+        return str(translated)
+    return str(service.i18n.plugin_text(plugin.id, field, translated or default, language=language))
+
+
 def form_choice_label(service: Any, field: str, value: str) -> str:
     """Translate menu choices while preserving their stored plugin values."""
     if field == "initial_sync":

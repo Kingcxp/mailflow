@@ -354,7 +354,168 @@
       "active_storage": "插件 {plugin_id} 正在提供当前存储，请先切换存储配置并重启。",
       "not_installed_id": "{plugin_id} 未安装，已清理残留配置。",
       "config_required": "未加载配置文件，请使用 --config 启动以保存插件设置。",
-      "load_failed": "插件 {plugin_id} 加载失败：{reason}"
+      "load_failed": "插件 {plugin_id} 加载失败：{reason}",
+      "catalog": {
+        "mailflow-export-astrbot": {
+          "name": "AstrBot 导出",
+          "description": "将配置好的 MailFlow 实例导出为 AstrBot 插件",
+          "readme": "# AstrBot 导出器\n\n导出器标识为 `astrbot`，按当前配置生成框架宿主；导出过程不启动邮件运行时。\n\n```bash\nuv run mailflow export --framework astrbot --output dist/astrbot_plugin_mailflow -c configs/local.toml\n```\n\n按 AstrBot 插件流程安装并启用生成目录，按生成说明配置匹配通知器的管理员，框架管理员不会自动导入。\n生成的 README 说明目录和命令前缀。宿主随框架启动／停止核心服务，\n将发起人和会话传给共享层；管理员由唯一匹配平台、实例的启用通知器中 options.admins 决定，未匹配平台保留普通权限。\n\n支持的框架文件事件可上传受管文件，适配器支持时可发送选中文件；具体能力取决于实际平台。\n不能因为导出成功或代码能导入就声称真实文件收发已验证，修改和发信仍受权限与确认限制。\n\n导出配置是快照，环境变量引用会保留，直接填写的凭据可能仍在文件中。\n检查输出、在机器人宿主提供所需环境变量，配置变化后重新导出。\n通知仍由已配置通知器投递，导出适配器不代表自动向所有框架会话额外广播。\n"
+        },
+        "mailflow-export-nonebot": {
+          "name": "NoneBot 导出",
+          "description": "将配置好的 MailFlow 实例导出为 NoneBot2 插件",
+          "readme": "# NoneBot 导出器\n\n导出器标识为 `nonebot`，按当前配置生成框架宿主；导出过程不启动邮件运行时。\n\n```bash\nuv run mailflow export --framework nonebot --output dist/nonebot_plugin_mailflow -c configs/local.toml\n```\n\n将生成目录安装到 NoneBot 使用的环境，再通过框架加载 `nonebot_plugin_mailflow`，按生成说明配置匹配通知器的管理员，框架管理员不会自动导入。\n生成的 README 说明目录和命令前缀。宿主随框架启动／停止核心服务，\n将发起人和会话传给共享层；管理员由唯一匹配平台、实例的启用通知器中 options.admins 决定，未匹配平台保留普通权限。\n\n支持的框架文件事件可上传受管文件，适配器支持时可发送选中文件；具体能力取决于实际平台。\n不能因为导出成功或代码能导入就声称真实文件收发已验证，修改和发信仍受权限与确认限制。\n\n导出配置是快照，环境变量引用会保留，直接填写的凭据可能仍在文件中。\n检查输出、在机器人宿主提供所需环境变量，配置变化后重新导出。\n通知仍由已配置通知器投递，导出适配器不代表自动向所有框架会话额外广播。\n"
+        },
+        "mailflow-llm-anthropic": {
+          "name": "Anthropic 模型",
+          "description": "内置 Anthropic Messages API 后端（Claude）",
+          "readme": "# Anthropic Messages 后端\n\n组件标识为 `anthropic-messages`，兼容旧标识 `anthropic`。\n将共享对话和工具格式转换为 Messages 请求，并返回结构化工具调用。\n\n```toml\n[[llms]]\nllm_id = \"primary\"\nprovider = \"anthropic\"\nmodel = \"your-model-id\"\napi_key_env = \"ANTHROPIC_API_KEY\"\n\n[llms.options]\nmax_tokens = 2048\n```\n\n默认端点为 `https://api.anthropic.com/v1/messages`。\n顶层 `base_url` 可填写代理根地址、`/v1` 前缀或完整端点；兼容的 `options.base_url`\n按完整端点覆盖。`max_tokens` 默认 1024，按需设置模型支持的 `thinking_budget`。\n\n支持共享超时、重试、请求头、查询和额外请求体配置，传递温度、单次选项和工具。\n模型本身也需支持所用能力，请填写实际可用模型名，失败时检查凭据与端点。\n主模型和后备使用 MailFlow 的统一设置，不在示例或日志中填写真实密钥。\n"
+        },
+        "mailflow-llm-deepseek": {
+          "name": "DeepSeek 模型",
+          "description": "面向 DeepSeek 的 OpenAI 兼容 Chat Completions 传输层（组件 id: deepseek）"
+        },
+        "mailflow-llm-google-generative-ai": {
+          "name": "Google Gemini 模型",
+          "description": "Google Gemini API 传输层(组件 id:google-generative-ai)",
+          "readme": "# Google Generative AI 后端\n\n组件标识为 `google-generative-ai`，使用 Gemini 的 `generateContent`，\n转换共享系统消息和结构化工具调用。\n\n```toml\n[[llms]]\nllm_id = \"primary\"\nprovider = \"google-generative-ai\"\nmodel = \"your-model-id\"\napi_key_env = \"GEMINI_API_KEY\"\n```\n\n默认根地址为 `https://generativelanguage.googleapis.com`，可用 `base_url` 覆盖代理地址。\n请求路径为 `/v1beta/models/{model}:generateContent`，密钥通过 `x-goog-api-key` 发送。\n`options.max_tokens`、`temperature`、`thinking_budget` 可设置生成默认值，\n也支持共享请求头、查询、额外请求体、超时和重试。\n\n选择账户实际可用且支持所需工具能力的模型。连接或参数失败会明确报告，并按配置回退。\n本插件是 API 传输，不提供浏览器账号登录。\n"
+        },
+        "mailflow-llm-google-vertex": {
+          "name": "Google Vertex AI 模型",
+          "description": "Vertex AI 上的 Gemini 传输层(组件 id:google-vertex)",
+          "readme": "# Google Vertex AI 后端\n\n组件标识为 `google-vertex`，通过 Vertex `generateContent` 处理共享对话和工具请求。\n需要项目和有效访问凭据。\n\n```toml\n[[llms]]\nllm_id = \"primary\"\nprovider = \"google-vertex\"\nmodel = \"your-model-id\"\napi_key_env = \"VERTEX_ACCESS_TOKEN\"\n\n[llms.options]\nproject = \"your-project-id\"\nlocation = \"us-central1\"\n```\n\n`options.project` 必填，地区默认 `us-central1`，默认根地址为\n`https://aiplatform.googleapis.com`。`api_key`／`api_key_env` 填短期 OAuth 访问令牌，\n或配置 `options.service_account_file` 并在宿主安装 `google-auth`。\n普通 API 密钥不等同于访问令牌，服务账号文件需要保密。\n\n可设置生成长度、温度、思考预算，以及共享请求头、查询、额外请求体、超时和重试。\n模型和地区必须在项目中可用，插件不提供额外访问权限；凭据或能力错误会明确报告。\n"
+        },
+        "mailflow-llm-moonshot": {
+          "name": "Kimi 模型",
+          "description": "面向月之暗面 Kimi（Moonshot AI）的 OpenAI 兼容 Chat Completions 传输层（组件 id: moonshot）"
+        },
+        "mailflow-llm-openai-compatible": {
+          "name": "OpenAI 兼容模型",
+          "description": "Chat Completions 与 Responses 传输层:openai-completions、openai-responses、openai-codex-responses、azure-openai-responses(历史别名:openai-compatible)",
+          "readme": "# OpenAI 兼容模型后端\n\n提供 Chat Completions 和 Responses 传输，支持配置的代理与 Azure 地址。\n组件标识包括 `openai-completions`、`openai-responses`、`openai-codex-responses`、\n`azure-openai-responses`；旧标识 `openai-compatible` 对应 Chat Completions。\n\n```toml\n[[llms]]\nllm_id = \"primary\"\nprovider = \"openai-compatible\"\nbase_url = \"https://your-provider.example/v1\"\nmodel = \"your-model-id\"\napi_key_env = \"MAILFLOW_MODEL_KEY\"\ntimeout_seconds = 60\nmax_retries = 2\n```\n\n按实际端点选择协议。`openai-codex-responses` 选择请求格式，不提供账号登录或订阅凭据流程。\nAzure 的 `model` 填部署名，`base_url` 填资源地址，`options.api_version` 需为服务接受的版本。\n\n额外请求头、查询参数和请求体分别使用 `headers`、`query`、`extra_body`；\n`options.path` 覆盖请求路径，`max_tokens`、`temperature`、`stream` 提供受支持的请求默认值。\n超时和重试由 `timeout_seconds`、`max_retries` 控制，密钥优先用环境变量。\n\n后端传递工具、温度和单次调用选项，并返回结构化工具调用；真实模型也必须支持相应能力。\n模型名填写账户实际可用值。处理器有效的 llm/fallback_llms 绑定优先；未指定时取默认模型或首项，后备由剩余列表补齐。先测试连接，认证和参数错误不会当成成功。\n"
+        },
+        "mailflow-llm-qwen": {
+          "name": "通义千问模型",
+          "description": "面向阿里云通义千问（DashScope）的 OpenAI 兼容 Chat Completions 传输层（组件 id: qwen）"
+        },
+        "mailflow-llm-zhipu": {
+          "name": "智谱模型",
+          "description": "面向智谱 GLM（BigModel）的 OpenAI 兼容 Chat Completions 传输层（组件 id: zhipu）"
+        },
+        "mailflow-mail-fake": {
+          "name": "本地演示邮箱",
+          "description": "面向开发与演示的确定性本地邮件源",
+          "readme": "# 假邮件源\n\n用于本地开发和演示，不连接真实邮箱。组件标识为 `fake`。\n\n```toml\n[[accounts]]\naccount_id = \"demo\"\nprovider = \"fake\"\nemail = \"demo@local.test\"\n\n[accounts.options]\nbase_time = \"2026-01-01T08:00:00+00:00\"\nmails = [{ message_id = \"welcome\", subject = \"欢迎使用\", sender = \"team@example.com\", body = \"工作区已就绪。\" }]\n```\n\n邮件支持标识、主题、发件人、显示名、纯文本、HTML 和可选重要程度提示。\n同一邮件保持相同标识以验证重试去重；时间按基础时间和序号分钟数生成。\n`fail = true` 模拟读取失败，`delay` 设置延迟秒数。本插件不发送真实邮件。\n"
+        },
+        "mailflow-mail-gmail": {
+          "name": "Gmail 邮箱",
+          "description": "通过应用专用密码接入 Gmail，使用 IMAP 收信、SMTP 发信。"
+        },
+        "mailflow-mail-imap": {
+          "name": "IMAP 邮箱",
+          "description": "内置 IMAP/SMTP 邮件源，预设 QQ、163、Outlook、Gmail 与通用服务器",
+          "readme": "# IMAP 邮件源\n\n通过 IMAP 收信、SMTP 发信，组件标识为 `imap`。支持 QQ、163、Gmail、Outlook\n预设，也可填写实际服务器地址；显式主机设置优先于预设。\n\n```toml\n[[accounts]]\naccount_id = \"personal\"\nprovider = \"imap\"\nemail = \"you@example.com\"\nstate_sync = false\n\n[accounts.options]\nimap_host = \"imap.example.com\"\nsmtp_host = \"smtp.example.com\"\npassword = \"${MAIL_PASSWORD}\"\ninitial_sync = \"new\"\ncatch_up_missed = false\n```\n\n| 选项 | 默认值或用途 |\n| --- | --- |\n| `preset` | 可选预设；不用预设时填写收件及所需发件主机 |\n| `username` / `password` | 默认账户邮箱／邮箱服务接受的凭据 |\n| `imap_port`、`imap_ssl`、`imap_folder` | `993`、`true`、`INBOX` |\n| `smtp_port`、`smtp_ssl` | 默认 `465`；465 默认隐式 TLS，其他端口默认 STARTTLS，可覆盖 |\n| `initial_sync`、`initial_days` | 默认 `new`；`recent` 默认导入 30 天，`all` 明确导入历史 |\n| `catch_up_missed`、`catch_up_summary` | 默认关闭补收、开启补收汇总，补收依赖有效游标 |\n| `include_past_actions` | 默认不提取导入邮件的过期待办 |\n| `interval_seconds`、`limit` | 默认 `300` 秒／每批 `20` 封，不表示启动自动导入最近邮件 |\n| `archive_folder`、`trash_folder`、`sent_folder` | 可覆盖自动识别的归档、回收站和已发送目录 |\n\n首次默认只接收新邮件，历史浏览单独进行；重启不恢复已取消的分析。\n补收需要账户、文件夹及 UIDVALIDITY 匹配的游标，失效时要求主动选择重新同步范围。\n成功交给运行时后才推进进度，账户标识参与去重，请保持稳定。\n\n附件字节保留到识别完成，可按需获取附件，下载与 OCR 独立。\n收件与发件分别检查；预设不提供原生 OAuth，也不绕过邮箱访问限制。\n账户 `state_sync` 可开启受支持的已读、收藏、归档联动；原邮箱删除与恢复需确认，\n未知结果先核对。永久清除仅作用于本地，不清空原邮箱其他邮件。\n"
+        },
+        "mailflow-mail-outlook": {
+          "name": "Outlook 邮箱",
+          "description": "通过应用专用密码接入 Outlook 或 Office 365 邮箱。"
+        },
+        "mailflow-mail-rss": {
+          "name": "RSS 订阅",
+          "description": "把 RSS/Atom 订阅源转成邮件进入收件箱（新闻通讯、博客等）"
+        },
+        "mailflow-notify-console": {
+          "name": "日志通知",
+          "description": "把已计算的邮件提醒输出到 MailFlow 日志",
+          "readme": "# 控制台通知器\n\n组件标识为 `console`，将邮件通知写入 MailFlow 日志，适合本地开发，无需外部服务。\n\n```toml\n[[notifiers]]\nnotifier_id = \"console\"\nprovider = \"console\"\nminimum_urgency = \"important\"\n```\n\n没有额外配置项，请按需开启控制台或文件日志查看输出，重要程度阈值仍然生效。\n本插件不是聊天平台，不提供订阅、接收命令或图片文件传输。\n"
+        },
+        "mailflow-notify-dingtalk": {
+          "name": "钉钉通知",
+          "description": "通过 钉钉 发送邮件摘要"
+        },
+        "mailflow-notify-discord": {
+          "name": "Discord 通知",
+          "description": "通过 Discord 发送邮件摘要"
+        },
+        "mailflow-notify-feishu": {
+          "name": "飞书通知",
+          "description": "通过 飞书 发送邮件摘要"
+        },
+        "mailflow-notify-ntfy": {
+          "name": "ntfy 通知",
+          "description": "通过 ntfy 发送邮件摘要"
+        },
+        "mailflow-notify-onebot": {
+          "name": "QQ 通知（OneBot）",
+          "description": "通过 OneBot v11 HTTP 服务器（NapCat、go-cqhttp）向 QQ 用户/群聊推送邮件提醒",
+          "readme": "# OneBot／QQ 通知与聊天连接\n\n组件标识为 `onebot`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n```toml\n[[notifiers]]\nnotifier_id = \"onebot-main\"\nprovider = \"onebot\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\nhttp_url = \"http://127.0.0.1:3000\"\naccess_token = \"${ONEBOT_ACCESS_TOKEN}\"\ntargets = [\"user:123456\"]\nadmins = [\"123456\"]\n```\n\n可连接已有 OneBot v11 HTTP 服务，或使用对应受管网关。安装、启动、QQ 登录和投递就绪是不同步骤，按检测出的前置条件安装并完成登录。\n\n`http_url` 必填，令牌需与网关一致。目标使用 `user:<ID>`／`group:<ID>`，管理员填写稳定平台用户标识；HTTP 200 但 retcode 失败仍算失败。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
+        },
+        "mailflow-notify-serverchan": {
+          "name": "Server酱通知",
+          "description": "通过 Server酱 发送邮件摘要"
+        },
+        "mailflow-notify-slack": {
+          "name": "Slack 通知",
+          "description": "通过 Slack 发送邮件摘要"
+        },
+        "mailflow-notify-smtp": {
+          "name": "邮件通知（SMTP）",
+          "description": "通过任意 SMTP 服务器把重要邮件提醒转发为邮件"
+        },
+        "mailflow-notify-telegram": {
+          "name": "Telegram 通知",
+          "description": "通过 Bot API 把邮件提醒推送到 Telegram 会话，并可在会话内运行 MailFlow 命令",
+          "readme": "# Telegram 通知与聊天连接\n\n组件标识为 `telegram`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n```toml\n[[notifiers]]\nnotifier_id = \"telegram-main\"\nprovider = \"telegram\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\nbot_token = \"${TELEGRAM_BOT_TOKEN}\"\nchat_id = \"123456789\"\nadmins = [\"123456789\"]\n```\n\n提供机器人令牌，通过进程内 Telegram 桥接收命令，无需额外网关进程。用户先与机器人私聊，或将其加入目标群并授予必要权限；长轮询需要能够访问配置的 API。\n\n令牌必填，`chat_id` 是可选固定目标，也可使用订阅或 `targets`。群聊使用稳定聊天标识，`api_base` 默认 `https://api.telegram.org`，管理员填写数字用户标识，不填显示名。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
+        },
+        "mailflow-notify-webhook": {
+          "name": "Webhook 通知",
+          "description": "通过 Webhook 发送邮件摘要"
+        },
+        "mailflow-notify-wecom": {
+          "name": "企业微信通知",
+          "description": "通过 企业微信 发送邮件摘要"
+        },
+        "mailflow-notify-whatsapp": {
+          "name": "WhatsApp 通知",
+          "description": "通过本地 Baileys 桥（扫码配对）把邮件提醒推送到 WhatsApp 会话",
+          "readme": "# WhatsApp 通知与聊天连接\n\n组件标识为 `whatsapp`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n```toml\n[[notifiers]]\nnotifier_id = \"whatsapp-main\"\nprovider = \"whatsapp\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\ngateway_url = \"http://127.0.0.1:3000\"\ntargets = [\"user:15550001111\"]\nadmins = [\"15550001111\"]\n```\n\n使用受管 Baileys 桥或兼容的现有桥。受管安装需要检测到的 Node/npm 环境并下载依赖；按提示在 WhatsApp 已关联设备中配对。保存的会话可重连，登录失效时仍需重新配对。\n\n桥地址必填，目标使用 `user:<号码或JID>`／`group:<群ID或JID>`，不依赖联系人显示名。管理员号码需与桥回调身份对应。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
+        },
+        "mailflow-processor-archive": {
+          "name": "自动归档",
+          "description": "按发件人或域名归档 MailFlow 邮件，保留原邮件、重要程度和分析结果"
+        },
+        "mailflow-processor-blocklist": {
+          "name": "发件人黑名单",
+          "description": "把来自黑名单发件人或域名的邮件标记为垃圾（灰色）"
+        },
+        "mailflow-processor-filter": {
+          "name": "内容过滤",
+          "description": "按发件人、主题和正文关键词匹配，将命中的邮件标为广告。"
+        },
+        "mailflow-processor-rules": {
+          "name": "邮件处理规则",
+          "description": "按顺序匹配规则，用首条匹配规则设置邮件分析结果。"
+        },
+        "mailflow-storage-sqlite": {
+          "name": "本地存储（SQLite）",
+          "description": "使用 SQLite 保存本地数据，支持回收站与兼容备份",
+          "readme": "# SQLite 存储\n\n组件标识为 `sqlite`，保存邮件、分析、待办、草稿、偏好和可恢复回收站，兼容增量迁移。\n\n```toml\n[storage]\nprovider = \"sqlite\"\npath = \"data/mailflow.db\"\n```\n\n父目录按需创建，`:memory:` 关闭即丢失。保留策略由 `[general]` 控制，\n不是插件内固定天数；默认长期保留邮件、回收站七天。恢复保留邮件状态和导入来源，\n日期筛选使用真实收件时间，重析保留人工优先级及本地状态。\n\n邮件记录保存正文、HTML、附件信息和识别文字；受管上传与下载缓存另行保存，\n服务备份会纳入已有文件。未缓存附件仍需访问原邮箱。\n\n建议通过 MailFlow 创建一致备份并预览恢复。手工复制数据库前先停止写入，\n运行中只复制主文件而忽略活动 WAL 不能保证备份一致。\n"
+        },
+        "mailflow-notify-openwechat": {
+          "name": "微信通知（OpenWechat）",
+          "description": "连接微信扫码登录网关，接收邮件通知并使用聊天命令。",
+          "readme": "# 微信通知（OpenWechat）\n\n在通知页添加 OpenWechat 渠道，通过连接向导安装网关并扫码登录。普通通知设置的修改不需要重新扫码。\n\n手动连接已有网关时，填写 `gateway_url`。联系人使用 `contact:<稳定标识>`，群聊使用 `room:<稳定标识>`；管理员填写平台账号标识，避免使用可能重复的显示名称。\n\n通知、图片和聊天操作取决于网关实际能力。发送失败会记录为失败，可在投递记录中重试；管理邮件、待办和配置仍遵守共享权限与确认规则。\n"
+        },
+        "mailflow-notify-wechatpadpro": {
+          "name": "微信通知（WeChatPadPro）",
+          "description": "通过 WeChatPadPro 网关发送微信通知并接收聊天命令。",
+          "readme": "# 微信通知（WeChatPadPro）\n\n在通知页添加此渠道，通过连接向导安装、启动并扫码登录，也可以连接已有网关。\n\n`base_url` 是网关地址；外部网关可提供 `auth_key`，或通过 `admin_key` 获取设备授权。由 MailFlow 管理的实例将授权保存在实例目录中，不会写回可编辑的通知配置。\n\n`targets` 使用 `user:<wxid>` 或 `group:<chatroom_id>`，管理员填写平台账号标识。连接地址能响应不代表已经登录或可以投递。缺少凭据、网络失败或平台拒绝会保留失败记录，修正配置后可重试。\n"
+        },
+        "mailflow-core": {
+          "name": "邮件分析与规则",
+          "description": "内置的规则处理和智能分析设置。"
+        }
+      }
     },
     "reply": {
       "cancelled": "草稿 {draft_id} 已取消",

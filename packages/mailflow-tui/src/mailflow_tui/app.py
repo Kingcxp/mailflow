@@ -64,6 +64,7 @@ from mailflow_tui.labels import (
     error_detail,
     error_message,
     mail_status,
+    plugin_text,
     remote_connection_status,
     urgency_label,
 )
@@ -3578,8 +3579,9 @@ class RuntimePane(Vertical):
                     plugin.plugin_id,
                     (
                         escape(plugin.plugin_id),
-                        escape(plugin.name),
-                        ",".join(k.value for k in plugin.kinds) or "-",
+                        escape(service.i18n.plugin_text(plugin.plugin_id, "name", plugin.name)),
+                        ", ".join(service.i18n.component_label(k.value) for k in plugin.kinds)
+                        or "-",
                         status_text,
                     ),
                 )
@@ -4336,6 +4338,24 @@ class MarketDetailScreen(ModalScreen[Any]):
             self._load_content(), exclusive=True, group="detail-load", exit_on_error=False
         )
 
+    async def relabel(self) -> None:
+        title = self.query_one_optional("#market-detail-title", Static)
+        if title is not None:
+            title.update(self._t("tui.market_detail"))
+        _relabel_buttons(
+            self,
+            {
+                "detail-install": "tui.btn_install",
+                "detail-uninstall": "tui.btn_uninstall",
+                "detail-enable": "tui.btn_enable",
+                "detail-disable": "tui.btn_disable",
+                "detail-close": "tui.btn_close",
+            },
+        )
+        self.run_worker(
+            self._load_content(), exclusive=True, group="detail-load", exit_on_error=False
+        )
+
     async def _load_content(self) -> None:
         plugin = self._plugin
         language = self._service.i18n.language
@@ -4346,22 +4366,16 @@ class MarketDetailScreen(ModalScreen[Any]):
         app = cast(MailFlowApp, self.app)  # pyright: ignore[reportUnknownMemberType]
         with contextlib.suppress(Exception):
             cached = app.plugin_entry(plugin.id)  # pyright: ignore[reportUnknownMemberType]
-            if cached is not None and cached.readme_for(language):
-                readme = await asyncio.to_thread(self._readme_for, cached, language)
-                meta = (
-                    f"**{cached.name or cached.id}** v{cached.version} — `{cached.id}`\n\n"
-                    f"{self._service.t('plugin.field_author')}: {cached.author or '-'} · "
-                    f"{self._service.t('plugin.field_updated')}: {cached.updated or '-'}\n"
-                    f"{self._service.t('plugin.field_homepage')}: {cached.homepage or '-'}\n"
-                )
-                node = self.query_one_optional("#market-detail-readme", Markdown)
-                if node is not None:
-                    node.update(meta + "\n---\n\n" + readme)
-                self._content_loaded = True
-                return
+            if cached is not None and plugin_text(
+                self._service, cached, "readme", language=language
+            ):
+                plugin = cached
         readme = await asyncio.to_thread(self._readme_for, plugin, language)
+        if language != self._service.i18n.language:
+            return
+        name = plugin_text(self._service, plugin, "name", language=language) or plugin.id
         meta = (
-            f"**{plugin.name or plugin.id}** v{plugin.version} — `{plugin.id}`\n\n"
+            f"**{name}** v{plugin.version} — `{plugin.id}`\n\n"
             f"{self._service.t('plugin.field_author')}: {plugin.author or '-'} · "
             f"{self._service.t('plugin.field_updated')}: {plugin.updated or '-'}\n"
             f"{self._service.t('plugin.field_homepage')}: {plugin.homepage or '-'}\n"
@@ -4371,17 +4385,17 @@ class MarketDetailScreen(ModalScreen[Any]):
             node.update(meta + "\n---\n\n" + readme)
         self._content_loaded = True
 
-    @staticmethod
-    def _readme_for(plugin: MarketPlugin, language: str) -> str:
+    def _readme_for(self, plugin: MarketPlugin, language: str) -> str:
         """Localized readme for the detail dialog.
 
-        Priority: market readme (may carry translations) > the plugin
+        Priority: translated market or bundled readme > the plugin
         module's docstring (full local documentation) > the one-line
         description. The docstring import runs here, in the worker, never
         on the click path."""
-        readme = plugin.readme_for(language)
+        readme = plugin_text(self._service, plugin, "readme", language=language)
         if readme:
             return readme
+        name = plugin_text(self._service, plugin, "name", language=language) or plugin.id
         if plugin.source == "local":
             from mailflow.plugins import PluginInfo
 
@@ -4393,10 +4407,10 @@ class MarketDetailScreen(ModalScreen[Any]):
             )
             doc = plugin_doc_readme(info)
             if doc:
-                return f"# {plugin.name or plugin.id}\n\n{doc}"
-        description = plugin.description_for(language)
+                return f"# {name}\n\n{doc}"
+        description = plugin_text(self._service, plugin, "description", language=language)
         if description:
-            return f"# {plugin.name or plugin.id}\n\n{description}"
+            return f"# {name}\n\n{description}"
         return ""
 
     def _set_status(self, text: str) -> None:
@@ -4579,12 +4593,7 @@ class MarketPane(Vertical):
         await self._render_entries()
 
     def _category_label(self, category: str) -> str:
-        """Localized label for a known plugin category id; unknown ids stay
-        as-is rather than guessing."""
-        translated = self._service.t(f"tui.market_category_{category}")
-        if translated != f"tui.market_category_{category}":
-            return translated
-        return category
+        return self._service.i18n.component_label(category)
 
     def _market_status_of(self, plugin: MarketPlugin) -> str:
         installed = self._installed.get(plugin.id)
@@ -4685,11 +4694,10 @@ class MarketPane(Vertical):
             return
         table.clear()
         self._market_matcher = matcher
-        language = self._service.i18n.language
         sort_mode = self._select_value("#market-sort")
         ordered = list(self._entries)
         if sort_mode == "name":
-            ordered.sort(key=lambda item: (item[1].name or item[1].id).lower())
+            ordered.sort(key=lambda item: plugin_text(self._service, item[1], "name").lower())
         elif sort_mode == "category":
             ordered.sort(key=lambda item: sorted(item[1].categories)[:1])
         elif sort_mode == "installed":
@@ -4698,33 +4706,35 @@ class MarketPane(Vertical):
                     not self._market_status_of(item[1]).startswith(
                         self._service.t("plugin.installed")
                     ),
-                    (item[1].name or item[1].id).lower(),
+                    plugin_text(self._service, item[1], "name").lower(),
                 )
             )
         elif sort_mode == "enabled":
             ordered.sort(
                 key=lambda item: (
                     self._market_status_of(item[1]) != self._service.t("tui.plugin_status_enabled"),
-                    (item[1].name or item[1].id).lower(),
+                    plugin_text(self._service, item[1], "name").lower(),
                 )
             )
         elif sort_mode == "not-installed":
             ordered.sort(
                 key=lambda item: (
                     self._market_status_of(item[1]).startswith(self._service.t("plugin.installed")),
-                    (item[1].name or item[1].id).lower(),
+                    plugin_text(self._service, item[1], "name").lower(),
                 )
             )
         for position, (_repo, plugin) in enumerate(ordered, start=1):
             if filter_value and filter_value != "all" and filter_value not in plugin.categories:
                 continue
+            name = plugin_text(self._service, plugin, "name") or plugin.id
+            description = plugin_text(self._service, plugin, "description")
             if matcher.query:
-                blob = f"{plugin.id} {plugin.name} {plugin.description} {plugin.description_for(language)}"
+                blob = f"{plugin.id} {plugin.name} {name} {plugin.description} {description}"
                 if not matcher.matches(blob):
                     continue
             table.add_row(
-                escape(plugin.name or plugin.id),
-                escape(plugin.description_for(language)[:44]),
+                escape(name),
+                escape(description[:44]),
                 escape(plugin.version),
                 self._market_status_of(plugin),
                 key=plugin.id,
@@ -4755,12 +4765,12 @@ class MarketPane(Vertical):
 
     def _show_detail(self, plugin: MarketPlugin) -> None:
         self._selected = plugin
-        language = self._service.i18n.language
-        readme = plugin.readme_for(language) or (
-            f"# {plugin.name or plugin.id}\n\n{plugin.description_for(language)}"
+        name = plugin_text(self._service, plugin, "name") or plugin.id
+        readme = plugin_text(self._service, plugin, "readme") or (
+            f"# {name}\n\n{plugin_text(self._service, plugin, 'description')}"
         )
         meta = (
-            f"**{plugin.name or plugin.id}** v{plugin.version}\n\n"
+            f"**{name}** v{plugin.version}\n\n"
             f"{self._service.t('plugin.field_author')}: {plugin.author or '-'} · "
             f"{self._service.t('plugin.field_updated')}: {plugin.updated or '-'}\n"
             f"{self._service.t('plugin.field_homepage')}: {plugin.homepage or '-'}\n\n---\n\n"
@@ -5239,7 +5249,7 @@ class MailFlowApp(App[None]):
         for pane in self.query(LogsPane):
             pane.relabel()
         for screen in self.screen_stack:
-            if isinstance(screen, MailHistoryScreen):
+            if isinstance(screen, (MailHistoryScreen, MarketDetailScreen)):
                 await screen.relabel()
         for table in self.query(SelectionTable):
             table.relabel()

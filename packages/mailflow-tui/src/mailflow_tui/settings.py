@@ -574,7 +574,11 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 return translated
         key = f"tui.bots_provider_{value}"
         translated = self._service.t(key)
-        return translated if translated != key else value
+        if translated != key:
+            return translated
+        kind = _GROUP_REGISTRY_KIND.get(self._group)
+        plugin_id = self._service.registry.plugin_for(value, kind) if kind is not None else None
+        return self._service.i18n.plugin_text(plugin_id, "name", value) if plugin_id else value
 
     def _extras_for(self, provider: str) -> tuple[_Extra, ...]:
         extras = self._provider_extras_for(provider)
@@ -1779,8 +1783,9 @@ class SettingsPane(Vertical):
         if label_key is not None:
             return self._t(label_key)
         if section.plugin_id or not section.title:
-            # uniform naming: plugin sections read as their lowercase-dash id
-            return section.section_id
+            plugin = self._service.snapshot().plugin(section.plugin_id)
+            name = plugin.name if plugin is not None else section.section_id
+            return self._service.i18n.plugin_text(section.plugin_id, "name", name)
         return section.title
 
     def _describe(self, spec: OptionSpec) -> str:

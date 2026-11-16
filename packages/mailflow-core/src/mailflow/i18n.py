@@ -125,6 +125,25 @@ class I18n:
             logger.error("translation %r failed to format with %r", key, params)
             return message
 
+    def plugin_text(
+        self,
+        plugin_id: str,
+        field: str,
+        fallback: str = "",
+        *,
+        language: str | None = None,
+    ) -> str:
+        key = f"plugin.catalog.{plugin_id}.{field}"
+        return self._packs.get(language or self._language, {}).get(key) or fallback
+
+    def component_label(self, kind: str) -> str:
+        category = {"mail_processor": "processor", "gateway_provisioner": "gateway"}.get(
+            kind, kind
+        )
+        key = f"tui.market_category_{category}"
+        label = self.t(key)
+        return kind if label == key else label
+
     def available_languages(self) -> list[LanguageInfo]:
         return [LanguageInfo(code, self._names.get(code, code)) for code in sorted(self._packs)]
 

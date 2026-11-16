@@ -69,6 +69,10 @@ class MarketPlugin(BaseModel):
     # active app language is preferred, falling back to the default fields.
     descriptions: dict[str, str] = Field(default_factory=lambda: {})
     readmes: dict[str, str] = Field(default_factory=lambda: {})
+    names: dict[str, str] = Field(default_factory=lambda: {})
+
+    def name_for(self, language: str) -> str:
+        return self.names.get(language) or self.name or self.id
 
     def description_for(self, language: str) -> str:
         """One-line description for a language, falling back to the default."""

@@ -1438,7 +1438,10 @@ class CommandRouter:
                     if self.service.market.is_installed(plugin.id, package=plugin.package)
                     else ""
                 )
-                categories = ", ".join(plugin.categories) or "-"
+                categories = (
+                    ", ".join(self.service.i18n.component_label(kind) for kind in plugin.categories)
+                    or "-"
+                )
                 description = (
                     " ".join(plugin.description_for(self.service.i18n.language).split()) or "-"
                 )
@@ -1466,12 +1469,14 @@ class CommandRouter:
                 else self._t("plugin.not_installed")
             )
             language = self.service.i18n.language
+            categories = (
+                ", ".join(self.service.i18n.component_label(kind) for kind in plugin.categories)
+                or "-"
+            )
             spans = [
-                StyleSpan(text=f"{plugin.name or plugin.id} {plugin.version}", style=_STYLE_TITLE),
+                StyleSpan(text=f"{plugin.name_for(language)} {plugin.version}", style=_STYLE_TITLE),
                 StyleSpan(text=f"\n{self._t('plugin.header_id')}: {plugin.id}"),
-                StyleSpan(
-                    text=f"\n{self._t('plugin.market_categories')}: {', '.join(plugin.categories) or '-'}"
-                ),
+                StyleSpan(text=f"\n{self._t('plugin.market_categories')}: {categories}"),
                 StyleSpan(text=f"\n{self._t('plugin.market_author')}: {plugin.author or '-'}"),
                 StyleSpan(text=f"\n{self._t('plugin.market_updated')}: {plugin.updated or '-'}"),
                 StyleSpan(text=f"\n{self._t('plugin.market_license')}: {plugin.license or '-'}"),
@@ -1515,6 +1520,7 @@ class CommandRouter:
                     (
                         entry[1].id,
                         entry[1].name,
+                        entry[1].name_for(language),
                         entry[1].description,
                         entry[1].description_for(language),
                     )
@@ -1535,7 +1541,10 @@ class CommandRouter:
                 if self.service.market.is_installed(plugin.id, package=plugin.package)
                 else ""
             )
-            categories = ", ".join(plugin.categories) or "-"
+            categories = (
+                ", ".join(self.service.i18n.component_label(kind) for kind in plugin.categories)
+                or "-"
+            )
             description = (
                 " ".join(plugin.description_for(self.service.i18n.language).split()) or "-"
             )
@@ -1646,9 +1655,12 @@ class CommandRouter:
                 spans.append(StyleSpan(text=f"\n{self._t('tui.empty')}", style=_STYLE_MUTED))
                 return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
             for plugin in plugins:
-                kinds = ", ".join(kind.value for kind in plugin.kinds)
+                kinds = ", ".join(
+                    self.service.i18n.component_label(kind.value) for kind in plugin.kinds
+                )
+                name = self.service.i18n.plugin_text(plugin.plugin_id, "name", plugin.name)
                 spans.append(StyleSpan(text=f"\n\n• {plugin.plugin_id} ({plugin.version})"))
-                spans.append(StyleSpan(text=f"\n  {plugin.name} · {kinds}", style=_STYLE_MUTED))
+                spans.append(StyleSpan(text=f"\n  {name} · {kinds}", style=_STYLE_MUTED))
                 status = self._t(f"tui.plugin_status_{plugin.status}")
                 spans.append(StyleSpan(text=f"\n  {status}"))
                 if plugin.error:
@@ -1658,10 +1670,14 @@ class CommandRouter:
             plugin_info = snapshot.plugin(args[1])
             if plugin_info is None:
                 return self._err(self._t("plugin.not_found", plugin_id=args[1]))
+            name = self.service.i18n.plugin_text(plugin_info.plugin_id, "name", plugin_info.name)
+            description = self.service.i18n.plugin_text(
+                plugin_info.plugin_id, "description", plugin_info.description
+            )
             spans = [
-                StyleSpan(text=f"{plugin_info.plugin_id} ({plugin_info.name})", style=_STYLE_TITLE),
+                StyleSpan(text=f"{plugin_info.plugin_id} ({name})", style=_STYLE_TITLE),
                 StyleSpan(text=f"\n{self._t('plugin.header_version')}: {plugin_info.version}"),
-                StyleSpan(text=f"\n{plugin_info.description or '-'}"),
+                StyleSpan(text=f"\n{description or '-'}"),
                 StyleSpan(
                     text=f"\n{self._t('plugin.field_components')}: {', '.join(plugin_info.components) or '-'}"
                 ),
