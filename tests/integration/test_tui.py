@@ -1255,6 +1255,7 @@ async def test_notifications_pane_lists_all_notifiers_and_toggles(
     """The Notifications tab shows every notifier (not just IM providers),
     toggles the selected one enabled/disabled in place, and edits urgency."""
     from mailflow_tui.notifications import NotificationsPane
+    from mailflow_tui.pickers import ChoicePicker
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
@@ -1309,9 +1310,20 @@ async def test_notifications_pane_lists_all_notifiers_and_toggles(
             await pilot.pause(0.2)
             qq = next(n for n in service.config.notifiers if n.notifier_id == "qq-1")
             assert qq.enabled is False
-            # edit urgency via the dropdown
-            urgency = cast(Select[Any], pane.query_one("#notif-urgency", Select))
-            await set_select_value(pilot, urgency, "urgent")
+            # Change mail urgency through More, then choose a level.
+            pane.query_one("#notif-more", Button).press()
+            await pilot.pause()
+            menu = cast(ChoicePicker, app.screen)
+            menu.query_one(DataTable).move_cursor(
+                row=next(i for i, (_, value) in enumerate(menu.matches) if value == "notif-urgency")
+            )
+            await pilot.press("enter")
+            await pilot.pause()
+            levels = cast(ChoicePicker, app.screen)
+            levels.query_one(DataTable).move_cursor(
+                row=next(i for i, (_, value) in enumerate(levels.matches) if value == "urgent")
+            )
+            await pilot.press("enter")
             await pilot.pause(0.2)
             qq = next(n for n in service.config.notifiers if n.notifier_id == "qq-1")
             assert qq.minimum_urgency is Urgency.URGENT

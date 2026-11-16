@@ -18,15 +18,16 @@ import asyncio
 from typing import Any, ClassVar
 
 import httpx
-from mailflow.domain import Urgency, parse_urgency
+from mailflow.domain import ComponentKind, Urgency, parse_urgency
 from mailflow.errors import error_text
 from mailflow.service import ConfigReloadError, MailFlowService
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import Horizontal, Vertical
 from textual.markup import escape
-from textual.widgets import Button, DataTable, Select, Static
+from textual.widgets import Button, DataTable, Static
 
+from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.gateway_guide import GatewayGuideModal
 from mailflow_tui.labels import (
     error_detail,
@@ -35,8 +36,8 @@ from mailflow_tui.labels import (
     relabel_buttons,
     urgency_label,
 )
+from mailflow_tui.pickers import ChoicePicker
 from mailflow_tui.view_state import TableView, update_table
-from mailflow_tui.widgets import SafeSelect
 
 _URGENCY_ORDER = (Urgency.AD, Urgency.INFO, Urgency.IMPORTANT, Urgency.URGENT)
 
@@ -155,7 +156,6 @@ class NotificationsPane(Vertical):
         self._service = service
         self._selected_id: str | None = None
         self._timer: Any = None
-        self._syncing_urgency = False
         self._mutating = False
         self._checking = False
         self._statuses: dict[str, str] = {}
@@ -168,21 +168,15 @@ class NotificationsPane(Vertical):
     def compose(self) -> ComposeResult:
         yield Static(self._service.t("tui.notifications_title"), id="notifications-title")
         yield Static(escape(self._service.t("tui.notifications_help")), id="notifications-help")
-        with ScrollableContainer(id="notifications-table-wrap"):
-            yield DataTable(id="notifications-table", cursor_type="row")  # pyright: ignore[reportUnknownMemberType]
+        yield DataTable(id="notifications-table", cursor_type="row")
         with Horizontal(id="notifications-actions"):
             yield Button(self._service.t("tui.btn_add"), id="notif-add", variant="success")
             yield Button(self._service.t("tui.btn_edit"), id="notif-edit", variant="primary")
             yield Button(
-                self._service.t("tui.notif_relogin"), id="notif-relogin", variant="warning"
-            )
-            yield Button(self._service.t("tui.btn_delete"), id="notif-delete", variant="error")
-            yield Button(
                 self._service.t("tui.notifications_toggle"), id="notif-toggle", variant="primary"
             )
-            yield SafeSelect(self._urgency_options(), id="notif-urgency", allow_blank=False)
             yield Button(
-                self._service.t("tui.notifications_check"), id="notif-check", variant="primary"
+                self._service.t("tui.notifications_more"), id="notif-more", variant="primary"
             )
         yield Static("", id="notifications-status")
 
@@ -203,14 +197,15 @@ class NotificationsPane(Vertical):
             )
         return out
 
-    def _selected_index(self) -> int | None:
-        if self._selected_id is None:
+    def _selected_index(self, notifier_id: str | None = None) -> int | None:
+        identity = notifier_id if notifier_id is not None else self._selected_id
+        if identity is None:
             return None
         return next(
             (
                 i
                 for i, n in enumerate(self._service.config.notifiers)
-                if n.notifier_id == self._selected_id
+                if n.notifier_id == identity
             ),
             None,
         )
@@ -234,6 +229,11 @@ class NotificationsPane(Vertical):
         statuses = self._statuses
         table: DataTable[Any] = self.query_one("#notifications-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
         view = TableView.capture(table, self._selected_id)
+        providers = {
+            component.component_id: component.plugin_id
+            for component in self._service.snapshot().components
+            if component.kind == ComponentKind.NOTIFIER
+        }
         rows: list[tuple[str, tuple[Any, ...]]] = []
         for entry in self._all_notifiers():
             notifier_id = str(entry["notifier_id"])
@@ -248,20 +248,36 @@ class NotificationsPane(Vertical):
                 )
             )
             targets = ", ".join(str(t) for t in raw_targets) or "-"
+            provider = str(entry["provider"])
+            plugin_id = providers.get(provider)
+            provider_key = f"tui.bots_provider_{provider}"
+            provider_label = self._service.t(provider_key)
+            if provider_label == provider_key:
+                provider_label = provider
+            provider_label = (
+                self._service.i18n.plugin_text(plugin_id, "name", provider_label)
+                if plugin_id
+                else provider_label
+            )
             rows.append(
                 (
                     notifier_id,
                     (
-                        notifier_id,
-                        str(entry["provider"]),
-                        (
-                            self._service.t("tui.notifications_on")
+                        Text(notifier_id),
+                        Text(provider_label),
+                        Text(
+                            self._service.t("tui.plugin_status_enabled")
                             if entry["enabled"]
-                            else self._service.t("tui.notifications_off")
+                            else self._service.t("tui.plugin_status_disabled"),
+                            style="green" if entry["enabled"] else "dim",
                         ),
                         urgency_label(self._service, str(entry["urgency"])),
                         escape(targets),
-                        Text(error_detail(self._service, statuses.get(notifier_id, "-"))),
+                        Text(
+                            error_detail(self._service, statuses.get(notifier_id, "-"))
+                            if entry["enabled"]
+                            else self._service.t("tui.plugin_status_disabled")
+                        ),
                     ),
                 )
             )
@@ -269,13 +285,15 @@ class NotificationsPane(Vertical):
         # previously selected row so in-place actions keep targeting it
         if update_table(table, rows):
             self._selected_id = view.restore(table)
-        if table.row_count == 0:
-            self.query_one("#notifications-status", Static).update(self._service.t("tui.empty"))
+        if table.row_count == 0 and not getattr(self._service, "remote", False):
+            self.query_one("#notifications-status", Static).update(
+                self._service.t("tui.notifications_empty")
+            )
+        self._sync_selection_controls()
 
     def on_mount(self) -> None:
         self._ensure_columns()
         self._render_rows()
-        self._refresh_urgency_options()
         self._sync_selection_controls()
         if getattr(self._service, "remote", False):
             self.query_one("#notifications-status", Static).update(
@@ -283,12 +301,10 @@ class NotificationsPane(Vertical):
                     "remote.unsupported", operation=self._service.t("tui.tab_notifications")
                 )
             )
-            for control in self.query("Button, Select"):
+            for control in self.query(Button):
                 control.disabled = True
             return
-        # auto-connect every enabled notifier on startup (bounded,
-        # non-blocking); failures render as "offline: <reason>" in the
-        # status column
+        # Probing reports connection state without starting or logging in.
         self.run_worker(self._check_all(), exclusive=True, group="notif-check", exit_on_error=False)
         self._timer = self.set_interval(self._PROBE_INTERVAL, self.check_if_visible)
 
@@ -298,10 +314,8 @@ class NotificationsPane(Vertical):
             {
                 "notif-add": "tui.btn_add",
                 "notif-edit": "tui.btn_edit",
-                "notif-delete": "tui.btn_delete",
-                "notif-relogin": "tui.notif_relogin",
                 "notif-toggle": "tui.notifications_toggle",
-                "notif-check": "tui.notifications_check",
+                "notif-more": "tui.notifications_more",
             },
         )
         self.query_one("#notifications-title", Static).update(
@@ -316,7 +330,6 @@ class NotificationsPane(Vertical):
         self._ensure_columns()
         self._render_rows()
         self._selected_id = view.restore(table)
-        self._refresh_urgency_options()
         self._sync_selection_controls()
 
     def check_if_visible(self) -> None:
@@ -345,89 +358,149 @@ class NotificationsPane(Vertical):
     async def on_data_table_row_selected(self, event: Any) -> None:
         self._selected_id = str(event.row_key.value)
         self._sync_selection_controls()
+        if self._mutating or getattr(self._service, "remote", False):
+            return
         from mailflow_tui.settings import _double_clicked
 
         if _double_clicked("notifiers", self._selected_id):
             await self._edit_selected()
 
-    def _refresh_urgency_options(self) -> None:
-        urgency = self.query_one_optional("#notif-urgency", Select)
-        if urgency is None:
-            return
-        current = urgency.value
-        # a pane remount can tear the Select down between the mount check and
-        # the poke; its watcher's internal '#label' query would then raise
-        # NoMatches and kill the app — swallow exactly that race
-        from textual.css.query import QueryError
-
-        try:
-            urgency.set_options(self._urgency_options())  # pyright: ignore[reportUnknownMemberType]
-            urgency.value = current  # pyright: ignore[reportUnknownMemberType]
-        except QueryError:
-            pass
-
     def _sync_selection_controls(self) -> None:
-        """Mirror the selected row's enabled/urgency into the action controls."""
+        """Show saved state; a failed save must not flip the state button."""
         if getattr(self._service, "remote", False):
-            for control in self.query("Button, Select"):
+            for control in self.query(Button):
                 control.disabled = True
             return
         index = self._selected_index()
-        for ident in ("notif-edit", "notif-delete", "notif-relogin"):
+        for ident in ("notif-add", "notif-edit", "notif-more"):
             button = self.query_one_optional("#" + ident, Button)
             if button is not None:
-                button.disabled = index is None or self._mutating
-                if ident == "notif-relogin" and index is not None:
-                    entry = self._service.config.notifiers[index]
-                    button.disabled = button.disabled or (
-                        not entry.options.get("gateway")
-                        and self._gateway_for(self._service, entry.provider) is None
-                    )
+                button.disabled = self._mutating or (ident == "notif-edit" and index is None)
         toggle = self.query_one_optional("#notif-toggle", Button)
-        urgency = self.query_one_optional("#notif-urgency", Select)
+        if toggle is None:
+            return
+        toggle.disabled = self._mutating or index is None
         if index is None:
-            if toggle is not None:
-                toggle.disabled = True
-            if urgency is not None:
-                urgency.disabled = True
+            toggle.label = self._service.t("tui.notifications_toggle")
+            toggle.variant = "default"
             return
         entry = self._service.config.notifiers[index]
-        if toggle is not None:
-            toggle.disabled = self._mutating
-            toggle.label = (
-                self._service.t("tui.notifications_disable")
-                if entry.enabled
-                else self._service.t("tui.notifications_enable")
-            )
-        if urgency is not None:
-            urgency.disabled = self._mutating
-            from textual.css.query import QueryError
-
-            self._syncing_urgency = True
-            try:
-                with urgency.prevent(Select.Changed):
-                    urgency.value = entry.minimum_urgency.value  # pyright: ignore[reportUnknownMemberType]
-            except QueryError:
-                pass
-            finally:
-                self._syncing_urgency = False
+        toggle.label = self._service.t(
+            "tui.plugin_status_enabled" if entry.enabled else "tui.plugin_status_disabled"
+        )
+        toggle.variant = "success" if entry.enabled else "error"
 
     # -- actions ----------------------------------------------------------------
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.disabled or self._mutating:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.disabled or self._mutating or getattr(self._service, "remote", False):
+            return
+        if event.button.id == "notif-more":
+            self._open_menu()
+            return
+        self._start_action(event.button.id or "", self._selected_id)
+
+    def _open_menu(self) -> None:
+        notifier_id = self._selected_id
+        index = self._selected_index(notifier_id)
+        choices: list[tuple[str, str]] = []
+        if index is not None:
+            choices.append((self._service.t("tui.notifications_minimum"), "notif-urgency"))
+            entry = self._service.config.notifiers[index]
+            gateway = entry.options.get("gateway") or self._gateway_for(
+                self._service, entry.provider
+            )
+            if gateway in self._service.gateway_providers():
+                choices.append((self._service.t("tui.notif_relogin"), "notif-relogin"))
+        choices.extend(
+            [
+                (self._service.t("experience.notification_preferences"), "notif-preferences"),
+                (self._service.t("ux.failed_deliveries"), "notif-failed"),
+            ]
+        )
+        if not self._checking and any(n.enabled for n in self._service.config.notifiers):
+            choices.append((self._service.t("tui.notifications_check"), "notif-check"))
+        if index is not None:
+            choices.append((self._service.t("tui.notifications_remove"), "notif-delete"))
+        title = self._service.t("tui.notifications_more")
+        if notifier_id:
+            title += " · " + notifier_id
+
+        def chosen(action: str | None) -> None:
+            if action is None or action not in {value for _, value in choices}:
+                return
+            if action == "notif-urgency":
+                self._choose_urgency(notifier_id)
+            elif action == "notif-delete":
+                self.app.push_screen(
+                    ConfirmModal(
+                        self._service,
+                        title=self._service.t("tui.notifications_remove"),
+                        body=self._service.t(
+                            "tui.notifications_remove_confirm", name=notifier_id
+                        ),
+                        confirm_label=self._service.t("tui.btn_remove"),
+                        variant="error",
+                        focus_confirm=False,
+                    ),
+                    callback=lambda confirmed: (
+                        self._start_action(action, notifier_id) if confirmed else None
+                    ),
+                )
+            else:
+                self._start_action(action, notifier_id)
+
+        self.app.push_screen(ChoicePicker(self._service, choices, title=title), chosen)
+
+    def _choose_urgency(self, notifier_id: str | None) -> None:
+        index = self._selected_index(notifier_id)
+        if index is None:
+            return
+        options = self._urgency_options()
+
+        def chosen(value: str | None) -> None:
+            if value is not None and value in {option for _, option in options}:
+                self._start_action("notif-urgency", notifier_id, value)
+
+        self.app.push_screen(
+            ChoicePicker(
+                self._service,
+                options,
+                self._service.config.notifiers[index].minimum_urgency.value,
+                title=self._service.t("tui.notifications_minimum"),
+            ),
+            chosen,
+        )
+
+    def _start_action(
+        self, action: str, notifier_id: str | None = None, urgency: str | None = None
+    ) -> None:
+        if self._mutating or getattr(self._service, "remote", False):
             return
         self._mutating = True
         self._sync_selection_controls()
+        self.run_worker(
+            self._run_action(action, notifier_id, urgency),
+            group="notif-action",
+            exit_on_error=False,
+        )
+
+    async def _run_action(
+        self, action: str, notifier_id: str | None, urgency: str | None
+    ) -> None:
         try:
-            await self._button_action(event)
+            await self._button_action(action, notifier_id, urgency)
+        except Exception as exc:
+            self._show_error(exc)
         finally:
             self._mutating = False
             if self.is_mounted:
                 self._sync_selection_controls()
 
-    async def _button_action(self, event: Button.Pressed) -> None:
-        button_id = event.button.id or ""
+    async def _button_action(
+        self, button_id: str, notifier_id: str | None, urgency: str | None
+    ) -> None:
         if button_id == "notif-preferences":
             from mailflow_tui.workspace_screens import NotificationPreferencesScreen
 
@@ -453,59 +526,50 @@ class NotificationsPane(Vertical):
             )
             return
         if button_id == "notif-edit":
-            await self._edit_selected()
+            await self._edit_selected(notifier_id)
             return
         if button_id == "notif-relogin":
-            await self._relogin_selected()
+            await self._relogin_selected(notifier_id)
             return
         if button_id == "notif-delete":
-            await self._delete_selected()
+            await self._delete_selected(notifier_id)
             return
         if button_id == "notif-toggle":
-            await self._toggle_selected()
+            await self._toggle_selected(notifier_id)
+            return
+        if button_id == "notif-urgency" and urgency is not None:
+            await self._set_selected_urgency(urgency, notifier_id)
             return
         if button_id == "notif-check":
-            self.run_worker(
-                self._check_all(), exclusive=True, group="notif-check", exit_on_error=False
-            )
+            await self._check_all(show_status=True)
 
-    async def on_select_changed(self, event: Any) -> None:
-        if getattr(event.select, "id", None) != "notif-urgency":
-            return
-        if self._syncing_urgency:
-            return
-        await self._set_selected_urgency()
-
-    async def _set_selected_urgency(self) -> None:
-        index = self._selected_index()
-        urgency = self.query_one_optional("#notif-urgency", Select)
-        if index is None or urgency is None or self._mutating:
-            return
-        selected = urgency.value
-        if selected is Select.NULL or selected == "":
+    async def _set_selected_urgency(self, selected: str, notifier_id: str | None = None) -> None:
+        index = self._selected_index(notifier_id)
+        if index is None:
             return
         parsed = parse_urgency(str(selected))
         entry = self._service.config.notifiers[index]
         if entry.minimum_urgency == parsed:
-            # unchanged (e.g. the programmatic re-sync after a re-render):
-            # break the loop instead of persisting + re-rendering again
             return
         values = entry.model_dump()
         values["minimum_urgency"] = parsed.value
-        self._mutating = True
-        self._sync_selection_controls()
         try:
             await self._service.update_config_entry("notifiers", index, values)
         except Exception as exc:
             self._show_error(exc)
             return
-        finally:
-            self._mutating = False
-            self._sync_selection_controls()
         self._render_rows()
+        self.query_one("#notifications-status", Static).update(
+            escape(
+                self._service.t(
+                    "tui.settings_saved",
+                    option=entry.notifier_id + " · " + urgency_label(self._service, parsed),
+                )
+            )
+        )
 
-    async def _toggle_selected(self) -> None:
-        index = self._selected_index()
+    async def _toggle_selected(self, notifier_id: str | None = None) -> None:
+        index = self._selected_index(notifier_id)
         if index is None:
             self.query_one("#notifications-status", Static).update(
                 f"[red]{self._service.t('tui.notifications_select_first')}[/red]"
@@ -519,22 +583,27 @@ class NotificationsPane(Vertical):
         except Exception as exc:
             self._show_error(exc)
             return
+        self._statuses.pop(entry.notifier_id, None)
         self._render_rows()
         self._sync_selection_controls()
+        state = self._service.t(
+            "tui.plugin_status_enabled" if values["enabled"] else "tui.plugin_status_disabled"
+        )
+        self.query_one("#notifications-status", Static).update(
+            escape(self._service.t("tui.settings_saved", option=entry.notifier_id + " · " + state))
+        )
 
-    async def _relogin_selected(self) -> None:
+    async def _relogin_selected(self, notifier_id: str | None = None) -> None:
         """Re-run the guided setup for an existing gateway-backed notifier
         (NapCat logged out / session expired): restarts the gateway
         process and shows the QR again, then re-saves the endpoint."""
-        if self._selected_id is None:
+        index = self._selected_index(notifier_id)
+        if index is None:
             self.query_one("#notifications-status", Static).update(
                 f"[red]{self._service.t('tui.notifications_select_first')}[/red]"
             )
             return
-        found = [n for n in self._service.config.notifiers if n.notifier_id == self._selected_id]
-        if not found:
-            return
-        entry = found[0]
+        entry = self._service.config.notifiers[index]
         provider = str(entry.provider or "")
         # onebot notifiers ride a gateway recorded in options.gateway
         # (napcat/openwechat/...); the provider id itself ('onebot') is
@@ -556,19 +625,16 @@ class NotificationsPane(Vertical):
             ),
         )
 
-    async def _edit_selected(self) -> None:
-        if self._selected_id is None:
+    async def _edit_selected(self, notifier_id: str | None = None) -> None:
+        index = self._selected_index(notifier_id)
+        if index is None:
             self.query_one("#notifications-status", Static).update(
                 f"[red]{self._service.t('tui.notifications_select_first')}[/red]"
             )
             return
-        found = [n for n in self._service.config.notifiers if n.notifier_id == self._selected_id]
-        if not found:
-            return
         from mailflow_tui.settings import EntryFormScreen
 
-        values = found[0].model_dump()
-        index = self._service.config.notifiers.index(found[0])
+        values = self._service.config.notifiers[index].model_dump()
         self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
             EntryFormScreen(
                 self._service,
@@ -624,6 +690,7 @@ class NotificationsPane(Vertical):
             if gateway is not None:
                 await self._service.gateway_shutdown(gateway, instance_id)
             raise
+        self._statuses.pop(instance_id, None)
         self.refresh_data()
         self.query_one("#notifications-status", Static).update(
             escape(
@@ -702,19 +769,18 @@ class NotificationsPane(Vertical):
         except Exception as exc:
             self._show_error(exc)
             return
+        self._statuses.pop(instance_id, None)
         self.refresh_data()
         self.query_one("#notifications-status", Static).update(
             f"[green]{self._service.t('tui.notifications_configured_ok', instance=instance_id)}[/green]"
         )
 
-    async def _delete_selected(self) -> None:
-        if self._selected_id is None:
+    async def _delete_selected(self, notifier_id: str | None = None) -> None:
+        index = self._selected_index(notifier_id)
+        if index is None:
             self.query_one("#notifications-status", Static).update(
                 f"[red]{self._service.t('tui.notifications_select_first')}[/red]"
             )
-            return
-        index = self._selected_index()
-        if index is None:
             return
         entry = self._service.config.notifiers[index]
         gateway = self._gateway_from_options(dict(entry.options))
@@ -740,6 +806,7 @@ class NotificationsPane(Vertical):
             self._show_error(exc)
             return
         self._selected_id = None
+        self._statuses.pop(entry.notifier_id, None)
         self._render_rows()
         self._sync_selection_controls()
         self.query_one("#notifications-status", Static).update(
@@ -751,7 +818,7 @@ class NotificationsPane(Vertical):
             )
         )
 
-    async def _check_all(self) -> None:
+    async def _check_all(self, *, show_status: bool = False) -> None:
         if getattr(self._service, "remote", False):
             return
         if self._checking:
@@ -759,13 +826,14 @@ class NotificationsPane(Vertical):
         self._checking = True
         try:
             with redact_operation_logs(self._service):
-                await self._check_connections()
+                await self._check_connections(show_status=show_status)
         finally:
             self._checking = False
 
-    async def _check_connections(self) -> None:
+    async def _check_connections(self, *, show_status: bool = False) -> None:
         status_node = self.query_one("#notifications-status", Static)
-        status_node.update(self._service.t("tui.loading"))
+        if show_status:
+            status_node.update(self._service.t("tui.loading"))
         instances = [
             (str(e["notifier_id"]), str(e["provider"]), e["options"])
             for e in self._all_notifiers()
@@ -777,8 +845,6 @@ class NotificationsPane(Vertical):
 
             async def _bounded(provider: str, options: dict[str, Any]) -> str:
                 async with sem:
-                    from mailflow.domain import ComponentKind
-
                     probe = self._service.registry.probe(ComponentKind.NOTIFIER, provider)
                     try:
                         if probe is not None:
@@ -798,7 +864,8 @@ class NotificationsPane(Vertical):
         # an explicit "re-run setup" hint instead of a generic unreachable
         await self._merge_gateway_states(results)
         self._render_rows(results)
-        status_node.update(self._service.t("tui.notifications_checked"))
+        if show_status:
+            status_node.update(self._service.t("tui.notifications_checked"))
 
     async def _merge_gateway_states(self, results: dict[str, str]) -> None:
         """Overlay managed-gateway errors onto notifier status rows.

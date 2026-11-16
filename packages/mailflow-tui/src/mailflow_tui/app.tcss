@@ -1170,19 +1170,19 @@ ListEditScreen, EntryFormScreen {
     margin-top: 1;
 }
 
-#accounts-title, #llms-title, #history-title {
+#accounts-title, #llms-title, #history-title, #notifications-title {
     height: auto;
     text-style: bold;
     padding: 0 1;
 }
 
-#accounts-help, #llms-help, #history-help {
+#accounts-help, #llms-help, #history-help, #notifications-help {
     height: auto;
     padding: 0 1;
     color: $text-muted;
 }
 
-#accounts-table, #llms-table {
+#accounts-table, #llms-table, #notifications-table {
     height: 1fr;
     min-height: 3;
     margin: 0 1;
@@ -1196,19 +1196,19 @@ ListEditScreen, EntryFormScreen {
     border: round $secondary;
 }
 
-#accounts-actions, #llms-actions, #history-actions {
+#accounts-actions, #llms-actions, #history-actions, #notifications-actions {
     height: auto;
     padding: 0 1;
     align-vertical: middle;
 }
 
-#accounts-actions Button, #llms-actions Button, #history-actions Button {
+#accounts-actions Button, #llms-actions Button, #history-actions Button, #notifications-actions Button {
     margin-right: 1;
     min-width: 0;
     width: 1fr;
 }
 
-#accounts-status, #llms-status, #history-status {
+#accounts-status, #llms-status, #history-status, #notifications-status {
     height: auto;
     padding: 0 1;
     color: $text-muted;
@@ -1295,34 +1295,9 @@ MailHistoryScreen {
 }
 
 
-#notifications-table-wrap {
-    height: 1fr;
-}
-
-#notifications-table {
-    height: 100%;
-    border: round $primary;
-}
-
-#notifications-help {
-    margin-bottom: 1;
-}
-
-#notifications-actions {
-    height: auto;
-    padding: 0 1;
-    align-vertical: middle;
-}
-
-#notifications-actions Select {
-    width: 18;
-    margin-right: 1;
-}
-
 #notifications-status {
-    height: 1;
-    padding: 0 1;
-    color: $text-muted;
+    max-height: 3;
+    overflow-y: auto;
 }
 
 /* Gateway guide dialog: bordered frame, log pane, QR + status inside,

@@ -21,6 +21,7 @@ from mailflow.gateway import InstallProgress
 from mailflow.registry import PluginRegistrar
 from mailflow_tui.gateway_guide import GatewayGuideModal
 from mailflow_tui.notifications import NotificationsPane
+from mailflow_tui.pickers import ChoicePicker
 from mailflow_tui.remote import LoginScreen
 from mailflow_tui.settings import EntryFormScreen, ListEditScreen, LLMPane, SettingsPane
 from textual.app import App, ComposeResult
@@ -455,14 +456,25 @@ async def test_notifier_page_rename_and_delete_recover_from_save_errors(
         monkeypatch.setattr(
             service, "remove_config_entry", AsyncMock(side_effect=OSError("read only"))
         )
-        pane.query_one("#notif-delete", Button).press()
-        await settle(pilot)
+
+        async def remove_channel() -> None:
+            pane.query_one("#notif-more", Button).press()
+            await settle(pilot)
+            menu = cast(ChoicePicker, pilot.app.screen)
+            menu.query_one(DataTable).move_cursor(
+                row=next(i for i, (_, value) in enumerate(menu.matches) if value == "notif-delete")
+            )
+            await pilot.press("enter")
+            await settle(pilot)
+            pilot.app.screen.query_one("#confirm-run", Button).press()
+            await settle(pilot)
+
+        await remove_channel()
         assert service.config.notifiers
         assert service.t("errors.storage") in rendered(pane, "#notifications-status")
         assert "read only" not in rendered(pane, "#notifications-status")
         monkeypatch.setattr(service, "remove_config_entry", remove)
-        pane.query_one("#notif-delete", Button).press()
-        await settle(pilot)
+        await remove_channel()
         assert not service.config.notifiers and table.row_count == 0
 
 

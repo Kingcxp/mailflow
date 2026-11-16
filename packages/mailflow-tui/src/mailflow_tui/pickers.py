@@ -26,14 +26,22 @@ class ChoicePicker(ModalScreen[str | None]):
     ChoicePicker DataTable { height: 1fr; }
     """
 
-    def __init__(self, service: Any, choices: list[tuple[str, str]], value: str = "") -> None:
+    def __init__(
+        self,
+        service: Any,
+        choices: list[tuple[str, str]],
+        value: str = "",
+        *,
+        title: str = "",
+    ) -> None:
         super().__init__()
         self.service, self.choices, self.value = service, choices, value
+        self.title_text = title
         self.matches: list[tuple[str, str]] = []
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(self.service.t("interface.browse"))
+            yield Static(self.title_text or self.service.t("interface.browse"))
             yield Input(
                 placeholder=self.service.t("tui.settings_search_placeholder"), id="picker-query"
             )
