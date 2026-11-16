@@ -1204,7 +1204,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         try:
             values = self._collect()
         except SettingsError as exc:
-            status.update(f"[red]{escape(error_detail(self._service, exc))}[/red]")
+            status.update(f"[$ctp-red]{escape(error_detail(self._service, exc))}[/$ctp-red]")
             return
         llm_id = str(values.get("llm_id") or "test")
         config = LLMConfig(
@@ -1230,7 +1230,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             backend = factory(config)
         except Exception as exc:
             status.update(
-                f"[red]{escape(error_message(self._service, exc, extra_secrets=self._secrets()))}[/red]"
+                f"[$ctp-red]{escape(error_message(self._service, exc, extra_secrets=self._secrets()))}[/$ctp-red]"
             )
             return
         status.update(self._t("tui.llm_testing_connect", provider=config.provider))
@@ -1241,11 +1241,11 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 timeout=120.0,
             )
         except TimeoutError:
-            status.update(f"[red]{self._t('tui.llm_test_timeout')}[/red]")
+            status.update(f"[$ctp-red]{self._t('tui.llm_test_timeout')}[/$ctp-red]")
             return
         except Exception as exc:
             status.update(
-                f"[red]{escape(error_message(self._service, exc, max_chars=300, extra_secrets=(config.api_key, *config.headers.values())))}[/red]"
+                f"[$ctp-red]{escape(error_message(self._service, exc, max_chars=300, extra_secrets=(config.api_key, *config.headers.values())))}[/$ctp-red]"
             )
             return
         finally:
@@ -1260,7 +1260,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         # raw model output is intentionally not shown — latency, the model
         # name and the routed provider are enough to judge connectivity
         status.update(
-            f"[green]{self._t('tui.llm_test_ok_model', seconds=f'{elapsed:.1f}', model=escape(completion.model or '-'))}[/green]"
+            f"[$ctp-green]{self._t('tui.llm_test_ok_model', seconds=f'{elapsed:.1f}', model=escape(completion.model or '-'))}[/$ctp-green]"
         )
 
     async def _test_account(self) -> None:
@@ -1269,7 +1269,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         try:
             values = self._collect()
         except SettingsError as exc:
-            status.update(f"[red]{escape(error_detail(self._service, exc))}[/red]")
+            status.update(f"[$ctp-red]{escape(error_detail(self._service, exc))}[/$ctp-red]")
             return
         provider = str(values.get("provider") or "")
         probe = self._service.registry.probe(ComponentKind.MAIL_SOURCE, provider)
@@ -1280,7 +1280,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             )
             return
         if provider not in {"imap", "gmail", "outlook"}:
-            status.update(f"[yellow]{self._t('tui.account_test_skip')}[/yellow]")
+            status.update(f"[$ctp-yellow]{self._t('tui.account_test_skip')}[/$ctp-yellow]")
             return
         opts = dict(values.get("options") or {})
         from mailflow_mail_imap.plugin import PRESETS
@@ -1351,13 +1351,13 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         try:
             send_status = await asyncio.wait_for(asyncio.to_thread(_probe), timeout=25.0)
         except TimeoutError:
-            status.update(f"[red]{self._t('tui.account_test_timeout')}[/red]")
+            status.update(f"[$ctp-red]{self._t('tui.account_test_timeout')}[/$ctp-red]")
             return
         except Exception as exc:
             detail = escape(
                 error_detail(self._service, exc, max_chars=200, extra_secrets=(password,))
             )
-            status.update(f"[red]{self._t('tui.account_test_failed', reason=detail)}[/red]")
+            status.update(f"[$ctp-red]{self._t('tui.account_test_failed', reason=detail)}[/$ctp-red]")
             return
         finally:
             cancelled.set()
@@ -1423,7 +1423,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             raise
         except Exception as exc:
             status.update(
-                f"[red]{escape(error_message(self._service, exc, extra_secrets=self._secrets()))}[/red]"
+                f"[$ctp-red]{escape(error_message(self._service, exc, extra_secrets=self._secrets()))}[/$ctp-red]"
             )
         finally:
             self._busy = ""
@@ -1550,9 +1550,9 @@ class OptionCard(Vertical):
         label = self._t(key)
         title = escape(self.spec.key if label == key else label)
         if self._dirty:
-            title += f"  [yellow]({self._t('interface.unsaved')})[/yellow]"
+            title += f"  [$ctp-yellow]({self._t('interface.unsaved')})[/$ctp-yellow]"
         elif not self.spec.is_default():
-            title += f"  [dim]({self._t('interface.custom')})[/dim]"
+            title += f"  [$mf-muted]({self._t('interface.custom')})[/$mf-muted]"
         return f"[bold]{title}[/bold]"
 
     def compose(self) -> ComposeResult:
@@ -1807,7 +1807,7 @@ class SettingsPane(Vertical):
             try:
                 await cast(Any, self._service).refresh_settings()
             except Exception as exc:
-                self._set_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
+                self._set_status(f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]")
                 return
         self._sections = self._service.settings_sections()
         listing = self.query_one_optional("#settings-sections", ListView)
@@ -1857,7 +1857,7 @@ class SettingsPane(Vertical):
     async def _render_options(self) -> None:
         matcher = self._current_matcher()
         if matcher.error:
-            self._set_status(f"[red]{self._t('tui.invalid_regex')}: {escape(matcher.error)}[/red]")
+            self._set_status(f"[$ctp-red]{self._t('tui.invalid_regex')}: {escape(matcher.error)}[/$ctp-red]")
             return
         self._settings_matcher = matcher
         async with self._render_lock:
@@ -2163,7 +2163,7 @@ class SettingsPane(Vertical):
             self._set_status(escape(message))
         except Exception as exc:
             message = error_message(self._service, exc, extra_secrets=secrets)
-            self._set_status(f"[red]{escape(message)}[/red]")
+            self._set_status(f"[$ctp-red]{escape(message)}[/$ctp-red]")
             if propagate:
                 raise
         finally:
@@ -2366,7 +2366,7 @@ class LLMPane(Vertical):
             return
         index = self._selected
         if index is None or index >= len(self._service.config.llms):
-            self._set_status(f"[yellow]{self._t('tui.entry_pick_first')}[/yellow]")
+            self._set_status(f"[$ctp-yellow]{self._t('tui.entry_pick_first')}[/$ctp-yellow]")
             return
         if button_id == "llm-edit":
             self._open_form(index)
@@ -2384,7 +2384,7 @@ class LLMPane(Vertical):
         total = len(self._service.config.llms)
         if target < 0 or target >= total:
             self._set_status(
-                f"[yellow]{self._t('tui.llms_already_first' if offset < 0 else 'tui.llms_already_last')}[/yellow]"
+                f"[$ctp-yellow]{self._t('tui.llms_already_first' if offset < 0 else 'tui.llms_already_last')}[/$ctp-yellow]"
             )
             return
         # select the entry's new position *before* the reload so the cursor
@@ -2444,12 +2444,12 @@ class LLMPane(Vertical):
             message = self._t(
                 "tui.settings_invalid", option=exc.option, reason=error_detail(self._service, exc)
             )
-            self._set_status(f"[red]{escape(message)}[/red]")
+            self._set_status(f"[$ctp-red]{escape(message)}[/$ctp-red]")
             self.notify(message, severity="error", timeout=8)
             return False
         except Exception as exc:
             message = error_message(self._service, exc)
-            self._set_status(f"[red]{escape(message)}[/red]")
+            self._set_status(f"[$ctp-red]{escape(message)}[/$ctp-red]")
             self.notify(message, severity="error", timeout=8)
             return False
         finally:
@@ -2457,7 +2457,7 @@ class LLMPane(Vertical):
             self._sync_controls()
         if message_key:
             self._set_status(
-                f"[green]{self._t(f'tui.{message_key}', group=self._t('tui.tab_llms'))}[/green]"
+                f"[$ctp-green]{self._t(f'tui.{message_key}', group=self._t('tui.tab_llms'))}[/$ctp-green]"
             )
         await self.reload()
         return True
@@ -2603,7 +2603,7 @@ class AccountsPane(Vertical):
             return
         index = self._selected
         if index is None or index >= len(self._service.config.accounts):
-            self._set_status(f"[yellow]{self._t('tui.entry_pick_first')}[/yellow]")
+            self._set_status(f"[$ctp-yellow]{self._t('tui.entry_pick_first')}[/$ctp-yellow]")
             return
         if button_id == "account-edit":
             self._open_form(index)
@@ -2657,17 +2657,17 @@ class AccountsPane(Vertical):
             message = self._t(
                 "tui.settings_invalid", option=exc.option, reason=error_detail(self._service, exc)
             )
-            self._set_status(f"[red]{escape(message)}[/red]")
+            self._set_status(f"[$ctp-red]{escape(message)}[/$ctp-red]")
             self.notify(message, severity="error", timeout=8)
             return
         except Exception as exc:
             message = error_message(self._service, exc)
-            self._set_status(f"[red]{escape(message)}[/red]")
+            self._set_status(f"[$ctp-red]{escape(message)}[/$ctp-red]")
             self.notify(message, severity="error", timeout=8)
             return
         if message_key:
             self._set_status(
-                f"[green]{self._t(f'tui.{message_key}', group=self._t('tui.accounts_title'))}[/green]"
+                f"[$ctp-green]{self._t(f'tui.{message_key}', group=self._t('tui.accounts_title'))}[/$ctp-green]"
             )
         await self.reload()
 
@@ -2908,7 +2908,7 @@ class MailHistoryScreen(ModalScreen[None]):
         except ValueError:
             count = 0
         if count <= 0:
-            self._set_status(f"[yellow]{self._t('tui.history_count_invalid')}[/yellow]")
+            self._set_status(f"[$ctp-yellow]{self._t('tui.history_count_invalid')}[/$ctp-yellow]")
             return None
         return count
 
@@ -2924,7 +2924,7 @@ class MailHistoryScreen(ModalScreen[None]):
     async def _load_history_page(self, *, offset: int) -> None:
         account_id = self._history_account
         if not account_id:
-            self._set_status(f"[yellow]{self._t('tui.entry_pick_first')}[/yellow]")
+            self._set_status(f"[$ctp-yellow]{self._t('tui.entry_pick_first')}[/$ctp-yellow]")
             return
         limit = self._history_limit()
         if limit is None:
@@ -2933,13 +2933,13 @@ class MailHistoryScreen(ModalScreen[None]):
         try:
             page = await self._service.fetch_history(account_id, limit=limit, offset=offset)
         except NotImplementedError:
-            self._set_status(f"[yellow]{self._t('tui.history_unsupported')}[/yellow]")
+            self._set_status(f"[$ctp-yellow]{self._t('tui.history_unsupported')}[/$ctp-yellow]")
             return
         except KeyError as exc:
-            self._set_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
+            self._set_status(f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]")
             return
         except Exception as exc:
-            self._set_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
+            self._set_status(f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]")
             return
         if account_id != self._history_account:
             return
@@ -2985,7 +2985,7 @@ class MailHistoryScreen(ModalScreen[None]):
             self._picked.add(record_id)
         self._render_history()
         self._set_status(
-            f"[green]{self._t('tui.history_all_selected', count=len(self._picked))}[/green]"
+            f"[$ctp-green]{self._t('tui.history_all_selected', count=len(self._picked))}[/$ctp-green]"
         )
 
     async def _analyze_selected(self) -> None:
@@ -2993,7 +2993,7 @@ class MailHistoryScreen(ModalScreen[None]):
         if not chosen:
             self._analysis_running = False
             self._sync_controls()
-            self._set_status(f"[yellow]{self._t('tui.history_none_selected')}[/yellow]")
+            self._set_status(f"[$ctp-yellow]{self._t('tui.history_none_selected')}[/$ctp-yellow]")
             return
         button = self.query_one("#history-analyze", Button)
         self._analysis_running = True

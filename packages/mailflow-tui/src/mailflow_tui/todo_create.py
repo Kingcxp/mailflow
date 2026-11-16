@@ -201,7 +201,7 @@ class TodoCreateModal(ModalScreen[bool]):
         summary = str(self.query_one("#todo-summary", Input).value).strip()
         action_type = self.query_one("#todo-type", ActionTypeField).value
         if not summary:
-            error.update(f"[yellow]{self._t('tui.todo_summary_required')}[/yellow]")
+            error.update(f"[$ctp-yellow]{self._t('tui.todo_summary_required')}[/$ctp-yellow]")
             return
         due_raw = str(self.query_one("#todo-due", Input).value).strip()
         end_raw = str(self.query_one("#todo-due-end", Input).value).strip()
@@ -209,7 +209,7 @@ class TodoCreateModal(ModalScreen[bool]):
             local_due = datetime.strptime(due_raw, "%Y-%m-%d %H:%M") if due_raw else None
             local_end = datetime.strptime(end_raw, "%Y-%m-%d %H:%M") if end_raw else None
         except ValueError:
-            error.update(f"[yellow]{self._t('tui.todo_invalid_due')}[/yellow]")
+            error.update(f"[$ctp-yellow]{self._t('tui.todo_invalid_due')}[/$ctp-yellow]")
             return
         tz = ZoneInfo(self._service.config.general.timezone)
         due_at = local_due.replace(tzinfo=tz) if local_due else None
@@ -225,7 +225,7 @@ class TodoCreateModal(ModalScreen[bool]):
                     else:
                         due_end = original
         if due_end is not None and (due_at is None or due_end <= due_at):
-            error.update(f"[yellow]{self._t('tui.todo_invalid_window')}[/yellow]")
+            error.update(f"[$ctp-yellow]{self._t('tui.todo_invalid_window')}[/$ctp-yellow]")
             return
         notes = str(self.query_one("#todo-notes", Input).value).strip()
         location = str(self.query_one("#todo-location", Input).value).strip()
@@ -342,7 +342,7 @@ class TodoCreateModal(ModalScreen[bool]):
         except Exception as exc:
             key = "tui.todo_create_failed" if self._item is None else "tui.todo_edit_failed"
             detail = escape(error_detail(self._service, exc))
-            error.update(f"[red]{self._t(key, error=detail)}[/red]")
+            error.update(f"[$ctp-red]{self._t(key, error=detail)}[/$ctp-red]")
             return
         self.dismiss(True)
 

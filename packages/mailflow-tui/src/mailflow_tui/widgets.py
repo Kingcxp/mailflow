@@ -336,7 +336,7 @@ class ShortcutHelp(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         table = Table.grid(padding=(0, 2), expand=True)
-        table.add_column(width=22, style="bold cyan")
+        table.add_column(width=22, style="bold $ctp-blue")
         table.add_column(ratio=1)
         for key, description in (
             ("Tab / Shift+Tab", "help_focus"),
@@ -382,7 +382,7 @@ class ShortcutHelp(ModalScreen[None]):
                             "Ctrl+V",
                             "Shift+Insert",
                         ),
-                        style="bold cyan",
+                        style="bold $ctp-blue",
                     )
                     yield Static(note, classes="shortcut-note")
             yield Button(self._t("tui.btn_close"), id="shortcut-close", variant="primary")
@@ -397,7 +397,7 @@ class SelectionTable(DataTable[Any]):
 
     COMPONENT_CLASSES: ClassVar[set[str]] = {"selectiontable--checked"}
     DEFAULT_CSS = """
-    SelectionTable > .selectiontable--checked { background: $primary 22%; }
+    SelectionTable > .selectiontable--checked { background: $block-cursor-background; }
     """
 
     BINDINGS: ClassVar[list[Any]] = [
@@ -477,8 +477,8 @@ class SelectionTable(DataTable[Any]):
 
     def check_label(self, key: str) -> Text:
         if key in self.unselectable_keys:
-            return Text("·", style="dim")
-        return Text("[x]" if key in self.checked_keys else "[ ]", style="bold cyan")
+            return Text("·", style="$mf-muted")
+        return Text("[x]" if key in self.checked_keys else "[ ]", style="bold $ctp-blue")
 
     def visible_keys(self) -> list[str]:
         return [str(row.key.value) for row in self.ordered_rows]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import queue
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -21,6 +22,7 @@ from mailflow.domain import (
 )
 from mailflow.i18n import I18n
 from mailflow.protocol import json_value
+from mailflow.themes import DEFAULT_THEME, builtin_themes
 from mailflow.tools import ToolRegistry
 from mailflow_server.app import create_app
 from mailflow_server.client import RemoteClient
@@ -41,7 +43,7 @@ from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.widgets import Input as EditingInput
 from mailflow_tui.widgets import PromptInput, SearchToggle, SelectionTable, ShortcutHelp
 from mailflow_tui.widgets import TextArea as EditingTextArea
-from textual.app import App, ComposeResult
+from textual.app import ComposeResult
 from textual.containers import ScrollableContainer
 from textual.coordinate import Coordinate
 from textual.widgets import (
@@ -58,6 +60,7 @@ from textual.widgets import (
 )
 
 from mailflow_test_support.commands import MemoryStorage, commands_service, make_record
+from mailflow_test_support.tui import ThemedApp as App
 from mailflow_test_support.ui import mock_http_client, until
 
 
@@ -116,6 +119,39 @@ async def settle(pilot: Any) -> None:
     await pilot.pause()
     await pilot.app.workers.wait_for_complete()
     await pilot.pause()
+
+
+async def test_theme_setting_applies_without_losing_input_or_restarting_connections(
+    host: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _view, app, emit, _failures = host
+    service.config_path = tmp_path / "mailflow.toml"
+    reload_runtime = AsyncMock()
+    monkeypatch.setattr(service, "reload_runtime", reload_runtime)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await settle(pilot)
+        search = app.query_one("#mail-search", PromptInput)
+        search.value = "Keep my unfinished search"
+        app.action_goto_tab("tab-settings")
+        await settle(pilot)
+        for name, scheme in builtin_themes().items():
+            app.query_one("#value-general-theme", Select).value = name
+            await pilot.pause()
+            app.query_one("#save-general-theme", Button).press()
+            await until(pilot, lambda: app.theme == name)
+            await settle(pilot)
+            assert app.current_theme.dark == scheme.is_dark
+            assert app.query_one("#mail-search", PromptInput) is search
+            assert search.value == "Keep my unfinished search"
+            assert service.config.general.theme == name
+        reload_runtime.assert_not_awaited()
+        # An unavailable plugin must not destroy the saved preference or UI.
+        service.config.general.theme = "uninstalled-theme"
+        await emit("plugin.uninstalled", plugin_id="old-theme")
+        await until(pilot, lambda: app.theme == DEFAULT_THEME)
+        await settle(pilot)
+        assert service.config.general.theme == "uninstalled-theme"
+        assert search.value == "Keep my unfinished search"
 
 
 async def test_stored_html_is_readable_in_mail_reader_and_related_task(host: Any) -> None:

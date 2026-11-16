@@ -25,16 +25,8 @@ from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widgets import Static
 
-# MailFlow brand palette: the four urgency contract colors plus the accent.
-# Drawn left-to-right as a moving wave; the logo cycles through them in
-# lockstep with the equalizer so the whole screen breathes together.
-_PALETTE: tuple[tuple[int, int, int], ...] = (
-    (0x90, 0x93, 0x99),  # AD / gray
-    (0x67, 0xC2, 0x3A),  # INFO / green
-    (0xE6, 0xA2, 0x3C),  # IMPORTANT / amber
-    (0xF5, 0x6C, 0x6C),  # URGENT / red
-    (0x7E, 0xA7, 0xF8),  # accent blue
-)
+# The boot animation uses the selected theme, just like the application.
+_PALETTE = ("$ctp-blue", "$ctp-lavender", "$ctp-mauve", "$ctp-pink", "$ctp-teal")
 
 # 5-row block-letter font for the wordmark; one tuple of rows per glyph.
 _LOGO_ART: dict[str, tuple[str, str, str, str, str]] = {
@@ -58,8 +50,7 @@ _TICK_INTERVAL = 1 / 8
 
 
 def _color(palette_index: int) -> str:
-    r, g, b = _PALETTE[palette_index % len(_PALETTE)]
-    return f"#{r:02x}{g:02x}{b:02x}"
+    return _PALETTE[palette_index % len(_PALETTE)]
 
 
 def _logo_text(frame: int) -> RichText:
@@ -83,7 +74,7 @@ def _logo_text(frame: int) -> RichText:
 
 def _divider_text() -> RichText:
     """A quiet hairline under the wordmark to separate it from the status."""
-    return RichText("─" * 36, style="#7EA7F8 dim", no_wrap=True)
+    return RichText("─" * 36, style="$ctp-surface2", no_wrap=True)
 
 
 def _wave_text(frame: int) -> RichText:

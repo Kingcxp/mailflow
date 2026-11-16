@@ -38,6 +38,7 @@ from mailflow.mail_query import MailPage, MailQuery
 from mailflow.permissions import AccessDenied
 from mailflow.replies import ReplyError
 from mailflow.settings import EditorKind, OptionSpec, SettingsSection
+from mailflow.themes import DEFAULT_THEME, ColorScheme, builtin_themes
 from mailflow_server.client import RemoteClient, RemoteUnsupported
 from textual.app import App
 from textual.containers import Horizontal, Vertical
@@ -48,6 +49,7 @@ from textual.worker import WorkerCancelled
 
 from mailflow_tui import credentials
 from mailflow_tui.labels import error_detail, redact_operation_logs
+from mailflow_tui.themes import apply_color_scheme
 from mailflow_tui.widgets import Input
 
 _SESSION_FILE = Path.home() / ".mailflow" / "tui-session.json"
@@ -275,7 +277,7 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         save = bool(self.query_one("#login-save-password", Switch).value)
         status = self.query_one("#login-status", Static)
         if not url or not user or not password:
-            status.update(f"[red]{self._t('tui.remote_fields_required')}[/red]")
+            status.update(f"[$ctp-red]{self._t('tui.remote_fields_required')}[/$ctp-red]")
             return
         address = urlsplit(url)
         if (
@@ -285,22 +287,22 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
         ):
             status.update(self._t("tui.remote_invalid_url"))
             return
-        status.update(f"[dim]{self._t('tui.remote_connecting')}[/dim]")
+        status.update(f"[$mf-muted]{self._t('tui.remote_connecting')}[/$mf-muted]")
         try:
             async with AsyncClient(base_url=url, timeout=10.0) as probe:
                 response = await probe.get("/snapshot", headers=basic_header(user, password))
         except (httpx.HTTPError, ValueError) as exc:
             status.update(
-                f"[red]{escape(self._t('tui.remote_unreachable', url=url, error=error_text(exc, self._t)))}[/red]"
+                f"[$ctp-red]{escape(self._t('tui.remote_unreachable', url=url, error=error_text(exc, self._t)))}[/$ctp-red]"
             )
             return
         if response.status_code == 401:
-            status.update(f"[red]{self._t('tui.remote_credentials_invalid')}[/red]")
+            status.update(f"[$ctp-red]{self._t('tui.remote_credentials_invalid')}[/$ctp-red]")
             clear_password()
             return
         if response.status_code >= 400:
             status.update(
-                f"[red]{self._t('tui.remote_http_error', status=response.status_code)}[/red]"
+                f"[$ctp-red]{self._t('tui.remote_http_error', status=response.status_code)}[/$ctp-red]"
             )
             return
         session: dict[str, Any] = {"url": url, "username": user, "autologin": bool(save)}
@@ -331,8 +333,12 @@ class LoginScreen(ModalScreen[dict[str, str] | None]):
 class LoginApp(App[dict[str, str] | None]):
     """The disconnected entry point uses the same modal as an attached client."""
 
+    CSS_PATH = "app.tcss"
+    ENABLE_COMMAND_PALETTE = False
+
     def __init__(self, session: dict[str, Any]) -> None:
         super().__init__()
+        apply_color_scheme(self, DEFAULT_THEME, builtin_themes()[DEFAULT_THEME])
         self.login = LoginScreen(session)
 
     def on_mount(self) -> None:
@@ -357,6 +363,7 @@ class RemoteServiceAdapter:
         self.log_queue: queue_module.Queue[Any] = queue_module.Queue()
         self.config = MailFlowConfig()
         self.config.general.timezone = self._snapshot.timezone
+        self.config.general.theme = self._snapshot.theme
         self._sections: list[SettingsSection] = []
         self.events = _EventProxy(client)
 
@@ -385,6 +392,9 @@ class RemoteServiceAdapter:
     def snapshot(self) -> RuntimeSnapshot:
         return self._snapshot
 
+    def color_schemes(self) -> dict[str, ColorScheme]:
+        return {**builtin_themes(), **self._snapshot.color_schemes}
+
     async def set_analysis_paused(self, paused: bool) -> None:
         self._snapshot = RuntimeSnapshot.model_validate(
             await self.client.set_analysis_paused(paused)
@@ -398,6 +408,7 @@ class RemoteServiceAdapter:
     async def refresh_snapshot(self) -> RuntimeSnapshot:
         self._snapshot = RuntimeSnapshot.model_validate(await self.client.snapshot())
         self.config.general.timezone = self._snapshot.timezone
+        self.config.general.theme = self._snapshot.theme
         self._apply_language(self._snapshot.language)
         return self._snapshot
 

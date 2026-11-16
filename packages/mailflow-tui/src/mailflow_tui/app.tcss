@@ -1,43 +1,101 @@
 /* MailFlow TUI layout — readable at normal terminal sizes. */
 
 Screen {
-    background: #1e1e2e;
+    background: $ctp-base;
+    color: $ctp-text;
 }
 
-/* Quiet tinted surfaces keep the semantic colors readable without glare. */
+Input, TextArea {
+    background: $ctp-mantle;
+    color: $ctp-text;
+}
+
+Input:focus, TextArea:focus {
+    background-tint: transparent;
+}
+
+Input > .input--placeholder,
+Input > .input--suggestion,
+TextArea > .text-area--placeholder {
+    color: $ctp-subtext0;
+}
+
+TextArea > .text-area--cursor {
+    background: $ctp-rosewater;
+    color: $ctp-base;
+}
+
+SelectCurrent {
+    background: $ctp-mantle;
+    color: $ctp-text;
+}
+
+SelectOverlay, OptionList, ListView {
+    background: $ctp-base;
+    color: $ctp-text;
+}
+
+OptionList > .option-list--highlighted,
+ListView > ListItem.--highlight {
+    background: $block-cursor-background;
+    color: $ctp-text;
+    text-style: bold;
+}
+
+Tabs, Tab {
+    background: $ctp-mantle;
+    color: $ctp-subtext0;
+}
+
+Tab.-active {
+    background: $ctp-base;
+    color: $ctp-lavender;
+    text-style: bold;
+}
+
+Markdown {
+    color: $ctp-text;
+}
+
+Markdown .code_inline {
+    color: $ctp-peach;
+    background: $ctp-surface0;
+}
+
+/* Official Catppuccin roles: neutral surfaces, restrained semantic accents. */
 Button {
     height: auto;
     min-width: 16;
     border: none;
     text-style: bold;
     content-align: center middle;
-    background: #313244;
+    background: $ctp-surface0;
     color: $text;
 }
 
 Button.-default {
-    background: #313244;
+    background: $ctp-surface0;
     color: $text;
 }
 
 Button.-primary {
-    background: #313d58;
-    color: $primary;
+    background: $ctp-blue;
+    color: $button-on-accent;
 }
 
 Button.-success {
-    background: #2d4239;
-    color: $success;
+    background: $ctp-green;
+    color: $button-on-accent;
 }
 
 Button.-warning {
-    background: #493f32;
-    color: $warning;
+    background: $ctp-yellow;
+    color: $button-on-warning;
 }
 
 Button.-error {
-    background: #49303e;
-    color: $error;
+    background: $ctp-red;
+    color: $button-on-accent;
 }
 
 Button:disabled {
@@ -87,8 +145,8 @@ SearchToggle.-active {
 #actions-smart-action {
     height: 3;
     margin-left: 1;
-    background: #3d3352;
-    color: $secondary;
+    background: $ctp-mauve;
+    color: $button-on-accent;
 }
 
 #smart-action:disabled,
@@ -163,7 +221,7 @@ SmartOperationEditModal {
 
 #smart-review-edit-fields {
     height: 1fr;
-    border: round $secondary;
+    border: round $border-blurred;
     padding: 0 1;
 }
 
@@ -179,7 +237,7 @@ SmartOperationEditModal {
 #smart-action-animation { height: 1; margin-bottom: 1; }
 #smart-action-animation LoadingIndicator { width: 8; height: 1; }
 #smart-action-log { height: auto; color: $text-muted; padding-left: 1; }
-#smart-action-result { border-top: solid $secondary; padding: 1 1 0 1; margin-top: 1; }
+#smart-action-result { border-top: solid $border-blurred; padding: 1 1 0 1; margin-top: 1; }
 #smart-action-objects { margin-top: 1; }
 #smart-review-operations { height: auto; margin-top: 1; }
 #smart-review-buttons { align-horizontal: right; }
@@ -244,13 +302,13 @@ Footer {
 #mail-table {
     width: 60%;
     height: 1fr;
-    border: round $primary;
+    border: round $border-blurred;
 }
 
 #mail-detail {
     width: 40%;
     height: 1fr;
-    border: round $secondary;
+    border: round $border-blurred;
     padding: 0 1;
     overflow-y: auto;
 }
@@ -263,7 +321,7 @@ ActionModal {
 #action-detail-scroll {
     width: 100%;
     height: 1fr;
-    border: round $secondary;
+    border: round $border-blurred;
     padding: 0 1;
     overflow-y: auto;
 }
@@ -376,13 +434,13 @@ ActionTypeField > Button {
 #actions-table {
     width: 60%;
     height: 1fr;
-    border: round $primary;
+    border: round $border-blurred;
 }
 
 #actions-detail {
     width: 40%;
     height: 1fr;
-    border: round $secondary;
+    border: round $border-blurred;
     padding: 0 1;
 }
 
@@ -426,7 +484,7 @@ ActionTypeField > Button {
     height: 1fr;
     margin: 0 1;
     padding: 0 1;
-    background: #181825;
+    background: $ctp-mantle;
 }
 
 /* Log export modal */
@@ -450,7 +508,7 @@ BotExportScreen {
 }
 #export-dialog #export-tree {
     height: 1fr;
-    border: round $primary;
+    border: round $border-blurred;
     margin-bottom: 1;
 }
 #export-dialog #export-actions {
@@ -525,7 +583,7 @@ BotExportScreen {
 #settings-config-scroll {
     height: 45%;
     margin: 0 1;
-    border: round $primary;
+    border: round $border-blurred;
 }
 
 #config-table {
@@ -562,7 +620,7 @@ LogExportScreen {
 #ask-correct-chat {
     width: 60%;
     height: 100%;
-    border: round $primary;
+    border: round $border-blurred;
     padding: 0 1;
 }
 #ask-correct-chat-label,
@@ -598,7 +656,7 @@ LogExportScreen {
 #ask-correct-info {
     width: 40%;
     height: 100%;
-    border: round $secondary;
+    border: round $border-blurred;
     padding: 0 1;
 }
 #ask-correct-info > Static {
@@ -649,7 +707,7 @@ LogExportScreen {
     height: auto;
     min-height: 10;
     margin: 0 1;
-    border: round $primary;
+    border: round $border-blurred;
 }
 
 #reply-toolbar {
@@ -683,36 +741,28 @@ LogExportScreen {
 }
 
 DataTable {
-    background: #181825;
+    background: $ctp-base;
+    color: $ctp-text;
+}
+
+DataTable:focus {
+    border: round $accent;
 }
 
 DataTable > .datatable--header {
-    background: #252538;
-    color: $primary;
+    background: $ctp-surface0;
+    color: $ctp-text;
     text-style: bold;
 }
 
 DataTable > .datatable--cursor,
 DataTable:focus > .datatable--cursor {
-    background: #34415c;
-    color: #cdd6f4;
+    background: $block-cursor-background;
+    color: $ctp-text;
 }
 
 DataTable > .datatable--hover {
-    background: #2b2e42;
-}
-
-#actions-table > .datatable--header {
-    color: $accent;
-}
-
-#llms-table > .datatable--header,
-#market-table > .datatable--header {
-    color: $secondary;
-}
-
-#notifications-table > .datatable--header {
-    color: $success;
+    background: $ctp-surface0;
 }
 
 #market-controls {
@@ -752,14 +802,14 @@ DataTable > .datatable--hover {
 
 #market-table,
 #runtime-plugins-table {
-    border: round $primary;
+    border: round $border-blurred;
 }
 
 #market-detail,
 #runtime-scroll {
     width: 2fr;
     height: 1fr;
-    border: round $secondary;
+    border: round $border-blurred;
     margin-left: 1;
     padding: 0 1;
 }
@@ -816,7 +866,7 @@ DataTable > .datatable--hover {
 }
 
 #runtime-plugins {
-    color: $primary;
+    color: $ctp-text;
     text-style: bold;
 }
 
@@ -859,7 +909,7 @@ PluginScaffoldScreen {
 
 #scaffold-tree {
     height: 14;
-    border: round $primary;
+    border: round $border-blurred;
     margin-bottom: 1;
 }
 
@@ -907,7 +957,7 @@ InstallScreen {
 
 #install-tree {
     height: 20;
-    border: round $primary;
+    border: round $border-blurred;
     margin-bottom: 1;
 }
 
@@ -944,7 +994,7 @@ ReposScreen {
 
 #repos-table {
     height: 10;
-    border: round $primary;
+    border: round $border-blurred;
     margin-bottom: 1;
 }
 
@@ -984,7 +1034,7 @@ MarketDetailScreen {
 
 #market-detail-title {
     text-style: bold;
-    color: $secondary;
+    color: $ctp-text;
     margin-bottom: 1;
 }
 
@@ -995,7 +1045,7 @@ MarketDetailScreen {
 
 #market-detail-readme {
     height: auto;
-    border: round $primary;
+    border: round $border-blurred;
     padding: 0 1;
 }
 
@@ -1029,19 +1079,19 @@ MarketDetailScreen {
 
 #settings-sidebar {
     width: 28;
-    border: round $primary;
+    border: round $border-blurred;
     margin: 0 1 0 1;
 }
 
 #settings-sidebar-title {
     text-style: bold;
-    color: $primary;
+    color: $ctp-text;
     padding: 0 1;
 }
 
 #settings-sections {
     height: 1fr;
-    background: #181825;
+    background: $ctp-mantle;
 }
 
 #settings-sections ListItem {
@@ -1060,7 +1110,7 @@ MarketDetailScreen {
 
 #settings-options {
     height: 1fr;
-    border: round $secondary;
+    border: round $border-blurred;
 }
 
 .settings-empty {
@@ -1137,7 +1187,7 @@ ListEditScreen, EntryFormScreen {
 
 #list-edit-text {
     height: 1fr;
-    border: round $primary;
+    border: round $border-blurred;
 }
 
 #entry-form-dialog {
@@ -1150,7 +1200,7 @@ ListEditScreen, EntryFormScreen {
 
 #entry-form-fields {
     height: 1fr;
-    border: round $primary;
+    border: round $border-blurred;
     padding: 0 1;
 }
 
@@ -1193,7 +1243,7 @@ ListEditScreen, EntryFormScreen {
 
 .field-multiline {
     height: 5;
-    border: round $primary;
+    border: round $border-blurred;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1217,15 +1267,7 @@ ListEditScreen, EntryFormScreen {
     height: auto;
     text-style: bold;
     padding: 0 1;
-    color: $primary;
-}
-
-#llms-title {
-    color: $secondary;
-}
-
-#notifications-title {
-    color: $success;
+    color: $ctp-text;
 }
 
 #accounts-help, #llms-help, #history-help, #notifications-help {
@@ -1238,14 +1280,14 @@ ListEditScreen, EntryFormScreen {
     height: 1fr;
     min-height: 3;
     margin: 0 1;
-    border: round $primary;
+    border: round $border-blurred;
 }
 
 #history-table {
     height: 1fr;
     min-height: 3;
     margin: 0 1;
-    border: round $secondary;
+    border: round $border-blurred;
 }
 
 #accounts-actions, #llms-actions, #history-actions, #notifications-actions {
@@ -1275,7 +1317,7 @@ MailHistoryScreen {
     max-width: 95%;
     height: 85%;
     background: $surface;
-    border: round $primary;
+    border: round $border-blurred;
     padding: 1;
 }
 
@@ -1380,7 +1422,7 @@ MailHistoryScreen {
        it grows with the dialog height instead of leaving a gap */
     height: 1fr;
     min-height: 4;
-    border: round $primary;
+    border: round $border-blurred;
     margin: 0 0 1 0;
     overflow-y: auto;
 }
@@ -1476,7 +1518,7 @@ UserProfileModal {
 }
 #profile-scroll {
     height: 12;
-    border: round $secondary;
+    border: round $border-blurred;
     margin-bottom: 1;
 }
 #profile-text {

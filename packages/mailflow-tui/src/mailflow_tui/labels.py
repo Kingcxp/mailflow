@@ -12,6 +12,8 @@ from mailflow.config import is_secret_key
 from mailflow.domain import MailRecord, Urgency
 from rich.text import Text
 
+from mailflow_tui.themes import theme_catalog
+
 _URGENCY_LABEL_KEYS: dict[str, str] = {
     "ad": "tui.urgency_opt_ad",
     "info": "tui.urgency_opt_info",
@@ -57,6 +59,9 @@ def plugin_text(service: Any, plugin: Any, field: str, *, language: str | None =
 
 def form_choice_label(service: Any, field: str, value: str) -> str:
     """Translate menu choices while preserving their stored plugin values."""
+    if field == "theme":
+        scheme = theme_catalog(service).get(value)
+        return scheme.name if scheme else str(service.t("tui.theme_choice_unavailable", theme=value))
     if field == "initial_sync":
         return str(service.t("ux.initial_" + value))
     if field == "minimum_urgency":
@@ -106,15 +111,15 @@ def mail_status(service: Any, record: MailRecord) -> Text:
         if record.analysis_state in {"pending", "analysing", "unanalysed", "cancelled"}
         else analysis_status(service, record)
     )
-    text = Text(source, style="cyan")
+    text = Text(source, style="$ctp-sapphire")
     if status:
         color = (
-            "bold red"
+            "bold $ctp-red"
             if record.analysis_state == "failed"
             or any(note.status == "failed" for note in record.processor_notes)
-            else "bold yellow"
+            else "bold $ctp-yellow"
             if record.analysis_is_fallback
-            else "dim"
+            else "$mf-muted"
         )
         text.append("\n" + status, style=color)
     return text

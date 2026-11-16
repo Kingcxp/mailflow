@@ -95,14 +95,14 @@ class LogExportScreen(ModalScreen[str | None]):
         tree = self.query_one("#log-export-tree", DirectoryTree)
         node = tree.cursor_node
         if node is None or node.data is None:
-            error.update(f"[yellow]{self._t('tui.scaffold_pick_folder')}[/yellow]")
+            error.update(f"[$ctp-yellow]{self._t('tui.scaffold_pick_folder')}[/$ctp-yellow]")
             return
         base = Path(str(node.data.path))
         if base.is_file():  # noqa: ASYNC240 — a stat on a picked path is instant
             base = base.parent
         name = str(self.query_one("#log-export-filename", Input).value).strip()
         if not name:
-            error.update(f"[yellow]{self._t('tui.log_export_filename_required')}[/yellow]")
+            error.update(f"[$ctp-yellow]{self._t('tui.log_export_filename_required')}[/$ctp-yellow]")
             return
         if not name.endswith(".log"):
             name += ".log"
@@ -121,6 +121,6 @@ class LogExportScreen(ModalScreen[str | None]):
             )
         except OSError as exc:
             detail = escape(error_detail(self._service, exc))
-            error.update(f"[red]{self._t('tui.log_export_failed', error=detail)}[/red]")
+            error.update(f"[$ctp-red]{self._t('tui.log_export_failed', error=detail)}[/$ctp-red]")
             return
         self.dismiss(str(target))

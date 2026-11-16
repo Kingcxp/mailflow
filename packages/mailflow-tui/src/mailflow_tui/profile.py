@@ -77,7 +77,7 @@ class UserProfileModal(ModalScreen[bool]):
             )
         except Exception as exc:
             self.query_one("#profile-status", Static).update(
-                f"[red]{escape(self._t('tui.profile_save_failed', error=error_detail(self._service, exc)))}[/red]"
+                f"[$ctp-red]{escape(self._t('tui.profile_save_failed', error=error_detail(self._service, exc)))}[/$ctp-red]"
             )
             return
         finally:
@@ -86,7 +86,7 @@ class UserProfileModal(ModalScreen[bool]):
             for field in self.query(TextArea):
                 field.disabled = False
         status = self._t("tui.profile_saved") if stored else self._t("tui.profile_cleared")
-        self.query_one("#profile-status", Static).update(f"[green]{escape(status)}[/green]")
+        self.query_one("#profile-status", Static).update(f"[$ctp-green]{escape(status)}[/$ctp-green]")
         self._dismiss_once(True)
 
     def action_save(self) -> None:

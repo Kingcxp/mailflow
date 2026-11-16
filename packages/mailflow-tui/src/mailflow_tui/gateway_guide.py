@@ -34,10 +34,10 @@ from mailflow_tui.mail_workflows import WorkflowScreen
 from mailflow_tui.widgets import Input
 
 _LEVEL_COLORS = {
-    "DEBUG": "dim",
-    "INFO": "cyan",
-    "WARN": "yellow",
-    "ERROR": "red",
+    "DEBUG": "$mf-muted",
+    "INFO": "$ctp-sapphire",
+    "WARN": "$ctp-yellow",
+    "ERROR": "$ctp-red",
 }
 
 
@@ -306,9 +306,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         bar = "═" * (width - 2)
         inner = message.center(width - 2)
         return (
-            f"[bold green]╔{bar}╗[/bold green]\n"
-            f"[bold green]║[/bold green] {inner} [bold green]║[/bold green]\n"
-            f"[bold green]╚{bar}╝[/bold green]"
+            f"[bold $ctp-green]╔{bar}╗[/bold $ctp-green]\n"
+            f"[bold $ctp-green]║[/bold $ctp-green] {inner} [bold $ctp-green]║[/bold $ctp-green]\n"
+            f"[bold $ctp-green]╚{bar}╝[/bold $ctp-green]"
         )
 
     # -- install progress ---------------------------------------------------------
@@ -370,7 +370,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             finally:
                 self._show_progress(False)
             self._log("INFO", self._t("tui.bots_guide_running", endpoint=instance.endpoint))
-            self._set_status(self._t("tui.bots_guide_running", endpoint=instance.endpoint), "green")
+            self._set_status(self._t("tui.bots_guide_running", endpoint=instance.endpoint), "$ctp-green")
             # 3. QR login loop (NapCat); the result is set now
             # so the Done button (or the manual 'I'm logged in' button)
             # can finish the flow even before automatic detection fires
@@ -395,7 +395,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             self._phase = "failed"
             message = self._t("tui.bots_guide_failed", error=error_detail(self._service, exc))
             self._log("ERROR", message)
-            self._set_status(message, "red")
+            self._set_status(message, "$ctp-red")
             return
 
     async def _provision_with_progress(self, service: MailFlowService, provider: str) -> Any:
@@ -524,7 +524,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         method waits for the gateway HTTP endpoint to become reachable
         so the subsequent connectivity check succeeds."""
         self._log("INFO", self._t("tui.bots_guide_qr_wait", provider=self._provider))
-        self._set_status(self._t("tui.bots_guide_qr_pending", provider=self._provider), "yellow")
+        self._set_status(self._t("tui.bots_guide_qr_pending", provider=self._provider), "$ctp-yellow")
         # first AppImage launch is slow (extract + QQ boot): 5 minutes
         deadline = time.monotonic() + float(self._options.get("login_timeout_seconds", 300))
         last_qr = ""
@@ -542,13 +542,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 if message != getattr(self, "_last_qr_diag", None):
                     self._log("WARN", message)
                     self._last_qr_diag = message
-                self._set_status(message, "yellow")
+                self._set_status(message, "$ctp-yellow")
                 await self._wait_qr_tick()
                 continue
             if qr == self._QR_LOGGED_IN:
                 self._set_qr(self._logged_in_banner())
                 self._log("INFO", self._t("tui.bots_guide_logged_in"))
-                self._set_status(self._t("tui.bots_guide_logged_in"), "green")
+                self._set_status(self._t("tui.bots_guide_logged_in"), "$ctp-green")
                 await self._finish_login(service, provider)
                 return
             if qr and qr != last_qr:
@@ -564,7 +564,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 # same QR as before: still waiting for the scan (or the
                 # provisioner's stable-QR login signal is about to fire)
                 self._set_status(
-                    self._t("tui.bots_guide_qr_wait_scan", provider=self._provider), "yellow"
+                    self._t("tui.bots_guide_qr_wait_scan", provider=self._provider), "$ctp-yellow"
                 )
             else:
                 self._set_qr("")
@@ -573,7 +573,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     self._log("INFO", self._t("tui.bots_guide_qr_pending", provider=self._provider))
                     self._logged_no_qr = True
                 self._set_status(
-                    self._t("tui.bots_guide_qr_pending", provider=self._provider), "yellow"
+                    self._t("tui.bots_guide_qr_pending", provider=self._provider), "$ctp-yellow"
                 )
             await self._wait_qr_tick()
         # the loop also exits via the manual "I'm logged in" button
@@ -583,7 +583,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             await self._finish_login(service, provider)
         else:
             self._log("ERROR", self._t("tui.bots_guide_qr_timeout"))
-            self._set_status(self._t("tui.bots_guide_qr_timeout"), "red")
+            self._set_status(self._t("tui.bots_guide_qr_timeout"), "$ctp-red")
             await service.gateway_shutdown(provider, self._instance_id)
             self._result = None
 
@@ -602,7 +602,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             return
         endpoint = (self._result or {}).get("endpoint", "")
         self._result = None
-        self._set_status(self._t("tui.bots_guide_endpoint_pending", endpoint=endpoint), "red")
+        self._set_status(self._t("tui.bots_guide_endpoint_pending", endpoint=endpoint), "$ctp-red")
         try:
             await service.gateway_shutdown(provider, self._instance_id)
         except Exception as exc:

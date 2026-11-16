@@ -18,7 +18,6 @@ from mailflow.service import MailFlowService
 from mailflow_bundled import create_plugin_manager
 from mailflow_tui.app import ActionsPane, MailFlowApp
 from mailflow_tui.confirm import ConfirmModal
-from rich.style import Style
 from textual.coordinate import Coordinate
 from textual.widgets import Button, DataTable
 
@@ -127,7 +126,7 @@ async def test_overdue_rows_fade_more_each_day_and_future_rows_stay_normal(tmp_p
 
             styles = {
                 str(table.get_cell(key, "content")): [
-                    Style.parse(str(table.get_cell(key, column).style))
+                    app.console.get_style(table.get_cell(key, column).style)
                     for column in ("time", "type", "content")
                 ]
                 for key in table.rows

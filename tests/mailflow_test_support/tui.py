@@ -4,17 +4,31 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from mailflow.config import LLMConfig, MailAccountConfig, MailFlowConfig
 from mailflow.contracts import MailSource
 from mailflow.domain import ComponentKind
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
+from mailflow.themes import DEFAULT_THEME, builtin_themes
 from mailflow_testkit.fakes import FakeMailSource, make_mail
+from mailflow_tui.themes import apply_color_scheme
+from textual.app import App
 from textual.widgets import (
     Static,
 )
+
+_Result = TypeVar("_Result")
+
+
+class ThemedApp(App[_Result]):
+    """Host isolated screens with the same palette as the actual terminal app."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        apply_color_scheme(self, DEFAULT_THEME, builtin_themes()[DEFAULT_THEME])
+
 
 AD_JSON = """{
   "summary": "Special promotion inside",

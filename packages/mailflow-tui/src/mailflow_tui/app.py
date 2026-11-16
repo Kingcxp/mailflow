@@ -31,6 +31,7 @@ from mailflow.mail_body import mail_body_text
 from mailflow.mail_query import MailQuery
 from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
+from mailflow.themes import DEFAULT_THEME
 from rich.console import Group as RichGroup
 from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text as RichText
@@ -41,7 +42,6 @@ from textual.coordinate import Coordinate
 from textual.css.query import QueryError
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.theme import Theme
 from textual.widget import MountError
 from textual.widgets import (
     Button,
@@ -87,6 +87,7 @@ from mailflow_tui.scaffold import PluginScaffoldScreen
 from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.settings import ConnectionsPane, MailHistoryScreen, SettingsPane
 from mailflow_tui.smart_action_review import SmartActionReviewModal
+from mailflow_tui.themes import apply_color_scheme, theme_catalog, urgency_style
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 from mailflow_tui.view_state import TableRowEvent, TableView, update_table
 from mailflow_tui.widgets import (
@@ -105,18 +106,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger("mailflow.tui")
 
 _BLANK = ""
-_DETAIL_TITLE = "bold #cdd6f4"
-_DETAIL_HEADING = "bold #89b4fa"
-_DETAIL_MUTED = "#a6adc8"
-_DETAIL_TIME = "bold #f9e2af"
-_DETAIL_TAG = "bold #cba6f7"
-_DETAIL_LINK = "underline #89dceb"
-_ACTION_OVERDUE_COLORS = ("#a6adc8", "#7f849c", "#585b70")
+_DETAIL_TITLE = "$mf-title"
+_DETAIL_HEADING = "$mf-heading"
+_DETAIL_MUTED = "$mf-muted"
+_DETAIL_TIME = "$mf-time"
+_DETAIL_TAG = "$mf-tag"
+_DETAIL_LINK = "$mf-link"
+_ACTION_OVERDUE_COLORS = ("$mf-overdue0", "$mf-overdue1", "$mf-overdue2")
 
 
 def _load_error(service: MailFlowService, exc: Exception) -> str:
     message = service.t("tui.data_load_failed", error=error_detail(service, exc))
-    return f"[red]{escape(message)}[/red]"
+    return f"[$ctp-red]{escape(message)}[/$ctp-red]"
 
 
 def _status_content(status: str | RichMarkdown, notes: list[str]) -> str | RichGroup:
@@ -206,7 +207,7 @@ def _action_age_style(service: MailFlowService, item: ActionItem) -> str:
     if days is None:
         return ""
     color = _ACTION_OVERDUE_COLORS[min(days, len(_ACTION_OVERDUE_COLORS) - 1)]
-    return f"not bold {color}"
+    return color
 
 
 def _action_time_style(service: MailFlowService, item: ActionItem) -> str:
@@ -261,7 +262,7 @@ def _action_detail_text(service: MailFlowService, item: ActionItem) -> RichText:
     detail.append("\n\n")
     detail.append(
         _detail_section(
-            service.t("tui.action_source"), source, style="cyan" if item.mail_id else _DETAIL_MUTED
+            service.t("tui.action_source"), source, style="$ctp-sapphire" if item.mail_id else _DETAIL_MUTED
         )
     )
     if style := _action_age_style(service, item):
@@ -916,7 +917,7 @@ class ActionModal(ModalScreen[Any]):
             node.update(_load_error(self._service, exc))
             return
         if record is None:
-            node.update(f"[dim]{self._service.t('tui.action_mail_missing')}[/dim]")
+            node.update(f"[$mf-muted]{self._service.t('tui.action_mail_missing')}[/$mf-muted]")
             return
         mail = record.mail
         self.query_one("#action-source-mail", Button).disabled = False
@@ -935,7 +936,7 @@ class ActionModal(ModalScreen[Any]):
             lines.append("\n\n")
         fields = [
             ("tui.detail_original_subject", mail.subject, _DETAIL_TITLE),
-            ("tui.column_sender", mail.sender.display or mail.sender.address, "cyan"),
+            ("tui.column_sender", mail.sender.display or mail.sender.address, "$ctp-sapphire"),
             ("tui.column_date", _localize(self._service, mail.date), _DETAIL_TIME),
         ]
         for label, value, style in fields:
@@ -945,7 +946,7 @@ class ActionModal(ModalScreen[Any]):
         summary = RichText(summary_value or self._service.t("tui.detail_analysis_unavailable"))
         if record.analysis_is_fallback and summary_value:
             summary.append(
-                f" ({self._service.t('tui.detail_summary_fallback')})", style="bold yellow"
+                f" ({self._service.t('tui.detail_summary_fallback')})", style="bold $ctp-yellow"
             )
         lines.append(_detail_section(self._service.t("tui.detail_summary"), summary))
         reason = record.analysis.reason if record.analysis else ""
@@ -1360,7 +1361,7 @@ class MailPane(Vertical):
         sender.truncate(32, overflow="ellipsis")
         return (
             _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
-            RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
+            RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency_style(urgency)),
             title,
             sender,
         )
@@ -1449,7 +1450,7 @@ class MailPane(Vertical):
         if matcher.error:
             self._set_static(
                 "#mail-analysis-status",
-                f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]",
+                f"[$ctp-red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/$ctp-red]",
             )
             return
         self._mail_matcher = matcher
@@ -1646,7 +1647,7 @@ class MailPane(Vertical):
         try:
             await self._handle_select_changed(event)
         except Exception as exc:
-            message = f"[red]{escape(error_message(self._service, exc))}[/red]"
+            message = f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]"
             self._set_operation_status(message)
 
     async def _handle_select_changed(self, event: Select.Changed) -> None:
@@ -1732,7 +1733,7 @@ class MailPane(Vertical):
             self._clear_mail_detail()
             self._set_static_text(
                 "#mail-analysis-status",
-                RichText(self._service.t("mail.not_found", mail_id=selected_id), style="yellow"),
+                RichText(self._service.t("mail.not_found", mail_id=selected_id), style="$ctp-yellow"),
             )
             return
         same_record = self._detail_record_id == selected_id
@@ -1762,10 +1763,10 @@ class MailPane(Vertical):
         summary_value = service.display_text(record.summary).strip()
         summary_line = _detail_section(service.t("tui.detail_summary"), summary_value)
         if not summary_value:
-            summary_line.append(service.t("tui.detail_analysis_unavailable"), style="yellow")
+            summary_line.append(service.t("tui.detail_analysis_unavailable"), style="$ctp-yellow")
         elif record.analysis_is_fallback:
             summary_line.append(
-                f" ({service.t('tui.detail_summary_fallback')})", style="bold yellow"
+                f" ({service.t('tui.detail_summary_fallback')})", style="bold $ctp-yellow"
             )
         self._set_static_text("#mail-summary", summary_line)
         reason = service.display_text(record.analysis.reason if record.analysis else "").strip()
@@ -1776,7 +1777,7 @@ class MailPane(Vertical):
             reason_line = _detail_section(
                 service.t("tui.detail_reason"),
                 service.t("tui.detail_reason_unavailable"),
-                style="yellow",
+                style="$ctp-yellow",
             )
         self._set_static_text("#mail-reason", reason_line)
         actions_text: RichText | None = None
@@ -1823,7 +1824,7 @@ class MailPane(Vertical):
                 if index:
                     attachments_line.append("\n\n")
                 attachments_line.append("• ", style=_DETAIL_HEADING)
-                attachments_line.append(attachment.filename, style="bold cyan")
+                attachments_line.append(attachment.filename, style="bold $ctp-blue")
                 attachments_line.append(
                     f"\n{attachment.content_type} · {attachment.size} B", style=_DETAIL_MUTED
                 )
@@ -1832,7 +1833,7 @@ class MailPane(Vertical):
         reply_line.append(service.t("tui.urgency_label") + ": ", style=_DETAIL_MUTED)
         reply_line.append(
             urgency_label(service, record.effective_urgency),
-            style="bold " + record.effective_urgency.color,
+            style="bold " + urgency_style(record.effective_urgency),
         )
         marker = service.t(
             "tui.detail_manual_marker"
@@ -1843,7 +1844,7 @@ class MailPane(Vertical):
         if record.analysis and record.analysis.reply_required:
             reply_line.append(
                 "\n" + service.t("tui.detail_reply_required", answer=service.t("common.yes")),
-                style="bold yellow",
+                style="bold $ctp-yellow",
             )
         if existing:
             reply_line.append(
@@ -1904,7 +1905,7 @@ class MailPane(Vertical):
         try:
             await self._handle_button_pressed(event)
         except Exception as exc:
-            message = f"[red]{escape(error_message(self._service, exc))}[/red]"
+            message = f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]"
             self._set_operation_status(message)
 
     async def _handle_button_pressed(self, event: Button.Pressed) -> None:
@@ -2223,8 +2224,8 @@ class MailPane(Vertical):
                     completed += 1
                 subject_short = escape((mail.subject or "")[:36])
                 self._set_operation_status(
-                    f"[cyan]{self._service.t('tui.history_progress', position=position, total=total)} "
-                    f"{subject_short}[/cyan]"
+                    f"[$ctp-sapphire]{self._service.t('tui.history_progress', position=position, total=total)} "
+                    f"{subject_short}[/$ctp-sapphire]"
                 )
                 try:
                     fresh = await self._service.process_mail(mail, force=True)
@@ -2266,18 +2267,18 @@ class MailPane(Vertical):
             await self.refresh_mail()
         if self._reparse_stop:
             self._set_operation_status(
-                f"[yellow]{self._service.t('tui.reparse_stopped', count=done, total=total)}[/yellow]"
+                f"[$ctp-yellow]{self._service.t('tui.reparse_stopped', count=done, total=total)}[/$ctp-yellow]"
             )
         elif failed:
             detail = "; ".join(failed[:3])
             more = f" (+{len(failed) - 3})" if len(failed) > 3 else ""
             self._set_operation_status(
-                f"[red]{self._service.t('tui.history_failed', count=len(failed))}: "
-                f"{escape(detail)}{more}[/red]"
+                f"[$ctp-red]{self._service.t('tui.history_failed', count=len(failed))}: "
+                f"{escape(detail)}{more}[/$ctp-red]"
             )
         else:
             self._set_operation_status(
-                f"[green]{self._service.t('tui.history_reanalyzed', count=done)}[/green]"
+                f"[$ctp-green]{self._service.t('tui.history_reanalyzed', count=done)}[/$ctp-green]"
             )
 
     async def _reparse_failed(self) -> None:
@@ -2285,14 +2286,14 @@ class MailPane(Vertical):
             failed_records = await self._service.list_failed_mails()
             if not failed_records:
                 self._set_operation_status(
-                    f"[green]{self._service.t('tui.reparse_none_failed')}[/green]"
+                    f"[$ctp-green]{self._service.t('tui.reparse_none_failed')}[/$ctp-green]"
                 )
                 return
             # immediate feedback before the first LLM call: each re-analysis can
             # take seconds (and may rate-limit), so without this the bulk
             # action looks like it never started
             self._set_operation_status(
-                f"[cyan]{self._service.t('tui.reparse_failed_start', count=len(failed_records))}[/cyan]"
+                f"[$ctp-sapphire]{self._service.t('tui.reparse_failed_start', count=len(failed_records))}[/$ctp-sapphire]"
             )
             await self._reparse_batch(
                 [record.mail for record in failed_records],
@@ -2385,7 +2386,7 @@ class MailPane(Vertical):
         worker = self._reparse_worker
         if worker is not None and not worker.is_finished:
             worker.cancel()
-        self._set_operation_status(f"[yellow]{self._service.t('tui.reparse_stopping')}[/yellow]")
+        self._set_operation_status(f"[$ctp-yellow]{self._service.t('tui.reparse_stopping')}[/$ctp-yellow]")
 
     async def _reparse_one(self, targets: list[str] | None = None) -> None:
         """Re-analyze the selected mail, with the same run/cancel controls."""
@@ -2393,7 +2394,7 @@ class MailPane(Vertical):
             targets = self._mail_targets() if targets is None else targets
             if not targets:
                 self._set_operation_status(
-                    f"[yellow]{self._service.t('tui.history_none_selected')}[/yellow]"
+                    f"[$ctp-yellow]{self._service.t('tui.history_none_selected')}[/$ctp-yellow]"
                 )
                 return
             records = [
@@ -2403,7 +2404,7 @@ class MailPane(Vertical):
             ]
             if not records:
                 self._set_operation_status(
-                    f"[yellow]{self._service.t('tui.mail_no_match')}[/yellow]"
+                    f"[$ctp-yellow]{self._service.t('tui.mail_no_match')}[/$ctp-yellow]"
                 )
                 return
             if len(records) > 1 and not await self._confirm(
@@ -2416,7 +2417,7 @@ class MailPane(Vertical):
                 return
             subject_short = escape((records[0].mail.subject or "")[:36])
             self._set_operation_status(
-                f"[cyan]{self._service.t('tui.reparse_one_start', subject=subject_short)}[/cyan]"
+                f"[$ctp-sapphire]{self._service.t('tui.reparse_one_start', subject=subject_short)}[/$ctp-sapphire]"
             )
             await self._reparse_batch(
                 [record.mail for record in records], [r.record_id for r in records]
@@ -2438,7 +2439,7 @@ class MailPane(Vertical):
         try:
             records = await self._service.list_mails()
             if not records:
-                self._set_operation_status(f"[yellow]{self._service.t('tui.mail_empty')}[/yellow]")
+                self._set_operation_status(f"[$ctp-yellow]{self._service.t('tui.mail_empty')}[/$ctp-yellow]")
                 return
             confirmed = await self._confirm(
                 title=self._service.t("tui.reparse_all_title"),
@@ -2448,7 +2449,7 @@ class MailPane(Vertical):
             if not confirmed:
                 return
             self._set_operation_status(
-                f"[cyan]{self._service.t('tui.reparse_all_start', count=len(records))}[/cyan]"
+                f"[$ctp-sapphire]{self._service.t('tui.reparse_all_start', count=len(records))}[/$ctp-sapphire]"
             )
             await self._reparse_batch(
                 [record.mail for record in records], [r.record_id for r in records]
@@ -2594,7 +2595,7 @@ class MailPane(Vertical):
             expired = await self._service.list_expired_mails()
             if not expired:
                 self._set_operation_status(
-                    f"[green]{self._service.t('tui.purge_expired_none')}[/green]"
+                    f"[$ctp-green]{self._service.t('tui.purge_expired_none')}[/$ctp-green]"
                 )
                 return
             confirmed = await self._confirm(
@@ -2621,7 +2622,7 @@ class MailPane(Vertical):
 
     def _report_bulk_failure(self, exc: BaseException) -> None:
         """A bulk action that cannot run says so instead of doing nothing."""
-        self._set_operation_status(f"[red]{escape(error_message(self._service, exc))}[/red]")
+        self._set_operation_status(f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]")
 
     async def _edit_profile(self) -> None:
         """Open the recipient-profile form; the text personalizes analysis."""
@@ -2636,7 +2637,7 @@ class MailPane(Vertical):
             return
         if not saved:
             return
-        self._set_operation_status(f"[green]{self._service.t('tui.profile_saved')}[/green]")
+        self._set_operation_status(f"[$ctp-green]{self._service.t('tui.profile_saved')}[/$ctp-green]")
 
     async def _confirm(self, *, title: str, body: str, confirm_label: str) -> bool:
         """Ask before a destructive or expensive bulk action.
@@ -2698,7 +2699,7 @@ class MailPane(Vertical):
                     self._clear_mail_detail()
                     self._set_static_text(
                         "#mail-analysis-status",
-                        RichText(self._service.t("tui.action_mail_missing"), style="yellow"),
+                        RichText(self._service.t("tui.action_mail_missing"), style="$ctp-yellow"),
                     )
                     self._sync_selection_controls()
                     return
@@ -2883,7 +2884,7 @@ class ActionsPane(Vertical):
             hint = self.query_one_optional("#actions-hint", Static)
             if hint is not None:
                 hint.update(
-                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]"
+                    f"[$ctp-red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/$ctp-red]"
                 )
             return
         self._actions_matcher = matcher
@@ -2919,7 +2920,7 @@ class ActionsPane(Vertical):
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
         rows: list[tuple[str, tuple[Any, ...]]] = []
         for item in items:
-            style = "dim" if item.preview else _action_age_style(self._service, item)
+            style = "$mf-muted" if item.preview else _action_age_style(self._service, item)
             rows.append(
                 (
                     item.item_id,
@@ -3187,7 +3188,7 @@ class ActionsPane(Vertical):
         try:
             await self._handle_action(event.button.id)
         except Exception as exc:
-            message = f"[red]{escape(error_message(self._service, exc))}[/red]"
+            message = f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]"
             self.query_one("#actions-hint", Static).update(message)
 
     async def _more_actions(self) -> None:
@@ -3582,17 +3583,17 @@ class RuntimePane(Vertical):
                     (
                         RichText(
                             service.i18n.plugin_text(plugin.plugin_id, "name", plugin.name),
-                            style="bold #89b4fa",
+                            style="bold $ctp-blue",
                             overflow="ellipsis",
                             no_wrap=True,
                         ),
                         RichText(
                             status_text,
                             style={
-                                "enabled": "#a6e3a1",
-                                "disabled": "#f9e2af",
-                                "error": "#f38ba8",
-                            }.get(status_key, "#a6adc8"),
+                                "enabled": "$ctp-green",
+                                "disabled": "$ctp-yellow",
+                                "error": "$ctp-red",
+                            }.get(status_key, "$ctp-subtext0"),
                         ),
                     ),
                 )
@@ -3651,23 +3652,23 @@ class RuntimePane(Vertical):
         )
         self._set_static(
             "#runtime-adapters",
-            f"[bold #89b4fa]{service.t('tui.runtime_adapters')}[/bold #89b4fa]\n{adapters or '  -'}",
+            f"[bold $ctp-blue]{service.t('tui.runtime_adapters')}[/bold $ctp-blue]\n{adapters or '  -'}",
         )
         self._set_static(
             "#runtime-accounts",
-            f"[bold #94e2d5]{service.t('tui.runtime_accounts')}[/bold #94e2d5]\n{accounts or '  -'}",
+            f"[bold $ctp-teal]{service.t('tui.runtime_accounts')}[/bold $ctp-teal]\n{accounts or '  -'}",
         )
         self._set_static(
             "#runtime-llms",
-            f"[bold #cba6f7]{service.t('tui.runtime_llms')}[/bold #cba6f7]\n{llms or '  -'}",
+            f"[bold $ctp-mauve]{service.t('tui.runtime_llms')}[/bold $ctp-mauve]\n{llms or '  -'}",
         )
         self._set_static(
             "#runtime-bindings",
-            f"[bold #89b4fa]{service.t('tui.runtime_bindings')}[/bold #89b4fa]\n{bindings or '  -'}",
+            f"[bold $ctp-blue]{service.t('tui.runtime_bindings')}[/bold $ctp-blue]\n{bindings or '  -'}",
         )
         self._set_static(
             "#runtime-storage",
-            f"[bold #a6e3a1]{service.t('tui.runtime_storage')}[/bold #a6e3a1]\n{snapshot.storage or '-'}",
+            f"[bold $ctp-green]{service.t('tui.runtime_storage')}[/bold $ctp-green]\n{snapshot.storage or '-'}",
         )
         if scroll is not None:
             scroll.call_after_refresh(
@@ -3710,7 +3711,7 @@ class RuntimePane(Vertical):
         if plugin is None:
             self._detail_open_for = None
             self.query_one("#runtime-status", Static).update(
-                f"[yellow]{self._service.t('plugin.unknown_plugin', plugin_id=plugin_id)}[/yellow]"
+                f"[$ctp-yellow]{self._service.t('plugin.unknown_plugin', plugin_id=plugin_id)}[/$ctp-yellow]"
             )
             return
         cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
@@ -3772,7 +3773,7 @@ class RuntimePane(Vertical):
             else:
                 return
         except Exception as exc:  # uv failures surface here too
-            status.update(f"[red]{escape(error_message(self._service, exc))}[/red]")
+            status.update(f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]")
             return
         status.update(message)
         await self.refresh_runtime()
@@ -3817,11 +3818,11 @@ class LogsPane(Vertical):
     # platform-level sub-identifiers within the chat category: tag text
     # suffix and color, so NapCat/OpenWeChat lines are distinguishable
     _CHAT_PLATFORMS: ClassVar[dict[str, tuple[str, str]]] = {
-        "napcat": ("napcat", "#89b4fa"),
-        "openwechat": ("openwechat", "#94e2d5"),
-        "wechatpadpro": ("wechatpadpro", "#cba6f7"),
-        "telegram": ("telegram", "#89dceb"),
-        "whatsapp": ("whatsapp", "#a6e3a1"),
+        "napcat": ("napcat", "$ctp-blue"),
+        "openwechat": ("openwechat", "$ctp-teal"),
+        "wechatpadpro": ("wechatpadpro", "$ctp-mauve"),
+        "telegram": ("telegram", "$ctp-sky"),
+        "whatsapp": ("whatsapp", "$ctp-green"),
     }
 
     @staticmethod
@@ -3838,20 +3839,20 @@ class LogsPane(Vertical):
 
     # Categories use quiet accents; red is reserved for failures.
     _CATEGORY_STYLES: ClassVar[dict[str, str]] = {
-        "chat": "#89b4fa",
-        "mail": "#94e2d5",
-        "llm": "#cba6f7",
-        "parse": "#b4befe",
-        "notify": "#a6e3a1",
-        "storage": "#a6adc8",
-        "system": "#a6adc8",
+        "chat": "$ctp-blue",
+        "mail": "$ctp-teal",
+        "llm": "$ctp-mauve",
+        "parse": "$ctp-lavender",
+        "notify": "$ctp-green",
+        "storage": "$ctp-subtext0",
+        "system": "$ctp-subtext0",
     }
     _LEVEL_STYLES: ClassVar[dict[str, str]] = {
-        "ERROR": "bold #f38ba8",
-        "CRITICAL": "bold #f38ba8",
-        "WARNING": "#f9e2af",
-        "INFO": "#89b4fa",
-        "DEBUG": "#a6adc8",
+        "ERROR": "bold $ctp-red",
+        "CRITICAL": "bold $ctp-red",
+        "WARNING": "$ctp-yellow",
+        "INFO": "$ctp-blue",
+        "DEBUG": "$ctp-subtext0",
     }
     _LEVEL_RANK: ClassVar[dict[str, int]] = {
         "DEBUG": 10,
@@ -4060,7 +4061,7 @@ class LogsPane(Vertical):
         if matcher.error:
             if status is not None:
                 status.update(
-                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]"
+                    f"[$ctp-red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/$ctp-red]"
                 )
             await self._restore_rendered_logs()
             return
@@ -4138,10 +4139,10 @@ class LogsPane(Vertical):
         # Layout: HH:MM:SS LEVEL [Category·platform]  message — the tag is
         # color-coded per platform, the message indented two spaces past
         # the bracket for a clear visual hierarchy.
-        text = Text(f"{time_part} ", style="#7f849c")
+        text = Text(f"{time_part} ", style="$ctp-overlay1")
         text.append(f"{level:<7}", style=self._LEVEL_STYLES.get(level, "bold"))
         text.append(f" [{cat_label}{platform_suffix}]", style=cat_style)
-        text.append(f"  {message}", style="#cdd6f4")
+        text.append(f"  {message}", style="$ctp-text")
         return text
 
     def _append_new_lines(self, new_lines: list[str], *, preserve_follow: bool = False) -> None:
@@ -4174,7 +4175,7 @@ class LogsPane(Vertical):
             status = self.query_one_optional("#logs-search-status", Static)
             if status is not None:
                 status.update(
-                    f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]"
+                    f"[$ctp-red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/$ctp-red]"
                 )
             self.run_worker(
                 cast(Any, self._render_logs),
@@ -4439,7 +4440,7 @@ class MarketDetailScreen(ModalScreen[Any]):
             return
         link = self.query_one_optional("#market-detail-link", Static)
         if link is not None:
-            link.update(f"[cyan]{escape(result)}[/cyan]")
+            link.update(f"[$ctp-sapphire]{escape(result)}[/$ctp-sapphire]")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -4564,7 +4565,7 @@ class MarketPane(Vertical):
                 }
             )
             if stale_names:
-                self._market_stale_status = f"[yellow]{self._service.t('tui.market_stale')}: {escape(', '.join(stale_names))}[/yellow]"
+                self._market_stale_status = f"[$ctp-yellow]{self._service.t('tui.market_stale')}: {escape(', '.join(stale_names))}[/$ctp-yellow]"
             await self._render_entries()
         await self.refresh_market()
 
@@ -4654,12 +4655,12 @@ class MarketPane(Vertical):
 
     def _market_status_style(self, plugin: MarketPlugin) -> str:
         if not self._is_installed(plugin):
-            return "#a6adc8"
+            return "$ctp-subtext0"
         return {
-            "enabled": "#a6e3a1",
-            "disabled": "#f9e2af",
-            "error": "#f38ba8",
-        }.get(self._service.plugin_status(plugin.id), "#89b4fa")
+            "enabled": "$ctp-green",
+            "disabled": "$ctp-yellow",
+            "error": "$ctp-red",
+        }.get(self._service.plugin_status(plugin.id), "$ctp-blue")
 
     def _sync_market_controls(self) -> None:
         plugin = self._selected
@@ -4745,7 +4746,7 @@ class MarketPane(Vertical):
         if failures:
             detail = "; ".join(f"{repo.name}: {reason}" for repo, reason in failures)
             self._market_stale_status = (
-                f"[yellow]{self._service.t('tui.market_stale')}: {escape(detail)}[/yellow]"
+                f"[$ctp-yellow]{self._service.t('tui.market_stale')}: {escape(detail)}[/$ctp-yellow]"
             )
         else:
             self._market_stale_status = ""
@@ -4773,7 +4774,7 @@ class MarketPane(Vertical):
         )
         if matcher.error:
             self._set_status(
-                f"[red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/red]"
+                f"[$ctp-red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/$ctp-red]"
             )
             return
         view = TableView.capture(table, self._selected.id if self._selected is not None else None)
@@ -4828,7 +4829,7 @@ class MarketPane(Vertical):
                 (
                     plugin.id,
                     (
-                        RichText(name, style="bold #cba6f7", overflow="ellipsis", no_wrap=True),
+                        RichText(name, style="bold $ctp-mauve", overflow="ellipsis", no_wrap=True),
                         RichText(
                             self._market_status_of(plugin), style=self._market_status_style(plugin)
                         ),
@@ -4873,8 +4874,8 @@ class MarketPane(Vertical):
     def _show_detail(self, plugin: MarketPlugin) -> None:
         self._selected = plugin
         name = plugin_text(self._service, plugin, "name") or plugin.id
-        summary = RichText(name, style="bold #cba6f7")
-        summary.append(f"  v{plugin.version}", style="#a6adc8")
+        summary = RichText(name, style="bold $ctp-mauve")
+        summary.append(f"  v{plugin.version}", style="$ctp-subtext0")
         summary.append("  " + self._market_status_of(plugin), style=self._market_status_style(plugin))
         self.query_one("#market-selection", Static).update(summary)
         readme = plugin_text(self._service, plugin, "readme")
@@ -5121,35 +5122,10 @@ class MailFlowApp(App[None]):
         session: SessionHost | None = None,
     ) -> None:
         super().__init__()
-        self.register_theme(
-            Theme(
-                name="mailflow",
-                primary="#89b4fa",
-                secondary="#cba6f7",
-                accent="#94e2d5",
-                foreground="#cdd6f4",
-                background="#1e1e2e",
-                surface="#181825",
-                panel="#313244",
-                success="#a6e3a1",
-                warning="#f9e2af",
-                error="#f38ba8",
-                variables={
-                    "border": "#45475a",
-                    "border-blurred": "#313244",
-                    "block-cursor-background": "#34415c",
-                    "block-cursor-foreground": "#cdd6f4",
-                    "block-cursor-blurred-background": "#313244",
-                    "block-cursor-blurred-foreground": "#bac2de",
-                    "input-selection-background": "#89b4fa 30%",
-                    "footer-background": "#181825",
-                    "footer-key-foreground": "#89b4fa",
-                    "button-focus-text-style": "bold underline",
-                },
-            )
-        )
-        self.theme = "mailflow"
         self._service = service
+        self._theme_signature: tuple[str, str] | None = None
+        self._missing_theme_notice = ""
+        self._apply_color_scheme()
         self._log_queue = log_queue
         self._remote = remote
         self._splash = splash
@@ -5168,6 +5144,57 @@ class MailFlowApp(App[None]):
         self._plugin_entries: dict[str, MarketPlugin] = {}
 
         self._reset_shortcuts()
+
+    def _apply_color_scheme(self) -> None:
+        configured = self._service.config.general.theme
+        schemes = theme_catalog(self._service)
+        selected = configured if configured in schemes else DEFAULT_THEME
+        scheme = schemes[selected]
+        signature = (configured, scheme.model_dump_json())
+        if signature != self._theme_signature:
+            apply_color_scheme(
+                self, selected, scheme, replace_rich=self._theme_signature is not None
+            )
+            self._theme_signature = signature
+            if self.is_running:
+                self.call_after_refresh(self._refresh_color_content)
+        if self.is_running and selected != configured and self._missing_theme_notice != configured:
+            self._missing_theme_notice = configured
+            self.notify(
+                self._service.t("tui.theme_unavailable", theme=configured),
+                severity="warning",
+                timeout=12,
+            )
+        elif selected == configured:
+            self._missing_theme_notice = ""
+
+    def _refresh_color_content(self) -> None:
+        # Re-render colored content in place; editors and page state stay intact.
+        for screen in self.screen_stack:
+            for node in screen.query(Static):
+                node.update(node.content, layout=False)
+            for table in screen.query(DataTable):
+                table.notify_style_update()
+        for pane in self.query(LogsPane):
+            pane.run_worker(
+                cast(Any, pane._render_logs),
+                exclusive=True,
+                group="logs-render",
+                exit_on_error=False,
+            )
+
+    async def _refresh_color_scheme(self) -> None:
+        if self._remote:
+            try:
+                await self._service.refresh_snapshot()
+            except Exception as exc:
+                logger.exception("could not refresh remote color scheme")
+                self.notify(
+                    self._service.t("tui.data_load_failed", error=error_detail(self._service, exc)),
+                    severity="warning",
+                )
+                return
+        self._apply_color_scheme()
 
     def _reset_shortcuts(self, *, refresh: bool = False) -> None:
         """Bind visible footer text from the active language pack."""
@@ -5207,6 +5234,10 @@ class MailFlowApp(App[None]):
     def action_shortcut_help(self) -> None:
         if not isinstance(self.screen, ShortcutHelp):
             self.push_screen(ShortcutHelp(self._service.t))  # pyright: ignore[reportUnknownMemberType]
+
+    def action_change_theme(self) -> None:
+        # Use the persisted setting rather than Textual's temporary preview.
+        self.action_goto_tab("tab-settings")
 
     def action_detach_session(self) -> None:
         if self._session is not None:
@@ -5281,6 +5312,7 @@ class MailFlowApp(App[None]):
 
     async def on_mount(self) -> None:
         self.title = self._service.t("tui.title")
+        self._apply_color_scheme()
         self._sync_connection_status()
         self._log_timer = self.set_interval(1.0, self._drain_logs)
         # preload the persisted marketplace cache so the Runtime tab's
@@ -5350,11 +5382,19 @@ class MailFlowApp(App[None]):
                 unsubscribe()
 
     async def _on_service_event(self, event: str, **payload: Any) -> None:
+        if event.startswith(("config.", "plugin.", "backup.restored")):
+            self.run_worker(
+                self._refresh_color_scheme(),
+                exclusive=True,
+                group="theme-refresh",
+                exit_on_error=False,
+            )
         if event == "language.changed":
             await self._on_language_changed(event, **payload)
         elif event == "remote.connection.changed":
             self._sync_connection_status()
             if payload.get("state") == "connected":
+                await self._refresh_color_scheme()
                 self._schedule_reload()
         elif event.startswith(
             (

@@ -269,7 +269,7 @@ class NotificationsPane(Vertical):
                             self._service.t("tui.plugin_status_enabled")
                             if entry["enabled"]
                             else self._service.t("tui.plugin_status_disabled"),
-                            style="green" if entry["enabled"] else "dim",
+                            style="$ctp-green" if entry["enabled"] else "$mf-muted",
                         ),
                         urgency_label(self._service, str(entry["urgency"])),
                         escape(targets),
@@ -348,7 +348,7 @@ class NotificationsPane(Vertical):
     def _show_error(self, error: BaseException | str) -> None:
         """Keep backend failure details localized, escaped, and credential-safe."""
         self.query_one("#notifications-status", Static).update(
-            f"[red]{escape(error_message(self._service, error))}[/red]"
+            f"[$ctp-red]{escape(error_message(self._service, error))}[/$ctp-red]"
         )
 
     def on_data_table_row_highlighted(self, event: Any) -> None:
@@ -572,7 +572,7 @@ class NotificationsPane(Vertical):
         index = self._selected_index(notifier_id)
         if index is None:
             self.query_one("#notifications-status", Static).update(
-                f"[red]{self._service.t('tui.notifications_select_first')}[/red]"
+                f"[$ctp-red]{self._service.t('tui.notifications_select_first')}[/$ctp-red]"
             )
             return
         entry = self._service.config.notifiers[index]
@@ -600,7 +600,7 @@ class NotificationsPane(Vertical):
         index = self._selected_index(notifier_id)
         if index is None:
             self.query_one("#notifications-status", Static).update(
-                f"[red]{self._service.t('tui.notifications_select_first')}[/red]"
+                f"[$ctp-red]{self._service.t('tui.notifications_select_first')}[/$ctp-red]"
             )
             return
         entry = self._service.config.notifiers[index]
@@ -613,7 +613,7 @@ class NotificationsPane(Vertical):
             gateway = self._gateway_for(self._service, provider) or ""
         if gateway not in self._service.gateway_providers():
             self.query_one("#notifications-status", Static).update(
-                f"[yellow]{self._service.t('tui.notif_relogin_manual')}[/yellow]"
+                f"[$ctp-yellow]{self._service.t('tui.notif_relogin_manual')}[/$ctp-yellow]"
             )
             return
         instance_id = entry.notifier_id
@@ -629,7 +629,7 @@ class NotificationsPane(Vertical):
         index = self._selected_index(notifier_id)
         if index is None:
             self.query_one("#notifications-status", Static).update(
-                f"[red]{self._service.t('tui.notifications_select_first')}[/red]"
+                f"[$ctp-red]{self._service.t('tui.notifications_select_first')}[/$ctp-red]"
             )
             return
         from mailflow_tui.settings import EntryFormScreen
@@ -772,14 +772,14 @@ class NotificationsPane(Vertical):
         self._statuses.pop(instance_id, None)
         self.refresh_data()
         self.query_one("#notifications-status", Static).update(
-            f"[green]{self._service.t('tui.notifications_configured_ok', instance=instance_id)}[/green]"
+            f"[$ctp-green]{self._service.t('tui.notifications_configured_ok', instance=instance_id)}[/$ctp-green]"
         )
 
     async def _delete_selected(self, notifier_id: str | None = None) -> None:
         index = self._selected_index(notifier_id)
         if index is None:
             self.query_one("#notifications-status", Static).update(
-                f"[red]{self._service.t('tui.notifications_select_first')}[/red]"
+                f"[$ctp-red]{self._service.t('tui.notifications_select_first')}[/$ctp-red]"
             )
             return
         entry = self._service.config.notifiers[index]
@@ -795,7 +795,7 @@ class NotificationsPane(Vertical):
                     instance=entry.notifier_id,
                     error=escape(error_detail(self._service, exc)),
                 )
-                self.query_one("#notifications-status", Static).update(f"[red]{message}[/red]")
+                self.query_one("#notifications-status", Static).update(f"[$ctp-red]{message}[/$ctp-red]")
                 return
         warning = ""
         try:

@@ -24,11 +24,12 @@ from mailflow_tui.notifications import NotificationsPane
 from mailflow_tui.pickers import ChoicePicker
 from mailflow_tui.remote import LoginScreen
 from mailflow_tui.settings import EntryFormScreen, ListEditScreen, LLMPane, SettingsPane
-from textual.app import App, ComposeResult
+from textual.app import ComposeResult
 from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 from textual.worker import WorkerCancelled
 
 from mailflow_test_support.commands import commands_service
+from mailflow_test_support.tui import ThemedApp as App
 from mailflow_test_support.ui import mock_http_client, until
 
 

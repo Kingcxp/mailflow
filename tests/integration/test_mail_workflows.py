@@ -35,10 +35,10 @@ from mailflow_testkit.fakes import FakeMailSource
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.mail_workflows import AttachmentsScreen, MailReader, TrashScreen
 from mailflow_tui.remote import RemoteServiceAdapter
-from textual.app import App
 from textual.widgets import Button, Input, Select, TextArea
 
 from mailflow_test_support.commands import make_record
+from mailflow_test_support.tui import ThemedApp as App
 from mailflow_test_support.ui import mock_http_client, until
 
 

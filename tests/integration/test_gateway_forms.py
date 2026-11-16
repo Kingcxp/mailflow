@@ -10,9 +10,9 @@ import httpx
 import pytest
 from mailflow.i18n import I18n
 from mailflow_tui.notifications import NotificationsPane
-from textual.app import App
 from textual.widgets import Button, Static
 
+from mailflow_test_support.tui import ThemedApp as App
 from mailflow_test_support.ui import until
 
 
@@ -161,7 +161,6 @@ async def test_guided_wechatpadpro_notifier_uses_base_url(monkeypatch: pytest.Mo
 async def test_guide_escape_cancels_deployment_and_shuts_down() -> None:
     """Escape has the same cleanup semantics as the visible Cancel button."""
     from mailflow_tui.gateway_guide import GatewayGuideModal
-    from textual.app import App
 
     class GuideService:
         def __init__(self) -> None:

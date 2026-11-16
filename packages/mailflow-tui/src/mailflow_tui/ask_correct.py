@@ -28,13 +28,13 @@ from textual.widgets import Button, Checkbox, Footer, Markdown, Static
 
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.labels import mail_status, urgency_label
+from mailflow_tui.themes import urgency_style
 from mailflow_tui.widgets import Input
 
 if TYPE_CHECKING:
     from mailflow_tui.app import MailFlowApp
 
-# Brand accent used for the title bar (matches the app's $accent).
-_ACCENT = "#7EA7F8"
+_ACCENT = "$ctp-lavender"
 
 logger = logging.getLogger("mailflow.tui.ask_correct")
 
@@ -59,7 +59,7 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
     def compose(self) -> ComposeResult:
         yield Static(
             f"[bold {_ACCENT}]{escape(self._record.mail.subject)}[/bold {_ACCENT}]  "
-            f"[dim]{escape(self._t('tui.ask_correct_ephemeral'))}[/dim]",
+            f"[$mf-muted]{escape(self._t('tui.ask_correct_ephemeral'))}[/$mf-muted]",
             id="ask-correct-title",
         )
         with Horizontal(id="ask-correct-body"):
@@ -97,11 +97,10 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
         """
         record = self._record
         urgency = record.effective_urgency
-        # The four contract colors are reused everywhere; the localized label
-        # receives the same color while its stored enum value stays unchanged.
+        # Match the active palette without changing stored priority semantics.
         label = urgency_label(self._service, urgency)
         urgency_line = RichText(f"{self._t('tui.column_urgency')}: ", style="bold")
-        urgency_line.append(f"■ {label}", style=f"bold {urgency.color}")
+        urgency_line.append(f"■ {label}", style=f"bold {urgency_style(urgency)}")
         self.query_one("#ask-correct-urgency", Static).update(  # pyright: ignore[reportUnknownMemberType]
             urgency_line
         )
@@ -128,10 +127,10 @@ class AskCorrectModal(ModalScreen[dict[str, Any] | None]):
             reason_line
         )
         body = mail_body_text(record.mail)
-        body_line = RichText(f"{self._t('tui.detail_body')}: ", style="dim bold")
+        body_line = RichText(f"{self._t('tui.detail_body')}: ", style="$mf-heading")
         body_line.append(body)
         if record.mail.image_text:
-            body_line.append(f"\n\n{self._t('mail.field_image_text')}: ", style="dim bold")
+            body_line.append(f"\n\n{self._t('mail.field_image_text')}: ", style="$mf-heading")
             body_line.append(record.mail.image_text)
         self.query_one("#ask-correct-original-body", Static).update(  # pyright: ignore[reportUnknownMemberType]
             body_line
