@@ -1124,12 +1124,13 @@ class MailPane(Vertical):
             return
         for key in ("selected", "urgency", "subject", "sender", "date"):
             _remove_column(table, key)
+        table.add_column(RichText("[ ]"), key="selected", width=3)
         table.add_column(self._service.t("tui.column_date"), key="date")
         table.add_column(self._service.t("tui.column_urgency"), key="urgency")
         table.add_column(self._service.t("tui.column_subject"), key="subject")
         table.add_column(self._service.t("tui.column_sender"), key="sender")
         table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
-        table.tooltip = self._service.t("tui.selection_help")
+        table.tooltip = None
         urgency = self._urgency_select()
         if urgency is not None:
             urgency.tooltip = self._service.t("tui.urgency_help")
@@ -1207,7 +1208,9 @@ class MailPane(Vertical):
 
     def _mail_cells(self, record: MailRecord) -> tuple[Any, ...]:
         urgency = record.effective_urgency
+        table = self._mail_table()
         return (
+            table.check_label(record.record_id) if table is not None else RichText("[ ]"),
             _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
             RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
             RichText(record.mail.subject or self._service.t("tui.mail_no_subject")),
@@ -2489,13 +2492,14 @@ class ActionsPane(Vertical):
             return
         for key in ("selected", "time", "type", "content", "notes", "source"):
             _remove_column(table, key)
+        table.add_column(RichText("[ ]"), key="selected", width=3)
         table.add_column(self._service.t("tui.action_time"), key="time")
         table.add_column(self._service.t("tui.action_type"), key="type")
         table.add_column(self._service.t("tui.action_content"), key="content")
         table.add_column(self._service.t("tui.action_notes"), key="notes")
         table.add_column(self._service.t("tui.action_source"), key="source")
         table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
-        table.tooltip = self._service.t("tui.selection_help")
+        table.tooltip = None
         self._columns_done = True
 
     async def relabel(self) -> None:
@@ -2597,6 +2601,7 @@ class ActionsPane(Vertical):
                 (
                     item.item_id,
                     (
+                        table.check_label(item.item_id),
                         RichText(_action_time_range(self._service, item), style=style),
                         RichText(_action_type_label(self._service, item.action_type), style=style),
                         RichText(

@@ -22,6 +22,7 @@ from collections.abc import Callable
 from typing import Any, ClassVar, cast
 
 from mailflow.i18n import I18n
+from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from textual import events
@@ -234,11 +235,14 @@ class ShortcutHelp(ModalScreen[None]):
             ("Ctrl+X / Shift+Delete", "help_edit_cut"),
             ("Ctrl+Z / Ctrl+Y", "help_edit_history"),
             ("↑ / ↓ / PageUp / PageDown", "help_rows"),
-            ("Space", "selection_toggle"),
+            ("Space / Ctrl+Enter", "selection_toggle"),
+            ("Ctrl+Click", "help_selection_toggle"),
+            ("Shift+↑ / ↓ / Click", "help_selection_extend"),
             ("F2", "help_selection_mode"),
             ("F3", "help_selection_range"),
             ("Ctrl+A / F4", "help_selection_all"),
             ("Esc", "help_selection_clear"),
+            ("M / Shift+F10", "help_selection_menu"),
             ("Ctrl+Z", "help_mail_undo"),
         ):
             table.add_row(key, self._t(f"tui.{description}"))
@@ -276,17 +280,28 @@ class ShortcutHelp(ModalScreen[None]):
 class SelectionTable(DataTable[Any]):
     """Checked rows are independent of the row being read or edited."""
 
+    COMPONENT_CLASSES: ClassVar[set[str]] = {"selectiontable--checked"}
+    DEFAULT_CSS = """
+    SelectionTable > .selectiontable--checked { background: $primary 22%; }
+    """
+
     BINDINGS: ClassVar[list[Any]] = [
-        Binding("space", "toggle_check", show=False),
+        Binding("space,ctrl+enter,ctrl+j", "toggle_check", show=False),
         Binding("ctrl+a,f4", "toggle_all", show=False),
         Binding("escape", "clear_checks", show=False),
         Binding("shift+up", "extend_selection(-1)", show=False),
         Binding("shift+down", "extend_selection(1)", show=False),
         Binding("f2", "selection_mode", show=False),
         Binding("f3", "select_range", show=False),
+        Binding("m,shift+f10", "context_menu", show=False),
     ]
 
     class SelectionChanged(Message):
+        def __init__(self, table: SelectionTable) -> None:
+            super().__init__()
+            self.table = table
+
+    class MenuRequested(Message):
         def __init__(self, table: SelectionTable) -> None:
             super().__init__()
             self.table = table
@@ -297,6 +312,7 @@ class SelectionTable(DataTable[Any]):
         self.checked_keys: set[str] = set()
         self.unselectable_keys: set[str] = set()
         self._anchor: str | None = None
+        self._range_base: set[str] | None = None
         self.selection_mode = False
 
     def on_mount(self) -> None:
@@ -308,11 +324,15 @@ class SelectionTable(DataTable[Any]):
     def relabel(self) -> None:
         self._bindings.bind("f2", "selection_mode", self._t("tui.selection_mode"), show=False)
         self._bindings.bind("f3", "select_range", self._t("tui.selection_range"), show=False)
-        self.tooltip = self._t("tui.selection_help")
+        self.tooltip = None
 
     def action_selection_mode(self) -> None:
         self.selection_mode = not self.selection_mode
+        self._range_base = None
         self.post_message(self.SelectionChanged(self))
+
+    def action_context_menu(self) -> None:
+        self.post_message(self.MenuRequested(self))
 
     def action_select_range(self) -> None:
         key = self._key_at(self.cursor_row)
@@ -331,25 +351,40 @@ class SelectionTable(DataTable[Any]):
         self.set_checks(self.checked_keys & available)
 
     def set_checks(self, keys: set[str]) -> None:
+        self._range_base = None
+        self._set_checks(keys)
+
+    def _set_checks(self, keys: set[str]) -> None:
         keys = keys - self.unselectable_keys
         if keys == self.checked_keys:
             return
+        changed = self.checked_keys ^ keys
         self.checked_keys = set(keys)
         if "selected" in self.columns:
-            for key in self.visible_keys():
+            for key in changed & set(self.visible_keys()):
                 self.update_cell(key, "selected", self.check_label(key))
+        self._clear_caches()
+        self.refresh()
         self.post_message(self.SelectionChanged(self))
 
+    def _get_row_style(self, row_index: int, base_style: Style) -> Style:
+        style = super()._get_row_style(row_index, base_style)
+        if self._key_at(row_index) in self.checked_keys:
+            style += self.get_component_styles("selectiontable--checked").rich_style
+        return style
+
     def _key_at(self, row: int) -> str | None:
-        keys = self.visible_keys()
-        return keys[row] if 0 <= row < len(keys) else None
+        rows = self.ordered_rows
+        return str(rows[row].key.value) if 0 <= row < len(rows) else None
 
     def _check_range(self, key: str) -> None:
         keys = self.visible_keys()
         if self._anchor not in keys:
             self._anchor = key
+        if self._range_base is None:
+            self._range_base = set(self.checked_keys)
         start, end = sorted((keys.index(self._anchor), keys.index(key)))
-        self.set_checks(self.checked_keys | set(keys[start : end + 1]))
+        self._set_checks(self._range_base | set(keys[start : end + 1]))
 
     def action_toggle_check(self) -> None:
         key = self._key_at(self.cursor_row)
@@ -372,16 +407,40 @@ class SelectionTable(DataTable[Any]):
     def action_extend_selection(self, direction: int) -> None:
         if not self.row_count:
             return
-        if self._anchor is None:
+        if self._range_base is None:
             self._anchor = self._key_at(self.cursor_row)
         self.move_cursor(row=max(0, min(self.row_count - 1, self.cursor_row + direction)))
         key = self._key_at(self.cursor_row)
         if key is not None:
             self._check_range(key)
 
+    def action_cursor_up(self) -> None:
+        self._range_base = None
+        super().action_cursor_up()
+
+    def action_cursor_down(self) -> None:
+        self._range_base = None
+        super().action_cursor_down()
+
+    def action_page_up(self) -> None:
+        self._range_base = None
+        super().action_page_up()
+
+    def action_page_down(self) -> None:
+        self._range_base = None
+        super().action_page_down()
+
     def on_click(self, event: events.Click) -> None:
         meta = event.style.meta
         row, column = meta.get("row"), meta.get("column")
+        if event.button == 3:
+            if isinstance(row, int) and row >= 0:
+                self.move_cursor(row=row)
+            self.focus()
+            self.action_context_menu()
+            event.stop()
+            event.prevent_default()
+            return
         if event.button != 1 or not isinstance(row, int):
             return
         checkbox = column == 0 and "selected" in self.columns
@@ -399,6 +458,9 @@ class SelectionTable(DataTable[Any]):
             else:
                 self.action_toggle_check()
         else:
+            if row >= 0:
+                self._anchor = self._key_at(row)
+                self._range_base = None
             return
         self.focus()
         event.stop()

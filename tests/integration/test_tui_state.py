@@ -790,6 +790,24 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         app.screen.query_one("#shortcut-close", Button).press()
         await pilot.pause()
         assert table.has_focus
+        # Range selection can shrink and keeps rows checked individually beforehand.
+        table.move_cursor(row=0)
+        await pilot.press("ctrl+enter", "shift+down", "shift+down")
+        assert table.checked_keys == set(keys(table))
+        await pilot.press("shift+up")
+        assert table.checked_keys == set(keys(table)[:2])
+        await pilot.press("shift+up")
+        assert table.checked_keys == {keys(table)[0]}
+        await pilot.click(table, offset=(25, 3), ctrl=True)
+        clicked = keys(table)[table.cursor_row]
+        assert clicked != keys(table)[0]
+        assert table.checked_keys == {keys(table)[0], clicked}
+        await pilot.click(table, offset=(25, 3), ctrl=True)
+        assert table.checked_keys == {keys(table)[0]}
+        await pilot.press("escape", "ctrl+j")
+        assert table.checked_keys == {clicked}
+        await pilot.press("escape", "home")
+        table.move_cursor(row=0)
         await pilot.press("space", "down", "down", "f3")
         assert len(table.checked_keys) == 3
         await pilot.press("escape", "f2")
