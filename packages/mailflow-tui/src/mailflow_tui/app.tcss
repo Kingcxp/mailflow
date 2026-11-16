@@ -4,55 +4,59 @@ Screen {
     background: #1e1e2e;
 }
 
-/* Textual 8 buttons: the stock theme draws every variant on ansi_default
-   (black-on-black on dark terminals) and its tall border makes fixed
-   height:3 buttons overflow their 3-row containers. Use flat, explicit
-   high-contrast variants with auto height (1 text row + line-pad). */
+/* Quiet tinted surfaces keep the semantic colors readable without glare. */
 Button {
     height: auto;
     min-width: 16;
     border: none;
     text-style: bold;
     content-align: center middle;
-    /* Fallback for any variant Textual leaves on ansi_default (black on
-       black in dark terminals): an explicit surface with readable text. */
-    background: $surface-lighten-2;
+    background: #313244;
     color: $text;
 }
 
 Button.-default {
-    background: $surface-lighten-2;
+    background: #313244;
     color: $text;
 }
 
 Button.-primary {
-    background: $primary;
-    color: #11111b;
+    background: #313d58;
+    color: $primary;
 }
 
 Button.-success {
-    background: $success;
-    color: #11111b;
+    background: #2d4239;
+    color: $success;
 }
 
 Button.-warning {
-    background: $warning;
-    color: #11111b;
+    background: #493f32;
+    color: $warning;
 }
 
 Button.-error {
-    background: $error;
-    color: #11111b;
+    background: #49303e;
+    color: $error;
 }
 
 Button:disabled {
     background: $surface;
     color: $text-disabled;
+    text-style: none;
 }
 
 Button:hover,
 Button:focus {
-    text-style: bold reverse;
+    background-tint: $foreground 7%;
+}
+
+Button:focus {
+    text-style: bold underline;
+}
+
+Button:disabled:hover {
+    background-tint: transparent;
 }
 
 /* The 3x3 toggles must read as one solid block: reverse-video on hover only
@@ -83,6 +87,14 @@ SearchToggle.-active {
 #actions-smart-action {
     height: 3;
     margin-left: 1;
+    background: #3d3352;
+    color: $secondary;
+}
+
+#smart-action:disabled,
+#actions-smart-action:disabled {
+    background: $surface;
+    color: $text-disabled;
 }
 
 #actions-search-row,
@@ -409,14 +421,12 @@ ActionTypeField > Button {
     margin: 0 1;
 }
 
-/* the export button must match the Select's bordered 3-row height */
-#logs-export {
-    height: 3;
-}
-
 #log-view {
     border: round $accent;
-    height: 100%;
+    height: 1fr;
+    margin: 0 1;
+    padding: 0 1;
+    background: #181825;
 }
 
 /* Log export modal */
@@ -485,18 +495,12 @@ BotExportScreen {
 }
 
 #log-controls Select {
-    width: 24;
+    width: 1fr;
     margin-right: 1;
 }
 
 #log-controls Input {
     width: 1fr;
-}
-
-#log-scroll {
-    height: 1fr;
-    margin: 0 1;
-    border: round $accent;
 }
 
 #settings-label {
@@ -682,9 +686,33 @@ DataTable {
     background: #181825;
 }
 
-DataTable > .datatable--cursor {
-    background: $accent;
-    color: $text;
+DataTable > .datatable--header {
+    background: #252538;
+    color: $primary;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor,
+DataTable:focus > .datatable--cursor {
+    background: #34415c;
+    color: #cdd6f4;
+}
+
+DataTable > .datatable--hover {
+    background: #2b2e42;
+}
+
+#actions-table > .datatable--header {
+    color: $accent;
+}
+
+#llms-table > .datatable--header,
+#market-table > .datatable--header {
+    color: $secondary;
+}
+
+#notifications-table > .datatable--header {
+    color: $success;
 }
 
 #market-controls {
@@ -947,6 +975,7 @@ MarketDetailScreen {
 
 #market-detail-dialog {
     width: 96;
+    max-width: 95%;
     height: 85%;
     border: round $accent;
     background: $surface;
@@ -955,6 +984,7 @@ MarketDetailScreen {
 
 #market-detail-title {
     text-style: bold;
+    color: $secondary;
     margin-bottom: 1;
 }
 
@@ -980,7 +1010,13 @@ MarketDetailScreen {
 }
 
 #market-detail-actions Button {
+    width: 1fr;
+    min-width: 0;
     margin-right: 1;
+}
+
+#detail-close {
+    margin-right: 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -999,6 +1035,7 @@ MarketDetailScreen {
 
 #settings-sidebar-title {
     text-style: bold;
+    color: $primary;
     padding: 0 1;
 }
 
@@ -1180,6 +1217,15 @@ ListEditScreen, EntryFormScreen {
     height: auto;
     text-style: bold;
     padding: 0 1;
+    color: $primary;
+}
+
+#llms-title {
+    color: $secondary;
+}
+
+#notifications-title {
+    color: $success;
 }
 
 #accounts-help, #llms-help, #history-help, #notifications-help {
@@ -1471,11 +1517,11 @@ UserProfileModal {
 }
 
 #log-filters {
-    padding: 0 1;
+    padding: 0;
 }
 
 #log-search-row {
-    padding: 0 1;
+    padding: 0;
 }
 
 #log-search {
@@ -1485,7 +1531,6 @@ UserProfileModal {
 #logs-export {
     min-width: 10;
     height: 3;
-    margin-left: 1;
 }
 
 #actions-search-row,

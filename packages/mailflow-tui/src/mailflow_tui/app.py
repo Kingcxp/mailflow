@@ -41,6 +41,7 @@ from textual.coordinate import Coordinate
 from textual.css.query import QueryError
 from textual.markup import escape
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widget import MountError
 from textual.widgets import (
     Button,
@@ -1098,7 +1099,7 @@ class MailPane(Vertical):
                     yield Button(
                         self._service.t("tui.btn_reparse_failed"),
                         id="btn-reparse-failed",
-                        variant="error",
+                        variant="warning",
                     )
                 with Horizontal(id="mail-actions-row3"):
                     yield Button(
@@ -1128,7 +1129,7 @@ class MailPane(Vertical):
             (
                 ("btn-reply", "tui.btn_reply", "success"),
                 ("btn-reparse", "tui.btn_reparse", "primary"),
-                ("btn-reparse-failed", "tui.btn_reparse_failed", "error"),
+                ("btn-reparse-failed", "tui.btn_reparse_failed", "warning"),
             ),
             (
                 ("btn-purge-expired", "tui.btn_purge_expired", "warning"),
@@ -2776,7 +2777,7 @@ class ActionsPane(Vertical):
             yield Button(
                 self._service.t("tui.btn_add_todo"),
                 id="actions-add",
-                variant="primary",
+                variant="success",
             )
             yield Button(
                 self._service.t("tui.btn_edit"),
@@ -3816,11 +3817,11 @@ class LogsPane(Vertical):
     # platform-level sub-identifiers within the chat category: tag text
     # suffix and color, so NapCat/OpenWeChat lines are distinguishable
     _CHAT_PLATFORMS: ClassVar[dict[str, tuple[str, str]]] = {
-        "napcat": ("napcat", "#F56C6C"),
-        "openwechat": ("openwechat", "#E6A23C"),
-        "wechatpadpro": ("wechatpadpro", "#67C23A"),
-        "telegram": ("telegram", "#229ED9"),
-        "whatsapp": ("whatsapp", "#25D366"),
+        "napcat": ("napcat", "#89b4fa"),
+        "openwechat": ("openwechat", "#94e2d5"),
+        "wechatpadpro": ("wechatpadpro", "#cba6f7"),
+        "telegram": ("telegram", "#89dceb"),
+        "whatsapp": ("whatsapp", "#a6e3a1"),
     }
 
     @staticmethod
@@ -3835,23 +3836,22 @@ class LogsPane(Vertical):
                 return category
         return "system"
 
-    # category tag colors (contract palette reuse: chat=accent blue,
-    # mail=info green, llm=important amber, parse=urgent red, notify=sys)
+    # Categories use quiet accents; red is reserved for failures.
     _CATEGORY_STYLES: ClassVar[dict[str, str]] = {
-        "chat": "#7EA7F8",
-        "mail": "#67C23A",
-        "llm": "#E6A23C",
-        "parse": "#F56C6C",
-        "notify": "#E6A23C",
-        "storage": "#909399",
-        "system": "#909399",
+        "chat": "#89b4fa",
+        "mail": "#94e2d5",
+        "llm": "#cba6f7",
+        "parse": "#b4befe",
+        "notify": "#a6e3a1",
+        "storage": "#a6adc8",
+        "system": "#a6adc8",
     }
     _LEVEL_STYLES: ClassVar[dict[str, str]] = {
-        "ERROR": "bold red",
-        "CRITICAL": "bold red",
-        "WARNING": "yellow",
-        "INFO": "dim",
-        "DEBUG": "dim",
+        "ERROR": "bold #f38ba8",
+        "CRITICAL": "bold #f38ba8",
+        "WARNING": "#f9e2af",
+        "INFO": "#89b4fa",
+        "DEBUG": "#a6adc8",
     }
     _LEVEL_RANK: ClassVar[dict[str, int]] = {
         "DEBUG": 10,
@@ -3890,6 +3890,13 @@ class LogsPane(Vertical):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="log-controls"):
+            with Horizontal(id="log-search-row"):
+                yield Input(
+                    placeholder=self._service.t("tui.logs_search_placeholder"),
+                    id="log-search",
+                )
+                yield SearchToggle("regex", ident="log-search-regex")
+                yield SearchToggle("case", ident="log-search-case")
             with Horizontal(id="log-filters"):
                 yield SafeSelect(
                     [
@@ -3906,21 +3913,13 @@ class LogsPane(Vertical):
                     id="log-source",
                     allow_blank=False,
                 )
-            with Horizontal(id="log-search-row"):
-                yield Input(
-                    placeholder=self._service.t("tui.logs_search_placeholder"),
-                    id="log-search",
-                )
-                yield SearchToggle("regex", ident="log-search-regex")
-                yield SearchToggle("case", ident="log-search-case")
                 yield Button(
                     self._service.t("tui.logs_export"),
                     id="logs-export",
-                    variant="default",
+                    variant="primary",
                 )
         yield Static("", id="logs-search-status")
-        with ScrollableContainer(id="log-scroll"):
-            yield RichLog(id="log-view", wrap=True, highlight=True, max_lines=2000)
+        yield RichLog(id="log-view", wrap=True, highlight=False, max_lines=self._MAX_LINES)
 
     async def on_mount(self) -> None:
         self.run_worker(
@@ -3939,6 +3938,7 @@ class LogsPane(Vertical):
         search = self.query_one_optional("#log-search", Input)
         if search is not None:
             search.placeholder = self._service.t("tui.logs_search_placeholder")
+        _relabel_buttons(self, {"logs-export": "tui.logs_export"})
         self._schedule_log_filter()
 
     def _set_level_options(self, level: Select[str]) -> None:
@@ -3991,7 +3991,7 @@ class LogsPane(Vertical):
             self._buffer.append(
                 f"{stamp}|INFO|mailflow.tui|{self._service.t('tui.logs_exported', path=path)}"
             )
-            self._seen_sources.add("tui")
+            self._seen_sources.add(self._category_of("mailflow.tui"))
             self._refresh_source_options()
             self._append_new_lines([self._buffer[-1]])
 
@@ -4138,10 +4138,10 @@ class LogsPane(Vertical):
         # Layout: HH:MM:SS LEVEL [Category·platform]  message — the tag is
         # color-coded per platform, the message indented two spaces past
         # the bracket for a clear visual hierarchy.
-        text = Text(f"{time_part} ")
+        text = Text(f"{time_part} ", style="#7f849c")
         text.append(f"{level:<7}", style=self._LEVEL_STYLES.get(level, "bold"))
         text.append(f" [{cat_label}{platform_suffix}]", style=cat_style)
-        text.append(f"  {message}")
+        text.append(f"  {message}", style="#cdd6f4")
         return text
 
     def _append_new_lines(self, new_lines: list[str], *, preserve_follow: bool = False) -> None:
@@ -4328,13 +4328,13 @@ class MarketDetailScreen(ModalScreen[Any]):
                 yield Button(
                     self._service.t("tui.btn_uninstall"),
                     id="detail-uninstall",
-                    variant="warning",
+                    variant="error",
                 )
                 yield Button(
-                    self._service.t("tui.btn_enable"), id="detail-enable", variant="primary"
+                    self._service.t("tui.btn_enable"), id="detail-enable", variant="success"
                 )
                 yield Button(
-                    self._service.t("tui.btn_disable"), id="detail-disable", variant="error"
+                    self._service.t("tui.btn_disable"), id="detail-disable", variant="warning"
                 )
                 yield Button(self._service.t("tui.btn_close"), id="detail-close", variant="primary")
 
@@ -5121,6 +5121,34 @@ class MailFlowApp(App[None]):
         session: SessionHost | None = None,
     ) -> None:
         super().__init__()
+        self.register_theme(
+            Theme(
+                name="mailflow",
+                primary="#89b4fa",
+                secondary="#cba6f7",
+                accent="#94e2d5",
+                foreground="#cdd6f4",
+                background="#1e1e2e",
+                surface="#181825",
+                panel="#313244",
+                success="#a6e3a1",
+                warning="#f9e2af",
+                error="#f38ba8",
+                variables={
+                    "border": "#45475a",
+                    "border-blurred": "#313244",
+                    "block-cursor-background": "#34415c",
+                    "block-cursor-foreground": "#cdd6f4",
+                    "block-cursor-blurred-background": "#313244",
+                    "block-cursor-blurred-foreground": "#bac2de",
+                    "input-selection-background": "#89b4fa 30%",
+                    "footer-background": "#181825",
+                    "footer-key-foreground": "#89b4fa",
+                    "button-focus-text-style": "bold underline",
+                },
+            )
+        )
+        self.theme = "mailflow"
         self._service = service
         self._log_queue = log_queue
         self._remote = remote
