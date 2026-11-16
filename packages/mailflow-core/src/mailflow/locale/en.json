@@ -1168,7 +1168,9 @@
       "help_selection_all": "Lists: check / uncheck visible rows",
       "help_selection_clear": "Lists: clear checks; dialogs: close",
       "help_mail_undo": "Mail list: undo the last mail deletion",
-      "help_terminal_clipboard": "Copy and paste within MailFlow work in this session. Copying to your computer also needs terminal clipboard support. In a browser console, use its Paste control or Shift+Insert if Ctrl+V is intercepted. Password fields do not copy hidden text.",
+      "help_sessions": "Background instances (local only)",
+      "help_clipboard": "Terminal clipboard",
+      "help_terminal_clipboard": "Copy and paste within MailFlow work in this session. Copying to your computer also needs terminal clipboard support.\n\nIn a browser console, use its Paste control or Shift+Insert if Ctrl+V is intercepted.\n\nPassword fields do not copy hidden text.",
       "smtp_tls_hint": "On: STARTTLS (usually port 587); off: implicit TLS (usually port 465).",
       "help_assistant": "Open the assistant",
       "form_choices": {
@@ -1510,7 +1512,7 @@
     "sessions": {
       "detach": "Detach",
       "quit": "Exit and stop",
-      "help": "Local instances: F8 returns to the shell while MailFlow keeps running. Ctrl+Q exits and stops it. Use mailflow tui list and mailflow tui attach NAME to reconnect.",
+      "help": "F8 — return to the shell; MailFlow keeps running.\nCtrl+Q — exit and stop MailFlow.\n\nView background instances:\nmailflow tui list\n\nReconnect (replace NAME with the instance name):\nmailflow tui attach NAME",
       "starting": "Starting the TUI instance…",
       "started": "Instance {name} is running in the background. Connect with: mailflow tui attach {name}",
       "detached": "Detached from {name}; MailFlow is still running. Reconnect with: mailflow tui attach {name}",

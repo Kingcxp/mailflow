@@ -209,6 +209,11 @@ class ShortcutHelp(ModalScreen[None]):
     }
     ShortcutHelp ScrollableContainer { height: 1fr; }
     ShortcutHelp #shortcut-title { text-style: bold; margin-bottom: 1; }
+    ShortcutHelp .shortcut-section-title {
+        margin-top: 1; border-top: solid $primary; padding-top: 1;
+        text-style: bold; color: $accent;
+    }
+    ShortcutHelp .shortcut-note { margin-top: 1; }
     ShortcutHelp Button { width: 100%; margin-top: 1; }
     """
 
@@ -241,8 +246,26 @@ class ShortcutHelp(ModalScreen[None]):
             yield Static(self._t("tui.help_shortcuts"), id="shortcut-title", markup=False)
             with ScrollableContainer():
                 yield Static(table)
-                yield Static(self._t("sessions.help"), markup=False)
-                yield Static(self._t("tui.help_terminal_clipboard"), markup=False)
+                for title, content in (
+                    ("tui.help_sessions", "sessions.help"),
+                    ("tui.help_clipboard", "tui.help_terminal_clipboard"),
+                ):
+                    yield Static(
+                        self._t(title), classes="shortcut-section-title", markup=False
+                    )
+                    note = Text(self._t(content))
+                    note.highlight_words(
+                        (
+                            "F8",
+                            "Ctrl+Q",
+                            "mailflow tui list",
+                            "mailflow tui attach NAME",
+                            "Ctrl+V",
+                            "Shift+Insert",
+                        ),
+                        style="bold cyan",
+                    )
+                    yield Static(note, classes="shortcut-note")
             yield Button(self._t("tui.btn_close"), id="shortcut-close", variant="primary")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

@@ -1168,7 +1168,9 @@
       "help_selection_all": "列表：全选或取消当前可见行",
       "help_selection_clear": "列表：清空勾选；弹窗：关闭",
       "help_mail_undo": "邮件列表：撤销最近一次删除邮件",
-      "help_terminal_clipboard": "软件内复制粘贴在本次使用中有效。复制到电脑还需要终端支持剪贴板。浏览器控制台若拦截 Ctrl+V，可使用控制台的粘贴入口或 Shift+Insert。密码框不会复制隐藏文字。",
+      "help_sessions": "后台实例（仅本地）",
+      "help_clipboard": "终端剪贴板",
+      "help_terminal_clipboard": "软件内复制粘贴在本次使用中有效。复制到电脑还需要终端支持剪贴板。\n\n浏览器控制台若拦截 Ctrl+V，可使用控制台的粘贴入口或 Shift+Insert。\n\n密码框不会复制隐藏文字。",
       "smtp_tls_hint": "开启：STARTTLS，通常使用 587 端口；关闭：直接加密连接，通常使用 465 端口。",
       "help_assistant": "打开智能助手",
       "form_choices": {
@@ -1510,7 +1512,7 @@
     "sessions": {
       "detach": "转入后台",
       "quit": "退出并停止",
-      "help": "本地实例：F8 返回终端，MailFlow 继续运行；Ctrl+Q 退出并停止。使用 mailflow tui list 查看实例，mailflow tui attach 名称 重新连接。",
+      "help": "F8 — 返回终端，MailFlow 继续运行。\nCtrl+Q — 退出并停止 MailFlow。\n\n查看后台实例：\nmailflow tui list\n\n重新连接（将 NAME 替换为实例名称）：\nmailflow tui attach NAME",
       "starting": "正在启动 TUI 实例……",
       "started": "实例 {name} 已在后台运行。连接命令：mailflow tui attach {name}",
       "detached": "已与 {name} 分离，MailFlow 继续运行。重新连接：mailflow tui attach {name}",
