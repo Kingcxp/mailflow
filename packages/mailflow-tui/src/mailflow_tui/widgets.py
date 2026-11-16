@@ -47,6 +47,59 @@ def _label_ready(select: Select[object]) -> bool:
         return False
 
 
+class StateButton(Button):
+    """A compact boolean editor with an explicit, translated state."""
+
+    class Changed(Message):
+        def __init__(self, button: StateButton, value: bool) -> None:
+            super().__init__()
+            self.button = button
+            self.value = value
+
+        @property
+        def control(self) -> StateButton:
+            return self.button
+
+    def __init__(
+        self,
+        t: Callable[..., str],
+        *,
+        value: bool = False,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
+        self._t = t
+        self._value = value
+        super().__init__(
+            t("tui.plugin_status_enabled" if value else "tui.plugin_status_disabled"),
+            variant="success" if value else "error",
+            id=id,
+            classes=classes,
+        )
+
+    @property
+    def value(self) -> bool:
+        return self._value
+
+    @value.setter
+    def value(self, value: bool) -> None:
+        changed = self._value != value
+        self._value = value
+        self.relabel()
+        if changed:
+            self.post_message(self.Changed(self, value))
+
+    def relabel(self) -> None:
+        self.label = self._t(
+            "tui.plugin_status_enabled" if self._value else "tui.plugin_status_disabled"
+        )
+        self.variant = "success" if self._value else "error"
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.value = not self.value
+
+
 class SafeSelect(Select[object]):  # pyright: ignore[reportUnsafeMultipleInheritance]
     """A :class:`Select` that never lets its value watcher crash on a
     missing ``#label``; everything else behaves exactly like ``Select``."""

@@ -58,7 +58,6 @@ from textual.widgets import (
     ListView,
     Select,
     Static,
-    Switch,
 )
 from textual.worker import WorkerCancelled
 
@@ -74,7 +73,14 @@ from mailflow_tui.labels import (
 from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.view_state import TableView
-from mailflow_tui.widgets import Input, SafeSelect, SearchToggle, SelectionTable, TextArea
+from mailflow_tui.widgets import (
+    Input,
+    SafeSelect,
+    SearchToggle,
+    SelectionTable,
+    StateButton,
+    TextArea,
+)
 
 _SECTION_LABELS = {
     "general": "tui.settings_section_general",
@@ -760,7 +766,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         if back is not None:
             back.disabled = self._busy == "saving"
         for node in self.query(
-            "#entry-form-fields Input, #entry-form-fields Select, #entry-form-fields Switch, #entry-form-fields TextArea, #entry-form-fields Button"
+            "#entry-form-fields Input, #entry-form-fields Select, #entry-form-fields StateButton, #entry-form-fields TextArea, #entry-form-fields Button"
         ):
             node.disabled = self._busy == "saving"
 
@@ -854,7 +860,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         }:
             yield Static(escape(description), classes="field-desc")
         if spec.editor is EditorKind.BOOLEAN:
-            yield Switch(value=bool(current), id=widget_id)
+            yield StateButton(self._t, value=bool(current), id=widget_id)
         elif spec.editor is EditorKind.CHOICE or (spec.label == "provider" and choices):
             choice_values = [str(c) for c in choices]
             initial = str(current) if str(current) in choice_values else None
@@ -960,7 +966,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 id=widget_id,
             )
         elif extra.kind == "boolean":
-            yield Switch(
+            yield StateButton(
+                self._t,
                 value=str(self._extra_value(extra)).strip().lower() in ("1", "true", "yes", "on"),
                 id=widget_id,
             )
@@ -1015,7 +1022,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             elif isinstance(node, Select):
                 select = cast("Select[Any]", node)
                 draft[extra.field_id] = select.value
-            elif isinstance(node, (Input, Switch)):
+            elif isinstance(node, (Input, StateButton)):
                 draft[extra.field_id] = node.value
         self._provider_drafts[self._active_provider] = draft
 
@@ -1028,7 +1035,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             node: Any | None = self.query_one_optional(selector)
             if node is None:
                 continue
-            if isinstance(node, Switch):
+            if isinstance(node, StateButton):
                 values[spec.label] = node.value
             elif isinstance(node, Select):
                 selected = _select_text(node)
@@ -1107,7 +1114,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                         params={"field": self._field_label(extra.field_id, extra.label_key)},
                     )
                 continue
-            if isinstance(node, Switch):
+            if isinstance(node, StateButton):
                 target = collected["options"] if extra.into_options else collected
                 target[extra.field_id] = bool(node.value)
                 continue
@@ -1454,7 +1461,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                     node = self.query_one_optional(f"#extra-{_slug(field_id)}")
                     if isinstance(node, Input):
                         node.value = str(value)
-                    elif isinstance(node, Switch):
+                    elif isinstance(node, StateButton):
                         node.value = bool(value)
 
     async def on_input_changed(self, event: Input.Changed) -> None:
@@ -1463,6 +1470,11 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             and event.input.id.startswith(("field-", "extra-"))
             and self._tested_inputs.get(event.input.id) != event.input.value
         ):
+            await self._cancel_test()
+
+    async def on_state_button_changed(self, event: StateButton.Changed) -> None:
+        ident = event.button.id or ""
+        if ident.startswith(("field-", "extra-")):
             await self._cancel_test()
 
     def action_save_form(self) -> None:
@@ -1574,7 +1586,7 @@ class OptionCard(Vertical):
         spec = self.spec
         widget_id = f"value-{slug}"
         if spec.editor is EditorKind.BOOLEAN:
-            yield Switch(value=bool(spec.value), id=widget_id, classes="option-input")
+            yield StateButton(self._t, value=bool(spec.value), id=widget_id, classes="option-input")
         elif spec.editor is EditorKind.CHOICE:
             self._choice_signature = [
                 (form_choice_label(self._service, spec.label, choice), choice)
@@ -1618,7 +1630,7 @@ class OptionCard(Vertical):
         """Current editor content, ready for ``service.set_setting``."""
         selector = f"#value-{_slug(self.spec.key)}"
         if self.spec.editor is EditorKind.BOOLEAN:
-            return self.query_one(selector, Switch).value
+            return self.query_one(selector, StateButton).value
         if self.spec.editor is EditorKind.CHOICE:
             return _select_text(self.query_one(selector, Select))
         if self.spec.editor in _MULTILINE_EDITORS:
@@ -1668,8 +1680,11 @@ class OptionCard(Vertical):
                     cast(Select[str], node).set_options(choices)
                     self._choice_signature = choices
                 node.value = draft if draft in spec.choices else Select.NULL
-        elif isinstance(node, (Input, Switch)):
-            with node.prevent(Input.Changed, Switch.Changed):
+        elif isinstance(node, StateButton):
+            with node.prevent(StateButton.Changed):
+                node.value = bool(draft)
+        elif isinstance(node, Input):
+            with node.prevent(Input.Changed):
                 if node.value != draft:
                     node.value = draft
 
@@ -1934,7 +1949,7 @@ class SettingsPane(Vertical):
         elif "option-input" in event.input.classes:
             self._sync_section_controls()
 
-    def on_switch_changed(self, event: Switch.Changed) -> None:
+    def on_state_button_changed(self, event: StateButton.Changed) -> None:
         self._sync_section_controls()
 
     def on_select_changed(self, event: Select.Changed) -> None:
