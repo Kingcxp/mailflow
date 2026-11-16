@@ -105,12 +105,6 @@ SearchToggle.-active {
     margin: 0 1 0 1;
 }
 
-#mail-empty-hint {
-    margin: 0 1 1 1;
-    color: $text-muted;
-    text-style: italic;
-}
-
 #mail-search-row Checkbox,
 #actions-search-row Checkbox,
 #market-search-row Checkbox,
@@ -130,15 +124,6 @@ SearchToggle {
     margin-left: 1;
     padding: 0;
     content-align: center middle;
-}
-
-#smart-action-progress {
-    height: auto;
-    max-height: 8;
-    min-height: 0;
-    margin: 0 1;
-    color: $text-muted;
-    overflow-y: auto;
 }
 
 #history-count {

@@ -20,7 +20,6 @@ from textual.widgets import (
     Button,
     DataTable,
     Input,
-    RichLog,
     Select,
     Static,
     TabbedContent,
@@ -47,7 +46,7 @@ async def _smart_review(app: MailFlowApp, pilot: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_smart_action_keeps_real_progress_and_relevance_order(
+async def test_smart_action_keeps_cancellation_and_relevance_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The progress line names the running tool, and the ranking the model
@@ -146,8 +145,8 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
             await pilot.pause()
             app.query_one("#smart-action", Button).press()
             await until(pilot, router.started.is_set)
-            progress = app.query_one("#smart-action-progress", RichLog)
-            assert progress.display and progress.lines
+            smart_button = app.query_one("#smart-action", Button)
+            assert str(smart_button.label) == service.t("tui.smart_action_cancel")
             tabs.active = "tab-actions"
             await pilot.pause()
             assert not router.cancelled.is_set()
@@ -156,9 +155,8 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
             await pilot.pause()
             app.query_one("#smart-action", Button).press()
             await until(pilot, router.cancelled.is_set)
-            await until(pilot, lambda: not progress.display)
+            await until(pilot, lambda: str(smart_button.label) == service.t("tui.smart_action"))
             assert search.value == "another request"
-            assert not progress.lines
             router.release.set()
             search.value = "the student ID invitation"
             await pilot.pause()
@@ -166,13 +164,13 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
             await until(
                 pilot,
                 lambda: (
-                    not progress.display
+                    str(smart_button.label) == service.t("tui.smart_action")
                     and table.row_count == 1
                     and "Pick up your student ID card" in str(table.get_row_at(0))
                 ),
             )
             assert "Pick up your student ID card" in str(table.get_row_at(0))
-            assert "Answered." in str(app.query_one("#mail-empty-hint", Static).render())
+            assert "Answered." in str(app.query_one("#mail-operation-status", Static).render())
             await service.set_language("zh-CN")
             await pilot.pause()
             assert search.value == "the student ID invitation" and table.row_count == 1
@@ -188,9 +186,9 @@ async def test_smart_action_keeps_real_progress_and_relevance_order(
             await pilot.pause()
             app.query_one("#smart-action", Button).press()
             await until(pilot, failed.is_set)
-            await until(pilot, lambda: not app.query_one("#smart-action-progress", RichLog).display)
+            await until(pilot, lambda: str(smart_button.label) == service.t("tui.smart_action"))
             assert "private network details" not in str(
-                app.query_one("#mail-empty-hint", Static).render()
+                app.query_one("#mail-operation-status", Static).render()
             )
             monkeypatch.setattr(service, "smart_action", original)
             router.held = False
@@ -339,12 +337,12 @@ async def test_smart_query_task_crud_requires_confirmation(
                 pilot,
                 lambda: (
                     service.t("errors.connection")
-                    in str(app.query_one("#mail-empty-hint", Static).render())
+                    in str(app.query_one("#mail-operation-status", Static).render())
                 ),
             )
             assert not await service.storage.list_custom_actions()
             assert "private connection details" not in str(
-                app.query_one("#mail-empty-hint", Static).render()
+                app.query_one("#mail-operation-status", Static).render()
             )
             monkeypatch.setattr(service, "apply_smart_plan", apply_plan)
             app.query_one("#smart-action", Button).press()
@@ -416,7 +414,11 @@ async def test_smart_query_task_crud_requires_confirmation(
             await until(pilot, lambda: modal() is None)
             await pilot.pause()
             assert await service.storage.list_custom_actions() == []
-            await until(pilot, lambda: not app.query_one("#smart-action-progress", RichLog).display)
+            await until(
+                pilot,
+                lambda: str(app.query_one("#smart-action", Button).label)
+                == service.t("tui.smart_action"),
+            )
             app.exit()
             await pilot.pause()
     finally:
@@ -543,7 +545,7 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
             assert [item.mail.subject for item in trash] == ["Huge promotion sale"]
             # the pane reports the real number moved (written after the
             # deferred reload, so it survives the re-render)
-            hint = app.query_one("#mail-empty-hint", Static)
+            hint = app.query_one("#mail-operation-status", Static)
             for _ in range(60):
                 if "1" in str(hint.render()):
                     break

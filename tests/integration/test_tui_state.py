@@ -47,7 +47,6 @@ from textual.widgets import (
     Checkbox,
     DataTable,
     Input,
-    RichLog,
     Select,
     Static,
     TabbedContent,
@@ -371,8 +370,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         assert keys(table) == ["target"]
         entered, release = asyncio.Event(), asyncio.Event()
 
-        async def execute_query(*_args: Any, **kwargs: Any) -> SmartActionResult:
-            kwargs["progress"]("query", 1, 2, None)
+        async def execute_query(*_args: Any, **_kwargs: Any) -> SmartActionResult:
             entered.set()
             await release.wait()
             return SmartActionResult(records=[target], final_text="Found matching mail")
@@ -397,13 +395,15 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         await pilot.pause()
         assert instruction.value == "Next question, not executed yet"
         assert smart.await_count == 1
-        assert app.query_one("#smart-action-progress", RichLog).display
+        assert str(app.query_one("#smart-action", Button).label) == service.t(
+            "tui.smart_action_cancel"
+        )
         release.set()
         await settle(pilot)
         assert smart.await_args is not None
         assert smart.await_args.kwargs["record_ids"] == ["target"]
         assert keys(table) == ["target"]
-        assert not app.query_one("#smart-action-progress", RichLog).display
+        assert str(app.query_one("#smart-action", Button).label) == service.t("tui.smart_action")
         # Stopping a follow-up keeps the previous result and the draft input.
         release.clear()
         entered.clear()
@@ -411,7 +411,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         await asyncio.wait_for(entered.wait(), 2)
         app.query_one("#smart-action", Button).press()
         await settle(pilot)
-        assert service.t("assistant.cancelled") in text(app, "#mail-empty-hint")
+        assert service.t("assistant.cancelled") in text(app, "#mail-operation-status")
         assert instruction.value == "Next question, not executed yet"
         assert keys(table) == ["target"]
         regex.press()
@@ -599,7 +599,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         await pilot.pause()
         assert app.query_one("#mail-table", DataTable).row_count == 0
         assert app.query_one("#actions-table", DataTable).row_count == 0
-        for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
+        for ident in ("#mail-analysis-status", "#actions-hint", "#runtime-status"):
             assert view.t("errors.connection") in text(app, ident)
             assert "offline [retry]" not in text(app, ident)
         failures.clear()
@@ -612,7 +612,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         await app.query_one(ActionsPane).refresh_actions()
         await app.query_one(RuntimePane).refresh_runtime()
         await settle(pilot)
-        for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
+        for ident in ("#mail-analysis-status", "#actions-hint", "#runtime-status"):
             assert view.t("errors.connection") in text(app, ident)
             assert "offline [retry]" not in text(app, ident)
         assert app.query_one("#mail-table", DataTable).row_count == 1
@@ -646,7 +646,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         assert view.t("tui.remote_events_connected") in app.sub_title
         assert app.query_one("#mail-table", DataTable).row_count == 2
         assert app.query_one("#mail-search", Input).value == "Exam"
-        for ident in ("#mail-empty-hint", "#actions-hint", "#runtime-status"):
+        for ident in ("#mail-analysis-status", "#actions-hint", "#runtime-status"):
             assert "offline" not in text(app, ident)
         assert app.query_one("#btn-reparse", Button).disabled
         assert app.query("#smart-action, #btn-ask-correct, #btn-profile")
