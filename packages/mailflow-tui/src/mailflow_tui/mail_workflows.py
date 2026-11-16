@@ -175,62 +175,72 @@ class TrashChoiceScreen(WorkflowScreen):
 
 
 class MailMenu(WorkflowScreen):
+    def __init__(self, service: MailFlowService, *, scope: str = "", count: int | None = None) -> None:
+        super().__init__(service)
+        self.scope, self.count = scope, count
+
+    def _choices(self) -> list[tuple[str, str]]:
+        targets = {"read", "unread", "star", "unstar", "archive", "unarchive", "priority"}
+        single = {"thread", "reply_all", "forward", "full_mail", "attachments", "task_from_mail"}
+        experience = {
+            "saved_filters",
+            "compose",
+            "thread",
+            "reply_all",
+            "forward",
+            "attachment_library",
+            "source_sync",
+        }
+        options: list[tuple[str, str]] = []
+        for key in (
+            "read",
+            "unread",
+            "star",
+            "unstar",
+            "archive",
+            "unarchive",
+            "priority",
+            "undo_delete",
+            "filter",
+            "saved_filters",
+            "attachment_library",
+            "source_sync",
+            "compose",
+            "thread",
+            "reply_all",
+            "forward",
+            "sync_mail",
+            "load_more",
+            "full_mail",
+            "attachments",
+            "task_from_mail",
+            "trash",
+            "drafts",
+            "cleanup_preview",
+        ):
+            if self.count == 0 and key in targets | single:
+                continue
+            if self.count is not None and self.count > 1 and key in single:
+                continue
+            label = (
+                "tui.urgency_label"
+                if key == "priority"
+                else ("experience." if key in experience else "ux.") + key
+            )
+            options.append((self.t(label), key))
+        if self.count:
+            options.insert(7, (self.t("tui.btn_trash"), "delete_selected"))
+            if not getattr(self.service, "remote", False):
+                options.insert(8, (self.t("tui.btn_reparse"), "reparse_selected"))
+        return options
+
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.t("ux.mail_tools"))
+            if self.scope:
+                yield Static(self.scope, markup=False)
             yield Static(self.t("ux.local_trash"))
-            yield SafeSelect(
-                [
-                    (
-                        self.t(
-                            (
-                                "experience."
-                                if key
-                                in {
-                                    "saved_filters",
-                                    "compose",
-                                    "thread",
-                                    "reply_all",
-                                    "forward",
-                                    "attachment_library",
-                                    "source_sync",
-                                }
-                                else "ux."
-                            )
-                            + key
-                        ),
-                        key,
-                    )
-                    for key in (
-                        "undo_delete",
-                        "filter",
-                        "saved_filters",
-                        "attachment_library",
-                        "source_sync",
-                        "compose",
-                        "thread",
-                        "reply_all",
-                        "forward",
-                        "sync_mail",
-                        "load_more",
-                        "read",
-                        "unread",
-                        "star",
-                        "unstar",
-                        "archive",
-                        "unarchive",
-                        "full_mail",
-                        "attachments",
-                        "task_from_mail",
-                        "trash",
-                        "drafts",
-                        "cleanup_preview",
-                    )
-                ]
-                + [(self.t("tui.urgency_label"), "priority")],
-                id="workflow-choice",
-                allow_blank=False,
-            )
+            yield SafeSelect(self._choices(), id="workflow-choice", allow_blank=False)
             with Horizontal():
                 yield Button(self.t("tui.btn_apply"), id="workflow-apply", variant="primary")
                 yield Button(self.t("tui.btn_back"), id="workflow-close")
@@ -923,6 +933,8 @@ class TaskMenu(MailMenu):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self.t("ux.task_operations"))
+            if self.scope:
+                yield Static(self.scope, markup=False)
             yield SafeSelect(
                 [
                     (self.t("ux." + key), key)
@@ -933,6 +945,10 @@ class TaskMenu(MailMenu):
                         "snooze_hour",
                         "snooze_day",
                     )
+                ]
+                + [
+                    (self.t("tui.batch_task_type"), "change_type"),
+                    (self.t("tui.btn_delete_todo"), "delete_tasks"),
                 ],
                 id="workflow-choice",
                 allow_blank=False,

@@ -24,7 +24,7 @@ from mailflow.protocol import json_value
 from mailflow.tools import ToolRegistry
 from mailflow_server.app import create_app
 from mailflow_server.client import RemoteClient
-from mailflow_tui.action_types import ActionTypesModal
+from mailflow_tui.action_types import ActionTypePicker, ActionTypesModal
 from mailflow_tui.app import (
     ActionModal,
     ActionsPane,
@@ -35,7 +35,7 @@ from mailflow_tui.app import (
     RuntimePane,
 )
 from mailflow_tui.confirm import ConfirmModal
-from mailflow_tui.mail_workflows import DraftsScreen, MailReader
+from mailflow_tui.mail_workflows import DraftsScreen, MailMenu, MailReader, TaskMenu
 from mailflow_tui.remote import RemoteServiceAdapter
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.widgets import Input as EditingInput
@@ -228,7 +228,7 @@ async def test_text_editing_shortcuts_copy_cut_paste_undo_and_redo(multiline: bo
 async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
     host: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    service, _view, app, emit, _failures = host
+    service, view, app, emit, _failures = host
     for ident in ("old-1", "old-2", "keep"):
         record = make_record(
             ident, Urgency.AD if ident.startswith("old") else Urgency.IMPORTANT, subject=ident
@@ -305,6 +305,53 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         assert await service.storage.get_mail("old-2") is not None
         assert await service.storage.get_mail("old-1") is None
         assert await service.storage.get_mail("keep") is not None
+        # Both terminal modes use the same menu and retain only unfinished work after stopping.
+        app.query_one("#mail-urgency-filter", Select).value = "all"
+        await settle(pilot)
+        table.focus()
+        await pilot.press("ctrl+a", "m")
+        await until(pilot, lambda: isinstance(app.screen, MailMenu))
+        app.screen.query_one("#workflow-choice", Select).value = "star"
+        app.screen.query_one("#workflow-apply", Button).press()
+        await settle(pilot)
+        mail_rows = [await service.get_mail(key) for key in ("keep", "old-2")]
+        assert all(record.starred for record in mail_rows)
+        assert not table.checked_keys
+        table.focus()
+        await pilot.press("ctrl+a")
+        app.query_one("#urgency-select", Select).value = "urgent"
+        await settle(pilot)
+        mail_rows = [await service.get_mail(key) for key in ("keep", "old-2")]
+        assert all(record.manual_urgency == Urgency.URGENT for record in mail_rows)
+        started, release = asyncio.Event(), asyncio.Event()
+        update = view.set_mail_state
+        calls: list[str] = []
+
+        async def slow_update(ids: list[str], **values: Any) -> Any:
+            calls.extend(ids)
+            started.set()
+            await release.wait()
+            return await update(ids, **values)
+
+        monkeypatch.setattr(view, "set_mail_state", slow_update)
+        table.focus()
+        await pilot.press("ctrl+a", "m")
+        await until(pilot, lambda: isinstance(app.screen, MailMenu))
+        app.screen.query_one("#workflow-choice", Select).value = "archive"
+        app.screen.query_one("#workflow-apply", Button).press()
+        await until(pilot, started.is_set)
+        try:
+            stop = app.query_one("#btn-trash", Button)
+            assert str(stop.label) == view.t("tui.batch_stop")
+            stop.press()
+            await pilot.pause()
+        finally:
+            release.set()
+        await settle(pilot)
+        monkeypatch.setattr(view, "set_mail_state", update)
+        assert len(calls) == 1 and len(table.checked_keys) == 1
+        assert calls[0] not in table.checked_keys
+        assert (await service.get_mail(calls[0])).archived
         # The same selection controls operate on the current task filter.
         app.query_one(TabbedContent).active = "tab-actions"
         app.query_one("#actions-search", Input).value = "Expired"
@@ -313,6 +360,33 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         assert set(keys(todos)) == {item.item_id for item in actions}
         todos.focus()
         await pilot.press("ctrl+a", "escape", "space", "shift+down")
+        await service.add_action_type("Work")
+        await pilot.press("m")
+        await until(pilot, lambda: isinstance(app.screen, TaskMenu))
+        app.screen.query_one("#workflow-choice", Select).value = "change_type"
+        app.screen.query_one("#workflow-apply", Button).press()
+        await until(pilot, lambda: isinstance(app.screen, ActionTypePicker))
+        await pilot.pause()
+        app.screen.query_one("#batch-action-type Select", Select).value = "Work"
+        await pilot.pause()
+        app.screen.query_one("#type-apply", Button).press()
+        await settle(pilot)
+        changed = await service.list_actions()
+        assert {item.action_type for item in changed if item.item_id != future.item_id} == {"Work"}
+        assert next(item for item in changed if item.item_id == future.item_id).action_type == ""
+        assert not todos.checked_keys
+        todos.focus()
+        await pilot.press("ctrl+a", "m")
+        await until(pilot, lambda: isinstance(app.screen, TaskMenu))
+        app.screen.query_one("#workflow-choice", Select).value = "mute_tasks"
+        app.screen.query_one("#workflow-apply", Button).press()
+        await settle(pilot)
+        assert not any(
+            item.reminder_enabled for item in await service.list_actions()
+            if item.item_id != future.item_id
+        )
+        todos.focus()
+        await pilot.press("ctrl+a")
         app.query_one("#actions-delete", Button).press()
         await until(
             pilot,
@@ -322,6 +396,17 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         await settle(pilot)
         assert [item.item_id for item in await service.list_actions()] == [future.item_id]
         assert todos.row_count == 0
+        app.query_one("#actions-search", Input).value = ""
+        await settle(pilot)
+        todos.focus()
+        await pilot.press("m")
+        await until(pilot, lambda: isinstance(app.screen, TaskMenu))
+        app.screen.query_one("#workflow-choice", Select).value = "complete_tasks"
+        app.screen.query_one("#workflow-apply", Button).press()
+        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        app.screen.query_one("#confirm-run", Button).press()
+        await settle(pilot)
+        assert not await service.list_actions_all() and not todos.row_count
 
 
 async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(

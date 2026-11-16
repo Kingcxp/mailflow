@@ -98,6 +98,41 @@ class ActionTypeNameModal(ModalScreen[str | None]):
             self.dismiss(None)
 
 
+class ActionTypePicker(ModalScreen[str | None]):
+    BINDINGS: ClassVar[list[Any]] = []
+    DEFAULT_CSS = """
+    ActionTypePicker { align: center middle; }
+    ActionTypePicker > Vertical {
+        width: 60; max-width: 95%; height: auto;
+        border: round $accent; background: $surface; padding: 1 2;
+    }
+    ActionTypePicker Static, ActionTypePicker Horizontal { height: auto; }
+    ActionTypePicker Button { margin-right: 1; }
+    """
+
+    def __init__(self, service: MailFlowService) -> None:
+        super().__init__()
+        self._service = service
+        self._bindings.bind("escape", "cancel", service.t("tui.btn_cancel"))
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self._service.t("tui.batch_task_type"))
+            yield ActionTypeField(self._service, id="batch-action-type")
+            with Horizontal():
+                yield Button(self._service.t("tui.btn_apply"), id="type-apply", variant="primary")
+                yield Button(self._service.t("tui.btn_cancel"), id="type-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss(
+            self.query_one(ActionTypeField).value if event.button.id == "type-apply" else None
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ActionTypesModal(ModalScreen[set[str] | None]):
     BINDINGS: ClassVar[list[Any]] = []
     DEFAULT_CSS = """

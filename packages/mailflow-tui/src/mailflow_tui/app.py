@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from mailflow.domain import (
     ActionItem,
+    BatchResult,
     MailRecord,
     ReplyDraft,
     ReplyState,
@@ -53,7 +54,7 @@ from textual.widgets import (
     TabPane,
 )
 
-from mailflow_tui.action_types import ActionTypesModal
+from mailflow_tui.action_types import ActionTypePicker, ActionTypesModal
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
@@ -103,6 +104,61 @@ _BLANK = ""
 def _load_error(service: MailFlowService, exc: Exception) -> str:
     message = service.t("tui.data_load_failed", error=error_detail(service, exc))
     return f"[red]{escape(message)}[/red]"
+
+
+async def _run_batch(
+    service: MailFlowService,
+    targets: list[str],
+    apply: Callable[[str], Awaitable[object]],
+    stopped: Callable[[], bool],
+    progress: Callable[[int, int], None],
+) -> tuple[BatchResult, list[str]]:
+    """Finish the current item before stopping; never retry successful items."""
+    targets = list(dict.fromkeys(targets))
+    result = BatchResult()
+    remaining = set(targets)
+    progress(0, len(targets))
+    for index, identity in enumerate(targets, 1):
+        if stopped():
+            break
+        try:
+            outcome = await apply(identity)
+            if isinstance(outcome, BatchResult):
+                result.succeeded.extend(outcome.succeeded)
+                result.failed.update(outcome.failed)
+                result.skipped.extend(outcome.skipped)
+                result.source_results.update(outcome.source_results)
+            elif outcome is None or outcome is False:
+                result.skipped.append(identity)
+            else:
+                result.succeeded.append(identity)
+        except Exception as exc:
+            result.failed[identity] = error_message(service, exc)
+        remaining.discard(identity)
+        progress(index, len(targets))
+        await asyncio.sleep(0)
+    return result, [identity for identity in targets if identity in remaining]
+
+
+def _batch_feedback(service: MailFlowService, result: BatchResult, pending: list[str]) -> str:
+    message = service.t(
+        "ux.batch_result",
+        success=len(result.succeeded),
+        failed=len(result.failed),
+        skipped=len(result.skipped),
+    )
+    if pending:
+        message += "\n" + service.t("tui.batch_remaining", count=len(pending))
+    if result.failed:
+        message += "\n" + service.t(
+            "tui.batch_failed", count=len(result.failed), error=next(iter(result.failed.values()))
+        )
+    for state in result.source_results.values():
+        if state["state"] != "synced":
+            message += "\n" + state["message"]
+    if any(state["state"] != "synced" for state in result.source_results.values()):
+        message += "\n" + service.t("tui.batch_source_check")
+    return message
 
 
 def _localize(service: MailFlowService, value: datetime, fmt: str = "%Y-%m-%d %H:%M") -> str:
@@ -889,6 +945,7 @@ class MailPane(Vertical):
         self._page_limit = 200
         self._page_total = 0
         self._trash_busy = False
+        self._trash_stop = False
         self._undo_trash_ids: list[str] = []
         self._smart_action_result: SmartActionResult | None = None
         self._smart_action_running = False
@@ -1019,7 +1076,10 @@ class MailPane(Vertical):
             button.label = self._service.t("tui.smart_action")
             search = self.query_one_optional("#mail-search", Input)
             button.disabled = (
-                self._smart_action_running or search is None or not search.value.strip()
+                self._smart_action_running
+                or self._trash_busy
+                or search is None
+                or not search.value.strip()
             )
 
     def set_smart_scope(self, scope: dict[str, Any], name: str) -> bool:
@@ -1319,29 +1379,42 @@ class MailPane(Vertical):
         if event.table.id == "mail-table":
             self._sync_selection_controls()
 
+    def on_selection_table_menu_requested(self, event: SelectionTable.MenuRequested) -> None:
+        if event.table.id == "mail-table" and not self._trash_busy and not self._reparse_active():
+            event.stop()
+            self.run_worker(
+                self._mail_tools(), group="mail-tools", exclusive=True, exit_on_error=False
+            )
+
     def _sync_selection_controls(self, *, reparse_idle: bool = False) -> None:
+        self._sync_smart_button()
         table = self._mail_table()
         if table is None:
             return
         count = len(table.checked_keys)
+        analysing = self._reparse_active() and not reparse_idle
         has_selected = any(r.record_id == self._selected_id for r in self._records)
         trash = self.query_one_optional("#btn-trash", Button)
         if trash is not None:
             trash.label = (
-                self._service.t("tui.btn_delete_selected", count=count)
+                self._service.t("tui.batch_stopping" if self._trash_stop else "tui.batch_stop")
+                if self._trash_busy
+                else self._service.t("tui.btn_delete_selected", count=count)
                 if count
                 else self._service.t("tui.btn_trash")
             )
-            trash.disabled = self._trash_busy or not (count or has_selected)
-            trash.tooltip = self._service.t("tui.selection_delete_help")
+            trash.disabled = self._trash_stop if self._trash_busy else not (count or has_selected)
+            if analysing:
+                trash.disabled = True
+            trash.tooltip = None
         purge = self.query_one_optional("#btn-purge-expired", Button)
         if purge is not None:
-            purge.disabled = self._trash_busy or not bool(self._mail_cache)
+            purge.disabled = self._trash_busy or analysing or not bool(self._mail_cache)
         for ident in ("#btn-reply", "#btn-ask-correct"):
             button = self.query_one_optional(ident, Button)
             if button is not None:
-                button.tooltip = self._service.t("tui.selection_current_help")
-                button.disabled = self._trash_busy or not has_selected
+                button.tooltip = None
+                button.disabled = self._trash_busy or analysing or not has_selected or count > 1
         table.disabled = self._trash_busy
         reparse = self.query_one_optional("#btn-reparse", Button)
         if reparse is not None and (reparse_idle or not self._reparse_active()):
@@ -1366,12 +1439,16 @@ class MailPane(Vertical):
                     )
         urgency = self._urgency_select()
         if urgency is not None:
-            urgency.disabled = not has_selected or self._trash_busy
+            urgency.disabled = not (count or has_selected) or self._trash_busy or analysing
+        self._show_operation_status()
 
     def _mail_targets(self) -> list[str]:
         table = self._mail_table()
         if table is not None and table.checked_keys:
-            return sorted(table.checked_keys)
+            visible = table.visible_keys()
+            return [key for key in visible if key in table.checked_keys] + sorted(
+                table.checked_keys - set(visible)
+            )
         return [self._selected_id] if self._selected_id is not None else []
 
     def _select_value(self, selector: str) -> str:
@@ -1470,7 +1547,7 @@ class MailPane(Vertical):
             await self.refresh_mail(reload=event.select.id == "mail-urgency-filter")
         elif (
             event.select.id == "urgency-select"
-            and self._selected_id is not None
+            and bool(self._mail_targets())
             and not getattr(self, "_urgency_suppress", False)
         ):
             value = event.value
@@ -1482,8 +1559,13 @@ class MailPane(Vertical):
                     urgency = Urgency(str(value))
                 except ValueError:
                     return
-            await self._service.set_mail_urgency(self._selected_id, urgency)
-            await self.refresh_mail()
+            if not self._trash_busy:
+                targets = self._mail_targets()
+                self._start_trash(
+                    lambda: self._update_mails(
+                        targets, lambda ident: self._service.set_mail_urgency(ident, urgency)
+                    )
+                )
 
     def _clear_mail_detail(self) -> None:
         """Remove detail from a record no longer visible in the table."""
@@ -1499,7 +1581,7 @@ class MailPane(Vertical):
             "#mail-notes",
         ):
             self._set_static(selector, "")
-        self._set_static("#mail-operation-status", self._operation_status)
+        self._show_operation_status()
 
     async def _show_selected(self, *, cached: bool = False) -> None:
         """Render the detail column for the selected mail.
@@ -1657,7 +1739,23 @@ class MailPane(Vertical):
     def _set_operation_status(self, content: str) -> None:
         """Keep operation results and errors in the existing detail area."""
         self._operation_status = content
-        self._set_static("#mail-operation-status", content)
+        self._show_operation_status()
+
+    def _show_operation_status(self) -> None:
+        table = self._mail_table()
+        messages = [self._operation_status] if self._operation_status else []
+        if table is not None:
+            if table.checked_keys:
+                messages.append(
+                    self._service.t(
+                        "tui.selection_count",
+                        count=len(table.checked_keys),
+                        hidden=len(table.checked_keys - set(table.visible_keys())),
+                    )
+                )
+            if table.selection_mode:
+                messages.append(self._service.t("tui.selection_mode_active"))
+        self._set_static("#mail-operation-status", "\n".join(messages))
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         try:
@@ -1690,12 +1788,17 @@ class MailPane(Vertical):
                 self._start_trash(self._purge_expired)
             return
         if button_id == "btn-trash":
-            if not self._trash_busy:
+            if self._trash_busy:
+                self._trash_stop = True
+                self._sync_selection_controls()
+            else:
                 self._start_trash(self._trash_selected)
             return
         if button_id in self._REPARSE_BUTTONS:
             if self._reparse_active():
                 self._stop_reparse()
+                return
+            if self._trash_busy:
                 return
             # build exactly one coroutine: constructing all three and using one
             # leaks the others ("coroutine was never awaited")
@@ -1712,7 +1815,8 @@ class MailPane(Vertical):
                 self._edit_profile(), exclusive=True, group="mail-profile", exit_on_error=False
             )
             return
-        if self._selected_id is None:
+        table = self._mail_table()
+        if self._selected_id is None or (table is not None and len(table.checked_keys) > 1):
             return
         if button_id == "btn-ask-correct":
             record = await self._service.get_mail(self._selected_id)
@@ -1732,29 +1836,48 @@ class MailPane(Vertical):
                     ReplyModal(self._service, record)
                 )
 
-    async def _pick_priority(self) -> None:
+    async def _pick_priority(self, targets: list[str]) -> None:
         from mailflow_tui.pickers import ChoicePicker
 
-        record_id = self._selected_id
         value = await self._ask_screen(ChoicePicker(self._service, self._urgency_options()))
-        if value is not None and record_id is not None:
-            await self._service.set_mail_urgency(
-                record_id, None if value == "auto" else Urgency(value)
+        if value is not None and targets:
+            urgency = None if value == "auto" else Urgency(value)
+            self._start_trash(
+                lambda: self._update_mails(
+                    targets, lambda ident: self._service.set_mail_urgency(ident, urgency)
+                )
             )
-            await self.refresh_mail()
 
     async def _mail_tools(self, choice: str | None = None) -> None:
         from mailflow_tui.mail_workflows import TrashScreen
 
-        choice = choice or await self._ask_screen(MailMenu(self._service))
+        if self._trash_busy or self._reparse_active():
+            return
+        targets = self._mail_targets()
+        table = self._mail_table()
+        scope = self._service.t(
+            "tui.batch_scope",
+            count=len(targets),
+            hidden=len(set(targets) - set(table.visible_keys())) if table is not None else 0,
+        )
+        choice = choice or await self._ask_screen(
+            MailMenu(self._service, scope=scope, count=len(targets))
+        )
         if not choice:
             return
         try:
             if choice == "priority":
-                await self._pick_priority()
+                await self._pick_priority(targets)
+                return
+            elif choice == "delete_selected":
+                self._start_trash(lambda: self._trash_selected(targets))
+                return
+            elif choice == "reparse_selected":
+                if not getattr(self._service, "remote", False) and not self._reparse_active():
+                    self._start_reparse("btn-reparse", self._reparse_one(targets))
                 return
             elif choice == "undo_delete":
-                await self._undo_trash()
+                self._start_trash(self._undo_trash)
                 return
             elif choice == "sync_mail":
                 from mailflow_tui.mail_workflows import SyncScreen
@@ -1772,15 +1895,7 @@ class MailPane(Vertical):
             elif choice == "source_sync":
                 from mailflow_tui.workspace_screens import SourceSyncScreen
 
-                table = self._mail_table()
-                ids = (
-                    list(table.checked_keys)
-                    if table and table.checked_keys
-                    else [self._selected_id]
-                    if self._selected_id
-                    else []
-                )
-                await self._ask_screen(SourceSyncScreen(self._service, ids))
+                await self._ask_screen(SourceSyncScreen(self._service, targets))
                 await self.refresh_mail()
             elif choice in {"compose", "forward", "reply_all"}:
                 from mailflow_tui.workspace_screens import ComposeScreen
@@ -1921,20 +2036,13 @@ class MailPane(Vertical):
                     "unarchive": ("archived", False),
                 }
                 field, value = fields[str(choice)]
-                result = await self._service.set_mail_state(self._mail_targets(), **{field: value})
-                self._set_operation_status(
-                    self._service.t(
-                        "ux.batch_result",
-                        success=len(result.succeeded),
-                        failed=len(result.failed),
-                        skipped=len(result.skipped),
-                    )
-                    + "".join(
-                        "\n" + escape(ident + ": " + state["message"])
-                        for ident, state in result.source_results.items()
-                        if state["state"] != "synced"
+                self._start_trash(
+                    lambda: self._update_mails(
+                        targets,
+                        lambda ident: self._service.set_mail_state([ident], **{field: value}),
                     )
                 )
+                return
             await self.refresh_mail()
         except Exception as exc:
             self._set_operation_status(escape(error_text(exc, self._service.t)))
@@ -1943,7 +2051,7 @@ class MailPane(Vertical):
     """Mails analyzed at once during a bulk run: a slow endpoint makes a strictly
     sequential sweep feel endless, while a small window keeps rate limits sane."""
 
-    async def _reparse_batch(self, mails: list[Any]) -> None:
+    async def _reparse_batch(self, mails: list[Any], record_ids: list[str]) -> None:
         """Force re-analysis for the given messages, with per-mail progress.
 
         Runs a small window of mails concurrently, stops when the user asks to
@@ -1954,11 +2062,12 @@ class MailPane(Vertical):
         total = len(mails)
         done = 0
         failed: list[str] = []
+        succeeded: set[str] = set()
         completed = 0
         lock = asyncio.Lock()
         window = asyncio.Semaphore(self._REPARSE_CONCURRENCY)
 
-        async def _analyze(mail: Any) -> None:
+        async def _analyze(mail: Any, identity: str) -> None:
             nonlocal done, completed
             async with window:
                 if self._reparse_stop or not self.is_mounted:
@@ -1994,10 +2103,19 @@ class MailPane(Vertical):
                         )
                         return
                     done += 1
+                    succeeded.add(identity)
 
         if self.is_mounted:
             with contextlib.suppress(asyncio.CancelledError, Exception):
-                await asyncio.gather(*(_analyze(mail) for mail in mails))
+                await asyncio.gather(
+                    *(
+                        _analyze(mail, identity)
+                        for mail, identity in zip(mails, record_ids, strict=True)
+                    )
+                )
+        table = self._mail_table()
+        if table is not None:
+            table.set_checks((table.checked_keys | set(record_ids)) - succeeded)
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await self.refresh_mail()
         if self._reparse_stop:
@@ -2030,7 +2148,10 @@ class MailPane(Vertical):
             self._set_operation_status(
                 f"[cyan]{self._service.t('tui.reparse_failed_start', count=len(failed_records))}[/cyan]"
             )
-            await self._reparse_batch([record.mail for record in failed_records])
+            await self._reparse_batch(
+                [record.mail for record in failed_records],
+                [record.record_id for record in failed_records],
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # remote mode, provider failures
@@ -2101,10 +2222,11 @@ class MailPane(Vertical):
                 self._set_reparse_buttons(None)
 
         self._reparse_stop = False
-        self._set_reparse_buttons(button_id)
         self._reparse_worker = self.run_worker(
             _run(), exclusive=True, group="mail-reparse", exit_on_error=False
         )
+        self._set_reparse_buttons(button_id)
+        self._sync_selection_controls()
 
     def _stop_reparse(self) -> None:
         """End the running re-analysis now.
@@ -2119,10 +2241,10 @@ class MailPane(Vertical):
             worker.cancel()
         self._set_operation_status(f"[yellow]{self._service.t('tui.reparse_stopping')}[/yellow]")
 
-    async def _reparse_one(self) -> None:
+    async def _reparse_one(self, targets: list[str] | None = None) -> None:
         """Re-analyze the selected mail, with the same run/cancel controls."""
         try:
-            targets = self._mail_targets()
+            targets = self._mail_targets() if targets is None else targets
             if not targets:
                 self._set_operation_status(
                     f"[yellow]{self._service.t('tui.history_none_selected')}[/yellow]"
@@ -2150,7 +2272,9 @@ class MailPane(Vertical):
             self._set_operation_status(
                 f"[cyan]{self._service.t('tui.reparse_one_start', subject=subject_short)}[/cyan]"
             )
-            await self._reparse_batch([record.mail for record in records])
+            await self._reparse_batch(
+                [record.mail for record in records], [r.record_id for r in records]
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -2180,14 +2304,19 @@ class MailPane(Vertical):
             self._set_operation_status(
                 f"[cyan]{self._service.t('tui.reparse_all_start', count=len(records))}[/cyan]"
             )
-            await self._reparse_batch([record.mail for record in records])
+            await self._reparse_batch(
+                [record.mail for record in records], [r.record_id for r in records]
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # remote mode, provider failures
             self._report_bulk_failure(exc)
 
     def _start_trash(self, operation: Callable[[], Awaitable[None]]) -> None:
+        if self._trash_busy or self._reparse_active():
+            return
         self._trash_busy = True
+        self._trash_stop = False
         self._sync_selection_controls()
 
         async def run() -> None:
@@ -2199,11 +2328,33 @@ class MailPane(Vertical):
                 self._report_bulk_failure(exc)
             finally:
                 self._trash_busy = False
-                self._sync_selection_controls()
+                self._trash_stop = False
+                if self.is_mounted:
+                    self._sync_selection_controls()
 
         cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
             run(), exclusive=True, group="mail-trash", exit_on_error=False
         )
+
+    def _mail_batch_progress(self, done: int, total: int) -> None:
+        self._set_operation_status(self._service.t("tui.batch_progress", done=done, total=total))
+
+    async def _update_mails(
+        self, targets: list[str], apply: Callable[[str], Awaitable[object]]
+    ) -> None:
+        result, pending = await _run_batch(
+            self._service, targets, apply, lambda: self._trash_stop, self._mail_batch_progress
+        )
+        table = self._mail_table()
+        if table is not None:
+            unsynced = {
+                identity
+                for identity, state in result.source_results.items()
+                if state["state"] != "synced"
+            }
+            table.set_checks(set(result.failed) | set(pending) | unsynced)
+        await self.refresh_mail()
+        self._set_operation_status(escape(_batch_feedback(self._service, result, pending)))
 
     def _mail_preview(self, records: list[MailRecord]) -> str:
         lines = [
@@ -2214,10 +2365,10 @@ class MailPane(Vertical):
             lines.append(self._service.t("tui.selection_more", count=len(records) - 20))
         return "\n".join(lines)
 
-    async def _trash_selected(self) -> None:
+    async def _trash_selected(self, targets: list[str] | None = None) -> None:
         from mailflow_tui.mail_workflows import TrashChoiceScreen
 
-        targets = self._mail_targets()
+        targets = self._mail_targets() if targets is None else targets
         if not targets:
             return
         records = [
@@ -2252,40 +2403,24 @@ class MailPane(Vertical):
     async def _trash_records(
         self, targets: list[str], *, expired: bool = False, delete_actions: bool = False
     ) -> None:
-        moved: list[str] = []
-        errors: dict[str, str] = {}
-        try:
-            for index, ident in enumerate(targets, 1):
-                self._set_operation_status(
-                    self._service.t("tui.batch_progress", done=index, total=len(targets))
-                )
-                try:
-                    if expired:
-                        changed = await self._service.purge_expired_mails([ident])
-                    else:
-                        result = await self._service.batch_mail(
-                            [ident], delete_actions=delete_actions
-                        )
-                        if result.failed:
-                            errors.update(result.failed)
-                        changed = bool(result.succeeded)
-                    if changed:
-                        moved.append(ident)
-                except Exception as exc:
-                    errors[ident] = error_message(self._service, exc)
-        finally:
-            if moved:
-                self._undo_trash_ids = moved
-            table = self._mail_table()
-            if table is not None:
-                table.set_checks(set(errors))
-            await self.refresh_mail()
-            message = self._service.t("tui.mail_delete_done", count=len(moved))
-            if errors:
-                message += "\n" + self._service.t(
-                    "tui.batch_failed", count=len(errors), error=next(iter(errors.values()))
-                )
-            self._set_operation_status(escape(message))
+        async def move(ident: str) -> object:
+            if expired:
+                return bool(await self._service.purge_expired_mails([ident]))
+            return await self._service.batch_mail([ident], delete_actions=delete_actions)
+
+        result, pending = await _run_batch(
+            self._service, targets, move, lambda: self._trash_stop, self._mail_batch_progress
+        )
+        if result.succeeded:
+            self._undo_trash_ids = list(result.succeeded)
+        table = self._mail_table()
+        if table is not None:
+            table.set_checks(set(result.failed) | set(pending))
+        await self.refresh_mail()
+        message = self._service.t("tui.mail_delete_done", count=len(result.succeeded))
+        if result.failed or result.skipped or pending or result.source_results:
+            message += "\n" + _batch_feedback(self._service, result, pending)
+        self._set_operation_status(escape(message))
 
     def action_undo_trash(self) -> None:
         if self._trash_busy or not self._undo_trash_ids:
@@ -2293,21 +2428,18 @@ class MailPane(Vertical):
         self._start_trash(self._undo_trash)
 
     async def _undo_trash(self) -> None:
-        restored = 0
-        failed: list[str] = []
-        error = ""
-        for ident in self._undo_trash_ids:
-            try:
-                if await self._service.restore_mail(ident) is not None:
-                    restored += 1
-            except Exception as exc:
-                failed.append(ident)
-                error = error_message(self._service, exc)
-        self._undo_trash_ids = failed
+        result, pending = await _run_batch(
+            self._service,
+            list(self._undo_trash_ids),
+            self._service.restore_mail,
+            lambda: self._trash_stop,
+            self._mail_batch_progress,
+        )
+        self._undo_trash_ids = [*result.failed, *pending]
         await self.refresh_mail()
-        message = self._service.t("tui.mail_restore_done", count=restored)
-        if failed:
-            message += "\n" + self._service.t("tui.batch_failed", count=len(failed), error=error)
+        message = self._service.t("tui.mail_restore_done", count=len(result.succeeded))
+        if result.failed or result.skipped or pending:
+            message += "\n" + _batch_feedback(self._service, result, pending)
         self._set_operation_status(escape(message))
 
     async def _purge_expired(self) -> None:
@@ -2427,6 +2559,7 @@ class ActionsPane(Vertical):
         self._actions_filter_generation = 0
         self._actions_matcher = SearchMatcher("")
         self._delete_busy = False
+        self._delete_stop = False
         self._action_status = ""
         self._category_filter = ""
         self._tag_filter = ""
@@ -2628,6 +2761,23 @@ class ActionsPane(Vertical):
         if event.table.id == "actions-table":
             self._sync_action_controls()
 
+    def on_selection_table_menu_requested(self, event: SelectionTable.MenuRequested) -> None:
+        if event.table.id == "actions-table" and not self._delete_busy:
+            event.stop()
+            if not self._task_targets():
+                self.run_worker(self._more_actions(), group="actions-menu", exit_on_error=False)
+                return
+            self._delete_busy = True
+            self._delete_stop = False
+            self._sync_action_controls()
+            self.run_worker(
+                self._run_task_status(), group="actions-status", exclusive=True, exit_on_error=False
+            )
+
+    def on_data_table_row_highlighted(self, event: TableRowEvent) -> None:
+        if event.data_table.id == "actions-table":
+            self._sync_action_controls()
+
     def _sync_action_controls(self) -> None:
         self._sync_smart_button()
         table = self._actions_table()
@@ -2639,17 +2789,19 @@ class ActionsPane(Vertical):
         button = self.query_one_optional("#actions-delete", Button)
         if button is not None:
             button.label = (
-                self._service.t("tui.btn_delete_selected", count=count)
+                self._service.t("tui.batch_stopping" if self._delete_stop else "tui.batch_stop")
+                if self._delete_busy
+                else self._service.t("tui.btn_delete_selected", count=count)
                 if count
                 else self._service.t("tui.btn_delete_todo")
             )
-            button.disabled = self._delete_busy or (not real and not count)
-            button.tooltip = self._service.t("tui.selection_help")
+            button.disabled = self._delete_stop if self._delete_busy else not (real or count)
+            button.tooltip = None
         table.disabled = self._delete_busy
         edit = self.query_one_optional("#actions-edit", Button)
         if edit is not None:
-            edit.tooltip = self._service.t("tui.selection_current_help")
-            edit.disabled = self._delete_busy or self._selected_item() is None
+            edit.tooltip = None
+            edit.disabled = self._delete_busy or self._selected_item() is None or count > 1
         status = self.query_one_optional("#actions-status", Button)
         if status is not None:
             status.disabled = self._delete_busy or not (count or real)
@@ -2660,6 +2812,9 @@ class ActionsPane(Vertical):
             )
             type_filter.variant = "error" if self._type_filters else "success"
             type_filter.disabled = self._delete_busy
+        add = self.query_one_optional("#actions-add", Button)
+        if add is not None:
+            add.disabled = self._delete_busy
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             message = self._action_status
@@ -2668,6 +2823,8 @@ class ActionsPane(Vertical):
                 message += "\n" + self._service.t("tui.selection_count", count=count, hidden=hidden)
             elif not table.row_count and not message:
                 message = self._service.t("tui.empty")
+            if table.selection_mode:
+                message += "\n" + self._service.t("tui.selection_mode_active")
             hint.update(message.strip())
 
     def _schedule_actions_filter(self) -> None:
@@ -2695,7 +2852,10 @@ class ActionsPane(Vertical):
         search = self.query_one_optional("#actions-search", Input)
         if button is not None:
             button.disabled = (
-                self._smart_action_running or search is None or not search.value.strip()
+                self._smart_action_running
+                or self._delete_busy
+                or search is None
+                or not search.value.strip()
             )
 
     async def _open_smart_action(self) -> None:
@@ -2786,6 +2946,9 @@ class ActionsPane(Vertical):
 
     def edit_selected(self) -> None:
         """Open the edit form for the selected todo (no-op without a row)."""
+        table = self._actions_table()
+        if self._delete_busy or (table is not None and len(table.checked_keys) > 1):
+            return
         item = self._selected_item()
         if item is None:
             return
@@ -2887,6 +3050,7 @@ class ActionsPane(Vertical):
             if self._delete_busy:
                 return
             self._delete_busy = True
+            self._delete_stop = False
             self._sync_action_controls()
             self.run_worker(
                 self._run_task_status(),
@@ -2916,20 +3080,14 @@ class ActionsPane(Vertical):
         if button_id != "actions-delete":
             return
         if self._delete_busy:
+            self._delete_stop = True
+            self._sync_action_controls()
             return
-        table = self._actions_table()
-        targets = sorted(table.checked_keys) if table is not None else []
-        item = self._selected_item()
-        if not targets and item is not None:
-            targets = [item.item_id]
-        targets = [
-            identity
-            for identity in targets
-            if any(item.item_id == identity and not item.preview for item in self._items)
-        ]
+        targets = self._task_targets()
         if not targets:
             return
         self._delete_busy = True
+        self._delete_stop = False
         self._sync_action_controls()
         cast(MailFlowApp, self.app).run_worker(  # pyright: ignore[reportUnknownMemberType]
             self._delete_actions(targets),
@@ -2941,104 +3099,134 @@ class ActionsPane(Vertical):
     async def _run_task_status(self) -> None:
         try:
             await self._change_task_status()
+        except Exception as exc:
+            self._action_status = escape(error_message(self._service, exc))
         finally:
             self._delete_busy = False
+            self._delete_stop = False
             if self.is_mounted:
                 self._sync_action_controls()
+
+    def _task_targets(self) -> list[str]:
+        table = self._actions_table()
+        item = self._selected_item()
+        ids = (
+            [key for key in table.visible_keys() if key in table.checked_keys]
+            + sorted(table.checked_keys - set(table.visible_keys()))
+            if table is not None and table.checked_keys
+            else ([item.item_id] if item is not None else [])
+        )
+        real_ids = {item.item_id for item in self._items if not item.preview}
+        return [identity for identity in ids if identity in real_ids]
+
+    def _task_batch_progress(self, done: int, total: int) -> None:
+        self._action_status = self._service.t("tui.batch_progress", done=done, total=total)
+        self._sync_action_controls()
+
+    async def _confirm_task_batch(self, targets: list[str], *, complete: bool = False) -> bool:
+        table = self._actions_table()
+        hidden = table is not None and bool(set(targets) - set(table.visible_keys()))
+        if len(targets) == 1 and not hidden and not complete:
+            return True
+        preview = "\n".join("• " + item.summary for item in self._items if item.item_id in targets)
+        return bool(
+            await cast(Any, self.app).push_screen_wait(
+                ConfirmModal(
+                    self._service,
+                    title=self._service.t(
+                        "ux.complete_tasks" if complete else "tui.btn_delete_selected",
+                        count=len(targets),
+                    ),
+                    body=(
+                        self._service.t(
+                            "tui.complete_tasks_body" if complete else "tui.actions_delete_body",
+                            count=len(targets),
+                        )
+                        + "\n\n"
+                        + preview
+                    ),
+                    confirm_label=self._service.t(
+                        "ux.complete_tasks" if complete else "tui.btn_delete"
+                    ),
+                    focus_confirm=False,
+                )
+            )
+        )
 
     async def _change_task_status(self) -> None:
         from datetime import timedelta
 
         table = self._actions_table()
-        item = self._selected_item()
-        ids = (
-            sorted(table.checked_keys)
-            if table and table.checked_keys
-            else ([item.item_id] if item else [])
-        )
-        ids = [
-            identity
-            for identity in ids
-            if any(item.item_id == identity and not item.preview for item in self._items)
-        ]
+        ids = self._task_targets()
         if not ids:
             return
         app = cast("Any", self).app
-        choice = await app.push_screen_wait(TaskMenu(self._service))
+        scope = self._service.t(
+            "tui.batch_scope",
+            count=len(ids),
+            hidden=len(set(ids) - set(table.visible_keys())) if table is not None else 0,
+        )
+        choice = await app.push_screen_wait(TaskMenu(self._service, scope=scope))
         if not choice:
             return
         values: dict[str, Any] = {}
-        if choice == "complete_tasks":
+        if choice == "delete_tasks":
+            await self._delete_actions(ids)
+            return
+        if choice == "change_type":
+            value = await app.push_screen_wait(ActionTypePicker(self._service))
+            if value is None:
+                return
+            values["action_type"] = value
+        elif choice == "complete_tasks":
+            if not await self._confirm_task_batch(ids, complete=True):
+                return
             values["completed"] = True
         elif choice in {"mute_tasks", "enable_tasks"}:
             values["reminder_enabled"] = choice == "enable_tasks"
+            if choice == "enable_tasks":
+                values["clear_snooze"] = True
         else:
             values.update(
                 snoozed_until=datetime.now(UTC)
                 + timedelta(hours=1 if choice == "snooze_hour" else 24),
                 reminder_enabled=True,
             )
-        failed: set[str] = set()
-        success = 0
-        for item_id in ids:
-            try:
-                await self._service.edit_action(item_id, **values)
-                success += 1
-            except Exception as exc:
-                logger.warning("task update %s: %s", item_id, exc)
-                failed.add(item_id)
-        if table is not None:
-            table.set_checks(failed)
-        self._action_status = self._service.t(
-            "ux.batch_result", success=success, failed=len(failed), skipped=0
+        result, pending = await _run_batch(
+            self._service,
+            ids,
+            lambda item_id: self._service.edit_action(item_id, **values),
+            lambda: self._delete_stop,
+            self._task_batch_progress,
         )
+        if table is not None:
+            table.set_checks(set(result.failed) | set(pending))
+        self._action_status = escape(_batch_feedback(self._service, result, pending))
         await self.refresh_actions()
-        self.query_one("#actions-hint", Static).update(self._action_status)
 
     async def _delete_actions(self, targets: list[str]) -> None:
         try:
-            if len(targets) > 1:
-                preview = "\n".join(
-                    f"• {item.summary}" for item in self._items if item.item_id in targets
-                )
-                confirmed = await cast(MailFlowApp, self.app).push_screen_wait(  # pyright: ignore[reportUnknownMemberType]
-                    ConfirmModal(
-                        self._service,
-                        title=self._service.t("tui.btn_delete_selected", count=len(targets)),
-                        body=self._service.t("tui.actions_delete_body", count=len(targets))
-                        + "\n\n"
-                        + preview,
-                        confirm_label=self._service.t("tui.btn_delete"),
-                        focus_confirm=False,
-                    )
-                )
-                if not confirmed:
-                    return
-            deleted = 0
-            errors: dict[str, str] = {}
-            for index, ident in enumerate(targets, 1):
-                self._action_status = self._service.t(
-                    "tui.batch_progress", done=index, total=len(targets)
-                )
-                self._sync_action_controls()
-                try:
-                    deleted += bool(await self._service.delete_action(ident))
-                except Exception as exc:
-                    errors[ident] = error_message(self._service, exc)
+            if not await self._confirm_task_batch(targets):
+                return
+            result, pending = await _run_batch(
+                self._service,
+                targets,
+                self._service.delete_action,
+                lambda: self._delete_stop,
+                self._task_batch_progress,
+            )
             table = self._actions_table()
             if table is not None:
-                table.set_checks(set(errors))
-            self._action_status = self._service.t("tui.actions_delete_done", count=deleted)
-            if errors:
-                self._action_status += "\n" + self._service.t(
-                    "tui.batch_failed", count=len(errors), error=next(iter(errors.values()))
-                )
+                table.set_checks(set(result.failed) | set(pending))
+            self._action_status = escape(_batch_feedback(self._service, result, pending))
             await self.refresh_actions()
         except Exception as exc:
-            self._action_status = error_message(self._service, exc)
+            self._action_status = escape(error_message(self._service, exc))
         finally:
             self._delete_busy = False
-            self._sync_action_controls()
+            self._delete_stop = False
+            if self.is_mounted:
+                self._sync_action_controls()
 
 
 class RuntimePane(Vertical):

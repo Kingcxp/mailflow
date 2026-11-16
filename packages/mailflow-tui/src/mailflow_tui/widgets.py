@@ -348,7 +348,12 @@ class SelectionTable(DataTable[Any]):
         return [str(row.key.value) for row in self.ordered_rows]
 
     def retain_checks(self, available: set[str]) -> None:
-        self.set_checks(self.checked_keys & available)
+        if self._range_base is not None:
+            self._range_base.intersection_update(available)
+        if self._anchor not in available:
+            self._anchor = None
+            self._range_base = None
+        self._set_checks(self.checked_keys & available)
 
     def set_checks(self, keys: set[str]) -> None:
         self._range_base = None
@@ -381,6 +386,7 @@ class SelectionTable(DataTable[Any]):
         keys = self.visible_keys()
         if self._anchor not in keys:
             self._anchor = key
+            self._range_base = None
         if self._range_base is None:
             self._range_base = set(self.checked_keys)
         start, end = sorted((keys.index(self._anchor), keys.index(key)))
