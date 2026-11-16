@@ -22,7 +22,6 @@ from textual.widgets import (
     Button,
     DataTable,
     Input,
-    RichLog,
     Select,
     Static,
     TabbedContent,
@@ -162,10 +161,8 @@ async def test_smart_action_keeps_cancellation_and_relevance_order(
                 panel.query_one("#smart-action-request", Static).render()
             )
             await pilot.pause()
-            log = panel.query_one("#smart-action-log", RichLog)
-            assert service.t("tui.smart_action_tools.find_mail") in "\n".join(
-                line.text for line in log.lines
-            )
+            log = panel.query_one("#smart-action-log", Static)
+            assert service.t("tui.smart_action_tools.find_mail") in str(log.render())
             assert panel.query_one("#smart-action-cancel", Button).variant == "error"
             tabs.active = "tab-actions"
             await pilot.pause()

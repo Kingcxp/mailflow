@@ -17,7 +17,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, LoadingIndicator, RichLog, Static
+from textual.widgets import Button, Checkbox, LoadingIndicator, Static
 
 from mailflow_tui.action_types import ActionTypeField
 from mailflow_tui.labels import error_message
@@ -89,7 +89,7 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
             return self._t(operation.summary_key, **operation.summary_params)
         if operation.tool == "delete_mail":
             count = len(args.get("record_ids", []))
-            subjects = " · ".join(args.get("subjects", []))
+            subjects = " · ".join(args.get("subjects", [])[:5])
             if subjects and count > 5:
                 subjects += "…"
             return self._t("tui.agent_pending_delete", count=count) + (
@@ -140,9 +140,7 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
                 with Horizontal(id="smart-action-animation"):
                     yield LoadingIndicator()
                     yield Static(self._t("assistant.working"), id="smart-action-activity")
-                yield RichLog(
-                    id="smart-action-log", wrap=True, markup=False, highlight=False, max_lines=300
-                )
+                yield Static("", id="smart-action-log", markup=False)
                 yield Static("", id="smart-action-result", markup=False)
                 yield Vertical(id="smart-review-operations")
                 yield Static("", id="smart-review-error", markup=False)
@@ -161,6 +159,9 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
         return self._t("assistant.scope", scope=self._scope_name or self._t("assistant.all"))
 
     def on_mount(self) -> None:
+        self.query_one("#smart-action-result").display = False
+        self.query_one("#smart-review-operations").display = False
+        self.query_one("#smart-review-error").display = False
         self._sync_controls()
         self._task = asyncio.create_task(self._execute(), name="smart-action")
 
@@ -194,7 +195,15 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
 
     def _log(self, key: str, **params: Any) -> None:
         self._log_entries.append((key, params))
-        self.query_one("#smart-action-log", RichLog).write(Text(self._log_text(key, params)))
+        self._render_log()
+        self.call_after_refresh(
+            self.query_one("#smart-action-body", ScrollableContainer).scroll_end, animate=False
+        )
+
+    def _render_log(self) -> None:
+        self.query_one("#smart-action-log", Static).update(
+            "\n".join("· " + self._log_text(key, params) for key, params in self._log_entries)
+        )
 
     def _progress(self, _stage: str, _done: int, _total: int, detail: Any) -> None:
         if self._stopping or not self.is_mounted:
@@ -209,9 +218,11 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
 
     def _show_error(self, exc: Exception | None) -> None:
         self._error = exc
-        self.query_one("#smart-review-error", Static).update(
-            error_message(self._service, exc) if exc is not None else ""
-        )
+        error = self.query_one("#smart-review-error", Static)
+        error.update(error_message(self._service, exc) if exc is not None else "")
+        error.display = exc is not None
+        if exc is not None:
+            error.scroll_visible(animate=False)
 
     async def _execute(self) -> None:
         self._log("tui.smart_action_working")
@@ -260,8 +271,11 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
         lines = list(dict.fromkeys(filter(None, [result.final_text, *result.failure_reasons])))
         lines.extend(record.mail.subject for record in result.records[:5])
         lines.extend(item.summary for item in result.actions[:5])
-        self.query_one("#smart-action-result", Static).update("\n".join(lines))
+        answer = self.query_one("#smart-action-result", Static)
+        answer.update("\n".join(lines))
+        answer.display = bool(lines)
         area = self.query_one("#smart-review-operations", Vertical)
+        area.display = False
         await area.remove_children()
         self._labels.clear()
         if self._operations:
@@ -270,14 +284,16 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
                 Static(self._t("tui.smart_action_confirm_hint"), id="smart-action-confirm-hint"),
             )
         for index, operation in enumerate(self._operations):
-            await area.mount(
+            item = Vertical(classes="smart-review-item")
+            await area.mount(item)
+            await item.mount(
                 Checkbox(
                     self._t("ux.include_change"), value=True, id=f"smart-review-include-{index}"
                 )
             )
             if operation.tool == "delete_mail":
                 for position, subject in enumerate(operation.arguments["subjects"]):
-                    await area.mount(
+                    await item.mount(
                         Checkbox(
                             Text(str(subject)),
                             value=True,
@@ -289,17 +305,18 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
             )
             self._labels[index] = label
             row = Horizontal(classes="smart-review-row")
-            await area.mount(row)
+            await item.mount(row)
             await row.mount(label)
             if self._can_edit(operation):
                 await row.mount(
                     Button(self._t("tui.smart_review_edit"), id=f"smart-review-edit-{index}")
                 )
+        area.display = bool(self._operations)
         self._state = "review"
         self._sync_controls()
         self.query_one("#smart-review-cancel", Button).focus()
         if self._operations:
-            self.query_one("#smart-action-confirm-title").scroll_visible(animate=False, top=True)
+            self.query_one("#smart-action-confirm-title").scroll_visible(animate=False)
         else:
             self.query_one("#smart-action-result").scroll_visible(animate=False)
 
@@ -435,10 +452,7 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
             edit = self.query_one_optional(f"#smart-review-edit-{index}", Button)
             if edit is not None:
                 edit.label = self._t("tui.smart_review_edit")
-        log = self.query_one("#smart-action-log", RichLog)
-        log.clear()
-        for key, params in self._log_entries:
-            log.write(Text(self._log_text(key, params)))
+        self._render_log()
         self._show_error(self._error)
         self._sync_controls()
 
