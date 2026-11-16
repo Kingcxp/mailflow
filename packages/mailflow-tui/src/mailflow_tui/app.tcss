@@ -333,6 +333,9 @@ TodoCreateModal {
 #todo-create-form ActionTypeField Select {
     margin-bottom: 0;
 }
+ActionTypeField > Button {
+    height: 3;
+}
 #todo-create-error {
     height: auto;
     color: $text-muted;

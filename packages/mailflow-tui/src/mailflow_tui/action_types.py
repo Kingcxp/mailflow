@@ -118,6 +118,7 @@ class ActionTypesModal(ModalScreen[set[str] | None]):
         self._selected = set(selected or ())
         self._busy = True
         self._deleting = False
+        self._load_failed = False
         self._bindings.bind("escape", "cancel", service.t("tui.btn_cancel"))
 
     def compose(self) -> ComposeResult:
@@ -151,10 +152,19 @@ class ActionTypesModal(ModalScreen[set[str] | None]):
                     variant="primary",
                     disabled=True,
                 )
+                yield Button(
+                    self._service.t("interface.retry"), id="action-types-retry", disabled=True
+                )
                 yield Button(self._service.t("tui.btn_cancel"), id="action-types-cancel")
 
     def on_mount(self) -> None:
-        self.run_worker(self._load(self._selected), group="action-types-load", exit_on_error=False)
+        self.query_one("#action-types-retry", Button).display = False
+        self.call_after_refresh(self._start_load, self._selected)
+
+    def _start_load(self, selected: set[str]) -> None:
+        self.run_worker(
+            self._load(selected), group="action-types-load", exclusive=True, exit_on_error=False
+        )
 
     def _list(self) -> SelectionList[str]:
         return cast(SelectionList[str], self.query_one("#action-types-list", SelectionList))
@@ -162,7 +172,9 @@ class ActionTypesModal(ModalScreen[set[str] | None]):
     def _current(self) -> str | None:
         choices = self._list()
         index = choices.highlighted
-        return choices.get_option_at_index(index).value if index is not None else None
+        if index is None or not 0 <= index < choices.option_count:
+            return None
+        return choices.get_option_at_index(index).value
 
     def _sync_controls(self) -> None:
         current = self._current()
@@ -173,13 +185,17 @@ class ActionTypesModal(ModalScreen[set[str] | None]):
                 or (action in {"rename", "delete"} and not current)
                 or (action == "done" and not self._list().selected)
             )
+        retry = self.query_one("#action-types-retry", Button)
+        retry.display = self._load_failed
+        retry.disabled = self._busy
 
     async def _load(self, selected: set[str]) -> None:
         self._busy = True
-        self._sync_controls()
         try:
+            self._sync_controls()
+            self.query_one("#action-types-status", Static).update(self._service.t("tui.loading"))
             names = await self._service.list_action_types()
-            if not self.is_mounted:
+            if not self.is_attached:
                 return
             choices = self._list()
             choices.clear_options()
@@ -188,17 +204,19 @@ class ActionTypesModal(ModalScreen[set[str] | None]):
                 (Text(action_type_label(self._service, name)), name, name in selected)
                 for name in values
             )
+            self._load_failed = False
             self.query_one("#action-types-status", Static).update(
                 "" if names else self._service.t("tui.todo_types_empty")
             )
         except Exception as exc:
-            if self.is_mounted:
+            self._load_failed = True
+            if self.is_attached:
                 self.query_one("#action-types-status", Static).update(
                     error_detail(self._service, exc)
                 )
         finally:
             self._busy = False
-            if self.is_mounted:
+            if self.is_attached:
                 self._sync_controls()
 
     def on_selection_list_selection_highlighted(
@@ -219,9 +237,7 @@ class ActionTypesModal(ModalScreen[set[str] | None]):
             if name is not None and name in next_selected:
                 next_selected.remove(name)
                 next_selected.add(result)
-            self.run_worker(
-                self._load(next_selected), group="action-types-load", exit_on_error=False
-            )
+            self._start_load(next_selected)
 
         cast(Any, self.app).push_screen(ActionTypeNameModal(self._service, name), closed)
 
@@ -265,6 +281,8 @@ class ActionTypesModal(ModalScreen[set[str] | None]):
         elif not self._busy:
             if ident == "action-types-done":
                 self.dismiss(set(self._list().selected))
+            elif ident == "action-types-retry":
+                self._start_load(set(self._list().selected))
             elif ident == "action-types-add":
                 self._edit_name(None)
             elif ident == "action-types-rename":
@@ -307,7 +325,9 @@ class ActionTypeField(Horizontal):
         yield Button(self._service.t("tui.todo_type_add"), variant="success")
 
     def on_mount(self) -> None:
-        self.run_worker(self._load(), group="action-type-options", exit_on_error=False)
+        self.call_after_refresh(
+            self.run_worker, self._load, group="action-type-options", exit_on_error=False
+        )
 
     async def _load(self) -> None:
         try:

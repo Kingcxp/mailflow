@@ -452,8 +452,10 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         assert (await service.storage.get_mail("target")).action_items == [action]
 
 
-async def test_events_language_and_refresh_keep_reading_state(host: Any) -> None:
-    service, _view, app, emit, _failures = host
+async def test_events_language_and_refresh_keep_reading_state(
+    host: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, view, app, emit, _failures = host
     now = datetime.now(UTC)
     for i in range(40):
         record = make_record(f"mail-{i:02}", subject=f"Keep {i:02}")
@@ -487,8 +489,14 @@ async def test_events_language_and_refresh_keep_reading_state(host: Any) -> None
         app.query_one(TabbedContent).active = "tab-actions"
         app.query_one("#actions-search", Input).value = "Todo"
         filter_button = app.query_one("#actions-type-filter", Button)
+        load_types = view.list_action_types
+        monkeypatch.setattr(view, "list_action_types", AsyncMock(side_effect=ConnectionError()))
         filter_button.press()
         await until(pilot, lambda: isinstance(app.screen, ActionTypesModal))
+        await until(pilot, lambda: app.screen.query_one("#action-types-retry", Button).display)
+        assert view.t("errors.connection") in text(app.screen, "#action-types-status")
+        monkeypatch.setattr(view, "list_action_types", load_types)
+        app.screen.query_one("#action-types-retry", Button).press()
         await until(
             pilot, lambda: not app.screen.query_one("#action-types-list", SelectionList).disabled
         )
@@ -821,6 +829,11 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         app.query_one("#actions-edit", Button).press()
         await until(pilot, lambda: bool(app.screen.query("#todo-completed")))
         await settle(pilot)
+        type_field = app.screen.query_one("#todo-type")
+        assert (
+            type_field.query_one(Button).region.height
+            == type_field.query_one(Select).region.height
+        )
         app.screen.query_one("#todo-completed", Checkbox).value = True
         app.screen.query_one("#todo-save", Button).press()
         await settle(pilot)
