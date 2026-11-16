@@ -18,6 +18,7 @@ from mailflow.service import MailFlowService
 from mailflow_bundled import create_plugin_manager
 from mailflow_tui.app import ActionsPane, MailFlowApp
 from mailflow_tui.confirm import ConfirmModal
+from rich.style import Style
 from textual.coordinate import Coordinate
 from textual.widgets import Button, DataTable
 
@@ -108,11 +109,13 @@ async def test_refresh_keeps_the_cursor_row_and_the_scroll_offset(tmp_path: Path
         await service.stop()
 
 
-async def test_expired_rows_are_dimmed_and_future_rows_are_not(tmp_path: Path) -> None:
+async def test_overdue_rows_fade_more_each_day_and_future_rows_stay_normal(tmp_path: Path) -> None:
     service = await start_service_quiet(tmp_path)
-    # over, but not yet swept: the sweep retires entries a day after they end
-    await service.add_action("Just ended", datetime.now(UTC) - timedelta(hours=2))
-    await service.add_action("Still ahead", datetime.now(UTC) + timedelta(days=3))
+    now = datetime.now(UTC)
+    overdue = ("Just ended", "One day overdue", "Two days overdue")
+    for summary, hours in zip(overdue, (2, 26, 50), strict=True):
+        await service.add_action(summary, now - timedelta(hours=hours))
+    await service.add_action("Still ahead", now + timedelta(days=3))
     app = MailFlowApp(cast(Any, service), queue_module.Queue())
     try:
         async with app.run_test(size=(140, 50)) as pilot:
@@ -120,14 +123,23 @@ async def test_expired_rows_are_dimmed_and_future_rows_are_not(tmp_path: Path) -
             pane = app.query_one(ActionsPane)
             await pane.refresh_actions()
             table = cast(DataTable[Any], app.query_one("#actions-table", DataTable))
-            assert table.row_count == 2
+            assert table.row_count == 4
 
             styles = {
-                str(table.get_cell(key, "content")): str(table.get_cell(key, "content").style)
+                str(table.get_cell(key, "content")): [
+                    Style.parse(str(table.get_cell(key, column).style))
+                    for column in ("time", "type", "content")
+                ]
                 for key in table.rows
             }
-            assert "dim" in styles["Just ended"], styles
-            assert "dim" not in styles["Still ahead"], styles
+            brightness: list[int] = []
+            for summary in overdue:
+                color = styles[summary][0].color
+                assert color is not None
+                assert all(style.color == color for style in styles[summary])
+                brightness.append(sum(color.get_truecolor()))
+            assert brightness[0] > brightness[1] > brightness[2]
+            assert all(style.color is None for style in styles["Still ahead"])
     finally:
         await service.stop()
 

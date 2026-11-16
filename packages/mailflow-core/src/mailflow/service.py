@@ -26,7 +26,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from mailflow import __version__
-from mailflow.action_store import action_has_ended, action_key
+from mailflow.action_store import action_has_ended, action_key, action_overdue_age
 from mailflow.config import (
     LLMConfig,
     MailFlowConfig,
@@ -235,12 +235,9 @@ _PROFILE_MAX_CHARS = 4000
 _FEEDBACK_WINDOW = 20
 """Distinct feedback notes kept for the LLM (repeats collapse onto one line)."""
 _SCHEDULE_EXPIRY_INTERVAL = 3600.0
-"""How often spent schedule entries are swept (seconds). The sweep is pure
-in-memory filtering over the stored records, so an hourly tick is cheap."""
-_EXPIRED_ACTION_AGE = timedelta(days=1)
-"""A schedule entry is dropped a day after it stopped being actionable, not at
-the moment it passed: the entry the user is looking at right now — and the one
-whose reminder just fired — must survive until they have had a chance to act."""
+"""Sweep overdue tasks at startup and hourly without adding frequent storage scans."""
+_EXPIRED_ACTION_AGE = timedelta(days=3)
+"""Keep tasks for three full days after their effective end, then remove them."""
 _EXPIRED_AD_AGE = timedelta(hours=24)
 """Ads only count as expired once they are a day old: the mail the user is
 reading right now must never be swept away by a single click."""
@@ -1250,6 +1247,10 @@ class MailFlowService:
         """
         return self._action_has_ended(item, datetime.now(UTC))
 
+    def action_overdue_days(self, item: ActionItem) -> int | None:
+        age = action_overdue_age(item, datetime.now(UTC))
+        return age.days if age is not None else None
+
     async def _find_duplicate_action(
         self, candidate: ActionItem, *, exclude_item_id: str = ""
     ) -> ActionItem | None:
@@ -1263,8 +1264,21 @@ class MailFlowService:
 
     @admin_operation
     async def purge_expired_actions(self) -> int:
-        """Unfinished and completed tasks are user records; passing time never deletes them."""
-        return 0
+        """Remove occurrences overdue by more than three days, retaining their plans."""
+        now = datetime.now(UTC)
+        store = self.runtime.action_store
+        removed: set[str] = set()
+        async with store.lock:
+            entries = await store.read(deduplicate=False)
+            for entry in entries:
+                age = action_overdue_age(entry.item, now)
+                if age is None or age <= _EXPIRED_ACTION_AGE:
+                    continue
+                if await store.remove(entry, entries):
+                    removed.add(entry.item.item_id)
+        if removed:
+            await self.events.emit("action.changed", item_ids=sorted(removed))
+        return len(removed)
 
     async def list_actions_all(self, *, preview_days: int = 0) -> list[ActionItem]:
         """Real occurrences by default; only terminal callers request future previews."""

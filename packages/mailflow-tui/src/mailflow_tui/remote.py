@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from httpx import AsyncClient
-from mailflow.action_store import action_has_ended
+from mailflow.action_store import action_has_ended, action_overdue_age
 from mailflow.config import MailFlowConfig
 from mailflow.domain import (
     ActionItem,
@@ -461,6 +461,10 @@ class RemoteServiceAdapter:
 
     def is_action_expired(self, item: ActionItem) -> bool:
         return action_has_ended(item, datetime.now(UTC))
+
+    def action_overdue_days(self, item: ActionItem) -> int | None:
+        age = action_overdue_age(item, datetime.now(UTC))
+        return age.days if age is not None else None
 
     # -- writes -----------------------------------------------------------------
     async def set_mail_urgency(self, record_id: str, urgency: Any) -> MailRecord | None:

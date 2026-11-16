@@ -1,5 +1,5 @@
 """Dismissal semantics: deleting a mail-derived todo hides it permanently,
-even across re-analysis; overdue tasks remain until the user completes or deletes them."""
+even across re-analysis; overdue tasks have a three-day grace period."""
 
 from __future__ import annotations
 
@@ -141,13 +141,35 @@ async def test_bulk_delete_reports_what_really_moved(service: MailFlowService) -
     assert store.mails == {}
 
 
-async def test_overdue_and_undated_tasks_survive_until_permanent_completion(
+async def test_overdue_tasks_expire_after_three_days_without_returning(
     service: MailFlowService,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    overdue = await service.add_action("Past deadline", datetime.now(UTC) - timedelta(days=3))
+    now = _DUE
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return now if tz is None else now.astimezone(tz)
+
+    monkeypatch.setattr("mailflow.service.datetime", Clock)
+    overdue = await service.add_action("Past deadline", now - timedelta(days=3))
+    old = await service.add_action("Too old", now - timedelta(days=3, seconds=1))
     undated = await service.add_action("No deadline")
+    store = cast(Any, service.storage)
+    original = _mail_item("expired-mail-action").model_copy(
+        update={"due_at": now - timedelta(days=4)}
+    )
+    store.mails["m1"] = cast(Any, type("R", (), {"action_items": [original]}))
+
+    assert await service.purge_expired_actions() == 2
+    assert old.item_id not in store.custom
     assert await service.purge_expired_actions() == 0
     assert {i.item_id for i in await service.list_actions()} == {overdue.item_id, undated.item_id}
+    replacement = original.model_copy(update={"item_id": "reanalysed-mail-action"})
+    store.mails["m1"] = cast(Any, type("R", (), {"action_items": [replacement]}))
+    assert {i.item_id for i in await service.list_actions()} == {overdue.item_id, undated.item_id}
+
     await service.edit_action(overdue.item_id, completed=True)
     assert [i.item_id for i in await service.list_actions()] == [undated.item_id]
     assert [i.item_id for i in await service.list_actions(include_completed=True)] == [

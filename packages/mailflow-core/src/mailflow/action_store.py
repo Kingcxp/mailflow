@@ -7,7 +7,7 @@ import hashlib
 import json
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 
 from mailflow.contracts import StorageBackend
@@ -64,6 +64,13 @@ def action_has_ended(item: ActionItem, now: datetime) -> bool:
     return item.due_at is not None and action_time_window(item)[1] <= to_utc(now)
 
 
+def action_overdue_age(item: ActionItem, now: datetime) -> timedelta | None:
+    """Elapsed time since the effective end; undated tasks and previews do not age."""
+    if item.preview or not action_has_ended(item, now):
+        return None
+    return to_utc(now) - action_time_window(item)[1]
+
+
 @dataclass
 class ScheduledAction:
     item: ActionItem
@@ -111,7 +118,7 @@ class ActionStore:
     async def read(
         self, *, deduplicate: bool = True, records: list[MailRecord] | None = None
     ) -> list[ScheduledAction]:
-        """Share visible task state; overdue tasks remain until explicitly removed."""
+        """Share visible task state, respecting manual and automatic dismissals."""
         await self.recurring.materialize()
         dismissed = await self.dismissed()
         if records is None:

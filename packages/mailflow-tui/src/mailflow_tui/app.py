@@ -108,6 +108,7 @@ _DETAIL_MUTED = "#a6adc8"
 _DETAIL_TIME = "bold #f9e2af"
 _DETAIL_TAG = "bold #cba6f7"
 _DETAIL_LINK = "underline #89dceb"
+_ACTION_OVERDUE_COLORS = ("#a6adc8", "#7f849c", "#585b70")
 
 
 def _load_error(service: MailFlowService, exc: Exception) -> str:
@@ -197,11 +198,19 @@ def _detail_section(label: str, body: str | RichText, *, style: str = "") -> Ric
     return text
 
 
+def _action_age_style(service: MailFlowService, item: ActionItem) -> str:
+    days = service.action_overdue_days(item)
+    if days is None:
+        return ""
+    color = _ACTION_OVERDUE_COLORS[min(days, len(_ACTION_OVERDUE_COLORS) - 1)]
+    return f"not bold {color}"
+
+
 def _action_time_style(service: MailFlowService, item: ActionItem) -> str:
+    if style := _action_age_style(service, item):
+        return style
     if item.due_at is None:
         return _DETAIL_MUTED
-    if not item.preview and service.is_action_expired(item):
-        return "bold red"
     return _DETAIL_TIME
 
 
@@ -252,6 +261,8 @@ def _action_detail_text(service: MailFlowService, item: ActionItem) -> RichText:
             service.t("tui.action_source"), source, style="cyan" if item.mail_id else _DETAIL_MUTED
         )
     )
+    if style := _action_age_style(service, item):
+        detail.stylize(style)
     return detail
 
 
@@ -1771,17 +1782,21 @@ class MailPane(Vertical):
             for index, item in enumerate(record.action_items):
                 if index:
                     actions_text.append("\n\n")
-                actions_text.append("• ", style=_DETAIL_HEADING)
-                actions_text.append(item.summary, style=_DETAIL_TITLE)
-                actions_text.append("\n")
-                actions_text.append(
+                item_text = RichText()
+                item_text.append("• ", style=_DETAIL_HEADING)
+                item_text.append(item.summary, style=_DETAIL_TITLE)
+                item_text.append("\n")
+                item_text.append(
                     _action_time_range(service, item), style=_action_time_style(service, item)
                 )
-                actions_text.append(
+                item_text.append(
                     "\n" + _action_type_label(service, item.action_type), style=_DETAIL_TAG
                 )
                 if item.notes:
-                    actions_text.append("\n" + item.notes, style=_DETAIL_MUTED)
+                    item_text.append("\n" + item.notes, style=_DETAIL_MUTED)
+                if style := _action_age_style(service, item):
+                    item_text.stylize(style)
+                actions_text.append(item_text)
         self._set_static_text("#mail-actions", actions_text or RichText(""))
         body = mail_body_text(record.mail)
         if not body and looks_binary(record.mail.body_text):
@@ -2779,12 +2794,17 @@ class ActionsPane(Vertical):
         yield Static(self._service.t("tui.empty"), id="actions-hint")
 
     async def on_mount(self) -> None:
+        self.set_interval(60, self._refresh_action_ages)
         self.run_worker(
             self.refresh_actions(),
             exclusive=True,
             group="actions-refresh",
             exit_on_error=False,
         )
+
+    async def _refresh_action_ages(self) -> None:
+        if self.is_on_screen and self._actions_loaded and not self._delete_busy:
+            await self.refresh_actions(reload=False)
 
     def _actions_table(self) -> SelectionTable | None:
         return self.query_one_optional("#actions-table", SelectionTable)
@@ -2896,10 +2916,7 @@ class ActionsPane(Vertical):
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
         rows: list[tuple[str, tuple[Any, ...]]] = []
         for item in items:
-            style = "dim" if item.preview else ""
-            time_style = "yellow" if self._service.is_action_expired(item) else ""
-            if item.preview:
-                time_style = "dim"
+            style = "dim" if item.preview else _action_age_style(self._service, item)
             rows.append(
                 (
                     item.item_id,
@@ -2908,7 +2925,7 @@ class ActionsPane(Vertical):
                             _localize(self._service, item.due_at, "%m-%d %H:%M")
                             if item.due_at is not None
                             else self._service.t("ux.no_due"),
-                            style=time_style,
+                            style=style,
                         ),
                         RichText(_action_type_label(self._service, item.action_type), style=style),
                         RichText(
