@@ -83,8 +83,9 @@ SearchToggle.-active {
     height: 100%;
 }
 
-#smart-action {
-    height: 100%;
+#smart-action,
+#actions-smart-action {
+    height: 3;
     margin-left: 1;
 }
 
@@ -169,12 +170,24 @@ SmartOperationEditModal {
     margin-bottom: 1;
 }
 
-#smart-review-operations,
 #smart-review-edit-fields {
     height: 1fr;
     border: round $secondary;
     padding: 0 1;
 }
+
+#smart-action-body { height: 1fr; }
+#smart-action-body Static { height: auto; }
+#smart-action-request-title,
+#smart-action-confirm-title { text-style: bold; }
+#smart-action-confirm-hint { color: $text-muted; margin-bottom: 1; }
+#smart-action-scope { color: $text-muted; margin-bottom: 1; }
+#smart-action-animation { height: 1; margin-bottom: 1; }
+#smart-action-animation LoadingIndicator { width: 8; height: 1; }
+#smart-action-log { height: 6; margin-bottom: 1; }
+#smart-action-result { margin-bottom: 1; }
+#smart-review-operations { height: auto; }
+#smart-review-buttons { align-horizontal: right; }
 
 .smart-review-row {
     height: auto;

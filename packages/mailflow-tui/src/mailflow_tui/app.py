@@ -891,10 +891,10 @@ class MailPane(Vertical):
         self._trash_busy = False
         self._undo_trash_ids: list[str] = []
         self._smart_action_result: SmartActionResult | None = None
-        self._smart_action_task: asyncio.Task[Any] | None = None
         self._smart_action_running = False
         self._smart_query_text = ""
         self._smart_scope: dict[str, Any] = {}
+        self._smart_scope_name = ""
         self._smart_history: list[dict[str, str]] = []
 
     def compose(self) -> ComposeResult:
@@ -908,7 +908,12 @@ class MailPane(Vertical):
             )
             yield SearchToggle("regex", ident="mail-search-regex")
             yield SearchToggle("case", ident="mail-search-case")
-            yield Button(self._service.t("tui.smart_action"), id="smart-action", variant="primary")
+            yield Button(
+                self._service.t("tui.smart_action"),
+                id="smart-action",
+                variant="primary",
+                disabled=True,
+            )
         with Horizontal():
             yield SelectionTable(t=self._service.t, id="mail-table")
             with ScrollableContainer(id="mail-detail"):
@@ -998,6 +1003,7 @@ class MailPane(Vertical):
     async def on_mount(self) -> None:
         self._urgency_suppress = False
         self._sync_selection_controls()
+        self._sync_smart_button()
         # never block startup on storage reads + row rendering: the pane
         # paints empty and fills in as the exclusive worker delivers
         self.run_worker(
@@ -1006,13 +1012,14 @@ class MailPane(Vertical):
 
     async def on_unmount(self) -> None:
         self._stop_reparse()
-        await self._cancel_smart_action()
 
     def _sync_smart_button(self) -> None:
         button = self.query_one_optional("#smart-action", Button)
         if button is not None:
-            button.label = self._service.t(
-                "tui.smart_action_cancel" if self._smart_action_running else "tui.smart_action"
+            button.label = self._service.t("tui.smart_action")
+            search = self.query_one_optional("#mail-search", Input)
+            button.disabled = (
+                self._smart_action_running or search is None or not search.value.strip()
             )
 
     def set_smart_scope(self, scope: dict[str, Any], name: str) -> bool:
@@ -1022,18 +1029,12 @@ class MailPane(Vertical):
             key: list(cast(list[Any], value)) if isinstance(value, list) else value
             for key, value in scope.items()
         }
+        self._smart_scope_name = name
         self._smart_history.clear()
         self._smart_action_result = None
         self._set_operation_status(escape(self._service.t("assistant.scope", scope=name)))
         self.query_one("#mail-search", Input).focus()
         return True
-
-    async def _cancel_smart_action(self) -> None:
-        task = self._smart_action_task
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
 
     async def _render_smart_action_result(self, result: SmartActionResult) -> None:
         self._records = list(result.records)
@@ -1043,78 +1044,27 @@ class MailPane(Vertical):
             escape("\n".join(hints)) or self._service.t("tui.smart_action_done")
         )
 
-    async def _review_smart_action(self, result: SmartActionResult) -> None:
-        operations = [op.model_copy(deep=True) for op in result.pending]
-        tasks = {item.item_id: item for item in await self._service.list_actions_all()}
-        for operation in operations:
-            if operation.tool == "delete_mail":
-                operation.arguments["subjects"] = [
-                    record.mail.subject
-                    for identity in operation.record_ids
-                    if (record := await self._service.get_mail(identity)) is not None
-                ]
-            elif operation.tool in {"edit_action", "delete_action"}:
-                item = tasks.get(str(operation.arguments.get("item_id") or ""))
-                if item is not None:
-                    operation.arguments = {**item.model_dump(mode="json"), **operation.arguments}
-                    if operation.arguments.get("clear_due"):
-                        operation.arguments["due_at"] = operation.arguments["due_end"] = None
-                    elif operation.arguments.get("clear_end"):
-                        operation.arguments["due_end"] = None
-        selected = await self._ask_screen(SmartActionReviewModal(self._service, operations))
-        if selected is None:
-            await self._service.workspace_call("assistant_cancel", {"plan_id": result.plan_id})
-            result.pending.clear()
-            self._set_operation_status(self._service.t("tui.smart_changes_cancelled"))
-            return
-        outcome = await self._service.apply_smart_plan(result.plan_id, selected)
-        result.pending = list(outcome["failed"])
-        result.records = [r for r in result.records if r.record_id not in outcome["deleted"]]
-        message = self._service.t(
-            "tui.agent_applied_partial" if result.pending else "tui.agent_applied",
-            applied=outcome["applied"],
-            failed=len(result.pending),
-        )
-        message += "".join("\n" + error for error in outcome["errors"])
-        message += "".join(
-            "\n" + identity + ": " + state["message"]
-            for identity, state in outcome.get("source_results", {}).items()
-            if state["state"] != "synced"
-        )
-        result.final_text = message
-        if result.records:
-            refreshed = {r.record_id: r for r in await self._service.list_mails()}
-            result.records = [
-                refreshed[r.record_id] for r in result.records if r.record_id in refreshed
-            ]
-        await self._render_smart_action_result(result)
-
     async def _toggle_smart_action(self) -> None:
         if self._smart_action_running:
-            await self._cancel_smart_action()
             return
         text = self.query_one("#mail-search", Input).value.strip()
         if not text:
             return
-        previous = self._smart_action_result
         self._smart_action_running = True
         self._mail_filter_generation += 1
         self._sync_smart_button()
-        self._set_operation_status("")
-
-        async def execute() -> None:
-            if previous and previous.pending and text == self._smart_query_text:
-                result = previous
+        panel = SmartActionReviewModal(
+            self._service,
+            text,
+            scope=self._smart_scope,
+            scope_name=self._smart_scope_name,
+            conversation=self._smart_history[-12:],
+        )
+        try:
+            result = await self._ask_screen(panel)
+            if result is None:
+                self._set_operation_status(escape(panel.cancel_message))
             else:
-                if previous and previous.pending:
-                    await self._service.workspace_call(
-                        "assistant_cancel", {"plan_id": previous.plan_id}
-                    )
-                result = await self._service.smart_action(
-                    text,
-                    conversation=self._smart_history[-12:],
-                    **self._smart_scope,
-                )
                 self._smart_history.extend(
                     [
                         {"role": "user", "content": text},
@@ -1130,22 +1080,11 @@ class MailPane(Vertical):
                     ]
                 )
                 self._smart_query_text = text
-            self._smart_action_result = result
-            await self._render_smart_action_result(result)
-            if result.pending:
-                await self._review_smart_action(result)
-
-        task = asyncio.create_task(execute(), name="mail-smart-action")
-        self._smart_action_task = task
-        try:
-            await task
-        except asyncio.CancelledError:
-            if self.is_mounted:
-                self._set_operation_status(self._service.t("assistant.cancelled"))
+                self._smart_action_result = result
+                await self._render_smart_action_result(result)
         except Exception as exc:
             self._set_operation_status(escape(error_message(self._service, exc)))
         finally:
-            self._smart_action_task = None
             self._smart_action_running = False
             self._sync_smart_button()
 
@@ -1475,6 +1414,7 @@ class MailPane(Vertical):
 
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "mail-search":
+            self._sync_smart_button()
             if self._smart_action_running:
                 return
             self._page_limit = 200
@@ -1736,6 +1676,7 @@ class MailPane(Vertical):
         if button_id == "btn-refresh":
             self._smart_action_result = None
             self._smart_scope.clear()
+            self._smart_scope_name = ""
             self._smart_history.clear()
             await self.refresh_mail()
             return
@@ -2487,6 +2428,10 @@ class ActionsPane(Vertical):
         self._category_filter = ""
         self._tag_filter = ""
         self._type_filters: set[str] = set()
+        self._smart_action_running = False
+        self._smart_action_result: SmartActionResult | None = None
+        self._smart_query_text = ""
+        self._smart_history: list[dict[str, str]] = []
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="actions-search-row"):
@@ -2495,6 +2440,12 @@ class ActionsPane(Vertical):
             )
             yield SearchToggle("regex", ident="actions-search-regex")
             yield SearchToggle("case", ident="actions-search-case")
+            yield Button(
+                self._service.t("tui.smart_action"),
+                id="actions-smart-action",
+                variant="primary",
+                disabled=True,
+            )
         yield SelectionTable(t=self._service.t, id="actions-table")
         with Horizontal(id="actions-buttons"):
             yield Button(
@@ -2557,6 +2508,7 @@ class ActionsPane(Vertical):
                 "actions-delete": "tui.btn_delete_todo",
                 "actions-status": "interface.action_status",
                 "actions-more": "interface.more",
+                "actions-smart-action": "tui.smart_action",
             },
         )
         search = self.query_one_optional("#actions-search", Input)
@@ -2587,8 +2539,13 @@ class ActionsPane(Vertical):
         search = self.query_one_optional("#actions-search", Input)
         regex = self.query_one_optional("#actions-search-regex", SearchToggle)
         case = self.query_one_optional("#actions-search-case", SearchToggle)
+        smart_result = (
+            self._smart_action_result
+            if search is not None and search.value.strip() == self._smart_query_text
+            else None
+        )
         matcher = build_search_matcher(
-            search.value if search is not None else "",
+            search.value if search is not None and smart_result is None else "",
             regex=bool(regex.value) if regex is not None else False,
             case_sensitive=bool(case.value) if case is not None else False,
         )
@@ -2616,6 +2573,9 @@ class ActionsPane(Vertical):
         ]
         if self._type_filters:
             items = [item for item in items if item.action_type in self._type_filters]
+        if smart_result is not None:
+            found = {item.item_id for item in smart_result.actions}
+            items = [item for item in items if item.item_id in found]
         if matcher.query:
             items = [
                 item
@@ -2664,6 +2624,7 @@ class ActionsPane(Vertical):
             self._sync_action_controls()
 
     def _sync_action_controls(self) -> None:
+        self._sync_smart_button()
         table = self._actions_table()
         if table is None:
             return
@@ -2719,7 +2680,57 @@ class ActionsPane(Vertical):
 
     async def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "actions-search":
+            self._sync_smart_button()
+            if self._smart_action_running:
+                return
             self._schedule_actions_filter()
+
+    def _sync_smart_button(self) -> None:
+        button = self.query_one_optional("#actions-smart-action", Button)
+        search = self.query_one_optional("#actions-search", Input)
+        if button is not None:
+            button.disabled = (
+                self._smart_action_running or search is None or not search.value.strip()
+            )
+
+    async def _open_smart_action(self) -> None:
+        text = self.query_one("#actions-search", Input).value.strip()
+        if self._smart_action_running or not text:
+            return
+        self._smart_action_running = True
+        self._actions_filter_generation += 1
+        self._sync_smart_button()
+        panel = SmartActionReviewModal(self._service, text, conversation=self._smart_history[-12:])
+        try:
+            result = await cast(Any, self.app).push_screen_wait(panel)
+            if result is None:
+                self._action_status = escape(panel.cancel_message)
+            else:
+                self._smart_action_result = result
+                self._smart_query_text = text
+                self._smart_history.extend(
+                    [
+                        {"role": "user", "content": text},
+                        {
+                            "role": "assistant",
+                            "content": result.final_text
+                            + "\n"
+                            + "\n".join(
+                                [f"task {a.item_id}: {a.summary}" for a in result.actions]
+                                + [f"mail {r.record_id}: {r.mail.subject}" for r in result.records]
+                            ),
+                        },
+                    ]
+                )
+                self._action_status = escape(
+                    "\n".join(filter(None, [result.final_text, *result.failure_reasons]))
+                ) or self._service.t("tui.smart_action_done")
+            await self.refresh_actions()
+        except Exception as exc:
+            self._action_status = escape(error_message(self._service, exc))
+        finally:
+            self._smart_action_running = False
+            self._sync_action_controls()
 
     def on_search_toggle_toggled(self, event: SearchToggle.Toggled) -> None:
         if event.toggle.id in {"actions-search-regex", "actions-search-case"}:
@@ -2778,6 +2789,12 @@ class ActionsPane(Vertical):
         )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "actions-smart-action":
+            event.stop()
+            self.run_worker(
+                self._open_smart_action(), group="actions-smart-action", exit_on_error=False
+            )
+            return
         try:
             await self._handle_action(event.button.id)
         except Exception as exc:
@@ -4815,6 +4832,9 @@ class MailFlowApp(App[None]):
             pane.relabel()
         for table in self.query(SelectionTable):
             table.relabel()
+        for screen in self.screen_stack:
+            if isinstance(screen, SmartActionReviewModal) and screen.is_mounted:
+                await screen.relabel()
         await pilot_pause_if_possible(self)
 
     async def _on_mail_processed(self, event: str, **payload: Any) -> None:

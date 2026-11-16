@@ -37,6 +37,7 @@ from mailflow_tui.app import (
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.mail_workflows import DraftsScreen, MailReader
 from mailflow_tui.remote import RemoteServiceAdapter
+from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.widgets import Input as EditingInput
 from mailflow_tui.widgets import SearchToggle, SelectionTable, ShortcutHelp
 from mailflow_tui.widgets import TextArea as EditingTextArea
@@ -387,6 +388,8 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         await pilot.pause()
         app.query_one("#smart-action", Button).press()
         await asyncio.wait_for(entered.wait(), 2)
+        panel = app.screen
+        assert isinstance(panel, SmartActionReviewModal)
         instruction.value = "Next question, not executed yet"
         app.query_one(TabbedContent).active = "tab-actions"
         await pilot.pause()
@@ -397,10 +400,14 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         await pilot.pause()
         assert instruction.value == "Next question, not executed yet"
         assert smart.await_count == 1
-        assert str(app.query_one("#smart-action", Button).label) == service.t(
-            "tui.smart_action_cancel"
+        assert app.query_one("#smart-action", Button).disabled
+        assert text(panel, "#smart-action-request") == "Find matching mail"
+        assert str(panel.query_one("#smart-action-cancel", Button).label) == service.t(
+            "tui.btn_cancel"
         )
         release.set()
+        await until(pilot, lambda: panel.query_one("#smart-review-apply", Button).display)
+        panel.query_one("#smart-review-apply", Button).press()
         await settle(pilot)
         assert smart.await_args is not None
         assert smart.await_args.kwargs["record_ids"] == ["target"]
@@ -411,7 +418,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         entered.clear()
         app.query_one("#smart-action", Button).press()
         await asyncio.wait_for(entered.wait(), 2)
-        app.query_one("#smart-action", Button).press()
+        app.screen.query_one("#smart-action-cancel", Button).press()
         await settle(pilot)
         assert service.t("assistant.cancelled") in text(app, "#mail-operation-status")
         assert instruction.value == "Next question, not executed yet"

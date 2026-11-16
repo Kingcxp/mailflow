@@ -1,32 +1,71 @@
-"""Review proposed mail and task changes before applying them."""
+"""Run smart actions and review their changes in one temporary panel."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
+from collections import deque
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
-from mailflow.domain import PendingOperation
+from mailflow.domain import ActionItem, PendingOperation, SmartActionResult
 from mailflow.service import MailFlowService
+from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Static
+from textual.widgets import Button, Checkbox, LoadingIndicator, RichLog, Static
 
 from mailflow_tui.action_types import ActionTypeField
+from mailflow_tui.labels import error_message
 from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.widgets import Input, TextArea
 
+logger = logging.getLogger(__name__)
 
-class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
+
+class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
     BINDINGS: ClassVar[list[Any]] = []
 
-    def __init__(self, service: MailFlowService, operations: list[PendingOperation]) -> None:
+    def __init__(
+        self,
+        service: MailFlowService,
+        instruction: str,
+        *,
+        scope: dict[str, Any] | None = None,
+        scope_name: str = "",
+        conversation: list[dict[str, str]] | None = None,
+    ) -> None:
         super().__init__()
         self._service = service
-        self._operations = [operation.model_copy(deep=True) for operation in operations]
+        self._instruction = instruction
+        self._scope = {
+            key: list(cast(list[Any], value)) if isinstance(value, list) else value
+            for key, value in (scope or {}).items()
+        }
+        self._scope_name = scope_name
+        self._conversation = [dict(message) for message in conversation or []]
+        self._operations: list[PendingOperation] = []
         self._labels: dict[int, Static] = {}
-        self._bindings.bind("escape", "cancel", self._t("tui.smart_review_cancel"))
+        self._result: SmartActionResult | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._state = "running"
+        self._stopping = False
+        self._apply_started = False
+        self._error: Exception | None = None
+        self._log_entries: deque[tuple[str, dict[str, Any]]] = deque(maxlen=300)
+        self._bindings.bind("escape", "cancel", self._t("tui.btn_cancel"))
+
+    @property
+    def cancel_message(self) -> str:
+        if self._error is not None and not self._apply_started:
+            return error_message(self._service, self._error)
+        return self._t(
+            "tui.smart_action_stopped" if self._apply_started else "assistant.cancelled"
+        )
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -93,59 +132,335 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="smart-review-dialog"):
-            yield Static(self._t("tui.smart_review_title"), id="smart-review-title")
-            with ScrollableContainer(id="smart-review-operations"):
-                for index, operation in enumerate(self._operations):
-                    yield Checkbox(
-                        self._t("ux.include_change"), value=True, id=f"smart-review-include-{index}"
-                    )
-                    if operation.tool == "delete_mail":
-                        subjects = operation.arguments.get("subjects", [])
-                        for position, record_id in enumerate(operation.record_ids):
-                            yield Checkbox(
-                                str(subjects[position]) if position < len(subjects) else record_id,
-                                value=True,
-                                id=f"smart-review-mail-{index}-{position}",
-                            )
-                    with Horizontal(classes="smart-review-row"):
-                        label = Static(
-                            self._description(index, operation),
-                            id=f"smart-review-op-{index}",
-                            markup=False,
-                        )
-                        self._labels[index] = label
-                        yield label
-                        if self._can_edit(operation):
-                            yield Button(
-                                self._t("tui.smart_review_edit"), id=f"smart-review-edit-{index}"
-                            )
-            yield Static("", id="smart-review-error")
+            yield Static(self._t("tui.smart_action"), id="smart-review-title")
+            with ScrollableContainer(id="smart-action-body"):
+                yield Static(self._t("tui.smart_action_request"), id="smart-action-request-title")
+                yield Static(self._instruction, id="smart-action-request", markup=False)
+                yield Static(self._scope_text(), id="smart-action-scope", markup=False)
+                with Horizontal(id="smart-action-animation"):
+                    yield LoadingIndicator()
+                    yield Static(self._t("assistant.working"), id="smart-action-activity")
+                yield RichLog(
+                    id="smart-action-log", wrap=True, markup=False, highlight=False, max_lines=300
+                )
+                yield Static("", id="smart-action-result", markup=False)
+                yield Vertical(id="smart-review-operations")
+                yield Static("", id="smart-review-error", markup=False)
             with Horizontal(id="smart-review-buttons"):
-                yield Button(self._t("tui.btn_apply"), id="smart-review-apply", variant="primary")
-                yield Button(self._t("tui.smart_review_cancel"), id="smart-review-cancel")
+                yield Button(
+                    self._t("tui.smart_action_reject"), id="smart-review-cancel", variant="error"
+                )
+                yield Button(
+                    self._t("tui.btn_cancel"), id="smart-action-cancel", variant="error"
+                )
+                yield Button(
+                    self._t("tui.smart_action_finish"), id="smart-review-apply", variant="success"
+                )
+
+    def _scope_text(self) -> str:
+        return self._t("assistant.scope", scope=self._scope_name or self._t("assistant.all"))
+
+    def on_mount(self) -> None:
+        self._sync_controls()
+        self._task = asyncio.create_task(self._execute(), name="smart-action")
+
+    def on_resize(self, _event: events.Resize) -> None:
+        if self.is_mounted:
+            self._sync_controls()
+
+    def _sync_controls(self) -> None:
+        cancel = self.query_one_optional("#smart-action-cancel", Button)
+        if cancel is None:
+            return
+        busy = self._state in {"running", "applying"}
+        cancel.display = busy
+        cancel.disabled = self._stopping
+        self.query_one("#smart-review-cancel", Button).display = self._state == "review"
+        self.query_one("#smart-review-cancel", Button).disabled = self._stopping
+        self.query_one("#smart-review-apply", Button).display = not busy
+        self.query_one("#smart-review-apply", Button).disabled = self._stopping
+        self.query_one("#smart-review-operations").disabled = busy or self._stopping
+        self.query_one("#smart-action-animation").display = (
+            busy and self.app.size.width >= 100 and self.app.size.height >= 30
+        )
+
+    def _log_text(self, key: str, params: dict[str, Any]) -> str:
+        params = dict(params)
+        if "tool" in params:
+            label_key = "tui.smart_action_tools." + str(params["tool"])
+            label = self._t(label_key)
+            params["tool"] = self._t("tui.smart_action_tool") if label == label_key else label
+        return self._t(key, **params)
+
+    def _log(self, key: str, **params: Any) -> None:
+        self._log_entries.append((key, params))
+        self.query_one("#smart-action-log", RichLog).write(Text(self._log_text(key, params)))
+
+    def _progress(self, _stage: str, _done: int, _total: int, detail: Any) -> None:
+        if self._stopping or not self.is_mounted:
+            return
+        if isinstance(detail, (tuple, list)) and len(detail) == 2:
+            key, params = cast(tuple[str, dict[str, Any]], detail)
+            # Progress names the operation; tool arguments and raw responses stay out of the log.
+            self._log(
+                "tui." + str(key),
+                **{k: v for k, v in params.items() if k not in {"args", "result"}},
+            )
+
+    def _show_error(self, exc: Exception | None) -> None:
+        self._error = exc
+        self.query_one("#smart-review-error", Static).update(
+            error_message(self._service, exc) if exc is not None else ""
+        )
+
+    async def _execute(self) -> None:
+        self._log("tui.smart_action_working")
+        try:
+            self._result = await self._service.smart_action(
+                self._instruction,
+                progress=self._progress,
+                conversation=self._conversation,
+                **self._scope,
+            )
+            self._log("tui.smart_action_steps", count=len(self._result.tool_steps))
+            await self._show_review()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._state = "failed"
+            self._show_error(exc)
+            self._sync_controls()
+
+    async def _show_review(self) -> None:
+        result = self._result
+        if result is None:
+            return
+        self._operations = [op.model_copy(deep=True) for op in result.pending]
+        tasks = (
+            {item.item_id: item for item in await self._service.list_actions_all()}
+            if any(op.tool in {"edit_action", "delete_action"} for op in self._operations)
+            else {}
+        )
+        for operation in self._operations:
+            if operation.tool == "delete_mail":
+                operation.arguments["subjects"] = [
+                    record.mail.subject
+                    if (record := await self._service.get_mail(identity))
+                    else identity
+                    for identity in operation.record_ids
+                ]
+            elif operation.tool in {"edit_action", "delete_action"}:
+                item = tasks.get(str(operation.arguments.get("item_id") or ""))
+                if item is not None:
+                    operation.arguments = {**item.model_dump(mode="json"), **operation.arguments}
+                    if operation.arguments.get("clear_due"):
+                        operation.arguments["due_at"] = operation.arguments["due_end"] = None
+                    elif operation.arguments.get("clear_end"):
+                        operation.arguments["due_end"] = None
+        lines = list(dict.fromkeys(filter(None, [result.final_text, *result.failure_reasons])))
+        lines.extend(record.mail.subject for record in result.records[:5])
+        lines.extend(item.summary for item in result.actions[:5])
+        self.query_one("#smart-action-result", Static).update("\n".join(lines))
+        area = self.query_one("#smart-review-operations", Vertical)
+        await area.remove_children()
+        self._labels.clear()
+        if self._operations:
+            await area.mount(
+                Static(self._t("tui.smart_review_title"), id="smart-action-confirm-title"),
+                Static(self._t("tui.smart_action_confirm_hint"), id="smart-action-confirm-hint"),
+            )
+        for index, operation in enumerate(self._operations):
+            await area.mount(
+                Checkbox(
+                    self._t("ux.include_change"), value=True, id=f"smart-review-include-{index}"
+                )
+            )
+            if operation.tool == "delete_mail":
+                for position, subject in enumerate(operation.arguments["subjects"]):
+                    await area.mount(
+                        Checkbox(
+                            Text(str(subject)),
+                            value=True,
+                            id=f"smart-review-mail-{index}-{position}",
+                        )
+                    )
+            label = Static(
+                self._description(index, operation), markup=False, id=f"smart-review-op-{index}"
+            )
+            self._labels[index] = label
+            row = Horizontal(classes="smart-review-row")
+            await area.mount(row)
+            await row.mount(label)
+            if self._can_edit(operation):
+                await row.mount(
+                    Button(self._t("tui.smart_review_edit"), id=f"smart-review-edit-{index}")
+                )
+        self._state = "review"
+        self._sync_controls()
+        self.query_one("#smart-review-cancel", Button).focus()
+        if self._operations:
+            self.query_one("#smart-action-confirm-title").scroll_visible(animate=False, top=True)
+        else:
+            self.query_one("#smart-action-result").scroll_visible(animate=False)
+
+    def _selected_operations(self) -> list[PendingOperation]:
+        selected: list[PendingOperation] = []
+        for index, operation in enumerate(self._operations):
+            if not self.query_one(f"#smart-review-include-{index}", Checkbox).value:
+                continue
+            operation = operation.model_copy(deep=True)
+            if operation.tool == "delete_mail":
+                ids = [
+                    rid
+                    for pos, rid in enumerate(operation.record_ids)
+                    if self.query_one(f"#smart-review-mail-{index}-{pos}", Checkbox).value
+                ]
+                if not ids:
+                    continue
+                operation.record_ids = ids
+                operation.arguments["record_ids"] = ids
+            selected.append(operation)
+        return selected
+
+    async def _apply(self, operations: list[PendingOperation]) -> None:
+        result = self._result
+        if result is None:
+            return
+        self._apply_started = True
+        self._log("tui.smart_action_applying")
+        try:
+            outcome = await self._service.apply_smart_plan(result.plan_id, operations)
+            result.pending = list(outcome["failed"])
+            result.records = [r for r in result.records if r.record_id not in outcome["deleted"]]
+            result.actions.extend(
+                ActionItem.model_validate(item) for item in outcome.get("actions", [])
+            )
+            result.final_text = self._t(
+                "tui.agent_applied_partial" if result.pending else "tui.agent_applied",
+                applied=outcome["applied"],
+                failed=len(result.pending),
+            )
+            result.final_text += "".join("\n" + error for error in outcome["errors"])
+            result.final_text += "".join(
+                "\n" + identity + ": " + state["message"]
+                for identity, state in outcome.get("source_results", {}).items()
+                if state["state"] != "synced"
+            )
+            if not result.pending:
+                result.plan_id = ""
+            result.records = [
+                record
+                for previous in result.records
+                if (record := await self._service.get_mail(previous.record_id)) is not None
+            ]
+            if result.actions:
+                current = {
+                    item.item_id: item
+                    for item in await self._service.list_actions_all(preview_days=30)
+                }
+                ids = dict.fromkeys(item.item_id for item in result.actions)
+                result.actions = [current[item_id] for item_id in ids if item_id in current]
+            if result.pending:
+                await self._show_review()
+            else:
+                self._finish(result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._state = "review"
+            self._show_error(exc)
+            self._sync_controls()
+
+    async def _discard_plan(self) -> None:
+        if self._result is not None and self._result.plan_id:
+            async with asyncio.timeout(3):
+                await self._service.workspace_call(
+                    "assistant_cancel", {"plan_id": self._result.plan_id}
+                )
+            self._result.plan_id = ""
+            self._result.pending.clear()
+
+    async def _stop(self) -> None:
+        try:
+            if self._task is not None and not self._task.done():
+                self._task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._task
+            await self._discard_plan()
+            self._finish(None)
+        except Exception as exc:
+            self._state = "failed"
+            self._show_error(exc)
+            self._stopping = False
+            self._sync_controls()
+
+    def _finish(self, result: SmartActionResult | None) -> None:
+        self._state = "closed"
+        self.dismiss(result)
+
+    async def on_unmount(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+        try:
+            await self._discard_plan()
+        except Exception:
+            logger.exception("Could not discard the smart action plan during shutdown")
+
+    async def relabel(self) -> None:
+        for ident, key in (
+            ("smart-review-title", "tui.smart_action"),
+            ("smart-action-request-title", "tui.smart_action_request"),
+            ("smart-action-activity", "assistant.working"),
+            ("smart-action-confirm-title", "tui.smart_review_title"),
+            ("smart-action-confirm-hint", "tui.smart_action_confirm_hint"),
+        ):
+            label = self.query_one_optional(f"#{ident}", Static)
+            if label is not None:
+                label.update(self._t(key))
+        self.query_one("#smart-action-scope", Static).update(self._scope_text())
+        for ident, key in (
+            ("smart-review-cancel", "tui.smart_action_reject"),
+            ("smart-action-cancel", "tui.btn_cancel"),
+            ("smart-review-apply", "tui.smart_action_finish"),
+        ):
+            self.query_one(f"#{ident}", Button).label = self._t(key)
+        for index, operation in enumerate(self._operations):
+            include = self.query_one_optional(f"#smart-review-include-{index}", Checkbox)
+            if include is not None:
+                include.label = self._t("ux.include_change")
+            if index in self._labels:
+                self._labels[index].update(self._description(index, operation))
+            edit = self.query_one_optional(f"#smart-review-edit-{index}", Button)
+            if edit is not None:
+                edit.label = self._t("tui.smart_review_edit")
+        log = self.query_one("#smart-action-log", RichLog)
+        log.clear()
+        for key, params in self._log_entries:
+            log.write(Text(self._log_text(key, params)))
+        self._show_error(self._error)
+        self._sync_controls()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
         ident = event.button.id or ""
-        if ident == "smart-review-cancel":
-            self.dismiss(None)
-        elif ident == "smart-review-apply":
-            selected: list[PendingOperation] = []
-            for index, operation in enumerate(self._operations):
-                if not self.query_one(f"#smart-review-include-{index}", Checkbox).value:
-                    continue
-                if operation.tool == "delete_mail":
-                    ids = [
-                        rid
-                        for pos, rid in enumerate(operation.record_ids)
-                        if self.query_one(f"#smart-review-mail-{index}-{pos}", Checkbox).value
-                    ]
-                    if not ids:
-                        continue
-                    operation.record_ids = ids
-                    operation.arguments["record_ids"] = ids
-                selected.append(operation)
-            self.dismiss(selected)
-        elif ident.startswith("smart-review-edit-"):
+        if ident in {"smart-action-cancel", "smart-review-cancel"}:
+            self.action_cancel()
+        elif ident == "smart-review-apply" and self._state in {"review", "failed"}:
+            if self._state == "failed":
+                self._finish(None)
+                return
+            if self._result is None or not self._result.pending:
+                self._finish(self._result)
+                return
+            selected = self._selected_operations()
+            self._show_error(None)
+            self._state = "applying"
+            self._sync_controls()
+            self.query_one("#smart-action-cancel", Button).focus()
+            self._task = asyncio.create_task(self._apply(selected), name="smart-action-apply")
+        elif ident.startswith("smart-review-edit-") and self._state == "review":
             index = int(ident.rsplit("-", 1)[1])
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
                 SmartOperationEditModal(self._service, self._operations[index]),
@@ -160,7 +475,10 @@ class SmartActionReviewModal(ModalScreen[list[PendingOperation] | None]):
         self._labels[index].update(self._description(index, operation))
 
     def action_cancel(self) -> None:
-        self.dismiss(None)
+        if not self._stopping and self._state != "closed":
+            self._stopping = True
+            self._sync_controls()
+            self.run_worker(self._stop(), group="smart-action-stop", exit_on_error=False)
 
 
 class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):

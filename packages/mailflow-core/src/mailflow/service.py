@@ -2270,6 +2270,9 @@ Return every candidate in this batch."""
         history_id = ""
         try:
             history_id = await self.assistant_history.add(text, result)
+        except asyncio.CancelledError:
+            self._smart_plans.pop(result.plan_id, None)
+            raise
         except Exception:
             logger.exception("cannot save assistant history")
             result.failure_reasons.append(self.t("experience.history_save_failed"))
@@ -2311,7 +2314,13 @@ Return every candidate in this batch."""
             if plan is None or plan[0] != current_context() or plan[1] <= utcnow():
                 raise translated_error(ValueError, self.t, "ux.plan_expired")
             remaining = list(plan[2])
-            result: dict[str, Any] = {"applied": 0, "deleted": [], "failed": [], "errors": []}
+            result: dict[str, Any] = {
+                "applied": 0,
+                "deleted": [],
+                "actions": [],
+                "failed": [],
+                "errors": [],
+            }
             selected: list[tuple[PendingOperation, PendingOperation]] = []
             for operation in operations:
                 original = next(
@@ -2407,9 +2416,10 @@ Return every candidate in this batch."""
                                 "repeat",
                                 "image_indices",
                             }
-                            await self.add_action(
+                            item = await self.add_action(
                                 **{k: v for k, v in arguments.items() if k in allowed}
                             )
+                            result["actions"].append(item.model_dump(mode="json"))
                         elif operation.tool == "edit_action":
                             allowed = {
                                 "item_id",
@@ -2431,9 +2441,10 @@ Return every candidate in this batch."""
                                 "tags",
                                 "image_indices",
                             }
-                            await self.edit_action(
+                            item = await self.edit_action(
                                 **{k: v for k, v in arguments.items() if k in allowed}
                             )
+                            result["actions"].append(item.model_dump(mode="json"))
                         elif operation.tool == "delete_action":
                             if not await self.delete_action(str(arguments["item_id"])):
                                 continue

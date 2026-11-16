@@ -17,10 +17,12 @@ from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import make_mail
 from mailflow_tui.action_types import ActionTypeField
 from mailflow_tui.app import MailFlowApp
+from mailflow_tui.smart_action_review import SmartActionReviewModal, SmartOperationEditModal
 from textual.widgets import (
     Button,
     DataTable,
     Input,
+    RichLog,
     Select,
     Static,
     TabbedContent,
@@ -40,18 +42,24 @@ from mailflow_test_support.ui import until
 # retired by the schedule-expiry sweep, which is not what this fixture tests.
 
 
-async def _smart_review(app: MailFlowApp, pilot: Any) -> None:
+async def _smart_review(
+    app: MailFlowApp, pilot: Any, *, entry: str = "smart-action"
+) -> SmartActionReviewModal:
     await pilot.pause()
-    app.query_one("#smart-action", Button).press()
-    await until(pilot, lambda: bool(app.screen.query("#smart-review-apply")))
+    app.query_one(f"#{entry}", Button).press()
+    await until(
+        pilot,
+        lambda: isinstance(app.screen, SmartActionReviewModal)
+        and app.screen.query_one("#smart-review-apply", Button).display,
+    )
+    return cast(SmartActionReviewModal, app.screen)
 
 
 @pytest.mark.asyncio
 async def test_smart_action_keeps_cancellation_and_relevance_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The progress line names the running tool, and the ranking the model
-    asked for survives to the table (best match first)."""
+    """The panel streams progress, cancels work and accepts results in relevance order."""
     import asyncio
     import queue
 
@@ -147,25 +155,40 @@ async def test_smart_action_keeps_cancellation_and_relevance_order(
             app.query_one("#smart-action", Button).press()
             await until(pilot, router.started.is_set)
             smart_button = app.query_one("#smart-action", Button)
-            assert str(smart_button.label) == service.t("tui.smart_action_cancel")
+            assert smart_button.disabled
+            panel = app.screen
+            assert isinstance(panel, SmartActionReviewModal)
+            assert "the student ID invitation" in str(
+                panel.query_one("#smart-action-request", Static).render()
+            )
+            await pilot.pause()
+            log = panel.query_one("#smart-action-log", RichLog)
+            assert service.t("tui.smart_action_tools.find_mail") in "\n".join(
+                line.text for line in log.lines
+            )
+            assert panel.query_one("#smart-action-cancel", Button).variant == "error"
             tabs.active = "tab-actions"
             await pilot.pause()
             assert not router.cancelled.is_set()
             tabs.active = "tab-mail"
             search.value = "another request"
             await pilot.pause()
-            app.query_one("#smart-action", Button).press()
+            panel.query_one("#smart-action-cancel", Button).press()
+            panel.query_one("#smart-action-cancel", Button).press()
             await until(pilot, router.cancelled.is_set)
-            await until(pilot, lambda: str(smart_button.label) == service.t("tui.smart_action"))
+            await until(pilot, lambda: not smart_button.disabled)
             assert search.value == "another request"
             router.release.set()
             search.value = "the student ID invitation"
-            await pilot.pause()
-            app.query_one("#smart-action", Button).press()
+            panel = await _smart_review(app, pilot)
+            assert panel.query_one("#smart-review-apply", Button).variant == "success"
+            assert panel.query_one("#smart-review-cancel", Button).variant == "error"
+            panel.query_one("#smart-review-apply", Button).press()
+            panel.query_one("#smart-review-apply", Button).press()
             await until(
                 pilot,
                 lambda: (
-                    str(smart_button.label) == service.t("tui.smart_action")
+                    not smart_button.disabled
                     and table.row_count == 1
                     and "Pick up your student ID card" in str(table.get_row_at(0))
                 ),
@@ -184,13 +207,14 @@ async def test_smart_action_keeps_cancellation_and_relevance_order(
 
             original = service.smart_action
             monkeypatch.setattr(service, "smart_action", fail_query)
-            await pilot.pause()
-            app.query_one("#smart-action", Button).press()
+            panel = await _smart_review(app, pilot)
             await until(pilot, failed.is_set)
-            await until(pilot, lambda: str(smart_button.label) == service.t("tui.smart_action"))
             assert "private network details" not in str(
-                app.query_one("#mail-operation-status", Static).render()
+                panel.query_one("#smart-review-error", Static).render()
             )
+            assert str(panel.query_one("#smart-review-error", Static).render()).strip()
+            panel.query_one("#smart-review-apply", Button).press()
+            await until(pilot, lambda: not smart_button.disabled)
             monkeypatch.setattr(service, "smart_action", original)
             router.held = False
             router.started.clear()
@@ -216,7 +240,6 @@ async def test_smart_query_task_crud_requires_confirmation(
     from mailflow.contracts import LLMCompletion, ToolCall
     from mailflow.domain import ActionOrigin
     from mailflow.plugin_market import PluginMarket
-    from mailflow_tui.smart_action_review import SmartActionReviewModal, SmartOperationEditModal
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
@@ -305,9 +328,11 @@ async def test_smart_query_task_crud_requires_confirmation(
                     break
                 await pilot.pause(0.05)
 
-            app.query_one(TabbedContent).active = "tab-mail"
+            app.query_one(TabbedContent).active = "tab-actions"
             await pilot.pause()
-            search = app.query_one("#mail-search", Input)
+            mail_search = app.query_one("#mail-search", Input)
+            mail_search.value = "Keep this mail search"
+            search = app.query_one("#actions-search", Input)
             search.value = "查找包含 lecture 的邮件，并在2099年10月15日14:00添加项目复核待办"
 
             def modal() -> SmartActionReviewModal | None:
@@ -318,7 +343,7 @@ async def test_smart_query_task_crud_requires_confirmation(
                 ]
                 return screens[-1] if screens else None
 
-            await _smart_review(app, pilot)
+            await _smart_review(app, pilot, entry="actions-smart-action")
             for _ in range(120):
                 if modal() is not None:
                     break
@@ -338,17 +363,15 @@ async def test_smart_query_task_crud_requires_confirmation(
                 pilot,
                 lambda: (
                     service.t("errors.connection")
-                    in str(app.query_one("#mail-operation-status", Static).render())
+                    in str(prompt.query_one("#smart-review-error", Static).render())
                 ),
             )
             assert not await service.storage.list_custom_actions()
             assert "private connection details" not in str(
-                app.query_one("#mail-operation-status", Static).render()
+                prompt.query_one("#smart-review-error", Static).render()
             )
             monkeypatch.setattr(service, "apply_smart_plan", apply_plan)
-            app.query_one("#smart-action", Button).press()
-            await until(pilot, lambda: modal() is not None)
-            app.screen.query_one("#smart-review-apply", Button).press()
+            prompt.query_one("#smart-review-apply", Button).press()
             for _ in range(120):
                 if await service.storage.list_custom_actions():
                     break
@@ -363,8 +386,16 @@ async def test_smart_query_task_crud_requires_confirmation(
             assert scheduled[0].origin is ActionOrigin.CUSTOM
             assert scheduled[0].due_end is not None
             await until(pilot, lambda: modal() is None)
+            await until(
+                pilot,
+                lambda: app.query_one("#actions-table", DataTable).row_count == 1,
+            )
+            assert mail_search.value == "Keep this mail search"
 
             router.mode = "edit"
+            app.query_one(TabbedContent).active = "tab-mail"
+            await pilot.pause()
+            search = mail_search
             search.value = "清除 Project review 待办的结束时间"
             await _smart_review(app, pilot)
             await until(pilot, lambda: modal() is not None)
@@ -432,7 +463,6 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
 
     from mailflow.contracts import LLMCompletion, ToolCall
     from mailflow.plugin_market import PluginMarket
-    from mailflow_tui.smart_action_review import SmartActionReviewModal
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())

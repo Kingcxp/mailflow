@@ -215,7 +215,9 @@ async def test_remote_smart_task_is_reviewed_and_applied_once(
     assert not await service.list_actions()
     applied = await remote.apply_smart_plan(result.plan_id, result.pending)
     assert applied["applied"] == 1 and not applied["failed"]
-    assert (await remote.list_actions())[0].due_at is None
+    added = (await remote.list_actions())[0]
+    assert added.due_at is None
+    assert [item["item_id"] for item in applied["actions"]] == [added.item_id]
     with pytest.raises(RemoteError):
         await remote.apply_smart_plan(result.plan_id, result.pending)
     assert len(await service.list_actions()) == 1
