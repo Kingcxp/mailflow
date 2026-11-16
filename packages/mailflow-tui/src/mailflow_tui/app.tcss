@@ -317,6 +317,9 @@ TodoCreateModal {
 #todo-create-form Select {
     margin-bottom: 1;
 }
+#todo-create-form ActionTypeField Select {
+    margin-bottom: 0;
+}
 #todo-create-error {
     height: auto;
     color: $text-muted;
@@ -363,16 +366,6 @@ TodoCreateModal {
     margin-top: 1;
 }
 
-#actions-controls {
-    height: auto;
-    padding: 0 1;
-}
-
-#actions-type-filter {
-    width: 24;
-}
-
-
 #actions-table {
     width: 100%;
     height: 1fr;
@@ -384,6 +377,10 @@ TodoCreateModal {
 #actions-buttons {
     height: auto;
     padding: 0 1;
+}
+
+#actions-type-filter {
+    width: auto;
 }
 
 #actions-hint {

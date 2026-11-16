@@ -15,6 +15,7 @@ from mailflow.plugins import PluginManager
 from mailflow.service import start_service
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import make_mail
+from mailflow_tui.action_types import ActionTypeField
 from mailflow_tui.app import MailFlowApp
 from textual.widgets import (
     Button,
@@ -373,9 +374,7 @@ async def test_smart_query_task_crud_requires_confirmation(
             prompt.query_one("#smart-review-edit-0", Button).press()
             await until(pilot, lambda: isinstance(app.screen, SmartOperationEditModal))
             assert app.screen.query_one("#smart-review-end", Input).value == ""
-            assert app.screen.query_one("#smart-review-type", Input).value == service.t(
-                "tui.action_type_meeting"
-            )
+            assert app.screen.query_one("#smart-review-type", ActionTypeField).value == "meeting"
             app.screen.query_one("#smart-review-location", Input).value = "Office 4"
             app.screen.query_one("#smart-review-save-edit", Button).press()
             await until(pilot, lambda: isinstance(app.screen, SmartActionReviewModal))

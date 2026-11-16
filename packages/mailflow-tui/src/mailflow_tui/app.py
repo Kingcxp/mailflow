@@ -53,6 +53,7 @@ from textual.widgets import (
     TabPane,
 )
 
+from mailflow_tui.action_types import ActionTypesModal
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
@@ -63,6 +64,7 @@ from mailflow_tui.labels import (
     remote_connection_status,
     urgency_label,
 )
+from mailflow_tui.labels import action_type_label as _action_type_label
 from mailflow_tui.labels import relabel_buttons as _relabel_buttons
 from mailflow_tui.mail_workflows import (
     AttachmentsScreen,
@@ -109,20 +111,6 @@ def _localize(service: MailFlowService, value: datetime, fmt: str = "%Y-%m-%d %H
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(ZoneInfo(service.config.general.timezone)).strftime(fmt)
-
-
-_ACTION_TYPE_KEYS: dict[str, str] = {
-    "errand": "tui.action_type_errand",
-    "exam": "tui.action_type_exam",
-    "meeting": "tui.action_type_meeting",
-    "other": "tui.action_type_other",
-}
-
-
-def _action_type_label(service: MailFlowService, action_type: str) -> str:
-    """Translate built-in action types without rewriting free-form data."""
-    key = _ACTION_TYPE_KEYS.get(action_type)
-    return service.t(key) if key else action_type
 
 
 def _action_time_range(service: MailFlowService, item: ActionItem) -> str:
@@ -2498,6 +2486,7 @@ class ActionsPane(Vertical):
         self._action_status = ""
         self._category_filter = ""
         self._tag_filter = ""
+        self._type_filters: set[str] = set()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="actions-search-row"):
@@ -2506,21 +2495,6 @@ class ActionsPane(Vertical):
             )
             yield SearchToggle("regex", ident="actions-search-regex")
             yield SearchToggle("case", ident="actions-search-case")
-        with Horizontal(id="actions-controls"):
-            yield SafeSelect(
-                [
-                    (self._service.t("tui.range_all"), "all"),
-                    (self._service.t("tui.range_today"), "today"),
-                    (self._service.t("tui.range_week"), "week"),
-                ],
-                id="actions-range",
-                allow_blank=False,
-            )
-            yield SafeSelect(
-                [(self._service.t("tui.filter_all_types"), "all")],
-                id="actions-type-filter",
-                allow_blank=False,
-            )
         yield SelectionTable(t=self._service.t, id="actions-table")
         with Horizontal(id="actions-buttons"):
             yield Button(
@@ -2537,6 +2511,11 @@ class ActionsPane(Vertical):
                 self._service.t("tui.btn_delete_todo"),
                 id="actions-delete",
                 variant="error",
+            )
+            yield Button(
+                self._service.t("tui.todo_types_filter"),
+                id="actions-type-filter",
+                variant="success",
             )
         yield Static(self._service.t("tui.empty"), id="actions-hint")
 
@@ -2583,15 +2562,6 @@ class ActionsPane(Vertical):
         search = self.query_one_optional("#actions-search", Input)
         if search is not None:
             search.placeholder = self._service.t("tui.actions_search_placeholder")
-        _apply_options(
-            self,
-            "#actions-range",
-            [
-                (self._service.t("tui.range_all"), "all"),
-                (self._service.t("tui.range_today"), "today"),
-                (self._service.t("tui.range_week"), "week"),
-            ],
-        )
         await self.refresh_actions()
 
     async def refresh_actions(self, *, reload: bool = True) -> None:
@@ -2644,50 +2614,8 @@ class ActionsPane(Vertical):
             if (not self._category_filter or item.category == self._category_filter)
             and (not self._tag_filter or self._tag_filter in item.tags)
         ]
-        types = sorted({item.action_type for item in self._items})
-        type_filter = self._select_value("#actions-type-filter")
-        if type_filter not in {"all", *types}:
-            type_filter = "all"
-        if type_filter != "all":
-            items = [item for item in items if item.action_type == type_filter]
-        range_mode = self._select_value("#actions-range")
-        items = (
-            [
-                item
-                for item in items
-                if (
-                    item.completed_at is not None
-                    if range_mode == "completed"
-                    else item.completed_at is None
-                )
-            ]
-            if range_mode != "everything"
-            else items
-        )
-        if range_mode == "expired":
-            items = [item for item in items if self._service.is_action_expired(item)]
-        elif range_mode not in {"all", "completed", "everything"}:
-            from datetime import timedelta
-            from zoneinfo import ZoneInfo
-
-            now = datetime.now(UTC)
-            if range_mode == "today":
-                zone = ZoneInfo(self._service.config.general.timezone)
-                local_start = now.astimezone(zone).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
-                lower = local_start.astimezone(UTC)
-                upper = (local_start + timedelta(days=1)).astimezone(UTC)
-            else:
-                lower = now
-                upper = now + timedelta(days=7)
-            items = [
-                item
-                for item in items
-                if item.due_at is not None
-                and to_utc(item.due_at) < upper
-                and (to_utc(item.due_end or item.due_at) >= lower)
-            ]
+        if self._type_filters:
+            items = [item for item in items if item.action_type in self._type_filters]
         if matcher.query:
             items = [
                 item
@@ -2696,23 +2624,6 @@ class ActionsPane(Vertical):
                     f"{item.summary} {item.action_type} {item.notes} {item.location} {item.url} {item.category} {' '.join(item.tags)}"
                 )
             ]
-        _apply_options(
-            self,
-            "#actions-type-filter",
-            [(self._service.t("tui.filter_all_types"), "all")]
-            + [
-                (_action_type_label(self._service, action_type), action_type)
-                for action_type in types
-            ],
-        )
-        current = self._select_value("#actions-type-filter")
-        if current not in {"all", *types}:
-            # stale selection vanished from the list: reset without recursing
-            type_select = _typed_select(self, "#actions-type-filter")
-            if type_select is not None and _select_ready(type_select):
-                selected_value = type_select.value
-                if selected_value is not Select.NULL and str(selected_value) != "all":
-                    _safe_set_value(type_select, "all")
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
@@ -2776,6 +2687,13 @@ class ActionsPane(Vertical):
         status = self.query_one_optional("#actions-status", Button)
         if status is not None:
             status.disabled = self._delete_busy or not (count or real)
+        type_filter = self.query_one_optional("#actions-type-filter", Button)
+        if type_filter is not None:
+            type_filter.label = self._service.t(
+                "tui.todo_types_filter_cancel" if self._type_filters else "tui.todo_types_filter"
+            )
+            type_filter.variant = "error" if self._type_filters else "success"
+            type_filter.disabled = self._delete_busy
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             message = self._action_status
@@ -2785,16 +2703,6 @@ class ActionsPane(Vertical):
             elif not table.row_count and not message:
                 message = self._service.t("tui.empty")
             hint.update(message.strip())
-
-    def _select_value(self, selector: str) -> str:
-        select = _typed_select(self, selector)
-        if select is None or select.value is Select.NULL:
-            return "all"
-        return str(select.value)
-
-    async def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id in ("actions-type-filter", "actions-range"):
-            await self.refresh_actions(reload=False)
 
     def _schedule_actions_filter(self) -> None:
         self._actions_filter_generation += 1
@@ -2901,6 +2809,24 @@ class ActionsPane(Vertical):
                 hint.display = True
 
     async def _handle_action(self, button_id: str | None) -> None:
+        if button_id == "actions-type-filter":
+            if self._delete_busy:
+                return
+            if self._type_filters:
+                self._type_filters.clear()
+                await self.refresh_actions(reload=False)
+            else:
+                modal = ActionTypesModal(self._service)
+
+                def closed(selected: set[str] | None) -> None:
+                    if selected is not None:
+                        self._type_filters = selected
+                    self.run_worker(
+                        self.refresh_actions(), group="actions-refresh", exit_on_error=False
+                    )
+
+                cast(Any, self.app).push_screen(modal, closed)
+            return
         if button_id == "actions-more":
             self.run_worker(
                 self._more_actions(), group="actions-menu", exclusive=True, exit_on_error=False

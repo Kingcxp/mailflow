@@ -14,6 +14,7 @@ from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Select, SelectionList, Static
 
+from mailflow_tui.action_types import ActionTypeField
 from mailflow_tui.labels import error_detail
 from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.widgets import Input, SafeSelect
@@ -49,15 +50,10 @@ class TodoCreateModal(ModalScreen[bool]):
                     placeholder=self._t("tui.todo_summary_required"),
                 )
                 yield Static(self._t("tui.todo_type_label"), classes="todo-label")
-                yield AssistedInput(
+                yield ActionTypeField(
                     self._service,
-                    self._t("tui.action_type_errand"),
+                    self._item.action_type if self._item else "",
                     id="todo-type",
-                    mode="choice",
-                    choices=[
-                        (self._t("tui.action_type_" + key), self._t("tui.action_type_" + key))
-                        for key in ("errand", "meeting", "exam", "other")
-                    ],
                 )
                 yield Static(self._t("tui.todo_due_label"), classes="todo-label")
                 yield AssistedInput(
@@ -203,20 +199,9 @@ class TodoCreateModal(ModalScreen[bool]):
     async def _save_values(self) -> None:
         error = self.query_one("#todo-create-error", Static)
         summary = str(self.query_one("#todo-summary", Input).value).strip()
-        action_type = str(self.query_one("#todo-type", Input).value).strip()
-        action_type = next(
-            (
-                key
-                for key in ("errand", "meeting", "exam", "other")
-                if self._t("tui.action_type_" + key) == action_type
-            ),
-            action_type,
-        )
+        action_type = self.query_one("#todo-type", ActionTypeField).value
         if not summary:
             error.update(f"[yellow]{self._t('tui.todo_summary_required')}[/yellow]")
-            return
-        if not action_type:
-            error.update(f"[yellow]{self._t('tui.todo_type_required')}[/yellow]")
             return
         due_raw = str(self.query_one("#todo-due", Input).value).strip()
         end_raw = str(self.query_one("#todo-due-end", Input).value).strip()
@@ -306,6 +291,7 @@ class TodoCreateModal(ModalScreen[bool]):
                     changes: dict[str, Any] = dict(
                         repeat=repeat,
                         summary=summary,
+                        action_type=action_type,
                         due_at=due_at,
                         due_end=due_end,
                         notes=notes,
@@ -387,7 +373,8 @@ class TodoEditModal(TodoCreateModal):
         item = self._item
         assert item is not None  # set by TodoEditModal.__init__
         controls = [
-            (node, node.disabled) for node in self.query("Input, Select, Checkbox, SelectionList")
+            (node, node.disabled)
+            for node in self.query("Input, Select, Checkbox, SelectionList, ActionTypeField")
         ]
         for node, _disabled in controls:
             node.disabled = True
@@ -438,10 +425,7 @@ class TodoEditModal(TodoCreateModal):
             if item.due_end is None
             else item.time_range_in(self._service.config.general.timezone).split(" ~ ", 1)[-1]
         )
-        label = self._t("tui.action_type_" + item.action_type)
-        self.query_one("#todo-type", Input).value = (
-            item.action_type if label.startswith("tui.") else label
-        )
+        self.query_one("#todo-type", ActionTypeField).set_value(item.action_type)
         self.query_one("#todo-notes", Input).value = item.notes
         self.query_one("#todo-location", Input).value = item.location
         self.query_one("#todo-url", Input).value = item.url

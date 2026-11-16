@@ -27,6 +27,15 @@ def urgency_label(service: Any, urgency: Urgency | str) -> str:
     return service.t(key) if key else value
 
 
+def action_type_label(service: Any, action_type: str) -> str:
+    """Keep old built-in labels readable without offering preset types."""
+    if not action_type:
+        return str(service.t("tui.todo_type_none"))
+    if action_type in {"errand", "exam", "meeting", "other"}:
+        return str(service.t("tui.action_type_" + action_type))
+    return action_type
+
+
 def model_provider_label(service: Any, provider: str) -> str:
     key = "interface.models." + provider
     label = str(service.t(key))

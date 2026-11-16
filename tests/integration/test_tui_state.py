@@ -24,6 +24,7 @@ from mailflow.protocol import json_value
 from mailflow.tools import ToolRegistry
 from mailflow_server.app import create_app
 from mailflow_server.client import RemoteClient
+from mailflow_tui.action_types import ActionTypesModal
 from mailflow_tui.app import (
     ActionModal,
     ActionsPane,
@@ -48,6 +49,7 @@ from textual.widgets import (
     DataTable,
     Input,
     Select,
+    SelectionList,
     Static,
     TabbedContent,
     TextArea,
@@ -451,7 +453,12 @@ async def test_events_language_and_refresh_keep_reading_state(host: Any) -> None
         record.mail.received_at = now + timedelta(minutes=i)
         record.mail.body_text = "\n".join(f"Body line {j}" for j in range(150))
         await service.storage.save_mail(record)
-        await service.add_action(f"Todo {i:02}", now + timedelta(days=1, minutes=i))
+        await service.add_action(
+            f"Todo {i:02}",
+            now + timedelta(days=1, minutes=i),
+            action_type="Work" if i % 2 else "Personal",
+        )
+    await service.add_action("Todo outside filter", action_type="Other")
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
         mail = app.query_one(MailPane)
@@ -472,10 +479,21 @@ async def test_events_language_and_refresh_keep_reading_state(host: Any) -> None
         assert mail_state[1] > 0 and mail_state[2] > 0
         app.query_one(TabbedContent).active = "tab-actions"
         app.query_one("#actions-search", Input).value = "Todo"
-        app.query_one("#actions-range", Select).value = "week"
-        app.query_one("#actions-type-filter", Select).value = "errand"
+        filter_button = app.query_one("#actions-type-filter", Button)
+        filter_button.press()
+        await until(pilot, lambda: isinstance(app.screen, ActionTypesModal))
+        await until(
+            pilot, lambda: not app.screen.query_one("#action-types-list", SelectionList).disabled
+        )
+        choices = app.screen.query_one("#action-types-list", SelectionList)
+        choices.select("Work")
+        choices.select("Personal")
+        await until(pilot, lambda: not app.screen.query_one("#action-types-done", Button).disabled)
+        app.screen.query_one("#action-types-done", Button).press()
         await settle(pilot)
         action_table = app.query_one("#actions-table", DataTable)
+        assert action_table.row_count == 40
+        assert filter_button.variant == "error"
         action_table.move_cursor(row=30)
         await pilot.pause()
         action_state = cursor(action_table), action_table.scroll_y
@@ -509,8 +527,8 @@ async def test_events_language_and_refresh_keep_reading_state(host: Any) -> None
         assert app.query_one("#mail-urgency-filter", Select).value == "important"
         assert app.query_one("#mail-sort", Select).value == "urgency"
         assert app.query_one("#actions-search", Input).value == "Todo"
-        assert app.query_one("#actions-range", Select).value == "week"
-        assert app.query_one("#actions-type-filter", Select).value == "errand"
+        assert filter_button.variant == "error"
+        assert str(filter_button.label) == service.t("tui.todo_types_filter_cancel")
         assert str(app.query_one("#btn-refresh", Button).label) == service.t("tui.btn_refresh")
         assert app.query_one(TabbedContent).active == "tab-runtime"
         assert all(record.manual_urgency is None for record in await service.storage.list_mails())
@@ -527,6 +545,13 @@ async def test_events_language_and_refresh_keep_reading_state(host: Any) -> None
             app.open_mail(target)
             await settle(pilot)
             assert cursor(table) == target
+        app.query_one(TabbedContent).active = "tab-actions"
+        await settle(pilot)
+        filter_button.press()
+        await settle(pilot)
+        assert action_table.row_count == 41
+        assert filter_button.variant == "success"
+        assert str(filter_button.label) == service.t("tui.todo_types_filter")
 
 
 async def test_failure_details_agree_and_missing_mail_has_visible_state(host: Any) -> None:
@@ -780,10 +805,11 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         for selector, key in (
             ("#mail-sort", "tui.sort_time"),
             ("#mail-urgency-filter", "tui.filter_all_urgencies"),
-            ("#actions-range", "tui.range_all"),
-            ("#actions-type-filter", "tui.filter_all_types"),
         ):
             assert view.t(key) in text(app, selector + " SelectCurrent #label")
+        assert str(app.query_one("#actions-type-filter", Button).label) == view.t(
+            "tui.todo_types_filter"
+        )
         assert search.value == "Finish review"
         app.query_one("#actions-edit", Button).press()
         await until(pilot, lambda: bool(app.screen.query("#todo-completed")))

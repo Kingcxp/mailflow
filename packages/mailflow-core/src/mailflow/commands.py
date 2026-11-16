@@ -1160,7 +1160,7 @@ class CommandRouter:
         """Parse ``action add <summary> --due <time> [--type <type>] [--notes <notes>]``."""
         summary: str | None = None
         due_raw: str | None = None
-        action_type = "errand"
+        action_type = ""
         notes = ""
         extra: dict[str, Any] = {}
         repeat: dict[str, Any] = {}

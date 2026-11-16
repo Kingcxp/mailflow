@@ -375,7 +375,7 @@ class ToolRegistry:
                     "Stage a new schedule entry (something the user must do). "
                     "Omit due_at when the user gives no deadline; otherwise use an "
                     "absolute ISO-8601 timestamp with offset. Never invent a deadline. "
-                    "action_type may be a built-in or any concise non-empty custom label."
+                    "action_type is an optional user-defined label; leave empty for unclassified."
                 ),
                 {
                     "summary": {"type": "string", "description": "What has to be done."},
@@ -386,7 +386,7 @@ class ToolRegistry:
                     },
                     "action_type": {
                         "type": "string",
-                        "description": "Built-in type or concise non-empty custom label.",
+                        "description": "Optional user-defined label; empty means unclassified.",
                     },
                     "category": {"type": "string"},
                     "mail_id": {
@@ -445,7 +445,7 @@ class ToolRegistry:
                     "clear_end": {"type": "boolean", "description": "Remove the current end time."},
                     "action_type": {
                         "type": "string",
-                        "description": "Built-in type or concise non-empty custom label.",
+                        "description": "User-defined label; empty removes the type.",
                     },
                     "category": {"type": "string"},
                     "tags": {"type": "array", "items": {"type": "string"}},
@@ -804,9 +804,7 @@ class ToolRegistry:
         due_end = _parse_instant(due_raw, "due_end", zone) if due_raw else None
         if due_end is not None and (due_at is None or due_end <= due_at):
             raise ToolError("`due_end` must be after `due_at`")
-        action_type = _as_str(arguments, "action_type", default="errand")
-        if not action_type:
-            raise ToolError("`action_type` must not be empty")
+        action_type = _as_str(arguments, "action_type")
         extra: dict[str, Any] = {}
         if arguments.get("mail_id"):
             source_id = _as_str(arguments, "mail_id")
@@ -855,7 +853,7 @@ class ToolRegistry:
             value = _as_optional_str(arguments, field)
             if value is None:
                 continue
-            if field in {"summary", "action_type"} and not value:
+            if field == "summary" and not value:
                 raise ToolError(f"`{field}` must not be empty")
             changes[field] = value
         if "tags" in arguments:
