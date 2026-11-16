@@ -4466,9 +4466,10 @@ class MarketDetailScreen(ModalScreen[Any]):
         except (KeyError, ValueError, RuntimeError) as exc:
             self._set_status(escape(error_message(self._service, exc)))
             return
+        note = "plugin.applies_now" if plugin.categories == ["theme"] else "plugin.restart_note"
         self._set_status(
             self._service.t(message_key, plugin_id=plugin.id)
-            + f" ({self._service.t('plugin.restart_note')})"
+            + f" ({self._service.t(note)})"
         )
         await asyncio.sleep(0.4)
         self.dismiss(button_id)
@@ -5081,9 +5082,10 @@ class MarketPane(Vertical):
                 self._sync_market_controls()
         self._installed.pop(plugin.id, None)
         await self._render_entries()
+        note = "plugin.applies_now" if plugin.categories == ["theme"] else "plugin.restart_note"
         status_node.update(
             self._service.t(message_key, plugin_id=plugin.id)
-            + f" ({self._service.t('plugin.restart_note')})"
+            + f" ({self._service.t(note)})"
         )
 
 
@@ -5123,7 +5125,7 @@ class MailFlowApp(App[None]):
     ) -> None:
         super().__init__()
         self._service = service
-        self._theme_signature: tuple[str, str] | None = None
+        self._theme_signature: tuple[str, str, str] | None = None
         self._missing_theme_notice = ""
         self._apply_color_scheme()
         self._log_queue = log_queue
@@ -5150,7 +5152,7 @@ class MailFlowApp(App[None]):
         schemes = theme_catalog(self._service)
         selected = configured if configured in schemes else DEFAULT_THEME
         scheme = schemes[selected]
-        signature = (configured, scheme.model_dump_json())
+        signature = (configured, selected, scheme.model_dump_json())
         if signature != self._theme_signature:
             apply_color_scheme(
                 self, selected, scheme, replace_rich=self._theme_signature is not None

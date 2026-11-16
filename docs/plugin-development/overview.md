@@ -22,6 +22,7 @@ do not copy protocol definitions into separate guides.
 | Storage / `storage` | Implement the storage protocol, including analysis updates, drafts, preferences, tasks and trash; support optional queries/backup only when implemented |
 | Gateway / `gateway_provisioner` | Detect, install, start, inspect, provide QR data and stop an instance; isolate owned resources |
 | Framework export / `bot_exporter` | Synchronously turn `BotExportContext` into `BotExportResult` and a usable generated host |
+| Color scheme / `theme` | Return a `ColorScheme` from a synchronous, zero-argument factory; no UI or network dependency |
 
 ## Registration and dependencies
 
@@ -55,11 +56,20 @@ mailflow-notify-demo = "mailflow_notify_demo.plugin:plugin"
 ```
 
 Most factories receive their corresponding typed configuration. Gateway
-provisioner factories take no arguments; exporters receive `BotExportContext`.
+provisioner and theme factories take no arguments; exporters receive `BotExportContext`.
 For custom hooks, form fields and probes, use
 [PluginRegistrar](../../packages/mailflow-core/src/mailflow/registry.py).
 The declarative registration API is
 [plugin_api.py](../../packages/mailflow-core/src/mailflow/plugin_api.py).
+
+Theme plugins use `@PLUGIN.theme("unique-theme-id")` (or `registrar.add_theme`)
+and return `mailflow.themes.ColorScheme(name="Display name", base="macchiato",
+colors={"blue": "#b7bdf8"})`. Base can be `latte`, `frappe`, `macchiato` or
+`mocha`; omitted colors inherit that palette. `colors` accepts the 26 official
+Catppuccin role names with `#RRGGBB` values. Optional `dark` overrides the base's
+light/dark mode. Reserve the built-in `catppuccin-*` IDs. A distribution may
+register several schemes; enabling, disabling and uninstalling them uses the
+normal plugin lifecycle. The scaffold wizard includes a `theme` category.
 
 `FormField` supports optional `placeholder_key`, `group_key`, `advanced` and
 `choice_label_keys` presentation metadata. Use `select` for finite choices;
@@ -136,6 +146,13 @@ Keep live credentials and external services out of automated verification.
 接口以核心的 `contracts.py`、领域模型和配置模型为唯一来源。两仓插件遵守同一契约，
 不要在说明中复制另一套接口定义。插件类型和职责见上表；完整示例演示通过
 `define_plugin` 注册文字通知器，并通过 `mailflow.plugins` 入口加载。
+
+配色插件选择 `theme` 分类，通过 `@PLUGIN.theme("唯一配色标识")` 或 `registrar.add_theme`
+注册无参数同步工厂，返回 `mailflow.themes.ColorScheme`。`name` 是显示名称，`base` 从
+`latte`、`frappe`、`macchiato`、`mocha` 选择；`colors` 用官方 26 个颜色角色名和
+`#RRGGBB` 覆盖颜色，其余继承基础配色。可用 `dark` 明确指定深浅模式。
+一个插件可注册多套配色，内置的 `catppuccin-*` 标识保留。无需导入界面库或连接网络；
+安装、启用、禁用和卸载复用现有流程，脚手架已包含该分类。
 
 `FormField` 可选声明示例、分组、高级选项和选项翻译键（`placeholder_key`、`group_key`、
 `advanced`、`choice_label_keys`）。有限选项使用 `select`，值保持稳定，显示名称经过翻译；

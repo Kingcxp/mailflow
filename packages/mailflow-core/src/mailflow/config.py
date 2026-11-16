@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic.fields import FieldInfo
 
 from mailflow.domain import Urgency
+from mailflow.themes import DEFAULT_THEME
 
 logger = logging.getLogger("mailflow.config")
 
@@ -91,7 +92,7 @@ def _interpolate_sequence(
 
 class GeneralConfig(BaseModel):
     theme: str = Field(
-        default="catppuccin-macchiato",
+        default=DEFAULT_THEME,
         description="Terminal color scheme from built-ins or enabled theme plugins",
     )
     language: str = Field(

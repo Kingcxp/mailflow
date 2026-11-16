@@ -29,6 +29,8 @@ search and rule processing work without one.
 
 English and Simplified Chinese are built in. Generated summaries follow the
 selected interface language; older analysis in another language can be reanalyzed.
+The terminal includes all four [Catppuccin palettes](https://catppuccin.com/palette/),
+defaults to Macchiato, and lets you select installed theme plugins in Settings.
 
 ## Quickstart
 

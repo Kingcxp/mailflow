@@ -3312,6 +3312,7 @@ Return every candidate in this batch."""
             raise translated_error(ValueError, self.t, "plugin.local_none_found", path=str(root))
         installed: list[str] = []
         failed: list[str] = []
+        themes_only = True
         for folder in folders:
             plugin_id = self._plugin_id_of(folder)
             try:
@@ -3337,6 +3338,10 @@ Return every candidate in this batch."""
                 failed.append(f"{plugin_id}: {error_text(exc, self.t)}")
                 continue
             installed.append(plugin_id)
+            owned = self._plugin_components(plugin_id)
+            themes_only = themes_only and bool(owned) and all(
+                kind is ComponentKind.THEME for kind, _ in owned
+            )
         if not installed:
             raise translated_error(
                 ValueError, self.t, "plugin.local_failed", detail="; ".join(failed)
@@ -3345,7 +3350,8 @@ Return every candidate in this batch."""
             "plugin.local_installed", count=len(installed), plugins=", ".join(installed)
         )
         if not failed:
-            result += f"\n{self.t('plugin.restart_note')}"
+            note = "plugin.applies_now" if themes_only else "plugin.restart_note"
+            result += f"\n{self.t(note)}"
         else:
             result += f"\n{self.t('plugin.local_failed', detail='; '.join(failed))}"
         return result

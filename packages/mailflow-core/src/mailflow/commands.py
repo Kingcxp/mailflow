@@ -1613,9 +1613,15 @@ class CommandRouter:
         already = self._t("plugin.already_installed", plugin_id=args[0])
         if output == already:
             return self._ok(output)
+        components = [c for c in self.service.registry.snapshots() if c.plugin_id == args[0]]
+        note = (
+            "plugin.applies_now"
+            if components and all(c.kind is ComponentKind.THEME for c in components)
+            else "plugin.restart_note"
+        )
         return self._ok(
             self._t("plugin.installed_ok", plugin_id=args[0])
-            + f" ({self._t('plugin.restart_note')})"
+            + f" ({self._t(note)})"
             + (f"\n{output}" if output else "")
         )
 

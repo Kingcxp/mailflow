@@ -33,6 +33,7 @@ reference for secrets. An unset referenced variable fails loading; embedded
 | --- | --- |
 | Save a form | Save or Ctrl+S; Enter does not submit multi-field forms |
 | Edit settings | Save individual options or use Ctrl+S to save the section; search also finds advanced settings |
+| Change colors | Settings → General → Color scheme; save to apply immediately without reconnecting accounts or bots |
 | Read mail | The original split view shows the mail list and the selected message together |
 | Send mail | Prepare displays recipients, body and attachments together; Edit returns to the draft, and changes invalidate the old confirmation |
 | Ask the assistant | Enter a request in the mail search field and click Smart action; click again to cancel; changes require confirmation |
@@ -43,6 +44,13 @@ The tab order, panels, filters and button rows follow the main branch layout.
 Smart actions use the original mail-page entry point. Mouse hover does not open
 help overlays; use F1 for keyboard and selection help. Settings can be saved
 individually or together with Ctrl+S.
+
+`general.theme` defaults to `catppuccin-macchiato`. The other built-ins are
+`catppuccin-latte` (light), `catppuccin-frappe` and `catppuccin-mocha` (dark).
+Enabled theme plugins appear in the same menu. Install them through the existing
+market or local installer. An unavailable theme falls back to Macchiato with a
+notice; the saved preference is retained. Remote terminals follow the server's
+selection, so a theme package is only needed on the server.
 
 ## Accounts and startup
 
@@ -265,6 +273,7 @@ for safe issue reports.
 | --- | --- |
 | 保存表单 | 保存按钮或 Ctrl+S；多字段表单不会因 Enter 意外提交 |
 | 修改设置 | 逐项保存，或通过 Ctrl+S 保存本区修改；搜索也包含高级设置 |
+| 切换配色 | 设置 → 通用 → 配色方案，保存后立即生效，不重新连接邮箱或机器人 |
 | 阅读邮件 | 使用原有左右分栏，同时查看邮件列表与所选邮件详情 |
 | 发送邮件 | 准备后集中预览收件人、正文和附件；编辑可返回草稿，改动使旧确认失效 |
 | 使用助手 | 在邮件搜索框填写需求，点击智能操作执行；再次点击可取消；修改操作先确认 |
@@ -274,6 +283,11 @@ for safe issue reports.
 标签顺序、面板、筛选栏和按钮行恢复 main 分支布局，智能操作恢复邮件页原有入口。
 鼠标悬停不弹出提示，快捷键和多选说明通过 F1 查看。
 设置可逐项保存，也可通过 Ctrl+S 保存本区修改。
+
+`general.theme` 默认是 `catppuccin-macchiato`，另有浅色 `catppuccin-latte` 和深色
+`catppuccin-frappe`、`catppuccin-mocha`。通过现有市场或本地安装入口安装配色插件，
+启用后即可在同一个菜单选择。配色不可用时会提示并临时使用 Macchiato，保留原选择。
+远程终端跟随服务端的配色，插件只需安装在服务端。
 
 ### 账户与启动
 
