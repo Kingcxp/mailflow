@@ -278,6 +278,10 @@ ActionModal {
     margin-top: 1;
 }
 
+#action-footer Button {
+    margin-right: 1;
+}
+
 #mail-controls {
     dock: bottom;
     height: auto;
@@ -394,10 +398,35 @@ ActionTypeField > Button {
     margin-top: 1;
 }
 
+#actions-body {
+    height: 1fr;
+}
+
 #actions-table {
-    width: 100%;
+    width: 60%;
     height: 1fr;
     border: round $primary;
+}
+
+#actions-detail {
+    width: 40%;
+    height: 1fr;
+    border: round $secondary;
+    padding: 0 1;
+}
+
+#actions-detail-scroll {
+    height: 1fr;
+}
+
+#actions-source-mail {
+    width: 100%;
+    min-width: 0;
+    margin-top: 1;
+}
+
+#action-mail-detail {
+    margin-top: 1;
 }
 
 /* Horizontal defaults to height:1fr — without this the button row splits

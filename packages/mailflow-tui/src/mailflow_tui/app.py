@@ -183,6 +183,39 @@ def _action_time_range(service: MailFlowService, item: ActionItem) -> str:
     return item.time_range_in(service.config.general.timezone) or service.t("ux.no_due")
 
 
+def _action_detail_text(service: MailFlowService, item: ActionItem) -> RichText:
+    """Keep task details readable without interpreting user text as markup."""
+    detail = RichText()
+    if item.preview:
+        detail.append(service.t("recurrence.preview") + "\n", style="dim")
+    detail.append(item.summary, style="bold")
+    fields = [
+        ("tui.action_time", _action_time_range(service, item)),
+        ("tui.action_type", _action_type_label(service, item.action_type)),
+        ("recurrence.category", item.category),
+        ("tui.action_tags", ", ".join(item.tags)),
+        ("tui.action_notes", item.notes),
+        ("tui.action_location", item.location),
+        ("tui.action_url", item.url),
+        (
+            "tui.action_source",
+            (item.source_subject or service.t("tui.action_from_mail"))
+            if item.mail_id
+            else service.t("tui.action_custom_source"),
+        ),
+    ]
+    for label, value in fields:
+        if value:
+            detail.append("\n\n" + service.t(label) + "\n", style="bold")
+            detail.append(value)
+            if label == "tui.action_time" and item.due_at is not None:
+                detail.append(
+                    "\n" + service.t("interface.timezone", zone=service.config.general.timezone),
+                    style="dim",
+                )
+    return detail
+
+
 def _remove_column(table: DataTable[Any], key: str) -> None:
     """Drop a column by key, tolerating absence (used when relabeling)."""
     with contextlib.suppress(Exception):
@@ -798,57 +831,17 @@ class ActionModal(ModalScreen[Any]):
         item = self._item
         yield Static(self._service.t("tui.action_detail"), id="action-title")
         with ScrollableContainer(id="action-detail-scroll"):
-            # every field below is model/user text (summaries routinely
-            # contain "[NOTICE]"-style brackets); Rich Text is never parsed
-            # as console markup, so the values render verbatim
-            yield Label(
-                RichText.assemble(
-                    (self._service.t("tui.action_time") + ": ", "bold"),
-                    (_action_time_range(self._service, item) + "\n", ""),
-                )
-            )
-            yield Label(
-                RichText.assemble(
-                    (self._service.t("tui.action_type") + ": ", "bold"),
-                    (_action_type_label(self._service, item.action_type) + "\n", ""),
-                )
-            )
-            yield Label(
-                RichText.assemble(
-                    (self._service.t("tui.action_content") + ":\n", "bold"),
-                    (item.summary + "\n", ""),
-                )
-            )
-            yield Label(
-                RichText.assemble(
-                    (self._service.t("tui.action_notes") + ": ", "bold"),
-                    ((item.notes or "-") + "\n", ""),
-                )
-            )
-            yield Label(
-                RichText.assemble(
-                    (self._service.t("tui.action_source") + ": ", "bold"),
-                    (item.mail_id, ""),
-                )
-            )
-            if item.location:
-                yield Label(
-                    RichText.assemble(
-                        (self._service.t("tui.action_location") + ": ", "bold"),
-                        (item.location + "\n", ""),
-                    )
-                )
-            if item.url:
-                yield Label(
-                    RichText.assemble(
-                        (self._service.t("tui.action_url") + ": ", "bold"),
-                        (item.url + "\n", ""),
-                    )
-                )
+            yield Static(_action_detail_text(self._service, item), id="action-detail-content")
             # the source mail's own details load asynchronously below
             yield Static("", id="action-mail-detail")
         # outside the scroll box: always visible, never scrolls away
         with Horizontal(id="action-footer"):
+            yield Button(
+                self._service.t("tui.action_open_source"),
+                id="action-source-mail",
+                variant="primary",
+                disabled=True,
+            )
             yield Button(self._service.t("tui.btn_edit"), id="action-edit", variant="primary")
             yield Button(self._service.t("tui.btn_close"), id="action-close", variant="default")
 
@@ -873,6 +866,12 @@ class ActionModal(ModalScreen[Any]):
             node.update(f"[dim]{self._service.t('tui.action_mail_missing')}[/dim]")
             return
         mail = record.mail
+        self.query_one("#action-source-mail", Button).disabled = False
+        self.query_one("#action-detail-content", Static).update(
+            _action_detail_text(
+                self._service, self._item.model_copy(update={"source_subject": mail.subject})
+            )
+        )
         body = mail_body_text(mail)
         if not body and looks_binary(mail.body_text):
             body = self._service.t("tui.detail_binary_body")
@@ -914,7 +913,11 @@ class ActionModal(ModalScreen[Any]):
         )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "action-edit":
+        if event.button.id == "action-source-mail" and self._item.mail_id:
+            app = cast(MailFlowApp, self.app)
+            self.dismiss(None)
+            app.call_after_refresh(app.open_mail, self._item.mail_id)
+        elif event.button.id == "action-edit":
             self._open_editor()
         elif event.button.id == "action-close":
             self.dismiss(None)
@@ -1343,6 +1346,13 @@ class MailPane(Vertical):
                 self._mail_cache = [
                     row for row in await self._service.list_mails() if query.matches(row)
                 ]
+            # Keep a linked mail visible even when it is older than the loaded page.
+            if self._selected_id and not any(
+                row.record_id == self._selected_id for row in self._mail_cache
+            ):
+                selected = await self._service.get_mail(self._selected_id)
+                if selected is not None and query.matches(selected):
+                    self._mail_cache.append(selected)
             self._expired_cache = None
         records = [record for record in self._mail_cache or [] if self._query.matches(record)]
         table = self._mail_table()
@@ -2554,19 +2564,49 @@ class MailPane(Vertical):
             raise
 
     def select_mail(self, mail_id: str) -> None:
-        search = self.query_one_optional("#mail-search", PromptInput)
-        if search is not None:
-            search.value = ""
-        urgency = _typed_select(self, "#mail-urgency-filter")
-        if urgency is not None:
-            _safe_set_value(urgency, "all")
-        self._selected_id = mail_id
-        table = self._mail_table()
-        if table is not None:
-            table.set_checks({mail_id})
         self.run_worker(
-            self.refresh_mail(), exclusive=True, group="mail-refresh", exit_on_error=False
+            self._focus_mail(mail_id), exclusive=True, group="mail-navigation", exit_on_error=False
         )
+
+    async def _focus_mail(self, mail_id: str) -> None:
+        try:
+            async with self._refresh_lock:
+                record = await self._service.get_mail(mail_id)
+                table = self._mail_table()
+                if table is None:
+                    return
+                if record is None:
+                    self._selected_id = None
+                    table.set_checks(set())
+                    table.show_cursor = False
+                    self._clear_mail_detail()
+                    self._set_static_text(
+                        "#mail-analysis-status",
+                        RichText(self._service.t("tui.action_mail_missing"), style="yellow"),
+                    )
+                    self._sync_selection_controls()
+                    return
+                self._mail_filter_generation += 1
+                search = self.query_one_optional("#mail-search", PromptInput)
+                if search is not None:
+                    with search.prevent(TextArea.Changed):
+                        search.value = ""
+                _safe_set_value(_typed_select(self, "#mail-urgency-filter"), "all")
+                self._query = MailQuery(state="all")
+                self._smart_action_result = None
+                self._smart_query_text = ""
+                self._selected_id = mail_id
+                table.set_checks({mail_id})
+                await self._refresh_mail_unlocked()
+
+                def focus() -> None:
+                    if self._selected_id == mail_id and mail_id in table.visible_keys():
+                        table.focus()
+                        table.move_cursor(row=table.get_row_index(mail_id), animate=False)
+
+                table.call_after_refresh(focus)
+        except Exception as exc:
+            self._set_static("#mail-analysis-status", _load_error(self._service, exc))
 
 
 class ActionsPane(Vertical):
@@ -2587,6 +2627,7 @@ class ActionsPane(Vertical):
         self._category_filter = ""
         self._tag_filter = ""
         self._type_filters: set[str] = set()
+        self._detail_item_id: str | None = None
         self._smart_action_running = False
         self._smart_action_result: SmartActionResult | None = None
         self._smart_query_text = ""
@@ -2605,7 +2646,17 @@ class ActionsPane(Vertical):
                 variant="primary",
                 disabled=True,
             )
-        yield SelectionTable(t=self._service.t, explorer_selection=True, id="actions-table")
+        with Horizontal(id="actions-body"):
+            yield SelectionTable(t=self._service.t, explorer_selection=True, id="actions-table")
+            with Vertical(id="actions-detail"):
+                with ScrollableContainer(id="actions-detail-scroll"):
+                    yield Static("", id="actions-detail-content")
+                yield Button(
+                    self._service.t("tui.action_open_source"),
+                    id="actions-source-mail",
+                    variant="primary",
+                    disabled=True,
+                )
         with Horizontal(id="actions-buttons"):
             yield Button(
                 self._service.t("tui.btn_add_todo"),
@@ -2648,11 +2699,9 @@ class ActionsPane(Vertical):
             return
         for key in ("selected", "time", "type", "content", "notes", "source"):
             _remove_column(table, key)
-        table.add_column(self._service.t("tui.action_time"), key="time")
-        table.add_column(self._service.t("tui.action_type"), key="type")
+        table.add_column(self._service.t("tui.action_time"), key="time", width=11)
+        table.add_column(self._service.t("tui.action_type"), key="type", width=10)
         table.add_column(self._service.t("tui.action_content"), key="content")
-        table.add_column(self._service.t("tui.action_notes"), key="notes")
-        table.add_column(self._service.t("tui.action_source"), key="source")
         table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
         table.tooltip = None
         self._columns_done = True
@@ -2668,6 +2717,7 @@ class ActionsPane(Vertical):
                 "actions-status": "interface.action_status",
                 "actions-more": "interface.more",
                 "actions-smart-action": "tui.smart_action",
+                "actions-source-mail": "tui.action_open_source",
             },
         )
         search = self.query_one_optional("#actions-search", PromptInput)
@@ -2748,29 +2798,26 @@ class ActionsPane(Vertical):
             hint.update(self._service.t("tui.empty") if not items else _BLANK)
         rows: list[tuple[str, tuple[Any, ...]]] = []
         for item in items:
-            # an entry that is over is styled dim instead of being hidden: the
-            # user still needs to see what happened, but must not mistake it
-            # for something still ahead
-            style = "dim" if item.preview or self._service.is_action_expired(item) else ""
+            style = "dim" if item.preview else ""
+            time_style = "yellow" if self._service.is_action_expired(item) else ""
+            if item.preview:
+                time_style = "dim"
             rows.append(
                 (
                     item.item_id,
                     (
-                        RichText(_action_time_range(self._service, item), style=style),
+                        RichText(
+                            _localize(self._service, item.due_at, "%m-%d %H:%M")
+                            if item.due_at is not None
+                            else self._service.t("ux.no_due"),
+                            style=time_style,
+                        ),
                         RichText(_action_type_label(self._service, item.action_type), style=style),
                         RichText(
                             (self._service.t("recurrence.preview") + " · " if item.preview else "")
-                            + item.summary,
+                            + " ".join(item.summary.split()),
                             style=style,
                         ),
-                        RichText(
-                            " · ".join(
-                                filter(None, [item.category, ", ".join(item.tags), item.notes])
-                            )
-                            or "-",
-                            style=style,
-                        ),
-                        RichText(item.source_subject or item.mail_id, style=style),
                     ),
                 )
             )
@@ -2808,8 +2855,29 @@ class ActionsPane(Vertical):
         if event.data_table.id == "actions-table":
             self._sync_action_controls()
 
+    def _show_action_detail(self) -> None:
+        table = self._actions_table()
+        node = self.query_one_optional("#actions-detail-content", Static)
+        button = self.query_one_optional("#actions-source-mail", Button)
+        if table is None or node is None or button is None:
+            return
+        key = (
+            table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value
+            if 0 <= table.cursor_row < table.row_count
+            else None
+        )
+        item = next((item for item in self._items if item.item_id == key), None)
+        item_id = item.item_id if item is not None else None
+        node.update(_action_detail_text(self._service, item) if item is not None else "")
+        button.disabled = self._delete_busy or item is None or not item.mail_id
+        if item_id != self._detail_item_id:
+            detail = self.query_one("#actions-detail-scroll", ScrollableContainer)
+            detail.scroll_home(animate=False)
+        self._detail_item_id = item_id
+
     def _sync_action_controls(self) -> None:
         self._sync_smart_button()
+        self._show_action_detail()
         table = self._actions_table()
         if table is None:
             return
@@ -3027,6 +3095,11 @@ class ActionsPane(Vertical):
                 hint.display = True
 
     async def _handle_action(self, button_id: str | None) -> None:
+        if button_id == "actions-source-mail":
+            item = next((i for i in self._items if i.item_id == self._detail_item_id), None)
+            if not self._delete_busy and item is not None and item.mail_id:
+                cast(MailFlowApp, self.app).open_mail(item.mail_id)
+            return
         if button_id == "actions-type-filter":
             if self._delete_busy:
                 return

@@ -127,12 +127,17 @@ async def test_stored_html_is_readable_in_mail_reader_and_related_task(host: Any
         "<style>secret-style</style><div hidden>secret-preview</div>"
     )
     task = ActionItem(
-        item_id="html-task", mail_id="html", summary="Follow up", action_type="errand"
+        item_id="html-task",
+        mail_id="html",
+        summary="Follow up",
+        action_type="errand",
+        notes="Bring [draft]\nCheck the agenda",
     )
     record = make_record("html", action=task)
     record.mail.body_text = source
     record.mail.body_html = source
     await service.storage.save_mail(record)
+    await service.add_action("My own task")
     async with app.run_test(size=(140, 45)) as pilot:
         await settle(pilot)
         body = text(app, "#mail-body")
@@ -153,6 +158,13 @@ async def test_stored_html_is_readable_in_mail_reader_and_related_task(host: Any
         assert "<p>" not in full and "secret-" not in full
         reader.query_one("#reader-close", Button).press()
         await pilot.pause()
+        newer = make_record("newer", subject="Unrelated mail")
+        newer.mail.received_at = record.mail.received_at + timedelta(days=1)
+        await service.storage.save_mail(newer)
+        search.value = "Unrelated"
+        await settle(pilot)
+        assert keys(app.query_one("#mail-table", DataTable)) == ["newer"]
+        app.query_one(MailPane)._page_limit = 1
         action_detail = ActionModal(view, task)
         await app.push_screen(action_detail)
         await until(
@@ -165,6 +177,27 @@ async def test_stored_html_is_readable_in_mail_reader_and_related_task(host: Any
         )
         detail = str(action_detail.query_one("#action-mail-detail", Static).render())
         assert "First paragraph\nSecond line" in detail and "<p>" not in detail
+        action_detail.query_one("#action-source-mail", Button).press()
+        await settle(pilot)
+        mail_table = app.query_one("#mail-table", SelectionTable)
+        assert cursor(mail_table) == "html" and mail_table.checked_keys == {"html"}
+        assert app.focused is mail_table
+        tabs = app.query_one(TabbedContent)
+        tabs.active = "tab-actions"
+        action_search = app.query_one("#actions-search", PromptInput)
+        action_search.value = "My own task"
+        await settle(pilot)
+        source_button = app.query_one("#actions-source-mail", Button)
+        assert source_button.disabled
+        assert view.t("tui.action_custom_source") in text(app, "#actions-detail-content")
+        action_search.value = "Follow up"
+        await settle(pilot)
+        assert "Bring [draft]\nCheck the agenda" in text(app, "#actions-detail-content")
+        assert record.mail.subject in text(app, "#actions-detail-content")
+        source_button.press()
+        await settle(pilot)
+        assert tabs.active == "tab-mail" and cursor(mail_table) == "html"
+        assert app.focused is mail_table
     stored = await service.get_mail("html")
     assert (
         stored is not None and stored.mail.body_text == source and stored.mail.body_html == source
