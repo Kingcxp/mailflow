@@ -972,7 +972,7 @@ class MailPane(Vertical):
                 disabled=True,
             )
         with Horizontal():
-            yield SelectionTable(t=self._service.t, id="mail-table")
+            yield SelectionTable(t=self._service.t, explorer_selection=True, id="mail-table")
             with ScrollableContainer(id="mail-detail"):
                 yield Static("", id="mail-analysis-status")
                 yield Static("", id="mail-operation-status")
@@ -1184,7 +1184,6 @@ class MailPane(Vertical):
             return
         for key in ("selected", "urgency", "subject", "sender", "date"):
             _remove_column(table, key)
-        table.add_column(RichText("[ ]"), key="selected", width=3)
         table.add_column(self._service.t("tui.column_date"), key="date")
         table.add_column(self._service.t("tui.column_urgency"), key="urgency")
         table.add_column(self._service.t("tui.column_subject"), key="subject")
@@ -1258,6 +1257,7 @@ class MailPane(Vertical):
                 )
                 if reordered or view.row_key != TableView.capture(table).row_key:
                     self._selected_id = view.restore(table)
+                table.restore_selection(select_initial=view.row_key is None)
         finally:
             self._rendering = False
         selected = next((r for r in records if r.record_id == self._selected_id), None)
@@ -1268,9 +1268,7 @@ class MailPane(Vertical):
 
     def _mail_cells(self, record: MailRecord) -> tuple[Any, ...]:
         urgency = record.effective_urgency
-        table = self._mail_table()
         return (
-            table.check_label(record.record_id) if table is not None else RichText("[ ]"),
             _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
             RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
             RichText(record.mail.subject or self._service.t("tui.mail_no_subject")),
@@ -1386,6 +1384,13 @@ class MailPane(Vertical):
                 self._mail_tools(), group="mail-tools", exclusive=True, exit_on_error=False
             )
 
+    def on_selection_table_delete_requested(self, event: SelectionTable.DeleteRequested) -> None:
+        if event.table.id == "mail-table":
+            event.stop()
+            targets = self._mail_targets()
+            if targets and not self._trash_busy and not self._reparse_active():
+                self._start_trash(lambda: self._trash_selected(targets))
+
     def _sync_selection_controls(self, *, reparse_idle: bool = False) -> None:
         self._sync_smart_button()
         table = self._mail_table()
@@ -1393,7 +1398,7 @@ class MailPane(Vertical):
             return
         count = len(table.checked_keys)
         analysing = self._reparse_active() and not reparse_idle
-        has_selected = any(r.record_id == self._selected_id for r in self._records)
+        has_selected = any(r.record_id in table.checked_keys for r in self._records)
         trash = self.query_one_optional("#btn-trash", Button)
         if trash is not None:
             trash.label = (
@@ -1403,7 +1408,7 @@ class MailPane(Vertical):
                 if count
                 else self._service.t("tui.btn_trash")
             )
-            trash.disabled = self._trash_stop if self._trash_busy else not (count or has_selected)
+            trash.disabled = self._trash_stop if self._trash_busy else not count
             if analysing:
                 trash.disabled = True
             trash.tooltip = None
@@ -1421,7 +1426,7 @@ class MailPane(Vertical):
             reparse.disabled = (
                 self._trash_busy
                 or getattr(self._service, "remote", False)
-                or not (count or has_selected)
+                or not count
             )
             reparse.label = (
                 self._service.t("tui.btn_reparse_selected", count=count)
@@ -1439,17 +1444,17 @@ class MailPane(Vertical):
                     )
         urgency = self._urgency_select()
         if urgency is not None:
-            urgency.disabled = not (count or has_selected) or self._trash_busy or analysing
+            urgency.disabled = not count or self._trash_busy or analysing
         self._show_operation_status()
 
     def _mail_targets(self) -> list[str]:
         table = self._mail_table()
-        if table is not None and table.checked_keys:
+        if table is not None:
             visible = table.visible_keys()
             return [key for key in visible if key in table.checked_keys] + sorted(
                 table.checked_keys - set(visible)
             )
-        return [self._selected_id] if self._selected_id is not None else []
+        return []
 
     def _select_value(self, selector: str) -> str:
         select = _typed_select(self, selector if selector.startswith("#") else f"#{selector}")
@@ -1792,7 +1797,9 @@ class MailPane(Vertical):
                 self._trash_stop = True
                 self._sync_selection_controls()
             else:
-                self._start_trash(self._trash_selected)
+                targets = self._mail_targets()
+                if targets:
+                    self._start_trash(lambda: self._trash_selected(targets))
             return
         if button_id in self._REPARSE_BUTTONS:
             if self._reparse_active():
@@ -1815,11 +1822,12 @@ class MailPane(Vertical):
                 self._edit_profile(), exclusive=True, group="mail-profile", exit_on_error=False
             )
             return
-        table = self._mail_table()
-        if self._selected_id is None or (table is not None and len(table.checked_keys) > 1):
+        targets = self._mail_targets()
+        if len(targets) != 1:
             return
+        selected_id = targets[0]
         if button_id == "btn-ask-correct":
-            record = await self._service.get_mail(self._selected_id)
+            record = await self._service.get_mail(selected_id)
             if record is None:
                 return
             from mailflow_tui.ask_correct import AskCorrectModal
@@ -1829,7 +1837,7 @@ class MailPane(Vertical):
             )
             return
         if button_id == "btn-reply":
-            record = await self._service.get_mail(self._selected_id)
+            record = await self._service.get_mail(selected_id)
             if record is not None:
                 # textual types Widget.app loosely; the cast pins the concrete app
                 cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
@@ -1854,6 +1862,7 @@ class MailPane(Vertical):
         if self._trash_busy or self._reparse_active():
             return
         targets = self._mail_targets()
+        selected_id = targets[0] if len(targets) == 1 else ""
         table = self._mail_table()
         scope = self._service.t(
             "tui.batch_scope",
@@ -1890,8 +1899,7 @@ class MailPane(Vertical):
                     AttachmentLibraryScreen(self._service, self._query.account_id)
                 )
                 if chosen:
-                    self._selected_id = str(chosen)
-                    await self._show_selected()
+                    self.select_mail(str(chosen))
             elif choice == "source_sync":
                 from mailflow_tui.workspace_screens import SourceSyncScreen
 
@@ -1904,14 +1912,14 @@ class MailPane(Vertical):
                     ComposeScreen(
                         self._service,
                         kind="new" if choice == "compose" else choice,
-                        mail_id=self._selected_id or "",
+                        mail_id=selected_id,
                     )
                 )
             elif choice == "thread":
                 from mailflow_tui.workspace_screens import ThreadScreen
 
                 chosen = await self._ask_screen(
-                    ThreadScreen(self._service, self._selected_id or "")
+                    ThreadScreen(self._service, selected_id)
                 )
                 if chosen:
                     self.select_mail(chosen)
@@ -2012,7 +2020,7 @@ class MailPane(Vertical):
                 elif not records:
                     self._set_operation_status(self._service.t("ux.cleanup_empty"))
             elif choice in {"full_mail", "attachments", "task_from_mail"}:
-                record = await self._service.get_mail(self._selected_id or "")
+                record = await self._service.get_mail(selected_id)
                 if record is not None:
                     if choice == "task_from_mail":
                         await self._ask_screen(
@@ -2541,6 +2549,9 @@ class MailPane(Vertical):
         if urgency is not None:
             _safe_set_value(urgency, "all")
         self._selected_id = mail_id
+        table = self._mail_table()
+        if table is not None:
+            table.set_checks({mail_id})
         self.run_worker(
             self.refresh_mail(), exclusive=True, group="mail-refresh", exit_on_error=False
         )
@@ -2582,7 +2593,7 @@ class ActionsPane(Vertical):
                 variant="primary",
                 disabled=True,
             )
-        yield SelectionTable(t=self._service.t, id="actions-table")
+        yield SelectionTable(t=self._service.t, explorer_selection=True, id="actions-table")
         with Horizontal(id="actions-buttons"):
             yield Button(
                 self._service.t("tui.btn_add_todo"),
@@ -2625,7 +2636,6 @@ class ActionsPane(Vertical):
             return
         for key in ("selected", "time", "type", "content", "notes", "source"):
             _remove_column(table, key)
-        table.add_column(RichText("[ ]"), key="selected", width=3)
         table.add_column(self._service.t("tui.action_time"), key="time")
         table.add_column(self._service.t("tui.action_type"), key="type")
         table.add_column(self._service.t("tui.action_content"), key="content")
@@ -2734,7 +2744,6 @@ class ActionsPane(Vertical):
                 (
                     item.item_id,
                     (
-                        table.check_label(item.item_id),
                         RichText(_action_time_range(self._service, item), style=style),
                         RichText(_action_type_label(self._service, item.action_type), style=style),
                         RichText(
@@ -2755,6 +2764,7 @@ class ActionsPane(Vertical):
             )
         if update_table(table, rows):
             view.restore(table)
+        table.restore_selection(select_initial=view.row_key is None)
         self._sync_action_controls()
 
     def on_selection_table_selection_changed(self, event: SelectionTable.SelectionChanged) -> None:
@@ -2774,6 +2784,14 @@ class ActionsPane(Vertical):
                 self._run_task_status(), group="actions-status", exclusive=True, exit_on_error=False
             )
 
+    async def on_selection_table_delete_requested(
+        self, event: SelectionTable.DeleteRequested
+    ) -> None:
+        if event.table.id == "actions-table":
+            event.stop()
+            if not self._delete_busy:
+                await self._handle_action("actions-delete")
+
     def on_data_table_row_highlighted(self, event: TableRowEvent) -> None:
         if event.data_table.id == "actions-table":
             self._sync_action_controls()
@@ -2785,7 +2803,6 @@ class ActionsPane(Vertical):
             return
         count = len(table.checked_keys)
         current = self._selected_item()
-        real = bool(current and not current.preview)
         button = self.query_one_optional("#actions-delete", Button)
         if button is not None:
             button.label = (
@@ -2795,16 +2812,16 @@ class ActionsPane(Vertical):
                 if count
                 else self._service.t("tui.btn_delete_todo")
             )
-            button.disabled = self._delete_stop if self._delete_busy else not (real or count)
+            button.disabled = self._delete_stop if self._delete_busy else not count
             button.tooltip = None
         table.disabled = self._delete_busy
         edit = self.query_one_optional("#actions-edit", Button)
         if edit is not None:
             edit.tooltip = None
-            edit.disabled = self._delete_busy or self._selected_item() is None or count > 1
+            edit.disabled = self._delete_busy or current is None or count != 1
         status = self.query_one_optional("#actions-status", Button)
         if status is not None:
-            status.disabled = self._delete_busy or not (count or real)
+            status.disabled = self._delete_busy or not count
         type_filter = self.query_one_optional("#actions-type-filter", Button)
         if type_filter is not None:
             type_filter.label = self._service.t(
@@ -2923,17 +2940,12 @@ class ActionsPane(Vertical):
         )
 
     def _selected_item(self) -> ActionItem | None:
-        """The row under the cursor, by the same rule Delete uses."""
+        """Resolve the sole selected item, independent of the keyboard cursor."""
         table = self._actions_table()
-        if table is None:
+        if table is None or len(table.checked_keys) != 1:
             return None
-        row_index = table.cursor_row
-        if row_index < 0 or row_index >= table.row_count:
-            return None
-        from textual.coordinate import Coordinate
-
-        row_key = table.coordinate_to_cell_key(Coordinate(row_index, 0)).row_key
-        return next((item for item in self._items if item.item_id == str(row_key.value)), None)
+        selected = table.checked_keys & set(table.visible_keys())
+        return next((item for item in self._items if item.item_id in selected), None)
 
     def _refresh_after_edit(self, changed: bool | None) -> None:
         if changed:
@@ -3109,12 +3121,11 @@ class ActionsPane(Vertical):
 
     def _task_targets(self) -> list[str]:
         table = self._actions_table()
-        item = self._selected_item()
         ids = (
             [key for key in table.visible_keys() if key in table.checked_keys]
             + sorted(table.checked_keys - set(table.visible_keys()))
-            if table is not None and table.checked_keys
-            else ([item.item_id] if item is not None else [])
+            if table is not None
+            else []
         )
         real_ids = {item.item_id for item in self._items if not item.preview}
         return [identity for identity in ids if identity in real_ids]

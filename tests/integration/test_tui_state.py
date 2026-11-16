@@ -225,7 +225,7 @@ async def test_text_editing_shortcuts_copy_cut_paste_undo_and_redo(multiline: bo
         assert app.clipboard == "" and secret.value == "password"
 
 
-async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
+async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
     host: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, view, app, emit, _failures = host
@@ -262,7 +262,8 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
         await emit("language.changed", language="zh-CN")
         await settle(pilot)
         assert keys(table) == ["old-1"]
-        app.query_one("#btn-trash", Button).press()
+        table.focus()
+        await pilot.press("delete")
         await until(
             pilot,
             lambda: isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run")),
@@ -386,8 +387,7 @@ async def test_checked_batches_keep_scope_retry_failures_and_undo_mail(
             if item.item_id != future.item_id
         )
         todos.focus()
-        await pilot.press("ctrl+a")
-        app.query_one("#actions-delete", Button).press()
+        await pilot.press("ctrl+a", "delete")
         await until(
             pilot,
             lambda: isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run")),
@@ -875,9 +875,10 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         app.screen.query_one("#shortcut-close", Button).press()
         await pilot.pause()
         assert table.has_focus
-        # Range selection can shrink and keeps rows checked individually beforehand.
+        assert "selected" not in table.columns
+        # Shift extends and shrinks a range; Ctrl toggles individual rows.
         table.move_cursor(row=0)
-        await pilot.press("ctrl+enter", "shift+down", "shift+down")
+        await pilot.press("escape", "ctrl+enter", "shift+down", "shift+down")
         assert table.checked_keys == set(keys(table))
         await pilot.press("shift+up")
         assert table.checked_keys == set(keys(table)[:2])
@@ -893,22 +894,32 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         assert table.checked_keys == {clicked}
         await pilot.press("escape", "home")
         table.move_cursor(row=0)
-        await pilot.press("space", "down", "down", "f3")
+        await pilot.press("space", "ctrl+down", "ctrl+down", "f3")
         assert len(table.checked_keys) == 3
-        await pilot.press("escape", "f2")
-        await settle(pilot)
         await pilot.click(table, offset=(25, 2))
-        assert len(table.checked_keys) == 1
-        await settle(pilot)
-        await pilot.click(table, offset=(25, 3))
+        first = keys(table)[table.cursor_row]
+        assert table.checked_keys == {first}
+        await pilot.click(table, offset=(25, 4), ctrl=True)
         assert len(table.checked_keys) == 2
-        await pilot.press("f4")
+        await pilot.click(table, offset=(25, 3))
+        middle = keys(table)[table.cursor_row]
+        assert table.checked_keys == {middle} and middle != first
+        await pilot.click(table, offset=(25, 4), shift=True)
+        assert table.checked_keys == set(keys(table)[1:])
+        await pilot.press("up")
+        assert table.checked_keys == {middle}
+        await pilot.press("ctrl+a", "ctrl+a")
         assert len(table.checked_keys) == 3
-        await pilot.press("escape", "f2")
+        await pilot.click(table, offset=(25, 5))
         assert not table.checked_keys
+        assert app.query_one("#btn-trash", Button).disabled
+        await pilot.press("delete")
+        await settle(pilot)
+        assert await service.count_mails() == 3
         app.query_one(TabbedContent).active = "tab-actions"
         await pilot.pause()
         action_table = app.query_one("#actions-table", DataTable)
+        assert "selected" not in action_table.columns
         search = app.query_one("#actions-search", Input)
         search.value = "not present"
         await settle(pilot)

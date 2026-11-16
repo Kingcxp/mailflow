@@ -235,13 +235,15 @@ class ShortcutHelp(ModalScreen[None]):
             ("Ctrl+X / Shift+Delete", "help_edit_cut"),
             ("Ctrl+Z / Ctrl+Y", "help_edit_history"),
             ("↑ / ↓ / PageUp / PageDown", "help_rows"),
+            (self._t("tui.selection_click"), "help_selection_single"),
             ("Space / Ctrl+Enter", "selection_toggle"),
             ("Ctrl+Click", "help_selection_toggle"),
             ("Shift+↑ / ↓ / Click", "help_selection_extend"),
-            ("F2", "help_selection_mode"),
+            ("Ctrl+↑ / ↓", "help_selection_focus"),
             ("F3", "help_selection_range"),
-            ("Ctrl+A / F4", "help_selection_all"),
+            ("Ctrl+A", "help_selection_all"),
             ("Esc", "help_selection_clear"),
+            ("Delete", "help_selection_delete"),
             ("M / Shift+F10", "help_selection_menu"),
             ("Ctrl+Z", "help_mail_undo"),
         ):
@@ -278,7 +280,7 @@ class ShortcutHelp(ModalScreen[None]):
 
 
 class SelectionTable(DataTable[Any]):
-    """Checked rows are independent of the row being read or edited."""
+    """Shared row selection, with Explorer-style interaction for the main lists."""
 
     COMPONENT_CLASSES: ClassVar[set[str]] = {"selectiontable--checked"}
     DEFAULT_CSS = """
@@ -294,6 +296,9 @@ class SelectionTable(DataTable[Any]):
         Binding("f2", "selection_mode", show=False),
         Binding("f3", "select_range", show=False),
         Binding("m,shift+f10", "context_menu", show=False),
+        Binding("ctrl+up", "focus_row(-1)", show=False),
+        Binding("ctrl+down", "focus_row(1)", show=False),
+        Binding("delete", "delete_selection", show=False),
     ]
 
     class SelectionChanged(Message):
@@ -306,9 +311,21 @@ class SelectionTable(DataTable[Any]):
             super().__init__()
             self.table = table
 
-    def __init__(self, *, t: Callable[..., str] | None = None, **kwargs: Any) -> None:
+    class DeleteRequested(Message):
+        def __init__(self, table: SelectionTable) -> None:
+            super().__init__()
+            self.table = table
+
+    def __init__(
+        self,
+        *,
+        t: Callable[..., str] | None = None,
+        explorer_selection: bool = False,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._t = t or I18n().t
+        self.explorer_selection = explorer_selection
         self.checked_keys: set[str] = set()
         self.unselectable_keys: set[str] = set()
         self._anchor: str | None = None
@@ -327,12 +344,18 @@ class SelectionTable(DataTable[Any]):
         self.tooltip = None
 
     def action_selection_mode(self) -> None:
+        if self.explorer_selection:
+            return
         self.selection_mode = not self.selection_mode
         self._range_base = None
         self.post_message(self.SelectionChanged(self))
 
     def action_context_menu(self) -> None:
         self.post_message(self.MenuRequested(self))
+
+    def action_delete_selection(self) -> None:
+        if self.explorer_selection and self.checked_keys:
+            self.post_message(self.DeleteRequested(self))
 
     def action_select_range(self) -> None:
         key = self._key_at(self.cursor_row)
@@ -359,8 +382,22 @@ class SelectionTable(DataTable[Any]):
         self._range_base = None
         self._set_checks(keys)
 
+    def restore_selection(self, *, select_initial: bool = False) -> None:
+        if not self.explorer_selection:
+            return
+        if select_initial and not self.checked_keys:
+            self._select_current_row()
+        self.show_cursor = self._key_at(self.cursor_row) in self.checked_keys
+
+    def _select_current_row(self) -> None:
+        key = self._key_at(self.cursor_row)
+        self._anchor = key
+        self.set_checks({key} if key is not None else set())
+
     def _set_checks(self, keys: set[str]) -> None:
         keys = keys - self.unselectable_keys
+        if self.explorer_selection:
+            self.show_cursor = self._key_at(self.cursor_row) in keys
         if keys == self.checked_keys:
             return
         changed = self.checked_keys ^ keys
@@ -388,7 +425,7 @@ class SelectionTable(DataTable[Any]):
             self._anchor = key
             self._range_base = None
         if self._range_base is None:
-            self._range_base = set(self.checked_keys)
+            self._range_base = set() if self.explorer_selection else set(self.checked_keys)
         start, end = sorted((keys.index(self._anchor), keys.index(key)))
         self._set_checks(self._range_base | set(keys[start : end + 1]))
 
@@ -400,6 +437,9 @@ class SelectionTable(DataTable[Any]):
 
     def action_toggle_all(self) -> None:
         visible = set(self.visible_keys()) - self.unselectable_keys
+        if self.explorer_selection:
+            self.set_checks(visible)
+            return
         self.set_checks(
             self.checked_keys - visible
             if visible <= self.checked_keys
@@ -413,6 +453,7 @@ class SelectionTable(DataTable[Any]):
     def action_extend_selection(self, direction: int) -> None:
         if not self.row_count:
             return
+        self.show_cursor = True
         if self._range_base is None:
             self._anchor = self._key_at(self.cursor_row)
         self.move_cursor(row=max(0, min(self.row_count - 1, self.cursor_row + direction)))
@@ -422,23 +463,87 @@ class SelectionTable(DataTable[Any]):
 
     def action_cursor_up(self) -> None:
         self._range_base = None
+        if self.explorer_selection:
+            self.show_cursor = True
         super().action_cursor_up()
+        if self.explorer_selection:
+            self._select_current_row()
 
     def action_cursor_down(self) -> None:
         self._range_base = None
+        if self.explorer_selection:
+            self.show_cursor = True
         super().action_cursor_down()
+        if self.explorer_selection:
+            self._select_current_row()
 
     def action_page_up(self) -> None:
         self._range_base = None
+        if self.explorer_selection:
+            self.show_cursor = True
         super().action_page_up()
+        if self.explorer_selection:
+            self._select_current_row()
 
     def action_page_down(self) -> None:
         self._range_base = None
+        if self.explorer_selection:
+            self.show_cursor = True
         super().action_page_down()
+        if self.explorer_selection:
+            self._select_current_row()
+
+    def action_focus_row(self, direction: int) -> None:
+        self._range_base = None
+        self.move_cursor(row=max(0, min(self.row_count - 1, self.cursor_row + direction)))
+        self.restore_selection()
+
+    def action_select_cursor(self) -> None:
+        if self.explorer_selection:
+            if self._key_at(self.cursor_row) not in self.checked_keys:
+                self._select_current_row()
+            self.show_cursor = True
+        super().action_select_cursor()
+        self.restore_selection()
+
+    def _explorer_click(self, event: events.Click, row: int | None) -> None:
+        key = self._key_at(row) if row is not None else None
+        if event.button == 3:
+            if key is not None:
+                self.move_cursor(row=row)
+                if key not in self.checked_keys:
+                    self._select_current_row()
+            else:
+                self.action_clear_checks()
+            self.action_context_menu()
+        elif key is None:
+            if row == -1:
+                return
+            if not event.ctrl and not event.shift:
+                self.action_clear_checks()
+        else:
+            if event.shift and self._anchor is None:
+                self._anchor = self._key_at(self.cursor_row)
+            self.move_cursor(row=row)
+            if event.shift:
+                self._check_range(key)
+            elif event.ctrl:
+                self.action_toggle_check()
+            else:
+                self._select_current_row()
+                if event.chain == 2:
+                    self.action_select_cursor()
+        self.restore_selection()
+        self.focus()
+        event.stop()
+        event.prevent_default()
 
     def on_click(self, event: events.Click) -> None:
         meta = event.style.meta
         row, column = meta.get("row"), meta.get("column")
+        if self.explorer_selection and event.button in (1, 3):
+            self._explorer_click(event, row if isinstance(row, int) else None)
+            return
         if event.button == 3:
             if isinstance(row, int) and row >= 0:
                 self.move_cursor(row=row)
