@@ -31,6 +31,8 @@ from mailflow.mail_body import mail_body_text
 from mailflow.mail_query import MailQuery
 from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
+from rich.console import Group as RichGroup
+from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
@@ -86,6 +88,7 @@ from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 from mailflow_tui.view_state import TableRowEvent, TableView, update_table
 from mailflow_tui.widgets import (
     Input,
+    PromptInput,
     SafeSelect,
     SearchToggle,
     SelectionTable,
@@ -104,6 +107,12 @@ _BLANK = ""
 def _load_error(service: MailFlowService, exc: Exception) -> str:
     message = service.t("tui.data_load_failed", error=error_detail(service, exc))
     return f"[red]{escape(message)}[/red]"
+
+
+def _status_content(status: str | RichMarkdown, notes: list[str]) -> str | RichGroup:
+    if isinstance(status, RichMarkdown):
+        return RichGroup(status, *(RichText(note) for note in notes))
+    return "\n".join(filter(None, [status, *notes]))
 
 
 async def _run_batch(
@@ -939,7 +948,7 @@ class MailPane(Vertical):
         # Re-analysis emits mail-processed events which asynchronously refresh
         # this pane. Keep the operation outcome separately so that refresh
         # cannot erase feedback before the user can read it.
-        self._operation_status = ""
+        self._operation_status: str | RichMarkdown = ""
         self._query = MailQuery()
         self._next_offset: int | None = None
         self._page_limit = 200
@@ -960,7 +969,7 @@ class MailPane(Vertical):
         # so it never stamps an override onto the selected mail
         self._urgency_suppress = True
         with Horizontal(id="mail-search-row"):
-            yield Input(
+            yield PromptInput(
                 placeholder=self._service.t("tui.smart_action_placeholder"), id="mail-search"
             )
             yield SearchToggle("regex", ident="mail-search-regex")
@@ -1074,7 +1083,7 @@ class MailPane(Vertical):
         button = self.query_one_optional("#smart-action", Button)
         if button is not None:
             button.label = self._service.t("tui.smart_action")
-            search = self.query_one_optional("#mail-search", Input)
+            search = self.query_one_optional("#mail-search", PromptInput)
             button.disabled = (
                 self._smart_action_running
                 or self._trash_busy
@@ -1093,21 +1102,26 @@ class MailPane(Vertical):
         self._smart_history.clear()
         self._smart_action_result = None
         self._set_operation_status(escape(self._service.t("assistant.scope", scope=name)))
-        self.query_one("#mail-search", Input).focus()
+        self.query_one("#mail-search", PromptInput).focus()
         return True
 
     async def _render_smart_action_result(self, result: SmartActionResult) -> None:
         self._records = list(result.records)
         hints = list(dict.fromkeys(filter(None, [result.final_text, *result.failure_reasons])))
         await self._render_records(self._records)
+        answer = "\n\n".join(hints)
         self._set_operation_status(
-            escape("\n".join(hints)) or self._service.t("tui.smart_action_done")
+            RichMarkdown(answer) if answer else self._service.t("tui.smart_action_done")
         )
 
-    async def _toggle_smart_action(self) -> None:
-        if self._smart_action_running:
+    async def _toggle_smart_action(self, instruction: str | None = None) -> None:
+        if self._smart_action_running or self._trash_busy:
             return
-        text = self.query_one("#mail-search", Input).value.strip()
+        text = (
+            instruction
+            if instruction is not None
+            else self.query_one("#mail-search", PromptInput).value
+        ).strip()
         if not text:
             return
         self._smart_action_running = True
@@ -1213,7 +1227,7 @@ class MailPane(Vertical):
                 },
             },
         )
-        search = self.query_one_optional("#mail-search", Input)
+        search = self.query_one_optional("#mail-search", PromptInput)
         if search is not None:
             search.placeholder = self._service.t("tui.smart_action_placeholder")
         self._sync_smart_button()
@@ -1280,7 +1294,7 @@ class MailPane(Vertical):
             return
         if self._smart_action_running:
             return
-        search_input = self.query_one_optional("#mail-search", Input)
+        search_input = self.query_one_optional("#mail-search", PromptInput)
         result = self._smart_action_result
         if (
             result is not None
@@ -1295,7 +1309,7 @@ class MailPane(Vertical):
             await self._render_smart_action_result(result)
             return
         if reload or self._mail_cache is None:
-            search_input = self.query_one_optional("#mail-search", Input)
+            search_input = self.query_one_optional("#mail-search", PromptInput)
             regex_toggle = self.query_one_optional("#mail-search-regex", SearchToggle)
             query = self._query.model_copy(
                 update={
@@ -1341,7 +1355,7 @@ class MailPane(Vertical):
             else:
                 available.update(table.checked_keys)
             table.retain_checks(available)
-        search = self.query_one_optional("#mail-search", Input)
+        search = self.query_one_optional("#mail-search", PromptInput)
         regex = self.query_one_optional("#mail-search-regex", SearchToggle)
         case = self.query_one_optional("#mail-search-case", SearchToggle)
         matcher = build_search_matcher(
@@ -1497,13 +1511,20 @@ class MailPane(Vertical):
             cast(Any, _filter), exclusive=True, group="mail-filter", exit_on_error=False
         )
 
-    async def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "mail-search":
+    async def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id == "mail-search":
             self._sync_smart_button()
             if self._smart_action_running:
                 return
             self._page_limit = 200
             self._schedule_mail_filter()
+
+    def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
+        if event.input.id == "mail-search":
+            event.stop()
+            self.run_worker(
+                self._toggle_smart_action(event.value), group="smart-action", exit_on_error=False
+            )
 
     def on_search_toggle_toggled(self, event: SearchToggle.Toggled) -> None:
         if event.toggle.id in {"mail-search-regex", "mail-search-case"}:
@@ -1732,7 +1753,7 @@ class MailPane(Vertical):
         finally:
             self._urgency_suppress = False
 
-    def _set_static(self, selector: str, content: str) -> None:
+    def _set_static(self, selector: str, content: str | RichGroup) -> None:
         node = self.query_one_optional(selector, Static)
         if node is None:
             return
@@ -1741,14 +1762,14 @@ class MailPane(Vertical):
         # flush at the top instead of leaving blank lines above the summary
         node.display = bool(content)
 
-    def _set_operation_status(self, content: str) -> None:
+    def _set_operation_status(self, content: str | RichMarkdown) -> None:
         """Keep operation results and errors in the existing detail area."""
         self._operation_status = content
         self._show_operation_status()
 
     def _show_operation_status(self) -> None:
         table = self._mail_table()
-        messages = [self._operation_status] if self._operation_status else []
+        messages: list[str] = []
         if table is not None:
             if table.checked_keys:
                 messages.append(
@@ -1760,7 +1781,7 @@ class MailPane(Vertical):
                 )
             if table.selection_mode:
                 messages.append(self._service.t("tui.selection_mode_active"))
-        self._set_static("#mail-operation-status", "\n".join(messages))
+        self._set_static("#mail-operation-status", _status_content(self._operation_status, messages))
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         try:
@@ -1928,7 +1949,7 @@ class MailPane(Vertical):
 
                 current = self._query.model_copy(
                     update={
-                        "text": self.query_one("#mail-search", Input).value,
+                        "text": self.query_one("#mail-search", PromptInput).value,
                         "urgency": self._select_value("#mail-urgency-filter")
                         if self._select_value("#mail-urgency-filter") not in {"all", "expired"}
                         else "",
@@ -1937,7 +1958,7 @@ class MailPane(Vertical):
                 query = await self._ask_screen(SavedFiltersScreen(self._service, current))
                 if query is not None:
                     self._query = query
-                    self.query_one("#mail-search", Input).value = query.text
+                    self.query_one("#mail-search", PromptInput).value = query.text
                     self.query_one("#mail-urgency-filter", Select).value = query.urgency or "all"
                     self._page_limit = 200
             elif choice == "filter":
@@ -1955,7 +1976,7 @@ class MailPane(Vertical):
                                 "offset": self._next_offset,
                                 "text": ""
                                 if self.query_one("#mail-search-regex", SearchToggle).value
-                                else self.query_one("#mail-search", Input).value,
+                                else self.query_one("#mail-search", PromptInput).value,
                                 "urgency": self._select_value("#mail-urgency-filter")
                                 if self._select_value("#mail-urgency-filter")
                                 not in {"all", "expired"}
@@ -2542,7 +2563,7 @@ class MailPane(Vertical):
             raise
 
     def select_mail(self, mail_id: str) -> None:
-        search = self.query_one_optional("#mail-search", Input)
+        search = self.query_one_optional("#mail-search", PromptInput)
         if search is not None:
             search.value = ""
         urgency = _typed_select(self, "#mail-urgency-filter")
@@ -2571,7 +2592,7 @@ class ActionsPane(Vertical):
         self._actions_matcher = SearchMatcher("")
         self._delete_busy = False
         self._delete_stop = False
-        self._action_status = ""
+        self._action_status: str | RichMarkdown = ""
         self._category_filter = ""
         self._tag_filter = ""
         self._type_filters: set[str] = set()
@@ -2582,7 +2603,7 @@ class ActionsPane(Vertical):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="actions-search-row"):
-            yield Input(
+            yield PromptInput(
                 placeholder=self._service.t("tui.actions_search_placeholder"), id="actions-search"
             )
             yield SearchToggle("regex", ident="actions-search-regex")
@@ -2658,7 +2679,7 @@ class ActionsPane(Vertical):
                 "actions-smart-action": "tui.smart_action",
             },
         )
-        search = self.query_one_optional("#actions-search", Input)
+        search = self.query_one_optional("#actions-search", PromptInput)
         if search is not None:
             search.placeholder = self._service.t("tui.actions_search_placeholder")
         await self.refresh_actions()
@@ -2683,7 +2704,7 @@ class ActionsPane(Vertical):
         )
         self._actions_loaded = True
         self._items = loaded
-        search = self.query_one_optional("#actions-search", Input)
+        search = self.query_one_optional("#actions-search", PromptInput)
         regex = self.query_one_optional("#actions-search-regex", SearchToggle)
         case = self.query_one_optional("#actions-search-case", SearchToggle)
         smart_result = (
@@ -2834,15 +2855,15 @@ class ActionsPane(Vertical):
             add.disabled = self._delete_busy
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
-            message = self._action_status
+            messages: list[str] = []
             if count:
                 hidden = count - len(table.checked_keys & set(table.visible_keys()))
-                message += "\n" + self._service.t("tui.selection_count", count=count, hidden=hidden)
-            elif not table.row_count and not message:
-                message = self._service.t("tui.empty")
+                messages.append(self._service.t("tui.selection_count", count=count, hidden=hidden))
+            elif not table.row_count and not self._action_status:
+                messages.append(self._service.t("tui.empty"))
             if table.selection_mode:
-                message += "\n" + self._service.t("tui.selection_mode_active")
-            hint.update(message.strip())
+                messages.append(self._service.t("tui.selection_mode_active"))
+            hint.update(_status_content(self._action_status, messages))
 
     def _schedule_actions_filter(self) -> None:
         self._actions_filter_generation += 1
@@ -2857,16 +2878,23 @@ class ActionsPane(Vertical):
             cast(Any, _filter), exclusive=True, group="actions-filter", exit_on_error=False
         )
 
-    async def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "actions-search":
+    async def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id == "actions-search":
             self._sync_smart_button()
             if self._smart_action_running:
                 return
             self._schedule_actions_filter()
 
+    def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
+        if event.input.id == "actions-search":
+            event.stop()
+            self.run_worker(
+                self._open_smart_action(event.value), group="actions-smart-action", exit_on_error=False
+            )
+
     def _sync_smart_button(self) -> None:
         button = self.query_one_optional("#actions-smart-action", Button)
-        search = self.query_one_optional("#actions-search", Input)
+        search = self.query_one_optional("#actions-search", PromptInput)
         if button is not None:
             button.disabled = (
                 self._smart_action_running
@@ -2875,9 +2903,13 @@ class ActionsPane(Vertical):
                 or not search.value.strip()
             )
 
-    async def _open_smart_action(self) -> None:
-        text = self.query_one("#actions-search", Input).value.strip()
-        if self._smart_action_running or not text:
+    async def _open_smart_action(self, instruction: str | None = None) -> None:
+        text = (
+            instruction
+            if instruction is not None
+            else self.query_one("#actions-search", PromptInput).value
+        ).strip()
+        if self._smart_action_running or self._delete_busy or not text:
             return
         self._smart_action_running = True
         self._actions_filter_generation += 1
@@ -2904,9 +2936,10 @@ class ActionsPane(Vertical):
                         },
                     ]
                 )
-                self._action_status = escape(
-                    "\n".join(filter(None, [result.final_text, *result.failure_reasons]))
-                ) or self._service.t("tui.smart_action_done")
+                answer = "\n\n".join(filter(None, [result.final_text, *result.failure_reasons]))
+                self._action_status = (
+                    RichMarkdown(answer) if answer else self._service.t("tui.smart_action_done")
+                )
             await self.refresh_actions()
         except Exception as exc:
             self._action_status = escape(error_message(self._service, exc))

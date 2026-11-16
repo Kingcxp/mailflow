@@ -17,7 +17,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, LoadingIndicator, Static
+from textual.widgets import Button, Checkbox, LoadingIndicator, Markdown, Static
 
 from mailflow_tui.action_types import ActionTypeField
 from mailflow_tui.labels import error_message
@@ -141,7 +141,8 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
                     yield LoadingIndicator()
                     yield Static(self._t("assistant.working"), id="smart-action-activity")
                 yield Static("", id="smart-action-log", markup=False)
-                yield Static("", id="smart-action-result", markup=False)
+                yield Markdown("", id="smart-action-result")
+                yield Static("", id="smart-action-objects", markup=False)
                 yield Vertical(id="smart-review-operations")
                 yield Static("", id="smart-review-error", markup=False)
             with Horizontal(id="smart-review-buttons"):
@@ -160,6 +161,7 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
 
     def on_mount(self) -> None:
         self.query_one("#smart-action-result").display = False
+        self.query_one("#smart-action-objects").display = False
         self.query_one("#smart-review-operations").display = False
         self.query_one("#smart-review-error").display = False
         self._sync_controls()
@@ -269,11 +271,14 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
                     elif operation.arguments.get("clear_end"):
                         operation.arguments["due_end"] = None
         lines = list(dict.fromkeys(filter(None, [result.final_text, *result.failure_reasons])))
-        lines.extend(record.mail.subject for record in result.records[:5])
-        lines.extend(item.summary for item in result.actions[:5])
-        answer = self.query_one("#smart-action-result", Static)
-        answer.update("\n".join(lines))
+        answer = self.query_one("#smart-action-result", Markdown)
+        await answer.update("\n\n".join(lines))
         answer.display = bool(lines)
+        objects = self.query_one("#smart-action-objects", Static)
+        references = [record.mail.subject for record in result.records[:5]]
+        references.extend(item.summary for item in result.actions[:5])
+        objects.update("\n".join("• " + label for label in references))
+        objects.display = bool(references)
         area = self.query_one("#smart-review-operations", Vertical)
         area.display = False
         await area.remove_children()
@@ -318,7 +323,7 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
         if self._operations:
             self.query_one("#smart-action-confirm-title").scroll_visible(animate=False)
         else:
-            self.query_one("#smart-action-result").scroll_visible(animate=False)
+            (answer if lines else objects).scroll_visible(animate=False)
 
     def _selected_operations(self) -> list[PendingOperation]:
         selected: list[PendingOperation] = []

@@ -18,6 +18,8 @@ from mailflow_testkit.fakes import make_mail
 from mailflow_tui.action_types import ActionTypeField
 from mailflow_tui.app import MailFlowApp
 from mailflow_tui.smart_action_review import SmartActionReviewModal, SmartOperationEditModal
+from mailflow_tui.widgets import PromptInput
+from rich.console import Console
 from textual.widgets import (
     Button,
     DataTable,
@@ -138,7 +140,7 @@ async def test_smart_action_keeps_cancellation_and_relevance_order(
                 return await service.count_mails() > 0
 
             await until(pilot, has_mail)
-            mail_search = app.query_one("#mail-search", Input)
+            mail_search = app.query_one("#mail-search", PromptInput)
             mail_search.value = "lecture"
             table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
             await until(
@@ -191,7 +193,10 @@ async def test_smart_action_keeps_cancellation_and_relevance_order(
                 ),
             )
             assert "Pick up your student ID card" in str(table.get_row_at(0))
-            assert "Answered." in str(app.query_one("#mail-operation-status", Static).render())
+            status = app.query_one("#mail-operation-status", Static)
+            assert "Answered." in "".join(
+                segment.text for segment in Console().render(cast(Any, status.content))
+            )
             await service.set_language("zh-CN")
             await pilot.pause()
             assert search.value == "the student ID invitation" and table.row_count == 1
@@ -327,9 +332,9 @@ async def test_smart_query_task_crud_requires_confirmation(
 
             app.query_one(TabbedContent).active = "tab-actions"
             await pilot.pause()
-            mail_search = app.query_one("#mail-search", Input)
+            mail_search = app.query_one("#mail-search", PromptInput)
             mail_search.value = "Keep this mail search"
-            search = app.query_one("#actions-search", Input)
+            search = app.query_one("#actions-search", PromptInput)
             search.value = "查找包含 lecture 的邮件，并在2099年10月15日14:00添加项目复核待办"
 
             def modal() -> SmartActionReviewModal | None:
@@ -340,11 +345,13 @@ async def test_smart_query_task_crud_requires_confirmation(
                 ]
                 return screens[-1] if screens else None
 
-            await _smart_review(app, pilot, entry="actions-smart-action")
-            for _ in range(120):
-                if modal() is not None:
-                    break
-                await pilot.pause(0.05)
+            search.focus()
+            await pilot.press("enter")
+            await until(
+                pilot,
+                lambda: isinstance(app.screen, SmartActionReviewModal)
+                and app.screen.query_one("#smart-review-apply", Button).display,
+            )
             prompt = modal()
             assert prompt is not None, "a staged schedule entry must ask before it is added"
             # nothing exists until the user confirms
@@ -515,7 +522,7 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
 
             app.query_one(TabbedContent).active = "tab-mail"
             await pilot.pause()
-            search = app.query_one("#mail-search", Input)
+            search = app.query_one("#mail-search", PromptInput)
             search.value = "把广告邮件都删掉"
 
             def modal() -> SmartActionReviewModal | None:

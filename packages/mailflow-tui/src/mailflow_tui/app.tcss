@@ -71,16 +71,12 @@ SearchToggle.-active {
 }
 
 #mail-search-row {
-    height: 3;
-    /* the input draws a 3-row frame (border+content+border) while a Button is
-       content-sized at 1 row; centering the row keeps the button on the input's
-       middle line instead of hanging off its top edge */
+    height: auto;
     align-vertical: middle;
 }
 
 #mail-search {
     width: 1fr;
-    height: 100%;
 }
 
 #smart-action,
@@ -189,6 +185,7 @@ SmartOperationEditModal {
 #smart-action-animation LoadingIndicator { width: 8; height: 1; }
 #smart-action-log { height: auto; color: $text-muted; padding-left: 1; }
 #smart-action-result { border-top: solid $secondary; padding: 1 1 0 1; margin-top: 1; }
+#smart-action-objects { margin-top: 1; }
 #smart-review-operations { height: auto; margin-top: 1; }
 #smart-review-buttons { align-horizontal: right; }
 

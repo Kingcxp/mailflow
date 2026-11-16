@@ -93,6 +93,7 @@ class SafeSelect(Select[object]):  # pyright: ignore[reportUnsafeMultipleInherit
 
 __all__ = [
     "Input",
+    "PromptInput",
     "SafeSelect",
     "SearchToggle",
     "SelectionTable",
@@ -198,6 +199,64 @@ class TextArea(TextualTextArea):
             super().action_paste()
 
 
+class PromptInput(TextArea):
+    """An input that grows to five visible text lines and submits with Enter."""
+
+    DEFAULT_CSS = """
+    PromptInput {
+        height: 3; min-height: 3; max-height: 7;
+        scrollbar-size-vertical: 1;
+        overflow-x: hidden; overflow-y: auto;
+    }
+    """
+
+    class Submitted(Message):
+        def __init__(self, prompt: PromptInput) -> None:
+            super().__init__()
+            self.input = prompt
+            self.value = prompt.value
+
+    def __init__(self, value: str = "", **kwargs: Any) -> None:
+        super().__init__(value, soft_wrap=True, tab_behavior="focus", **kwargs)
+
+    @property
+    def value(self) -> str:
+        return self.text
+
+    @value.setter
+    def value(self, value: str) -> None:
+        self.text = value
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._fit_height)
+
+    def on_resize(self, _event: events.Resize) -> None:
+        self.call_after_refresh(self._fit_height)
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area is self:
+            self._fit_height()
+
+    def _fit_height(self) -> None:
+        lines = max(1, min(5, self.wrapped_document.height))
+        height = lines + self.styles.gutter.height
+        if self.size.height != height:
+            self.styles.height = height
+        self.call_after_refresh(self.scroll_cursor_visible)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key not in {"enter", "shift+enter"}:
+            return
+        event.stop()
+        event.prevent_default()
+        if self.read_only:
+            return
+        if event.key == "shift+enter":
+            self.replace("\n", *self.selection, maintain_selection_offset=False)
+        elif self.value.strip():
+            self.post_message(self.Submitted(self))
+
+
 class ShortcutHelp(ModalScreen[None]):
     """A scrollable help sheet that also works without mouse hover or modifiers."""
 
@@ -234,6 +293,7 @@ class ShortcutHelp(ModalScreen[None]):
             ("Ctrl+V / Shift+Insert", "help_edit_paste"),
             ("Ctrl+X / Shift+Delete", "help_edit_cut"),
             ("Ctrl+Z / Ctrl+Y", "help_edit_history"),
+            ("Enter / Shift+Enter", "help_prompt_submit"),
             ("↑ / ↓ / PageUp / PageDown", "help_rows"),
             (self._t("tui.selection_click"), "help_selection_single"),
             ("Space / Ctrl+Enter", "selection_toggle"),

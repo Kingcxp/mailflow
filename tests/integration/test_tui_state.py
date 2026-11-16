@@ -39,7 +39,7 @@ from mailflow_tui.mail_workflows import DraftsScreen, MailMenu, MailReader, Task
 from mailflow_tui.remote import RemoteServiceAdapter
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.widgets import Input as EditingInput
-from mailflow_tui.widgets import SearchToggle, SelectionTable, ShortcutHelp
+from mailflow_tui.widgets import PromptInput, SearchToggle, SelectionTable, ShortcutHelp
 from mailflow_tui.widgets import TextArea as EditingTextArea
 from textual.app import App, ComposeResult
 from textual.containers import ScrollableContainer
@@ -139,7 +139,7 @@ async def test_stored_html_is_readable_in_mail_reader_and_related_task(host: Any
         assert "First paragraph\nSecond line\n\nNext block\n• First item\n• Second item" in body
         assert "https://example.com/details" in body
         assert "<p>" not in body and "secret-" not in body
-        search = app.query_one("#mail-search", Input)
+        search = app.query_one("#mail-search", PromptInput)
         search.value = "example.com/details"
         await settle(pilot)
         assert keys(app.query_one("#mail-table", DataTable)) == ["html"]
@@ -257,7 +257,7 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         await pilot.click("#mail-table", offset=(2, 2))
         await pilot.click("#mail-table", offset=(2, 3), shift=True)
         assert table.checked_keys == set(keys(table))
-        app.query_one("#mail-search", Input).value = "old-1"
+        app.query_one("#mail-search", PromptInput).value = "old-1"
         await settle(pilot)
         await emit("language.changed", language="zh-CN")
         await settle(pilot)
@@ -286,7 +286,7 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         assert await service.storage.get_mail("old-1") is None
         assert await service.storage.get_mail("old-2") is not None
         assert "private storage failure" not in text(app, "#mail-operation-status")
-        app.query_one("#mail-search", Input).value = ""
+        app.query_one("#mail-search", PromptInput).value = ""
         await settle(pilot)
         assert keys(table) == ["old-2"] and table.checked_keys == {"old-2"}
         failing.clear()
@@ -295,7 +295,7 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         assert await service.count_mails() == 1
         await app.query_one(MailPane).refresh_mail()
         assert "Ctrl+Z" in text(app, "#mail-operation-status")
-        search = app.query_one("#mail-search", Input)
+        search = app.query_one("#mail-search", PromptInput)
         search.focus()
         await pilot.press("ctrl+a", "x", "ctrl+z")
         assert search.value == ""
@@ -355,7 +355,7 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         assert (await service.get_mail(calls[0])).archived
         # The same selection controls operate on the current task filter.
         app.query_one(TabbedContent).active = "tab-actions"
-        app.query_one("#actions-search", Input).value = "Expired"
+        app.query_one("#actions-search", PromptInput).value = "Expired"
         await settle(pilot)
         todos = app.query_one("#actions-table", SelectionTable)
         assert set(keys(todos)) == {item.item_id for item in actions}
@@ -396,7 +396,7 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         await settle(pilot)
         assert [item.item_id for item in await service.list_actions()] == [future.item_id]
         assert todos.row_count == 0
-        app.query_one("#actions-search", Input).value = ""
+        app.query_one("#actions-search", PromptInput).value = ""
         await settle(pilot)
         todos.focus()
         await pilot.press("m")
@@ -434,7 +434,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         await pilot.pause()
         pane = app.query_one(MailPane)
         table = app.query_one("#mail-table", DataTable)
-        search = app.query_one("#mail-search", Input)
+        search = app.query_one("#mail-search", PromptInput)
         for query in (
             "SubjectNeedle",
             "NameNeedle",
@@ -461,7 +461,9 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         async def execute_query(*_args: Any, **_kwargs: Any) -> SmartActionResult:
             entered.set()
             await release.wait()
-            return SmartActionResult(records=[target], final_text="Found matching mail")
+            return SmartActionResult(
+                records=[target], final_text="## Result\n\n**Found** matching mail"
+            )
 
         smart = AsyncMock(side_effect=execute_query)
         monkeypatch.setattr(view, "smart_action", smart)
@@ -469,9 +471,22 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         app.open_assistant({"record_ids": scoped_ids}, "Current results")
         scoped_ids.append("other")  # The handoff owns a snapshot of the original range.
         instruction = search
-        instruction.value = "Find matching mail"
+        instruction.value = "\n".join(f"Line {index}" for index in range(7))
         await pilot.pause()
-        app.query_one("#smart-action", Button).press()
+        assert instruction.scrollable_content_region.height == 5
+        instruction.focus()
+        await pilot.press("ctrl+end")
+        assert instruction.scroll_y > 0
+        await pilot.press("ctrl+a", "backspace")
+        await pilot.pause()
+        assert instruction.value == "" and instruction.scrollable_content_region.height == 1
+        instruction.value = "Find matching mail"
+        await pilot.press("end", "shift+enter", *"Use full text")
+        await pilot.pause()
+        assert instruction.value == "Find matching mail\nUse full text"
+        assert instruction.scrollable_content_region.height == 2
+        assert not entered.is_set()
+        await pilot.press("enter")
         await asyncio.wait_for(entered.wait(), 2)
         panel = app.screen
         assert isinstance(panel, SmartActionReviewModal)
@@ -486,12 +501,17 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         assert instruction.value == "Next question, not executed yet"
         assert smart.await_count == 1
         assert app.query_one("#smart-action", Button).disabled
-        assert text(panel, "#smart-action-request") == "Find matching mail"
+        assert text(panel, "#smart-action-request") == "Find matching mail\nUse full text"
         assert str(panel.query_one("#smart-action-cancel", Button).label) == service.t(
             "tui.btn_cancel"
         )
         release.set()
         await until(pilot, lambda: panel.query_one("#smart-review-apply", Button).display)
+        rendered = "\n".join(
+            str(block.render()) for block in panel.query("#smart-action-result MarkdownBlock")
+        )
+        assert "Result" in rendered and "Found matching mail" in rendered
+        assert "## Result" not in rendered and "**Found**" not in rendered
         panel.query_one("#smart-review-apply", Button).press()
         await settle(pilot)
         assert smart.await_args is not None
@@ -558,7 +578,7 @@ async def test_events_language_and_refresh_keep_reading_state(
         mail = app.query_one(MailPane)
         actions = app.query_one(ActionsPane)
         runtime = app.query_one(RuntimePane)
-        search = app.query_one("#mail-search", Input)
+        search = app.query_one("#mail-search", PromptInput)
         search.value = "Keep"
         app.query_one("#mail-urgency-filter", Select).value = "important"
         app.query_one("#mail-sort", Select).value = "urgency"
@@ -572,7 +592,7 @@ async def test_events_language_and_refresh_keep_reading_state(
         mail_state = cursor(table), table.scroll_y, detail.scroll_y
         assert mail_state[1] > 0 and mail_state[2] > 0
         app.query_one(TabbedContent).active = "tab-actions"
-        app.query_one("#actions-search", Input).value = "Todo"
+        app.query_one("#actions-search", PromptInput).value = "Todo"
         filter_button = app.query_one("#actions-type-filter", Button)
         load_types = view.list_action_types
         monkeypatch.setattr(view, "list_action_types", AsyncMock(side_effect=ConnectionError()))
@@ -626,7 +646,7 @@ async def test_events_language_and_refresh_keep_reading_state(
         assert search.value == "Keep"
         assert app.query_one("#mail-urgency-filter", Select).value == "important"
         assert app.query_one("#mail-sort", Select).value == "urgency"
-        assert app.query_one("#actions-search", Input).value == "Todo"
+        assert app.query_one("#actions-search", PromptInput).value == "Todo"
         assert filter_button.variant == "error"
         assert str(filter_button.label) == service.t("tui.todo_types_filter_cancel")
         assert str(app.query_one("#btn-refresh", Button).label) == service.t("tui.btn_refresh")
@@ -747,13 +767,13 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         assert view.t("tui.remote_events_retrying", seconds=2) in app.sub_title
         assert view.t("tui.remote_events_retrying", seconds=2) in text(app, "#runtime-plugins")
         # Filtering the loaded data stays usable without an HTTP connection.
-        app.query_one("#mail-search", Input).value = "no match"
-        app.query_one("#actions-search", Input).value = "no match"
+        app.query_one("#mail-search", PromptInput).value = "no match"
+        app.query_one("#actions-search", PromptInput).value = "no match"
         await settle(pilot)
         assert app.query_one("#mail-table", DataTable).row_count == 0
         assert app.query_one("#actions-table", DataTable).row_count == 0
-        app.query_one("#mail-search", Input).value = "Exam"
-        app.query_one("#actions-search", Input).value = "Remote"
+        app.query_one("#mail-search", PromptInput).value = "Exam"
+        app.query_one("#actions-search", PromptInput).value = "Remote"
         await settle(pilot)
         assert app.query_one("#mail-table", DataTable).row_count == 1
         assert app.query_one("#actions-table", DataTable).row_count == 1
@@ -770,7 +790,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
         await settle(pilot)
         assert view.t("tui.remote_events_connected") in app.sub_title
         assert app.query_one("#mail-table", DataTable).row_count == 2
-        assert app.query_one("#mail-search", Input).value == "Exam"
+        assert app.query_one("#mail-search", PromptInput).value == "Exam"
         for ident in ("#mail-analysis-status", "#actions-hint", "#runtime-status"):
             assert "offline" not in text(app, ident)
         assert app.query_one("#btn-reparse", Button).disabled
@@ -920,7 +940,7 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         await pilot.pause()
         action_table = app.query_one("#actions-table", DataTable)
         assert "selected" not in action_table.columns
-        search = app.query_one("#actions-search", Input)
+        search = app.query_one("#actions-search", PromptInput)
         search.value = "not present"
         await settle(pilot)
         assert action_table.row_count == 0

@@ -15,6 +15,7 @@ from mailflow.commands import CommandRouter
 from mailflow_testkit.fakes import make_mail
 from mailflow_tui.app import MailFlowApp
 from mailflow_tui.log_export import LogExportScreen
+from mailflow_tui.widgets import PromptInput
 from textual.widgets import (
     Button,
     DataTable,
@@ -56,7 +57,7 @@ async def test_mail_burst_is_persisted_searchable_and_readable(tmp_path: Path) -
             }
             table = cast(DataTable[str], app.query_one("#mail-table", DataTable))
             await until(pilot, lambda: table.row_count == len(mails))
-            search = app.query_one("#mail-search", Input)
+            search = app.query_one("#mail-search", PromptInput)
             search.value = "Burst mail 24"
             await until(pilot, lambda: table.row_count == 1)
             assert "Burst mail 24" in str(table.get_row_at(0))
