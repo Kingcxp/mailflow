@@ -268,7 +268,10 @@ def run_tui(
 
         if not background and not has_terminal():
             raise SessionError("sessions.terminal_required")
-        config = load_config(config_path) if config_path else MailFlowConfig()
+        # Bootstrap before the foreground reads the file. Previously only
+        # start_instance did this, after both launchers had already tried to load it.
+        prepared_path = ensure_default_config(config_path)
+        config = load_config(prepared_path) if prepared_path else MailFlowConfig()
         console = Console()
         with console.status(I18n(config.general.language).t("sessions.starting")):
             info = await start_instance(config_path, name=name, local=local)

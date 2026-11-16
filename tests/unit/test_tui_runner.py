@@ -110,3 +110,30 @@ class TestEnsureDefaultConfig:
         target = str(tmp_path / "configs" / "development.toml")
         assert ensure_default_config(target) == target
         assert not Path(target).exists()
+
+        from mailflow.i18n import I18n
+        from mailflow_tui.cli import app
+        from typer.testing import CliRunner
+
+        cli = CliRunner()
+        cli_target = "configs/development.toml"
+        missing = cli.invoke(app, ["--config", cli_target, "--background"])
+        assert missing.exit_code == 1
+        assert I18n().t("sessions.config_missing", path=cli_target) in " ".join(
+            missing.output.split()
+        )
+        assert not Path(target).exists()
+        # Instance management remains available when the old configuration
+        # has been removed; it never creates a service or a replacement config.
+        monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(tmp_path / "sessions"))
+        assert cli.invoke(app, ["--config", cli_target, "list", "--json"]).exit_code == 0
+        assert not Path(target).exists()
+
+        Path(target).parent.mkdir(parents=True)
+        Path(target).write_text('[general]\nworkers = "private-config-value"\n', encoding="utf-8")
+        invalid = cli.invoke(app, ["--config", cli_target, "--background"])
+        assert invalid.exit_code == 1
+        assert "private-config-value" not in invalid.output and "Traceback" not in invalid.output
+        assert I18n().t("sessions.config_invalid", path=cli_target) in " ".join(
+            invalid.output.split()
+        )

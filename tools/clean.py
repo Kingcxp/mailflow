@@ -42,7 +42,8 @@ _TARGETS: dict[str, tuple[tuple[str, ...], str]] = {
     ),
     "config": (
         ("configs/development.toml", "configs/local.toml"),
-        "local config files (regenerated from configs/example.toml)",
+        "local settings, including accounts and credentials / 本地设置（包括账户和凭据）；"
+        "next TUI launch creates an empty setup / 下次启动 TUI 将使用空白配置",
     ),
 }
 

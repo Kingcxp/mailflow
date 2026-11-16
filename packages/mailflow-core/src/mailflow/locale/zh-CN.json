@@ -1530,6 +1530,8 @@
       "not_found": "没有找到运行中的实例 {name}，请使用 mailflow tui list 查看。",
       "in_use": "实例 {name} 或其邮件数据库正在使用中。请连接已有实例，或使用独立的名称、配置和数据库。",
       "start_failed": "实例 {name} 启动失败，详情见：{log}",
+      "config_missing": "找不到配置文件 {path}。全新使用请将 configs/example.toml 复制到此路径；如需保留账户，请恢复配置备份。",
+      "config_invalid": "无法读取配置文件 {path}。请检查 TOML 格式、引用的环境变量和文件权限后重试。",
       "unavailable": "暂时无法连接实例 {name}，请使用 mailflow tui list 检查状态。",
       "attached": "实例 {name} 已连接其他终端，请先分离，或使用 attach --takeover 接管。",
       "auth_failed": "本地实例的连接凭据已失效，请使用 mailflow tui list 检查实例。",
@@ -1901,7 +1903,7 @@
         "clean-records": "邮件移入本地回收站，移除待办",
         "clean-trash": "永久清空本地回收站，无法撤销",
         "clean-gateways": "确认后删除 data/gateways/ 中的网关安装",
-        "clean-config": "确认后删除本地配置文件",
+        "clean-config": "确认后重置本地设置，包括账户和凭据",
         "help": "显示此帮助"
       },
       "options_title": "常用参数",

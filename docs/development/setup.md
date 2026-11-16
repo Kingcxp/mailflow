@@ -71,6 +71,10 @@ plain text. Set `NO_COLOR=1` to disable colors in a terminal.
 Coverage output goes to `build/reports` and
 wheels to `dist/wheels`; both are ignored. Data-modifying `clean-*` targets are
 not quality checks and must not run against someone else's configuration.
+`clean-config` resets saved accounts and credentials; the next local TUI launch
+creates a fresh configuration from the example. `clean-gateways` removes gateway
+installs and login data. Neither is part of routine build cleanup; use `make clean`
+to remove build output while keeping your working setup.
 For a build using only cached build dependencies, pass `--offline` explicitly
 to `tools/build_all.py`; it is not the default of `make build`.
 
@@ -196,3 +200,5 @@ CI 覆盖 Windows/Linux 和 Python 3.11/3.12。测试分为组件隔离、真实
 生成安装产物后发布预览版本。真实登录、文件投递和终端效果仍需单独实测。
 
 `make clean` 保留用户数据；其他 `clean-*` 目标可能修改数据，不能当作开发检查运行。
+`clean-config` 会重置账户、凭据等本地设置，下次启动本地 TUI 时从示例生成空白配置；
+`clean-gateways` 会移除网关安装和登录数据。日常清理构建产物只需运行 `make clean`。

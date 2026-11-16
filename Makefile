@@ -130,7 +130,7 @@ clean-trash: ## Permanently empty the local trash; cannot be undone
 clean-gateways: ## Delete data/gateways/ after confirmation
 	"$(PYTHON)" -X utf8 "$(ROOT)/tools/clean.py" --gateways
 
-clean-config: ## Delete local config files after confirmation
+clean-config: ## Reset local settings, including accounts and credentials, after confirmation
 	"$(PYTHON)" -X utf8 "$(ROOT)/tools/clean.py" --config
 
 ### Help

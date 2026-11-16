@@ -1530,6 +1530,8 @@
       "not_found": "No running instance matches {name}. Use mailflow tui list to see available instances.",
       "in_use": "Instance {name} or its mailbox data is already in use. Attach to that instance, or use a separate name, configuration and database.",
       "start_failed": "Could not start instance {name}. Details are in: {log}",
+      "config_missing": "Configuration file {path} was not found. Copy configs/example.toml to this path for a new setup, or restore your configuration backup to keep your accounts.",
+      "config_invalid": "Cannot read configuration {path}. Check its TOML syntax, referenced environment variables and file permissions, then retry.",
       "unavailable": "Cannot connect to instance {name}. Use mailflow tui list to check its state.",
       "attached": "Instance {name} already has a terminal. Detach it first, or attach with --takeover.",
       "auth_failed": "The local instance credential is no longer valid. Use mailflow tui list to check the instance.",
@@ -1901,7 +1903,7 @@
         "clean-records": "Move local mail to trash and remove schedule entries",
         "clean-trash": "Permanently empty the local trash; cannot be undone",
         "clean-gateways": "Delete data/gateways/ after confirmation",
-        "clean-config": "Delete local config files after confirmation",
+        "clean-config": "Reset local settings, including accounts and credentials, after confirmation",
         "help": "Show this help"
       },
       "options_title": "Options",

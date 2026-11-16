@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -22,11 +23,28 @@ def _execute(function: Callable[[], Any], config_path: str | None = None) -> Non
 
     t = I18n().t
     try:
-        config = load_config(config_path) if config_path else MailFlowConfig()
+        # A fresh checkout or clean-config has no local file yet. The local
+        # launcher creates it; reading it just to select a language must not
+        # prevent that launcher (or config-independent session commands) running.
+        try:
+            config = (
+                load_config(config_path)
+                if config_path and Path(config_path).exists()
+                else MailFlowConfig()
+            )
+        except (OSError, ValueError) as exc:
+            raise SessionError("sessions.config_invalid", path=config_path) from exc
         t = I18n(config.general.language).t
         function()
     except SessionError as exc:
         console.print(t(exc.key, **exc.params), style="red", markup=False)
+        raise typer.Exit(1) from exc
+    except FileNotFoundError as exc:
+        if config_path and not Path(config_path).exists():
+            message = t("sessions.config_missing", path=config_path)
+        else:
+            message = t("sessions.unavailable", name="")
+        console.print(message, style="red", markup=False)
         raise typer.Exit(1) from exc
     except (OSError, ValueError, EOFError, TimeoutError) as exc:
         console.print(t("sessions.unavailable", name=""), style="red", markup=False)
@@ -66,7 +84,7 @@ def list_sessions(
     from mailflow_tui.sessions import list_instances
 
     def show() -> None:
-        config = load_config(ctx.obj) if ctx.obj else MailFlowConfig()
+        config = load_config(ctx.obj) if ctx.obj and Path(ctx.obj).exists() else MailFlowConfig()
         t = I18n(config.general.language).t
         items = asyncio.run(list_instances())
         if json_output:

@@ -10,6 +10,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -383,7 +384,9 @@ def test_cli_business_failure_exits_nonzero_without_changing_data(cli_config: Pa
     assert not output.exists()
 
 
-def test_clean_commands_do_not_receive_mail_again_or_wait_for_runtime(cli_config: Path) -> None:
+def test_clean_commands_do_not_receive_mail_again_or_break_first_launch(
+    cli_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import time
 
     started = time.monotonic()
@@ -394,3 +397,89 @@ def test_clean_commands_do_not_receive_mail_again_or_wait_for_runtime(cli_config
     assert "CLI account" not in run_cli(cli_config, "command", "trash list").stdout
     snapshot = json.loads(run_cli(cli_config, "snapshot", "--json").stdout)
     assert all(account["status"] == "stopped" for account in snapshot["accounts"])
+
+    make = shutil.which("make")
+    if make is None:
+        return
+    # Exercise the real make/CLI/host chain after all cleanup types. Every
+    # removable file, database and instance belongs to this temporary checkout.
+    project = Path(__file__).resolve().parents[2]
+    checkout = cli_config.parent / "clean checkout"
+    (checkout / "configs").mkdir(parents=True)
+    (checkout / "tools").mkdir()
+    shutil.copyfile(project / "Makefile", checkout / "Makefile")
+    shutil.copyfile(project / "tools/clean.py", checkout / "tools/clean.py")
+    config = load_config(cli_config)
+    config.accounts = []
+    config.storage.path = "data/mail.db"
+    write_config(config, checkout / "configs/example.toml")
+    shutil.copyfile(checkout / "configs/example.toml", checkout / "configs/development.toml")
+    (checkout / "data/gateways").mkdir(parents=True)
+    (checkout / "build").mkdir()
+    (checkout / "build/output").write_text("disposable", encoding="utf-8")
+    monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(checkout / "sessions"))
+    env = {**os.environ, "PYTHONUTF8": "1", "UV_OFFLINE": "1", "UV_PYTHON_DOWNLOADS": "never"}
+    for key in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "MAKELEVEL"):
+        env.pop(key, None)
+
+    def run_make(target: str) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(
+            [
+                make,
+                "--no-print-directory",
+                f"PYTHON={sys.executable}",
+                f"VENV={sys.prefix}",
+                "SESSION=clean-start",
+                target,
+            ],
+            cwd=checkout,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result
+
+    for target in ("clean-records", "clean-trash", "clean"):
+        run_make(target)
+    subprocess.run(
+        [sys.executable, str(checkout / "tools/clean.py"), "--config", "--gateways", "--yes"],
+        cwd=checkout,
+        env=env,
+        check=True,
+        capture_output=True,
+        timeout=15,
+    )
+    assert not (checkout / "configs/development.toml").exists()
+    assert not (checkout / "data/gateways").exists() and not (checkout / "build").exists()
+    before = (checkout / "configs/example.toml").read_bytes()
+
+    async def read_screen() -> None:
+        from mailflow_tui.session_terminal import read_frame, send_frame
+        from mailflow_tui.sessions import connect, find_instance
+
+        info = await find_instance("clean-start")
+        reader, writer, _ = await connect(info, "attach")
+        try:
+            send_frame(writer, {"event": "Resize", "size": [80, 24]})
+            send_frame(writer, {"event": "Key", "key": "f1", "character": None})
+            output = ""
+            async with asyncio.timeout(8):
+                while "Keyboard help" not in output:
+                    output += str((await read_frame(reader)).get("data", ""))
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    try:
+        run_make("tui-background")
+        assert "clean-start" in run_make("tui-list").stdout
+        asyncio.run(read_screen())
+        restored = load_config(checkout / "configs/development.toml")
+        assert restored.accounts == [] and restored.storage.path == "data/mail.db"
+        assert (checkout / "configs/example.toml").read_bytes() == before
+    finally:
+        run_make("tui-stop")
