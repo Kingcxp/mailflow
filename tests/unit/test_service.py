@@ -457,6 +457,35 @@ class TestActionMutations:
     def make_service() -> MailFlowService:
         return new_service(None)
 
+    async def test_user_types_persist_and_reclassify_without_restarting_reminders(self) -> None:
+        from mailflow.runtime import reminder_identity
+
+        service = self.make_service()
+        assert await service.list_action_types() == []
+        await service.add_action_type("Work")
+        await service.add_action_type("Personal")
+        assert await service.list_action_types() == ["Personal", "Work"]
+        due = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        item = await service.add_action(
+            "Daily check", due, action_type="Work", repeat={"frequency": "daily"}
+        )
+        quiet = await service.edit_action(item.item_id, reminder_enabled=False)
+        identity = reminder_identity(quiet)
+        await service.rename_action_type("Work", "Office")
+        updated = (await service.list_actions_all())[0]
+        assert updated.item_id == item.item_id and updated.action_type == "Office"
+        assert not updated.reminder_enabled and reminder_identity(updated) == identity
+        assert (await service.action_plans())[0].template.action_type == "Office"
+        assert await service.delete_action_type("Office")
+        assert (await service.list_actions_all())[0].action_type == ""
+        assert (await service.action_plans())[0].template.action_type == ""
+        assert await service.list_action_types() == ["Personal"]
+        await service.edit_action(item.item_id, completed=True)
+        assert await service.list_actions_all() == []
+        assert await service.list_action_types() == ["Personal"]
+        await service.add_action("Without a type")
+        assert (await service.list_actions_all())[0].action_type == ""
+
     async def test_add_and_edit_preserve_free_type_and_metadata(self) -> None:
         service = self.make_service()
         start = datetime(2099, 6, 1, 9, tzinfo=UTC)

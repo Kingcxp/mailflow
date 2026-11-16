@@ -429,6 +429,18 @@ class RemoteServiceAdapter:
     async def action_plans(self) -> list[ActionPlan]:
         return [ActionPlan.model_validate(item) for item in await self.client.action_plans()]
 
+    async def list_action_types(self) -> list[str]:
+        return await self.client.list_action_types()
+
+    async def add_action_type(self, name: str) -> str:
+        return await self.client.add_action_type(name)
+
+    async def rename_action_type(self, name: str, new_name: str) -> str:
+        return await self.client.rename_action_type(name, new_name)
+
+    async def delete_action_type(self, name: str) -> bool:
+        return await self.client.delete_action_type(name)
+
     async def stop_action_plan(self, plan_id: str) -> bool:
         return await self.client.stop_action_plan(plan_id)
 

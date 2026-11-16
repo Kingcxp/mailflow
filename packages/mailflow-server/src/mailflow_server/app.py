@@ -79,7 +79,7 @@ class ActionCreate(BaseModel):
     reminder_enabled: bool = True
     mail_id: str = ""
     reply_task: bool = False
-    action_type: str = "errand"
+    action_type: str = ""
     due_end: datetime | None = None
     notes: str = ""
     location: str = ""
@@ -603,6 +603,23 @@ def create_app(service: MailFlowService) -> FastAPI:
     @app.get("/action-plans")
     async def action_plans(_: None = Depends(guard)) -> Any:
         return _jsonable(await service.action_plans())
+
+    @app.get("/action-types")
+    async def action_types(_: None = Depends(guard)) -> Any:
+        return await service.list_action_types()
+
+    @app.post("/action-types")
+    async def add_action_type(body: dict[str, str], _: None = Depends(guard)) -> Any:
+        return {"name": await service.add_action_type(body.get("name", ""))}
+
+    @app.put("/action-types")
+    async def rename_action_type(body: dict[str, str], _: None = Depends(guard)) -> Any:
+        name = await service.rename_action_type(body.get("old_name", ""), body.get("name", ""))
+        return {"name": name}
+
+    @app.post("/action-types/delete")
+    async def delete_action_type(body: dict[str, str], _: None = Depends(guard)) -> Any:
+        return {"ok": await service.delete_action_type(body.get("name", ""))}
 
     @app.put("/action-plans/{plan_id}")
     async def update_plan(plan_id: str, body: dict[str, Any], _: None = Depends(guard)) -> Any:

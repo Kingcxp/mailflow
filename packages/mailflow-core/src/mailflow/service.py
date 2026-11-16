@@ -395,6 +395,7 @@ class MailFlowService:
         self._smart_history: dict[str, str] = {}
         self._reply_create_lock = asyncio.Lock()
         self._subscription_lock = asyncio.Lock()
+        self._action_types_lock = asyncio.Lock()
         self._language_lock = asyncio.Lock()
         self._chat_lock = asyncio.Lock()
         self._chat_tasks: dict[str, asyncio.Task[str | list[str] | None]] = {}
@@ -1111,6 +1112,116 @@ class MailFlowService:
             if include_completed or entry.item.completed_at is None
         ]
 
+    async def _read_action_types(self) -> list[str]:
+        raw = await self.storage.get_preference("actions.types")
+        names = cast(list[str], json.loads(raw or "[]"))
+        items = await self.list_actions_all()
+        plans = await self.action_plans()
+        return sorted(
+            {name for name in names if name}
+            | {item.action_type for item in items if item.action_type}
+            | {plan.template.action_type for plan in plans if plan.template.action_type},
+            key=str.casefold,
+        )
+
+    async def list_action_types(self) -> list[str]:
+        """Keep user types, including existing task types, independently of their tasks."""
+        async with self._action_types_lock:
+            names = await self._read_action_types()
+            encoded = json.dumps(names, ensure_ascii=False)
+            if await self.storage.get_preference("actions.types") != encoded:
+                await self.storage.set_preference("actions.types", encoded)
+            return names
+
+    @admin_operation
+    async def add_action_type(self, name: str) -> str:
+        name = name.strip()
+        if not name:
+            raise translated_error(ValueError, self.t, "action.type_name_required")
+        async with self._action_types_lock:
+            names = await self._read_action_types()
+            if name not in names:
+                names.append(name)
+            await self.storage.set_preference(
+                "actions.types", json.dumps(sorted(names, key=str.casefold), ensure_ascii=False)
+            )
+        await self.events.emit("action.changed", action_type=name)
+        return name
+
+    async def _replace_action_type(self, name: str, replacement: str) -> None:
+        from mailflow.runtime import reminder_identity
+
+        store = self.runtime.action_store
+        async with store.lock:
+            entries = await store.read(deduplicate=False)
+            async with store.recurring.lock:
+                plans = await store.recurring.read()
+                for entry in entries:
+                    item = entry.item
+                    if item.action_type != name:
+                        continue
+                    # Use the same override ownership as editing a mail task;
+                    # its original analysis and reminder receipts stay intact.
+                    updated = item.model_copy(
+                        update={
+                            "action_type": replacement,
+                            "reminder_key": reminder_identity(item),
+                            "origin": ActionOrigin.CUSTOM,
+                            "mail_id": entry.record.record_id if entry.record else item.mail_id,
+                            "source_subject": entry.record.mail.subject
+                            if entry.record
+                            else item.source_subject,
+                        }
+                    )
+                    await self.storage.save_custom_action(updated)
+                    if not entry.custom:
+                        await store.remove(entry, entries)
+                changed = False
+                for plan in plans:
+                    if plan.template.action_type == name:
+                        plan.template = plan.template.model_copy(
+                            update={"action_type": replacement}
+                        )
+                        changed = True
+                if changed:
+                    await store.recurring.save(plans)
+
+    @admin_operation
+    async def rename_action_type(self, name: str, new_name: str) -> str:
+        new_name = new_name.strip()
+        if not new_name:
+            raise translated_error(ValueError, self.t, "action.type_name_required")
+        async with self._action_types_lock:
+            names = await self._read_action_types()
+            if name not in names:
+                raise translated_error(ValueError, self.t, "action.type_not_found", name=name)
+            if new_name != name and new_name in names:
+                raise translated_error(ValueError, self.t, "action.type_exists", name=new_name)
+            if new_name != name:
+                await self._replace_action_type(name, new_name)
+            await self.storage.set_preference(
+                "actions.types",
+                json.dumps(
+                    [new_name if value == name else value for value in names], ensure_ascii=False
+                ),
+            )
+        await self.events.emit("action.changed", old_type=name, new_type=new_name)
+        return new_name
+
+    @admin_operation
+    async def delete_action_type(self, name: str) -> bool:
+        async with self._action_types_lock:
+            names = await self._read_action_types()
+            if name not in names:
+                return False
+            await self._replace_action_type(name, "")
+            await self.storage.set_preference(
+                "actions.types",
+                json.dumps([value for value in names if value != name], ensure_ascii=False),
+            )
+        await self.events.emit("action.changed", old_type=name, new_type="")
+        return True
+
     @admin_operation
     async def delete_action(self, item_id: str) -> bool:
         async with self.runtime.action_store.lock:
@@ -1190,6 +1301,7 @@ class MailFlowService:
                 plan.schedule = schedule
             allowed = {
                 "summary",
+                "action_type",
                 "due_at",
                 "due_end",
                 "category",
@@ -1222,7 +1334,7 @@ class MailFlowService:
         summary: str,
         due_at: datetime | None = None,
         *,
-        action_type: str = "errand",
+        action_type: str = "",
         due_end: datetime | None = None,
         notes: str = "",
         location: str = "",
@@ -1240,8 +1352,6 @@ class MailFlowService:
         final_type = action_type.strip()
         if not final_summary:
             raise translated_error(ValueError, self.t, "action.missing_summary")
-        if not final_type:
-            raise translated_error(ValueError, self.t, "action.missing_type")
         if due_at is not None and (due_at.tzinfo is None or due_at.utcoffset() is None):
             raise translated_error(ValueError, self.t, "action.invalid_due_edit")
         final_due = to_utc(due_at) if due_at is not None else None
@@ -1355,8 +1465,6 @@ class MailFlowService:
             if not final_summary:
                 raise translated_error(ValueError, self.t, "action.missing_summary")
             final_type = item.action_type if action_type is None else action_type.strip()
-            if not final_type:
-                raise translated_error(ValueError, self.t, "action.missing_type")
             if due_at is not None and (due_at.tzinfo is None or due_at.utcoffset() is None):
                 raise translated_error(ValueError, self.t, "action.invalid_due_edit")
             if due_end is not None and (due_end.tzinfo is None or due_end.utcoffset() is None):

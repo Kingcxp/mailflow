@@ -456,6 +456,21 @@ class RemoteClient:
     async def action_plans(self) -> list[dict[str, Any]]:
         return cast(list[dict[str, Any]], await self._request("GET", "/action-plans"))
 
+    async def list_action_types(self) -> list[str]:
+        return cast(list[str], await self._request("GET", "/action-types"))
+
+    async def add_action_type(self, name: str) -> str:
+        result = await self._request("POST", "/action-types", {"name": name})
+        return str(result["name"])
+
+    async def rename_action_type(self, name: str, new_name: str) -> str:
+        result = await self._request("PUT", "/action-types", {"old_name": name, "name": new_name})
+        return str(result["name"])
+
+    async def delete_action_type(self, name: str) -> bool:
+        result = await self._request("POST", "/action-types/delete", {"name": name})
+        return bool(result["ok"])
+
     async def update_action_plan(self, plan_id: str, values: dict[str, Any]) -> dict[str, Any]:
         return cast(dict[str, Any], await self._request("PUT", f"/action-plans/{plan_id}", values))
 

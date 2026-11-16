@@ -239,7 +239,7 @@ class ActionItem(BaseModel):
     item_id: str
     mail_id: str
     summary: str
-    action_type: str  # built-in category or user-defined non-empty label
+    action_type: str  # User-managed label; an empty value means unclassified.
     due_at: datetime | None = None
     due_end: datetime | None = None
     notes: str = ""
