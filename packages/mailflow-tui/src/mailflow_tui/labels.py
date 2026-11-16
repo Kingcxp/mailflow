@@ -96,10 +96,10 @@ def mail_status(service: Any, record: MailRecord) -> Text:
     text = Text(source, style="cyan")
     if status:
         color = (
-            "red"
+            "bold red"
             if record.analysis_state == "failed"
             or any(note.status == "failed" for note in record.processor_notes)
-            else "yellow"
+            else "bold yellow"
             if record.analysis_is_fallback
             else "dim"
         )

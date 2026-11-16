@@ -102,6 +102,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger("mailflow.tui")
 
 _BLANK = ""
+_DETAIL_TITLE = "bold #cdd6f4"
+_DETAIL_HEADING = "bold #89b4fa"
+_DETAIL_MUTED = "#a6adc8"
+_DETAIL_TIME = "bold #f9e2af"
+_DETAIL_TAG = "bold #cba6f7"
+_DETAIL_LINK = "underline #89dceb"
 
 
 def _load_error(service: MailFlowService, exc: Exception) -> str:
@@ -183,36 +189,69 @@ def _action_time_range(service: MailFlowService, item: ActionItem) -> str:
     return item.time_range_in(service.config.general.timezone) or service.t("ux.no_due")
 
 
+def _detail_section(label: str, body: str | RichText, *, style: str = "") -> RichText:
+    """Style the heading separately so long content keeps its normal weight."""
+    text = RichText()
+    text.append(label + "\n", style=_DETAIL_HEADING)
+    text.append(body, style=style or None)
+    return text
+
+
+def _action_time_style(service: MailFlowService, item: ActionItem) -> str:
+    if item.due_at is None:
+        return _DETAIL_MUTED
+    if not item.preview and service.is_action_expired(item):
+        return "bold red"
+    return _DETAIL_TIME
+
+
 def _action_detail_text(service: MailFlowService, item: ActionItem) -> RichText:
     """Keep task details readable without interpreting user text as markup."""
     detail = RichText()
     if item.preview:
-        detail.append(service.t("recurrence.preview") + "\n", style="dim")
-    detail.append(item.summary, style="bold")
+        detail.append(service.t("recurrence.preview") + "\n", style=_DETAIL_TAG)
+    detail.append(item.summary, style=_DETAIL_TITLE)
+    detail.append("\n\n")
+    detail.append(
+        _detail_section(
+            service.t("tui.action_time"),
+            _action_time_range(service, item),
+            style=_action_time_style(service, item),
+        )
+    )
+    if item.due_at is not None:
+        detail.append(
+            "\n" + service.t("interface.timezone", zone=service.config.general.timezone),
+            style=_DETAIL_MUTED,
+        )
+    detail.append("\n")
     fields = [
-        ("tui.action_time", _action_time_range(service, item)),
         ("tui.action_type", _action_type_label(service, item.action_type)),
         ("recurrence.category", item.category),
         ("tui.action_tags", ", ".join(item.tags)),
-        ("tui.action_notes", item.notes),
         ("tui.action_location", item.location),
-        ("tui.action_url", item.url),
-        (
-            "tui.action_source",
-            (item.source_subject or service.t("tui.action_from_mail"))
-            if item.mail_id
-            else service.t("tui.action_custom_source"),
-        ),
     ]
     for label, value in fields:
         if value:
-            detail.append("\n\n" + service.t(label) + "\n", style="bold")
-            detail.append(value)
-            if label == "tui.action_time" and item.due_at is not None:
-                detail.append(
-                    "\n" + service.t("interface.timezone", zone=service.config.general.timezone),
-                    style="dim",
-                )
+            detail.append("\n" + service.t(label) + ": ", style=_DETAIL_MUTED)
+            detail.append(value, style=_DETAIL_TAG if label != "tui.action_location" else None)
+    if item.notes:
+        detail.append("\n\n")
+        detail.append(_detail_section(service.t("tui.action_notes"), item.notes))
+    if item.url:
+        detail.append("\n\n")
+        detail.append(_detail_section(service.t("tui.action_url"), item.url, style=_DETAIL_LINK))
+    source = (
+        (item.source_subject or service.t("tui.action_from_mail"))
+        if item.mail_id
+        else service.t("tui.action_custom_source")
+    )
+    detail.append("\n\n")
+    detail.append(
+        _detail_section(
+            service.t("tui.action_source"), source, style="cyan" if item.mail_id else _DETAIL_MUTED
+        )
+    )
     return detail
 
 
@@ -879,28 +918,42 @@ class ActionModal(ModalScreen[Any]):
         status = mail_status(self._service, record)
         if status:
             lines.append(status)
-            lines.append("\n")
-        lines.append(f"{self._service.t('tui.column_subject')}: ", style="bold")
-        lines.append(f"{mail.subject}\n")
-        lines.append(f"{self._service.t('tui.column_sender')}: ", style="bold")
-        lines.append(f"{mail.sender.display or mail.sender.address}\n")
-        lines.append(f"{self._service.t('tui.column_date')}: ", style="bold")
-        lines.append(f"{_localize(self._service, mail.date)}\n")
-        summary = self._service.display_text(record.summary)
-        lines.append(f"{self._service.t('tui.detail_summary')}:\n", style="bold")
-        lines.append(summary or self._service.t("tui.detail_analysis_unavailable"))
-        if record.analysis_is_fallback and summary:
-            lines.append(f" ({self._service.t('tui.detail_summary_fallback')})", style="yellow")
-        lines.append("\n")
+            lines.append("\n\n")
+        fields = [
+            ("tui.detail_original_subject", mail.subject, _DETAIL_TITLE),
+            ("tui.column_sender", mail.sender.display or mail.sender.address, "cyan"),
+            ("tui.column_date", _localize(self._service, mail.date), _DETAIL_TIME),
+        ]
+        for label, value, style in fields:
+            lines.append(_detail_section(self._service.t(label), value, style=style))
+            lines.append("\n\n")
+        summary_value = self._service.display_text(record.summary)
+        summary = RichText(summary_value or self._service.t("tui.detail_analysis_unavailable"))
+        if record.analysis_is_fallback and summary_value:
+            summary.append(
+                f" ({self._service.t('tui.detail_summary_fallback')})", style="bold yellow"
+            )
+        lines.append(_detail_section(self._service.t("tui.detail_summary"), summary))
         reason = record.analysis.reason if record.analysis else ""
         if reason:
-            lines.append(f"{self._service.t('tui.detail_reason')}:\n", style="bold")
-            lines.append(f"{self._service.display_text(reason)}\n")
-        lines.append(f"{self._service.t('tui.detail_body')}:\n", style="bold")
-        lines.append(body[:800] or self._service.t("tui.mail_no_body"))
+            lines.append("\n\n")
+            lines.append(
+                _detail_section(
+                    self._service.t("tui.detail_reason"), self._service.display_text(reason)
+                )
+            )
+        lines.append("\n\n")
+        lines.append(
+            _detail_section(
+                self._service.t("tui.detail_body"),
+                body[:800] or self._service.t("tui.mail_no_body"),
+            )
+        )
         if mail.image_text.strip():
-            lines.append(f"\n\n{self._service.t('mail.field_image_text')}:\n", style="bold")
-            lines.append(mail.image_text)
+            lines.append("\n\n")
+            lines.append(
+                _detail_section(self._service.t("mail.field_image_text"), mail.image_text)
+            )
         node.update(lines)
 
     def _open_editor(self) -> None:
@@ -986,15 +1039,16 @@ class MailPane(Vertical):
         with Horizontal():
             yield SelectionTable(t=self._service.t, explorer_selection=True, id="mail-table")
             with ScrollableContainer(id="mail-detail"):
+                yield Static("", id="mail-title")
                 yield Static("", id="mail-analysis-status")
                 yield Static("", id="mail-operation-status")
-                yield Static("", id="mail-subject")
+                yield Static("", id="mail-notes")
                 yield Static("", id="mail-summary")
                 yield Static("", id="mail-reason")
                 yield Static("", id="mail-actions")
-                yield Static("", id="mail-body")
                 yield Static("", id="mail-attachments")
-                yield Static("", id="mail-notes")
+                yield Static("", id="mail-subject")
+                yield Static("", id="mail-body")
         with Horizontal(id="mail-controls"):
             yield SafeSelect(self._urgency_options(), id="urgency-select", allow_blank=False)
             yield SafeSelect(
@@ -1610,6 +1664,7 @@ class MailPane(Vertical):
         """Remove detail from a record no longer visible in the table."""
         self._detail_record_id = None
         for selector in (
+            "#mail-title",
             "#mail-analysis-status",
             "#mail-operation-status",
             "#mail-subject",
@@ -1667,47 +1722,64 @@ class MailPane(Vertical):
         same_record = self._detail_record_id == selected_id
         self._detail_record_id = selected_id
         service = self._service
+        self._set_static_text(
+            "#mail-title",
+            RichText(record.display_title or service.t("tui.mail_no_subject"), style=_DETAIL_TITLE),
+        )
         status = mail_status(service, record)
         self._set_static_text("#mail-analysis-status", status)
         self._set_static("#mail-operation-status", self._operation_status)
-        subject = RichText(service.t("tui.detail_original_subject") + ": ", style="bold")
-        subject.append(record.mail.subject or service.t("tui.mail_no_subject"))
+        subject = (
+            _detail_section(
+                service.t("tui.detail_original_subject"),
+                record.mail.subject or service.t("tui.mail_no_subject"),
+                style=_DETAIL_MUTED,
+            )
+            if record.display_title != " ".join(record.mail.subject.split())
+            else RichText("")
+        )
         self._set_static_text("#mail-subject", subject)
         # The stored summary and reason are the mail's content: they stay
         # visible even when the pipeline had to fall back, because hiding them
         # left the user with no content at all. A fallback is labelled, never
         # presented as a generated analysis.
         summary_value = service.display_text(record.summary).strip()
-        summary_line = RichText(service.t("tui.detail_summary") + ": ", style="bold")
-        if summary_value:
-            summary_line.append(summary_value)
-            if record.analysis_is_fallback:
-                summary_line.append(
-                    f" ({service.t('tui.detail_summary_fallback')})", style="yellow"
-                )
-        else:
+        summary_line = _detail_section(service.t("tui.detail_summary"), summary_value)
+        if not summary_value:
             summary_line.append(service.t("tui.detail_analysis_unavailable"), style="yellow")
+        elif record.analysis_is_fallback:
+            summary_line.append(
+                f" ({service.t('tui.detail_summary_fallback')})", style="bold yellow"
+            )
         self._set_static_text("#mail-summary", summary_line)
         reason = service.display_text(record.analysis.reason if record.analysis else "").strip()
-        reason_line = RichText(service.t("tui.detail_reason") + ": ", style="bold")
+        reason_line = RichText()
         if reason:
-            reason_line.append(reason)
+            reason_line = _detail_section(service.t("tui.detail_reason"), reason)
         elif record.analysis_is_fallback:
-            reason_line.append(service.t("tui.detail_reason_unavailable"), style="yellow")
-        else:
-            reason_line.append("-")
+            reason_line = _detail_section(
+                service.t("tui.detail_reason"),
+                service.t("tui.detail_reason_unavailable"),
+                style="yellow",
+            )
         self._set_static_text("#mail-reason", reason_line)
         actions_text: RichText | None = None
         if record.action_items:
-            actions_text = RichText("\n" + service.t("tui.action_content") + ":", style="bold")
-            for item in record.action_items:
-                actions_text.append("\n  ")
+            actions_text = _detail_section(service.t("tui.detail_actions"), "")
+            for index, item in enumerate(record.action_items):
+                if index:
+                    actions_text.append("\n\n")
+                actions_text.append("• ", style=_DETAIL_HEADING)
+                actions_text.append(item.summary, style=_DETAIL_TITLE)
+                actions_text.append("\n")
                 actions_text.append(
-                    f"{_action_time_range(service, item)} "
-                    f"({_action_type_label(service, item.action_type)}) {item.summary}"
+                    _action_time_range(service, item), style=_action_time_style(service, item)
+                )
+                actions_text.append(
+                    "\n" + _action_type_label(service, item.action_type), style=_DETAIL_TAG
                 )
                 if item.notes:
-                    actions_text.append(f" — {item.notes}")
+                    actions_text.append("\n" + item.notes, style=_DETAIL_MUTED)
         self._set_static_text("#mail-actions", actions_text or RichText(""))
         body = mail_body_text(record.mail)
         if not body and looks_binary(record.mail.body_text):
@@ -1715,19 +1787,39 @@ class MailPane(Vertical):
         if len(body) > 4000:
             # a 200 KB dump into one Static is unusable and slow to render
             body = body[:4000] + "…\n" + service.t("ux.read_full_hint")
-        body_line = RichText(service.t("tui.detail_body") + ":\n", style="bold")
-        body_line.append(body or service.t("tui.mail_no_body"))
+        body_line = _detail_section(
+            service.t("tui.detail_body"), body or service.t("tui.mail_no_body")
+        )
         if record.mail.image_text.strip():
-            body_line.append(f"\n\n{service.t('mail.field_image_text')}:\n", style="bold")
-            body_line.append(record.mail.image_text)
+            body_line.append("\n\n")
+            body_line.append(
+                _detail_section(service.t("mail.field_image_text"), record.mail.image_text)
+            )
         self._set_static_text("#mail-body", body_line)
         attachments_line: RichText | None = None
         if record.mail.attachments:
-            attachments_line = RichText(service.t("tui.detail_attachments") + ":", style="bold")
-            for a in record.mail.attachments:
-                attachments_line.append(f"\n  {a.filename} ({a.content_type}, {a.size} B)")
+            attachments_line = _detail_section(service.t("tui.detail_attachments"), "")
+            for index, attachment in enumerate(record.mail.attachments):
+                if index:
+                    attachments_line.append("\n\n")
+                attachments_line.append("• ", style=_DETAIL_HEADING)
+                attachments_line.append(attachment.filename, style="bold cyan")
+                attachments_line.append(
+                    f"\n{attachment.content_type} · {attachment.size} B", style=_DETAIL_MUTED
+                )
         self._set_static_text("#mail-attachments", attachments_line or RichText(""))
         reply_line = RichText()
+        reply_line.append(service.t("tui.urgency_label") + ": ", style=_DETAIL_MUTED)
+        reply_line.append(
+            urgency_label(service, record.effective_urgency),
+            style="bold " + record.effective_urgency.color,
+        )
+        marker = service.t(
+            "tui.detail_manual_marker"
+            if record.manual_urgency is not None
+            else "tui.detail_auto_marker"
+        )
+        reply_line.append(f" ({marker})", style=_DETAIL_MUTED)
         if record.analysis and record.analysis.reply_required:
             reply_line.append(
                 "\n" + service.t("tui.detail_reply_required", answer=service.t("common.yes")),
@@ -1735,12 +1827,9 @@ class MailPane(Vertical):
             )
         if existing:
             reply_line.append(
-                f"\n{service.t('tui.feedback_marker')}: {existing}", style="bold yellow"
+                "\n" + service.t("tui.feedback_marker") + ": ", style=_DETAIL_HEADING
             )
-        reply_line.append(
-            f"\n{service.t('tui.urgency_label')}: {urgency_label(service, record.effective_urgency)} "
-            f"({service.t('tui.detail_manual_marker') if record.manual_urgency is not None else service.t('tui.detail_auto_marker')})"
-        )
+            reply_line.append(existing)
         self._set_static_text("#mail-notes", reply_line)
         if detail is not None and not same_record:
             detail.scroll_to(x=0, y=0, animate=False, force=True, immediate=True)
@@ -2875,7 +2964,9 @@ class ActionsPane(Vertical):
         )
         item = next((item for item in self._items if item.item_id == key), None)
         item_id = item.item_id if item is not None else None
-        node.update(_action_detail_text(self._service, item) if item is not None else "")
+        content = _action_detail_text(self._service, item) if item is not None else ""
+        if node.content != content:
+            node.update(content)
         button.disabled = self._delete_busy or item is None or not item.mail_id
         if item_id != self._detail_item_id:
             detail = self.query_one("#actions-detail-scroll", ScrollableContainer)

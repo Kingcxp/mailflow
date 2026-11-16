@@ -568,6 +568,7 @@
       "confirm_trash": "将 {mail_id} 移入回收站？",
       "confirm_uninstall": "卸载 {plugin_id}？",
       "detail_body": "原文内容",
+      "detail_actions": "关联待办",
       "detail_reason": "原因",
       "detail_reply_required": "需要回复：{answer}",
       "detail_summary": "摘要",

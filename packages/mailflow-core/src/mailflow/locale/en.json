@@ -568,6 +568,7 @@
       "confirm_trash": "Move {mail_id} to trash?",
       "confirm_uninstall": "Uninstall {plugin_id}?",
       "detail_body": "Original body",
+      "detail_actions": "Linked tasks",
       "detail_reason": "Reason",
       "detail_reply_required": "Reply required: {answer}",
       "detail_summary": "Summary",

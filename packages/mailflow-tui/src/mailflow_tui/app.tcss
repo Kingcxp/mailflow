@@ -365,37 +365,13 @@ ActionTypeField > Button {
     margin-right: 1;
 }
 
-#mail-analysis-status,
-#mail-operation-status {
+#mail-detail > Static {
     height: auto;
-    margin-bottom: 1;
-}
-
-#mail-summary {
-    color: $text;
-    margin-bottom: 1;
-}
-
-#mail-reason {
-    margin-bottom: 1;
-}
-
-#mail-actions {
-    margin-bottom: 1;
-}
-
-#mail-attachments {
     margin-bottom: 1;
 }
 
 #mail-body {
-    margin-top: 1;
-    height: auto;
-    color: $text-muted;
-}
-
-#mail-notes {
-    margin-top: 1;
+    color: $text;
 }
 
 #actions-body {
