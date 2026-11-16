@@ -688,86 +688,111 @@ DataTable > .datatable--cursor {
 }
 
 #market-controls {
-    padding: 0 1 1 1;
+    height: auto;
+    padding: 0 1;
 }
 
+#market-search-row,
 #market-controls-top {
     height: auto;
     align-vertical: middle;
 }
 
-#market-controls-buttons {
-    height: auto;
-    margin-top: 1;
-    align-vertical: middle;
-}
-
-#market-search {
-    width: 2fr;
-    margin-right: 1;
-}
-
-#market-category {
-    width: 1fr;
-    margin-right: 1;
-}
-
+#market-category,
 #market-sort {
     width: 1fr;
+    margin-right: 1;
 }
 
-#market-table {
-    height: 1fr;
-    border: round $primary;
+#market-refresh {
+    height: 3;
+    min-width: 8;
 }
 
-#market-detail {
+/* Keep the same list/detail balance as the mail and action pages. */
+#market-body,
+#runtime-body {
     height: 1fr;
-    border: round $secondary;
     margin: 0 1;
 }
 
-#market-readme {
+#market-table,
+#runtime-list {
+    width: 3fr;
     height: 1fr;
-    padding: 0 1;
-    overflow-y: auto;
 }
 
-#market-status {
-    height: 1;
+#market-table,
+#runtime-plugins-table {
+    border: round $primary;
+}
+
+#market-detail,
+#runtime-scroll {
+    width: 2fr;
+    height: 1fr;
+    border: round $secondary;
+    margin-left: 1;
+    padding: 0 1;
+}
+
+#market-selection {
+    height: auto;
+    padding: 1 0;
+}
+
+#market-preview-scroll {
+    height: 1fr;
+}
+
+#market-readme {
+    height: auto;
+    padding: 0;
+}
+
+#market-status,
+#runtime-status {
+    height: auto;
+    max-height: 3;
+    overflow-y: auto;
     margin: 0 1;
     color: $text-muted;
 }
 
-#market-actions {
+#market-actions,
+#runtime-plugin-actions {
     height: auto;
     padding: 0 1;
     align-vertical: middle;
 }
 
-#runtime-scroll {
-    padding: 0 1;
+#market-actions Button,
+#runtime-plugin-actions Button {
+    width: 1fr;
+    min-width: 0;
+    margin-right: 1;
+}
+
+#market-tools,
+#runtime-plugin-uninstall {
+    margin-right: 0;
 }
 
 #runtime-plugins-table {
     height: 1fr;
-    border: round $primary;
-    margin: 0 0 1 0;
+}
+
+#runtime-plugins,
+#runtime-plugins-hint {
+    height: auto;
+}
+
+#runtime-plugins {
+    color: $primary;
+    text-style: bold;
 }
 
 #runtime-plugins-hint {
-    height: 1;
-    color: $text-muted;
-}
-
-#runtime-plugin-actions {
-    height: auto;
-    align-vertical: middle;
-}
-
-#runtime-status {
-    height: 1;
-    margin: 0 0 1 0;
     color: $text-muted;
 }
 
@@ -776,7 +801,8 @@ DataTable > .datatable--cursor {
 #runtime-llms,
 #runtime-bindings,
 #runtime-storage {
-    margin-bottom: 0;
+    height: auto;
+    margin: 0 0 1 0;
 }
 
 /* plugin scaffold wizard */
@@ -867,26 +893,6 @@ InstallScreen {
     width: 16;
     margin: 0 1;
     content-align: center middle;
-}
-
-/* market: two control rows so every button stays on screen */
-#market-controls {
-    height: auto;
-    padding: 0 1;
-}
-
-#market-controls-top {
-    height: auto;
-    align-vertical: middle;
-}
-
-#market-controls-buttons {
-    height: auto;
-    align-vertical: middle;
-}
-
-#market-controls-buttons Button {
-    margin-right: 1;
 }
 
 /* remote repository manager */
@@ -1493,7 +1499,7 @@ UserProfileModal {
 }
 
 #market-search-row {
-    padding: 0 1;
+    padding: 0;
 }
 
 #smart-review-dialog,

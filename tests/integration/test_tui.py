@@ -17,6 +17,7 @@ from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import make_mail
 from mailflow_tui.action_types import ActionTypeField
 from mailflow_tui.app import MailFlowApp
+from mailflow_tui.pickers import ChoicePicker
 from mailflow_tui.smart_action_review import SmartActionReviewModal, SmartOperationEditModal
 from mailflow_tui.widgets import PromptInput
 from rich.console import Console
@@ -54,6 +55,17 @@ async def _smart_review(
         and app.screen.query_one("#smart-review-apply", Button).display,
     )
     return cast(SmartActionReviewModal, app.screen)
+
+
+async def _market_tool(pane: Any, pilot: Any, action: str) -> None:
+    pane.query_one("#market-tools", Button).press()
+    await until(pilot, lambda: isinstance(pane.app.screen, ChoicePicker))
+    menu = cast(ChoicePicker, pane.app.screen)
+    await until(pilot, lambda: bool(menu.matches))
+    row = next(index for index, (_, value) in enumerate(menu.matches) if value == action)
+    menu.query_one(DataTable).move_cursor(row=row)
+    menu.query_one("#picker-apply", Button).press()
+    await pilot.pause()
 
 
 @pytest.mark.asyncio
@@ -620,7 +632,7 @@ async def test_plugin_scaffold_wizard(tmp_path: Path) -> None:
             tabs.active = "tab-market"  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause()
             market_pane = app.query_one(MarketPane)
-            cast(Button, market_pane.query_one("#market-create")).press()
+            await _market_tool(market_pane, pilot, "market-create")
             await pilot.pause(0.1)
             assert isinstance(app.screen, PluginScaffoldScreen)
             tree = app.screen.query_one("#scaffold-tree", DirectoryTree)
@@ -704,7 +716,7 @@ async def test_bot_export_wizard(tmp_path: Path) -> None:
             tabs.active = "tab-market"  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause()
             market_pane = app.query_one(MarketPane)
-            cast(Button, market_pane.query_one("#market-export")).press()
+            await _market_tool(market_pane, pilot, "market-export")
             await until(pilot, lambda: bool(app.screen.query("#export-tree")))
             assert isinstance(app.screen, BotExportScreen)
             # the exporter plugin is registered -> the framework select defaults to nonebot
@@ -912,7 +924,7 @@ async def test_market_repos_screen(tmp_path: Path, monkeypatch: pytest.MonkeyPat
             tabs.active = "tab-market"  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause()
             market_pane = app.query_one(MarketPane)
-            cast(Button, market_pane.query_one("#market-repos")).press()
+            await _market_tool(market_pane, pilot, "market-repos")
             await pilot.pause(0.1)
             assert isinstance(app.screen, ReposScreen)
             # add a repository through the form
