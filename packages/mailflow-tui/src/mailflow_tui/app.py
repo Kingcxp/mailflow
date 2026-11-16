@@ -82,7 +82,7 @@ from mailflow_tui.profile import UserProfileModal
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
 from mailflow_tui.search import SearchMatcher, build_search_matcher
-from mailflow_tui.settings import AccountsPane, LLMPane, SettingsPane
+from mailflow_tui.settings import ConnectionsPane, MailHistoryScreen, SettingsPane
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 from mailflow_tui.view_state import TableRowEvent, TableView, update_table
@@ -4969,16 +4969,14 @@ class MailFlowApp(App[None]):
             ("ctrl+1", "tab-mail"),
             ("ctrl+2", "tab-actions"),
             ("ctrl+3", "tab-mailboxes"),
-            ("ctrl+4", "tab-llms"),
-            ("ctrl+5", "tab-runtime"),
-            ("ctrl+6", "tab-market"),
-            ("ctrl+7", "tab-notifications"),
-            ("ctrl+8", "tab-settings"),
-            ("ctrl+9", "tab-logs"),
+            ("ctrl+4", "tab-runtime"),
+            ("ctrl+5", "tab-market"),
+            ("ctrl+6", "tab-notifications"),
+            ("ctrl+7", "tab-settings"),
+            ("ctrl+8", "tab-logs"),
         ):
             if self._remote and tab_id in {
                 "tab-mailboxes",
-                "tab-llms",
                 "tab-market",
             }:
                 continue
@@ -5045,10 +5043,8 @@ class MailFlowApp(App[None]):
                 yield ActionsPane(self._service)
             if not self._remote:
                 # mailbox forms and history browsing need the local service
-                with TabPane(self._service.t("tui.tab_mailboxes"), id="tab-mailboxes"):
-                    yield AccountsPane(self._service)
-                with TabPane(self._service.t("tui.tab_llms"), id="tab-llms"):
-                    yield LLMPane(self._service)
+                with TabPane(self._service.t("tui.tab_connections"), id="tab-mailboxes"):
+                    yield ConnectionsPane(self._service)
             with TabPane(self._service.t("tui.tab_runtime"), id="tab-runtime"):
                 yield RuntimePane(self._service)
             if not self._remote:
@@ -5161,7 +5157,6 @@ class MailFlowApp(App[None]):
                     "tab-actions",
                     "tab-runtime",
                     "tab-mailboxes",
-                    "tab-llms",
                     "tab-notifications",
                     "tab-settings",
                 }
@@ -5176,9 +5171,8 @@ class MailFlowApp(App[None]):
     def _pane_factories(self) -> dict[str, tuple[Callable[[Any], Any], str]]:
         return {
             "tab-mail": (MailPane, "tui.tab_mail"),
-            "tab-mailboxes": (AccountsPane, "tui.tab_mailboxes"),
+            "tab-mailboxes": (ConnectionsPane, "tui.tab_connections"),
             "tab-actions": (ActionsPane, "tui.tab_actions"),
-            "tab-llms": (LLMPane, "tui.tab_llms"),
             "tab-runtime": (RuntimePane, "tui.tab_runtime"),
             "tab-notifications": (NotificationsPane, "tui.tab_notifications"),
             "tab-market": (MarketPane, "tui.tab_market"),
@@ -5226,8 +5220,7 @@ class MailFlowApp(App[None]):
                     MailPane,
                     ActionsPane,
                     RuntimePane,
-                    AccountsPane,
-                    LLMPane,
+                    ConnectionsPane,
                     NotificationsPane,
                     SettingsPane,
                 ),
@@ -5245,6 +5238,9 @@ class MailFlowApp(App[None]):
         # panes that survive remounting still need their statics retranslated
         for pane in self.query(LogsPane):
             pane.relabel()
+        for screen in self.screen_stack:
+            if isinstance(screen, MailHistoryScreen):
+                await screen.relabel()
         for table in self.query(SelectionTable):
             table.relabel()
         for screen in self.screen_stack:
@@ -5314,8 +5310,7 @@ class MailFlowApp(App[None]):
             MailPane,
             ActionsPane,
             RuntimePane,
-            AccountsPane,
-            LLMPane,
+            ConnectionsPane,
             NotificationsPane,
             SettingsPane,
         ):
@@ -5331,7 +5326,7 @@ class MailFlowApp(App[None]):
                 await pane.refresh_runtime()
             elif isinstance(pane, NotificationsPane):
                 pane.refresh_data()
-            elif isinstance(pane, (AccountsPane, LLMPane, SettingsPane)):
+            elif isinstance(pane, (ConnectionsPane, SettingsPane)):
                 await pane.reload()
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:

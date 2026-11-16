@@ -833,7 +833,7 @@ async def test_remote_errors_preserve_data_then_recover_and_only_supported_actio
             assert "offline" not in text(app, ident)
         assert app.query_one("#btn-reparse", Button).disabled
         assert app.query("#smart-action, #btn-ask-correct, #btn-profile")
-        assert not app.query("#tab-mailboxes, #tab-llms, #tab-market")
+        assert not app.query("#tab-mailboxes, #tab-market")
         app.query_one("#btn-reply", Button).press()
         await until(
             pilot,

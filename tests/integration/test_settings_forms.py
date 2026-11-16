@@ -693,7 +693,7 @@ async def test_history_count_controls_page_size_across_pages(tmp_path: Path) -> 
     service = await start_service_quiet(tmp_path)
     service.config.accounts = [
         _fake_account(
-            mails=[{"message_id": f"count-{i}", "subject": f"mail {i}"} for i in range(12)]
+            mails=[{"message_id": f"count-{i}", "subject": f"mail {i}"} for i in range(40)]
         )
     ]
     await service.reload_runtime()
@@ -703,29 +703,31 @@ async def test_history_count_controls_page_size_across_pages(tmp_path: Path) -> 
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
             app.query_one(TabbedContent).active = "tab-mailboxes"
+            await _wait_until(pilot, lambda: not app.query_one("#account-history", Button).disabled)
+            app.query_one("#account-history", Button).press()
             await _wait_until(pilot, lambda: bool(app.query("#history-more")))
-            pane = _accounts_pane(app)
+            pane = _history_screen(app)
+            await _wait_until(pilot, lambda: len(pane._history) == 25)
             count = app.query_one("#history-count", Input)
             more = app.query_one("#history-more", Button)
-            assert more.disabled
+            assert not more.disabled
             assert app.query_one("#history-analyze", Button).disabled
-            count.value = "4"
-            app.query_one("#account-history", Button).press()
-            await _wait_until(pilot, lambda: len(pane._history) == 4)
             count.value = "3"
             more.press()
-            await _wait_until(pilot, lambda: len(pane._history) == 7)
-            assert app.query_one("#history-table", DataTable).row_count == 7
+            await _wait_until(pilot, lambda: len(pane._history) == 28)
+            assert app.query_one("#history-table", DataTable).row_count == 28
             count.value = "0"
             await pilot.pause()
             assert more.disabled
             more.press()
             await pilot.pause(0.1)
-            assert len(pane._history) == 7
+            assert len(pane._history) == 28
             count.value = "10"
             await pilot.pause()
             more.press()
-            await _wait_until(pilot, lambda: len(pane._history) == 12)
+            await _wait_until(pilot, lambda: len(pane._history) == 38)
+            more.press()
+            await _wait_until(pilot, lambda: len(pane._history) == 40)
             assert more.disabled
     finally:
         await service.stop()
@@ -752,13 +754,16 @@ async def test_history_bulk_load_beyond_hundred_mails(tmp_path: Path) -> None:
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
             app.query_one(TabbedContent).active = "tab-mailboxes"
+            await _wait_until(pilot, lambda: not app.query_one("#account-history", Button).disabled)
+            app.query_one("#account-history", Button).press()
             await _wait_until(pilot, lambda: bool(app.query("#history-more")))
-            pane = _accounts_pane(app)
+            pane = _history_screen(app)
+            await _wait_until(pilot, lambda: len(pane._history) == 25)
 
             more = app.query_one("#history-more", Button)
-            for _expected in range(25, 126, 25):  # 5 x 25 = 125 > 100
+            for _expected in range(50, 126, 25):  # five pages including the initial load
                 before = len(pane._history)
-                (app.query_one("#account-history", Button) if before == 0 else more).press()
+                more.press()
                 # a page can yield fewer NEW rows (server resends overlap);
                 # wait for progress, not an exact count
                 await _wait_until(
@@ -782,10 +787,10 @@ def _fake_account(mails: list[dict[str, Any]] | None = None) -> Any:
     )
 
 
-def _accounts_pane(app: Any) -> Any:
-    from mailflow_tui.settings import AccountsPane
+def _history_screen(app: Any) -> Any:
+    from mailflow_tui.settings import MailHistoryScreen
 
-    return app.query_one(AccountsPane)
+    return cast(MailHistoryScreen, app.screen)
 
 
 async def test_custom_todo_create_show_delete(tmp_path: Path) -> None:

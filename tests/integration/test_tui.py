@@ -1138,7 +1138,7 @@ async def test_llm_tab_orders_the_fallback_chain(tmp_path: Path) -> None:
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
             tabs = app.query_one(TabbedContent)
-            tabs.active = "tab-llms"  # pyright: ignore[reportUnknownMemberType]
+            tabs.active = "tab-mailboxes"  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause(0.2)
             table = cast(DataTable[Any], app.query_one("#llms-table", DataTable))
             assert table.row_count == 2
@@ -1166,10 +1166,9 @@ async def test_llm_tab_orders_the_fallback_chain(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
-    """The mailbox tab lists already-received mail and only the picked ones
-    are pushed through the pipeline."""
+    """The history dialog analyzes picked mail without duplicating saved mail."""
     from mailflow.plugin_market import PluginMarket
-    from mailflow_tui.settings import AccountsPane
+    from mailflow_tui.settings import AccountsPane, MailHistoryScreen
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())
@@ -1204,9 +1203,11 @@ async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
                 ),
             )
 
-            pane = app.query_one(AccountsPane)
-            pane._selected = 0  # pyright: ignore[reportPrivateUsage]
+            accounts = app.query_one(AccountsPane)
+            accounts._selected = 0  # pyright: ignore[reportPrivateUsage]
             app.query_one("#account-history", Button).press()
+            await until(pilot, lambda: isinstance(app.screen, MailHistoryScreen))
+            pane = cast(MailHistoryScreen, app.screen)
             history = cast(DataTable[Any], app.query_one("#history-table", DataTable))
             await until(pilot, lambda: history.row_count == 3)
             assert history.row_count == 3
@@ -1781,7 +1782,7 @@ async def test_llm_move_up_follows_the_entry_and_repeats(tmp_path: Path) -> None
     try:
         async with app.run_test(size=(140, 45)) as pilot:
             tabs = app.query_one(TabbedContent)
-            tabs.active = "tab-llms"  # pyright: ignore[reportUnknownMemberType]
+            tabs.active = "tab-mailboxes"  # pyright: ignore[reportUnknownMemberType]
             await until(pilot, lambda: bool(app.query(LLMPane)))
             pane = app.query_one(LLMPane)
             await cast(Any, app.workers).wait_for_complete()

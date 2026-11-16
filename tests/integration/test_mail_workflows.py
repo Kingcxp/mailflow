@@ -839,13 +839,14 @@ async def test_history_controls_follow_selection_loading_and_failure(
     from mailflow.config import MailAccountConfig
     from mailflow_testkit.fakes import FakeMailSource
     from mailflow_tui.app import MailFlowApp
-    from mailflow_tui.settings import AccountsPane
+    from mailflow_tui.settings import AccountsPane, MailHistoryScreen
     from mailflow_tui.widgets import SelectionTable
     from textual.widgets import DataTable, Input, TabbedContent
 
     from mailflow_test_support.ui import until
 
     entered, release = asyncio.Event(), asyncio.Event()
+    cancelled = asyncio.Event()
     calls: list[int] = []
     fail = True
     mails = [make_record(str(index)).mail for index in range(3)]
@@ -854,7 +855,11 @@ async def test_history_controls_follow_selection_loading_and_failure(
         async def fetch_history(self, limit: int = 50, offset: int = 0) -> Any:
             calls.append(offset)
             entered.set()
-            await release.wait()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
             if fail:
                 raise TimeoutError("connection timed out")
             return mails[offset : offset + limit]
@@ -869,9 +874,6 @@ async def test_history_controls_follow_selection_loading_and_failure(
             "account-edit",
             "account-delete",
             "account-history",
-            "history-more",
-            "history-analyze",
-            "history-select-all",
             "btn-reply",
             "btn-reparse",
             "btn-trash",
@@ -889,34 +891,45 @@ async def test_history_controls_follow_selection_loading_and_failure(
             {ident: cast(MailSource, Source(mails)) for ident in ("acct-1", "acct-2")}
         )
         await pane.reload()
-        app.query_one("#history-count", Input).value = "2"
-        await pilot.pause()
         load = app.query_one("#account-history", Button)
-        more = app.query_one("#history-more", Button)
-        assert not load.disabled and more.disabled
+        assert not load.disabled
         load.press()
         await until(pilot, entered.is_set)
-        assert load.disabled and more.disabled
+        dialog = cast(MailHistoryScreen, app.screen)
+        more = dialog.query_one("#history-more", Button)
+        assert more.disabled and dialog.query_one("#history-count", Input).disabled
         more.press()
         await pilot.pause()
         assert calls == [0]
         release.set()
-        await until(pilot, lambda: not load.disabled)
-        assert more.disabled
+        await until(pilot, lambda: not more.disabled)
+        assert app.screen is dialog
+        assert dialog.query_one("#history-table", SelectionTable).row_count == 0
         fail = False
-        load.press()
-        history = app.query_one("#history-table", SelectionTable)
+        dialog.query_one("#history-count", Input).value = "2"
+        more.press()
+        history = dialog.query_one("#history-table", SelectionTable)
         await until(pilot, lambda: history.row_count == 2)
         assert not more.disabled
         history.focus()
         await pilot.press("ctrl+a")
-        assert not app.query_one("#history-analyze", Button).disabled
+        assert not dialog.query_one("#history-analyze", Button).disabled
+        dialog.query_one("#history-close", Button).press()
+        await until(pilot, lambda: app.screen is not dialog)
         accounts = cast(DataTable[Any], app.query_one("#accounts-table", DataTable))
         accounts.focus()
         await pilot.press("down")
-        await until(pilot, lambda: history.row_count == 0)
-        assert more.disabled and app.query_one("#history-analyze", Button).disabled
-        assert not history.checked_keys
+        entered.clear()
+        release.clear()
+        load.press()
+        await until(pilot, entered.is_set)
+        next_dialog = cast(MailHistoryScreen, app.screen)
+        assert next_dialog is not dialog
+        assert next_dialog.query_one("#history-table", SelectionTable).row_count == 0
+        assert next_dialog.query_one("#history-analyze", Button).disabled
+        next_dialog.query_one("#history-close", Button).press()
+        await until(pilot, cancelled.is_set)
+        assert calls == [0, 0, 0]
 
 
 async def test_open_mailbox_refreshes_after_another_connection_clears_records(

@@ -123,23 +123,6 @@ SearchToggle {
     content-align: center middle;
 }
 
-#history-count {
-    width: 10;
-    min-width: 8;
-    /* match the 1-row content height of the row's buttons: drop the input's
-       frame instead of inflating the buttons, keeping the whole row on one
-       line */
-    height: 1;
-    border: none;
-    margin-left: 1;
-}
-
-#history-count-label {
-    width: auto;
-    margin-left: 1;
-    color: $text-muted;
-}
-
 #logs-search-status {
     height: auto;
     color: $text-muted;
@@ -1158,10 +1141,24 @@ ListEditScreen, EntryFormScreen {
 }
 
 /* ---------------------------------------------------------------------------
-   Mailboxes and LLM chain tabs
+   Mailbox and model configuration, plus historical mail dialog
    --------------------------------------------------------------------------- */
 
+#connections-pane {
+    height: 1fr;
+}
+
+#connections-pane > AccountsPane, #connections-pane > LLMPane {
+    height: 1fr;
+    min-height: 11;
+}
+
+#connections-pane > LLMPane {
+    margin-top: 1;
+}
+
 #accounts-title, #llms-title, #history-title {
+    height: auto;
     text-style: bold;
     padding: 0 1;
 }
@@ -1174,12 +1171,14 @@ ListEditScreen, EntryFormScreen {
 
 #accounts-table, #llms-table {
     height: 1fr;
+    min-height: 3;
     margin: 0 1;
     border: round $primary;
 }
 
 #history-table {
     height: 1fr;
+    min-height: 3;
     margin: 0 1;
     border: round $secondary;
 }
@@ -1192,14 +1191,58 @@ ListEditScreen, EntryFormScreen {
 
 #accounts-actions Button, #llms-actions Button, #history-actions Button {
     margin-right: 1;
+    min-width: 0;
+    width: 1fr;
 }
 
-#accounts-status, #llms-status {
+#accounts-status, #llms-status, #history-status {
     height: auto;
     padding: 0 1;
     color: $text-muted;
 }
 
+MailHistoryScreen {
+    align: center middle;
+}
+
+#history-dialog {
+    width: 110;
+    max-width: 95%;
+    height: 85%;
+    background: $surface;
+    border: round $primary;
+    padding: 1;
+}
+
+#history-batch {
+    height: 3;
+    padding: 0 1;
+    align-vertical: middle;
+}
+
+#history-count-label {
+    width: auto;
+    height: 3;
+    content-align: left middle;
+    margin-right: 1;
+    color: $text-muted;
+}
+
+#history-count {
+    width: 10;
+    height: 3;
+}
+
+#history-status {
+    max-height: 3;
+    overflow-y: auto;
+}
+
+#history-footer {
+    height: auto;
+    padding: 0 1;
+    align-horizontal: right;
+}
 
 .secret-row {
     height: auto;
@@ -1238,23 +1281,6 @@ ListEditScreen, EntryFormScreen {
     content-align: center middle;
 }
 
-
-#notify-title {
-    margin-bottom: 1;
-    padding: 0 1;
-    text-style: bold;
-}
-
-#notify-wrap {
-    height: 1fr;
-}
-
-#notify-feed {
-    height: 1fr;
-    border: round $secondary;
-    background: #181825;
-    padding: 0 1;
-}
 
 #notifications-table-wrap {
     height: 1fr;

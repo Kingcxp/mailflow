@@ -7,8 +7,9 @@ Every pane here is a thin client of ``mailflow.settings``:
   its name, description and an inline editor with Save / Restore-default.
 - :class:`LLMPane` — the ordered LLM chain: the first entry is the default
   and each entry falls back to the ones below it; add / edit / delete / move.
-- :class:`AccountsPane` — mailboxes plus the history browser: load mail that
-  already arrived and push a selected subset through the pipeline.
+- :class:`ConnectionsPane` — mailbox and model configuration on one page.
+- :class:`AccountsPane` — mailbox configuration and history entry point.
+- :class:`MailHistoryScreen` — load and analyze selected historical mail.
 - :class:`EntryFormScreen` — form window for one structured entry.
 - :class:`ListEditScreen` — window for list and mapping values.
 
@@ -22,7 +23,6 @@ import asyncio
 import contextlib
 import re
 import uuid
-from collections import deque
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -43,7 +43,6 @@ from mailflow.settings import (
     entry_field_specs,
     entry_model,
 )
-from rich.text import Text
 from textual import getters
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
@@ -57,7 +56,6 @@ from textual.widgets import (
     Label,
     ListItem,
     ListView,
-    RichLog,
     Select,
     Static,
     Switch,
@@ -72,7 +70,6 @@ from mailflow_tui.labels import (
     redact_operation_logs,
     relabel_buttons,
     secret_values,
-    urgency_label,
 )
 from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.search import SearchMatcher, build_search_matcher
@@ -2157,66 +2154,6 @@ class SettingsPane(Vertical):
             self._sync_section_controls()
 
 
-class _NotifyFeed:
-    """Rich notification feed shown under the LLM chain table.
-
-    Subscribes to ``mailflow.mail.processed`` and renders one colored entry
-    per processed mail (all urgency levels, strongest last). Replaces the
-    former raw request log — LLM activity now lives in the main Logs tab."""
-
-    MAX_ENTRIES = 100
-
-    _STYLES: ClassVar[dict[str, str]] = {
-        "urgent": "bold #F56C6C",
-        "important": "#E6A23C",
-        "info": "#67C23A",
-        "ad": "#909399",
-    }
-
-    def __init__(self, service: MailFlowService, pane: Any) -> None:
-        self._service = service
-        self._pane = pane
-        self._entries: deque[Text] = deque(maxlen=self.MAX_ENTRIES)
-
-    def start(self) -> None:
-        self._unsubscribe = self._service.events.subscribe(
-            "mailflow.mail.processed", self._on_processed
-        )
-
-    def stop(self) -> None:
-        stop = getattr(self, "_unsubscribe", None)
-        if stop is not None:
-            with contextlib.suppress(Exception):
-                stop()
-
-    async def _on_processed(self, **payload: Any) -> None:
-        record = payload.get("record")
-        if record is None:
-            return
-        urgency = str(getattr(record, "effective_urgency", "info"))
-        style = self._STYLES.get(urgency, "white")
-        mail = getattr(record, "mail", None)
-        stamp = getattr(mail, "received_at", None)
-        when = _local_time(self._service, stamp, "%m-%d %H:%M") if stamp is not None else ""
-        subject = str(getattr(mail, "subject", "") or "")
-        line = Text.assemble(
-            (when + "  ", "dim"),
-            (urgency_label(self._service, urgency), style),
-            ("  ", ""),
-            (subject[:60], "bold"),
-        )
-        summary = str(getattr(getattr(record, "analysis", None), "summary", ""))
-        if summary:
-            line.append("\n")
-            line.append(summary[:160], "dim")
-        self._entries.append(line)
-        with contextlib.suppress(Exception):
-            self._pane.app.call_later(self._pane._append_notify_entry, line)
-
-    def snapshot(self) -> list[Text]:
-        return list(self._entries)
-
-
 _CLICK_WINDOW_SECONDS = 0.5
 """Double-click window for list rows (this textual has no RowActivated)."""
 
@@ -2272,29 +2209,10 @@ class LLMPane(Vertical):
             yield Button(self._t("tui.btn_delete"), id="llm-delete", variant="error")
             yield Button(self._t("tui.btn_move_up"), id="llm-up", variant="primary")
             yield Button(self._t("tui.btn_move_down"), id="llm-down", variant="primary")
-        with Vertical(id="notify-wrap"):
-            yield Static(self._t("tui.notify_title"), id="notify-title")
-            yield RichLog(id="notify-feed", wrap=True, markup=False, highlight=False)
         yield Static("", id="llms-status")
 
     async def on_mount(self) -> None:
         await self.reload()
-        self._notify_feed = _NotifyFeed(self._service, self)
-        self._notify_feed.start()
-        for entry in self._notify_feed.snapshot():
-            with contextlib.suppress(Exception):
-                self.query_one("#notify-feed", RichLog).write(entry)
-
-    def on_unmount(self) -> None:
-        feed = getattr(self, "_notify_feed", None)
-        if feed is not None:
-            feed.stop()
-
-    def _append_notify_entry(self, entry: Text) -> None:
-        """Write one entry incrementally — clear()+rewrite on every mail
-        churned the UI loop hard enough to starve Textual pilots in e2e."""
-        with contextlib.suppress(Exception):
-            self.query_one("#notify-feed", RichLog).write(entry)
 
     async def relabel(self) -> None:
         self._columns_done = False
@@ -2308,7 +2226,8 @@ class LLMPane(Vertical):
                 "llm-down": "tui.btn_move_down",
             },
         )
-        self.query_one("#notify-title", Static).update(self._t("tui.notify_title"))
+        self.query_one("#llms-title", Static).update(self._t("tui.llms_title"))
+        self.query_one("#llms-help", Static).update(self._t("tui.llms_help"))
         await self.reload()
 
     def _table(self) -> DataTable[Any] | None:
@@ -2525,12 +2444,7 @@ class LLMPane(Vertical):
 
 
 class AccountsPane(Vertical):
-    """Mailboxes plus the history browser (select mail, run the pipeline)."""
-
-    def add_account(self) -> None:
-        self._open_form(None)
-
-    _DEFAULT_HISTORY_BATCH_SIZE = 25
+    """Mailbox configuration; historical mail opens in a separate dialog."""
 
     app = getters.app(cast("type[App[Any]]", App))
 
@@ -2538,18 +2452,9 @@ class AccountsPane(Vertical):
         super().__init__()
         self._service = service
         self._selected: int | None = None
-        self._history: list[MailMessage] = []
-        self._picked: set[str] = set()
-        self._known: set[str] = set()
-        self._history_account = ""
-        self._analysis_worker: Any = None
-        self._analysis_running = False
-        self._history_load_worker: Any = None
-        self._history_loading = False
-        self._history_loaded = False
-        self._history_has_more = True
-        self._history_offset = 0
-        self._history_load_generation = 0
+
+    def add_account(self) -> None:
+        self._open_form(None)
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -2563,19 +2468,6 @@ class AccountsPane(Vertical):
             yield Button(self._t("tui.btn_edit"), id="account-edit", variant="primary")
             yield Button(self._t("tui.btn_delete"), id="account-delete", variant="error")
             yield Button(self._t("tui.history_load"), id="account-history", variant="primary")
-        yield Static(self._t("tui.history_title"), id="history-title")
-        yield Static(self._t("tui.history_select_hint"), id="history-help")
-        yield SelectionTable(t=self._t, id="history-table")
-        with Horizontal(id="history-actions"):
-            yield Button(self._t("tui.history_analyze"), id="history-analyze", variant="success")
-            yield Button(
-                self._t("tui.history_select_all"), id="history-select-all", variant="primary"
-            )
-            yield Button(self._t("tui.history_more"), id="history-more", variant="primary")
-            yield Static(self._t("tui.history_count_label"), id="history-count-label")
-            yield Input(
-                value=str(self._DEFAULT_HISTORY_BATCH_SIZE), type="integer", id="history-count"
-            )
         yield Static("", id="accounts-status")
 
     async def on_mount(self) -> None:
@@ -2583,7 +2475,6 @@ class AccountsPane(Vertical):
 
     async def relabel(self) -> None:
         self._columns_done = False
-        self._history_columns_done = False
         relabel_buttons(
             self,
             {
@@ -2591,31 +2482,14 @@ class AccountsPane(Vertical):
                 "account-edit": "tui.btn_edit",
                 "account-delete": "tui.btn_delete",
                 "account-history": "tui.history_load",
-                "account-sync": "ux.sync_mail",
-                "history-analyze": "tui.history_analyze",
-                "history-select-all": "tui.history_select_all",
-                "history-more": "tui.history_more",
             },
         )
-        for ident, key in {
-            "accounts-title": "tui.accounts_title",
-            "accounts-help": "tui.accounts_help",
-            "history-title": "tui.history_title",
-            "history-help": "tui.history_select_hint",
-            "history-count-label": "tui.history_count_label",
-        }.items():
-            self.query_one(f"#{ident}", Static).update(self._t(key))
+        self.query_one("#accounts-title", Static).update(self._t("tui.accounts_title"))
+        self.query_one("#accounts-help", Static).update(self._t("tui.accounts_help"))
         await self.reload()
-        if self._analysis_worker is not None and not self._analysis_worker.is_finished:
-            self.query_one("#history-analyze", Button).label = self._t("tui.reparse_stop")
-
-    # -- helpers -----------------------------------------------------------
 
     def _accounts_table(self) -> DataTable[Any] | None:
         return self.query_one_optional("#accounts-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
-
-    def _history_table(self) -> DataTable[Any] | None:
-        return self.query_one_optional("#history-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
 
     def _set_status(self, text: str) -> None:
         node = self.query_one_optional("#accounts-status", Static)
@@ -2630,62 +2504,19 @@ class AccountsPane(Vertical):
 
     def _sync_controls(self) -> None:
         account_id = self._selected_account_id()
-        busy = self._history_loading or self._analysis_running
-        count = self.query_one_optional("#history-count", Input)
-        raw = count.value.strip() if count is not None else ""
-        valid_count = raw.isdecimal() and int(raw) > 0
-        can_load = valid_count and account_id in self._service.history_accounts()
         enabled = {
-            "account-edit": bool(account_id) and not busy,
-            "account-delete": bool(account_id) and not busy,
-            "account-history": can_load and not busy,
-            "account-sync": bool(account_id) and not busy,
-            "history-more": bool(account_id)
-            and valid_count
-            and account_id == self._history_account
-            and self._history_loaded
-            and self._history_has_more
-            and not busy,
-            "history-select-all": bool(self._history) and not busy,
-            "history-analyze": self._analysis_running or (bool(self._picked) and not busy),
+            "account-edit": bool(account_id),
+            "account-delete": bool(account_id),
+            "account-history": account_id in self._service.history_accounts(),
         }
         for ident, available in enabled.items():
             button = self.query_one_optional(f"#{ident}", Button)
             if button is not None:
                 button.disabled = not available
-        table = self._accounts_table()
-        if table is not None:
-            table.disabled = self._analysis_running
-        if count is not None:
-            count.disabled = self._history_loading
 
     def _select_account(self, index: int | None) -> None:
         self._selected = index
-        if self._history_account and self._history_account != self._selected_account_id():
-            self._history_load_generation += 1
-            if self._history_load_worker is not None:
-                self._history_load_worker.cancel()
-            self._history_account = ""
-            self._history.clear()
-            self._picked.clear()
-            self._known.clear()
-            self._history_loading = False
-            self._history_loaded = False
-            self._history_has_more = True
-            self._history_offset = 0
-            self._render_history()
         self._sync_controls()
-
-    def _start_history_load(self, offset: int) -> None:
-        self._history_load_generation += 1
-        self._history_loading = True
-        self._sync_controls()
-        self._history_load_worker = self.run_worker(
-            self._load_history(offset=offset, generation=self._history_load_generation),
-            exclusive=True,
-            group="history-load",
-            exit_on_error=False,
-        )
 
     def _ensure_columns(self) -> None:
         table = self._accounts_table()
@@ -2700,21 +2531,6 @@ class AccountsPane(Vertical):
         table.add_column(self._t("tui.accounts_column_status"), key="status")
         table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
         self._columns_done = True
-
-    def _ensure_history_columns(self) -> None:
-        table = self._history_table()
-        if table is None or getattr(self, "_history_columns_done", False):
-            return
-        for key in ("pick", "subject", "sender", "date", "state"):
-            with contextlib.suppress(Exception):
-                table.remove_column(key)
-        table.add_column(self._t("tui.history_column_selected"), key="pick")
-        table.add_column(self._t("tui.column_subject"), key="subject")
-        table.add_column(self._t("tui.column_sender"), key="sender")
-        table.add_column(self._t("tui.column_date"), key="date")
-        table.add_column(self._t("tui.accounts_column_status"), key="state")
-        table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
-        self._history_columns_done = True
 
     async def reload(self) -> None:
         table = self._accounts_table()
@@ -2739,65 +2555,6 @@ class AccountsPane(Vertical):
             selected = view.restore(table)
             self._selected = int(selected) if selected is not None else None
         self._select_account(self._selected)
-        self._render_history()
-
-    def _render_history(self) -> None:
-        table = self._history_table()
-        if table is None:
-            return
-        view = TableView.capture(table)
-        table.clear()
-        self._ensure_history_columns()
-        if isinstance(table, SelectionTable):
-            table.set_checks(set(self._picked))
-        # The IMAP page arrives in UID order, which is NOT the Date-header
-        # order (moved/late-delivered mail breaks it); the user reads this
-        # table as a timeline, so sort by the displayed date instead.
-        for mail in sorted(self._history, key=lambda item: item.date, reverse=True):
-            record_id = mail.normalized_message_id()
-            try:
-                subject = escape(mail.subject or self._t("tui.mail_no_subject"))
-                sender = escape(mail.sender.address)
-                date_text = _local_time(self._service, mail.date)
-            except Exception:
-                # one poison mail must never take the app down
-                subject, sender, date_text = self._t("tui.history_parse_error"), "-", "-"
-            state = (
-                self._t("tui.history_marked_known")
-                if record_id in self._known
-                else self._t("tui.history_marked_new")
-            )
-            table.add_row(
-                self._t("tui.history_picked")
-                if record_id in self._picked
-                else self._t("tui.history_unpicked"),
-                subject,
-                sender,
-                date_text,
-                state,
-                key=record_id,
-            )
-        view.restore(table)
-        self._sync_controls()
-
-    # -- events ------------------------------------------------------------
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "history-count":
-            self._sync_controls()
-
-    def on_selection_table_selection_changed(self, event: SelectionTable.SelectionChanged) -> None:
-        if event.table.id == "history-table":
-            self._picked = set(event.table.checked_keys)
-            for identity in event.table.visible_keys():
-                event.table.update_cell(
-                    identity,
-                    "pick",
-                    self._t(
-                        "tui.history_picked" if identity in self._picked else "tui.history_unpicked"
-                    ),
-                )
-            self._sync_controls()
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if _table_id(event) == "accounts-table" and event.row_key.value is not None:
@@ -2807,15 +2564,6 @@ class AccountsPane(Vertical):
                 self._service.config.accounts
             ):
                 self._open_form(index)
-            return
-        if _table_id(event) == "history-table":
-            table = self._history_table()
-            if isinstance(table, SelectionTable):
-                table.action_toggle_check()
-            elif event.row_key.value is not None:
-                identity = str(event.row_key.value)
-                self._picked.symmetric_difference_update({identity})
-                self._render_history()
 
     async def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if _table_id(event) == "accounts-table" and event.row_key.value is not None:
@@ -2831,23 +2579,7 @@ class AccountsPane(Vertical):
         if button_id == "account-add":
             self._open_form(None)
             return
-        if button_id == "history-select-all":
-            await self._select_all_history()
-            return
-        if button_id == "history-analyze":
-            if self._analysis_worker is not None and not self._analysis_worker.is_finished:
-                self._analysis_worker.cancel()
-                event.button.disabled = True
-                self._set_status(self._t("tui.reparse_stopping"))
-            else:
-                self._analysis_running = True
-                self._sync_controls()
-                self._analysis_worker = self.run_worker(
-                    self._analyze_selected(), group="history-analyze", exit_on_error=False
-                )
-            return
-        if button_id == "history-more":
-            self._start_history_load(self._history_offset)
+        if button_id not in {"account-edit", "account-delete", "account-history"}:
             return
         index = self._selected
         if index is None or index >= len(self._service.config.accounts):
@@ -2855,25 +2587,11 @@ class AccountsPane(Vertical):
             return
         if button_id == "account-edit":
             self._open_form(index)
-        elif button_id == "account-sync":
-            from mailflow_tui.mail_workflows import SyncScreen
-
-            self.app.push_screen(SyncScreen(self._service, self._selected_account_id()))
         elif button_id == "account-delete":
-            await self._mutate(
-                self._service.remove_config_entry("accounts", index), "entry_removed"
-            )
+            await self._mutate(self._service.remove_config_entry("accounts", index), "entry_removed")
             self._select_account(None)
-        elif button_id == "account-history":
-            self._history = []
-            self._picked.clear()
-            self._known.clear()
-            self._history_account = self._service.config.accounts[index].account_id
-            self._history_loaded = False
-            self._history_has_more = True
-            self._history_offset = 0
-            self._render_history()
-            self._start_history_load(0)
+        else:
+            self.app.push_screen(MailHistoryScreen(self._service, self._selected_account_id()))
 
     def _open_form(self, index: int | None) -> None:
         values = self._service.config.accounts[index].model_dump() if index is not None else None
@@ -2933,7 +2651,234 @@ class AccountsPane(Vertical):
             )
         await self.reload()
 
-    # -- history -----------------------------------------------------------
+
+class MailHistoryScreen(ModalScreen[None]):
+    """Browse and analyze history for the account chosen when opening the dialog."""
+
+    _DEFAULT_HISTORY_BATCH_SIZE = 25
+
+    def __init__(self, service: MailFlowService, account_id: str) -> None:
+        super().__init__()
+        self._service = service
+        self._history_account = account_id
+        self._history: list[MailMessage] = []
+        self._picked: set[str] = set()
+        self._known: set[str] = set()
+        self._analysis_worker: Any = None
+        self._analysis_running = False
+        self._history_load_worker: Any = None
+        self._history_loading = False
+        self._history_loaded = False
+        self._history_has_more = True
+        self._history_offset = 0
+        self._history_load_generation = 0
+        self._bindings.bind("escape", "close", self._t("tui.btn_close"))
+
+    def _t(self, key: str, **params: Any) -> str:
+        return self._service.t(key, **params)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="history-dialog"):
+            yield Static(
+                self._t("tui.history_title") + " · " + self._history_account,
+                id="history-title",
+                markup=False,
+            )
+            yield Static(self._t("tui.history_select_hint"), id="history-help")
+            with Horizontal(id="history-batch"):
+                yield Static(self._t("tui.history_count_label"), id="history-count-label")
+                yield Input(
+                    value=str(self._DEFAULT_HISTORY_BATCH_SIZE), type="integer", id="history-count"
+                )
+            yield SelectionTable(t=self._t, id="history-table")
+            with Horizontal(id="history-actions"):
+                yield Button(self._t("tui.history_analyze"), id="history-analyze", variant="success")
+                yield Button(
+                    self._t("tui.history_select_all"), id="history-select-all", variant="primary"
+                )
+                yield Button(self._t("tui.history_more"), id="history-more", variant="primary")
+            yield Static("", id="history-status")
+            with Horizontal(id="history-footer"):
+                yield Button(self._t("tui.btn_close"), id="history-close")
+
+    async def on_mount(self) -> None:
+        self._render_history()
+        self._start_history_load(0)
+
+    async def relabel(self) -> None:
+        self._history_columns_done = False
+        relabel_buttons(
+            self,
+            {
+                "history-analyze": "tui.history_analyze",
+                "history-select-all": "tui.history_select_all",
+                "history-more": "tui.history_more",
+            },
+        )
+        self.query_one("#history-title", Static).update(
+            self._t("tui.history_title") + " · " + self._history_account
+        )
+        self.query_one("#history-help", Static).update(self._t("tui.history_select_hint"))
+        self.query_one("#history-count-label", Static).update(self._t("tui.history_count_label"))
+        self._render_history()
+        if self._analysis_running:
+            self.query_one("#history-analyze", Button).label = self._t("tui.reparse_stop")
+
+    def _cancel_tasks(self) -> None:
+        self._history_load_generation += 1
+        for worker in (self._history_load_worker, self._analysis_worker):
+            if worker is not None and not worker.is_finished:
+                worker.cancel()
+
+    def action_close(self) -> None:
+        self._cancel_tasks()
+        self.dismiss(None)
+
+    def on_unmount(self) -> None:
+        self._cancel_tasks()
+
+    def _history_table(self) -> DataTable[Any] | None:
+        return self.query_one_optional("#history-table", DataTable)  # pyright: ignore[reportUnknownVariableType]
+
+    def _set_status(self, text: str) -> None:
+        node = self.query_one_optional("#history-status", Static)
+        if node is not None:
+            node.update(text)
+
+    def _sync_controls(self) -> None:
+        busy = self._history_loading or self._analysis_running
+        count = self.query_one_optional("#history-count", Input)
+        raw = count.value.strip() if count is not None else ""
+        valid_count = raw.isdecimal() and int(raw) > 0
+        enabled = {
+            "history-more": valid_count
+            and (not self._history_loaded or self._history_has_more)
+            and not busy,
+            "history-select-all": bool(self._history) and not busy,
+            "history-analyze": self._analysis_running or (bool(self._picked) and not busy),
+        }
+        for ident, available in enabled.items():
+            button = self.query_one_optional(f"#{ident}", Button)
+            if button is not None:
+                button.disabled = not available
+        more = self.query_one_optional("#history-more", Button)
+        if more is not None:
+            more.label = self._t("tui.history_more" if self._history_loaded else "tui.history_load")
+        if count is not None:
+            count.disabled = busy
+        close = self.query_one_optional("#history-close", Button)
+        if close is not None:
+            close.label = self._t("tui.btn_cancel" if busy else "tui.btn_close")
+
+    def _start_history_load(self, offset: int) -> None:
+        self._history_load_generation += 1
+        self._history_loading = True
+        self._sync_controls()
+        self._history_load_worker = self.run_worker(
+            self._load_history(offset=offset, generation=self._history_load_generation),
+            exclusive=True,
+            group="history-load",
+            exit_on_error=False,
+        )
+
+    def _ensure_history_columns(self) -> None:
+        table = self._history_table()
+        if table is None or getattr(self, "_history_columns_done", False):
+            return
+        for key in ("pick", "subject", "sender", "date", "state"):
+            with contextlib.suppress(Exception):
+                table.remove_column(key)
+        table.add_column(self._t("tui.history_column_selected"), key="pick")
+        table.add_column(self._t("tui.column_subject"), key="subject")
+        table.add_column(self._t("tui.column_sender"), key="sender")
+        table.add_column(self._t("tui.column_date"), key="date")
+        table.add_column(self._t("tui.accounts_column_status"), key="state")
+        table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
+        self._history_columns_done = True
+
+    def _render_history(self) -> None:
+        table = self._history_table()
+        if table is None:
+            return
+        view = TableView.capture(table)
+        table.clear()
+        self._ensure_history_columns()
+        if isinstance(table, SelectionTable):
+            table.set_checks(set(self._picked))
+        # The IMAP page arrives in UID order, which is NOT the Date-header
+        # order (moved/late-delivered mail breaks it); the user reads this
+        # table as a timeline, so sort by the displayed date instead.
+        for mail in sorted(self._history, key=lambda item: item.date, reverse=True):
+            record_id = mail.normalized_message_id()
+            try:
+                subject = escape(mail.subject or self._t("tui.mail_no_subject"))
+                sender = escape(mail.sender.address)
+                date_text = _local_time(self._service, mail.date)
+            except Exception:
+                # one poison mail must never take the app down
+                subject, sender, date_text = self._t("tui.history_parse_error"), "-", "-"
+            state = (
+                self._t("tui.history_marked_known")
+                if record_id in self._known
+                else self._t("tui.history_marked_new")
+            )
+            table.add_row(
+                self._t("tui.history_picked")
+                if record_id in self._picked
+                else self._t("tui.history_unpicked"),
+                subject,
+                sender,
+                date_text,
+                state,
+                key=record_id,
+            )
+        view.restore(table)
+        self._sync_controls()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "history-count":
+            self._sync_controls()
+
+    def on_selection_table_selection_changed(self, event: SelectionTable.SelectionChanged) -> None:
+        if event.table.id == "history-table":
+            self._picked = set(event.table.checked_keys)
+            for identity in event.table.visible_keys():
+                event.table.update_cell(
+                    identity,
+                    "pick",
+                    self._t(
+                        "tui.history_picked" if identity in self._picked else "tui.history_unpicked"
+                    ),
+                )
+            self._sync_controls()
+
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if _table_id(event) == "history-table":
+            table = self._history_table()
+            if isinstance(table, SelectionTable):
+                table.action_toggle_check()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.disabled:
+            return
+        button_id = event.button.id or ""
+        if button_id == "history-close":
+            self.action_close()
+        elif button_id == "history-select-all":
+            await self._select_all_history()
+        elif button_id == "history-more":
+            self._start_history_load(self._history_offset)
+        elif button_id == "history-analyze":
+            if self._analysis_worker is not None and not self._analysis_worker.is_finished:
+                self._analysis_worker.cancel()
+                event.button.disabled = True
+                self._set_status(self._t("tui.reparse_stopping"))
+            else:
+                self._analysis_running = True
+                self._sync_controls()
+                self._analysis_worker = self.run_worker(
+                    self._analyze_selected(), group="history-analyze", exit_on_error=False
+                )
 
     def _history_limit(self) -> int | None:
         node = self.query_one_optional("#history-count", Input)
@@ -3083,11 +3028,33 @@ class AccountsPane(Vertical):
             self._set_status(self._t("tui.history_reanalyzed", count=processed))
 
 
+class ConnectionsPane(ScrollableContainer):
+    """Keep mailbox and model configuration together without embedded activity logs."""
+
+    def __init__(self, service: MailFlowService) -> None:
+        super().__init__(id="connections-pane")
+        self._service = service
+
+    def compose(self) -> ComposeResult:
+        yield AccountsPane(self._service)
+        yield LLMPane(self._service)
+
+    async def reload(self) -> None:
+        await self.query_one(AccountsPane).reload()
+        await self.query_one(LLMPane).reload()
+
+    async def relabel(self) -> None:
+        await self.query_one(AccountsPane).relabel()
+        await self.query_one(LLMPane).relabel()
+
+
 __all__ = [
     "AccountsPane",
+    "ConnectionsPane",
     "EntryFormScreen",
     "LLMPane",
     "ListEditScreen",
+    "MailHistoryScreen",
     "OptionCard",
     "SettingsPane",
 ]
