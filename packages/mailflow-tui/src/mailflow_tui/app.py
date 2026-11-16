@@ -988,6 +988,7 @@ class MailPane(Vertical):
             with ScrollableContainer(id="mail-detail"):
                 yield Static("", id="mail-analysis-status")
                 yield Static("", id="mail-operation-status")
+                yield Static("", id="mail-subject")
                 yield Static("", id="mail-summary")
                 yield Static("", id="mail-reason")
                 yield Static("", id="mail-actions")
@@ -1285,10 +1286,12 @@ class MailPane(Vertical):
 
     def _mail_cells(self, record: MailRecord) -> tuple[Any, ...]:
         urgency = record.effective_urgency
+        title = RichText(record.display_title or self._service.t("tui.mail_no_subject"))
+        title.truncate(24, overflow="ellipsis")
         return (
             _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
             RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
-            RichText(record.mail.subject or self._service.t("tui.mail_no_subject")),
+            title,
             RichText(record.mail.sender.address),
         )
 
@@ -1609,6 +1612,7 @@ class MailPane(Vertical):
         for selector in (
             "#mail-analysis-status",
             "#mail-operation-status",
+            "#mail-subject",
             "#mail-summary",
             "#mail-reason",
             "#mail-actions",
@@ -1666,6 +1670,9 @@ class MailPane(Vertical):
         status = mail_status(service, record)
         self._set_static_text("#mail-analysis-status", status)
         self._set_static("#mail-operation-status", self._operation_status)
+        subject = RichText(service.t("tui.detail_original_subject") + ": ", style="bold")
+        subject.append(record.mail.subject or service.t("tui.mail_no_subject"))
+        self._set_static_text("#mail-subject", subject)
         # The stored summary and reason are the mail's content: they stay
         # visible even when the pipeline had to fall back, because hiding them
         # left the user with no content at all. A fallback is labelled, never

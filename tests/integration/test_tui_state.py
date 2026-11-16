@@ -461,15 +461,19 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
     target.mail.image_text = "OCRNeedle Research Up date Room Y908"
     assert target.analysis is not None
     target.analysis.summary = "SummaryNeedle"
+    target.analysis.short_title = "ShortTitleNeedle"
     await service.storage.save_mail(target)
     await service.storage.save_mail(make_record("other", subject="unrelated"))
     async with app.run_test(size=(140, 45)) as pilot:
-        await pilot.pause()
+        await settle(pilot)
         pane = app.query_one(MailPane)
         table = app.query_one("#mail-table", DataTable)
         search = app.query_one("#mail-search", PromptInput)
+        assert str(table.get_cell("target", "subject")) == "ShortTitleNeedle"
+        assert str(table.get_cell("other", "subject")) == "unrelated"
         for query in (
             "SubjectNeedle",
+            "ShortTitleNeedle",
             "NameNeedle",
             "BodyNeedle",
             "SummaryNeedle",
@@ -482,6 +486,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
             await settle(pilot)
             assert keys(table) == ["target"], query
             assert "SummaryNeedle" in text(app, "#mail-summary")
+            assert target.mail.subject in text(app, "#mail-subject")
             result, _ = await ToolRegistry(service).call("find_mail", {"contains": query})
             assert "id=target" in result and "id=other" not in result
         regex = app.query_one("#mail-search-regex", SearchToggle)

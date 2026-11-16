@@ -21,6 +21,7 @@ CONTEXT = ProcessingContext(
 )
 
 CRITICAL_EXAM_JSON = """{
+  "short_title": "Calculus exam June 10",
   "summary": "Final calculus exam on June 10 at 09:00",
   "urgency": "urgent",
   "reason": "attendance is mandatory and requires preparation",
@@ -89,6 +90,7 @@ class TestLLMImportanceProcessor:
 
         assert result.analysis is not None
         analysis = result.analysis
+        assert analysis.short_title == "Calculus exam June 10"
         assert analysis.urgency is Urgency.URGENT
         assert analysis.summary == "Final calculus exam on June 10 at 09:00"
         assert analysis.reply_required is True
@@ -193,7 +195,7 @@ class TestLLMImportanceProcessor:
 
     async def test_empty_model_summary_is_explicitly_marked_as_fallback(self) -> None:
         router = StubRouter(
-            '{"summary": "", "urgency": "info", "reason": "", '
+            '{"short_title": null, "summary": "", "urgency": "info", "reason": "", '
             '"reply_required": false, "suggested_reply": "", "action_items": [], "notes": ""}'
         )
         processor = make_processor(router)
@@ -202,6 +204,7 @@ class TestLLMImportanceProcessor:
         result = await processor.process(mail, CONTEXT)
 
         assert result.analysis is not None
+        assert result.analysis.short_title == ""
         assert result.analysis.summary == mail.subject
         assert result.analysis.summary_is_fallback is True
         assert result.analysis.urgency is Urgency.INFO

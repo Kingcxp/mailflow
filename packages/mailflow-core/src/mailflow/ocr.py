@@ -133,7 +133,7 @@ def searchable_text(text: str) -> str:
 
 def searchable_record_text(record: MailRecord) -> str:
     """Canonical search scope for local, remote and model-assisted mail views."""
-    return f"{record.summary}\n{searchable_mail_text(record.mail)}"
+    return f"{record.display_title}\n{record.summary}\n{searchable_mail_text(record.mail)}"
 
 
 def _decode_image(data: bytes) -> Any | None:

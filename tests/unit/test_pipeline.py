@@ -401,17 +401,27 @@ class TestMergeAnalysis:
         base = MailAnalysis(
             summary="old", urgency=Urgency.INFO, reason="old-reason", reply_required=False
         )
-        overlay = MailAnalysis(summary="new", urgency=Urgency.URGENT, reason="new-reason")
+        overlay = MailAnalysis(
+            summary="new", short_title="Short title", urgency=Urgency.URGENT, reason="new-reason"
+        )
         merged = merge_analysis(base, overlay)
+        assert merged.short_title == "Short title"
         assert merged.summary == "new"
         assert merged.urgency is Urgency.URGENT
         assert merged.reason == "new-reason"
         assert merged.reply_required is False  # overlay explicitly false wins
 
     def test_empty_overlay_fields_keep_base(self) -> None:
-        base = MailAnalysis(summary="keep", urgency=Urgency.IMPORTANT, reason="why", notes="note")
+        base = MailAnalysis(
+            summary="keep",
+            short_title="Keep title",
+            urgency=Urgency.IMPORTANT,
+            reason="why",
+            notes="note",
+        )
         overlay = MailAnalysis(summary="", urgency=Urgency.INFO, reason="")
         merged = merge_analysis(base, overlay)
+        assert merged.short_title == "Keep title"
         assert merged.summary == "keep"
         assert merged.reason == "why"
         assert merged.notes == "note"

@@ -52,6 +52,8 @@ def merge_analysis(base: MailAnalysis, overlay: MailAnalysis) -> MailAnalysis:
     override earlier ones.
     """
     merged = base.model_copy(deep=True)
+    if overlay.short_title:
+        merged.short_title = overlay.short_title
     if overlay.summary:
         merged.summary = overlay.summary
         merged.summary_is_fallback = overlay.summary_is_fallback

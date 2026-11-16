@@ -369,6 +369,7 @@ class MailAnalysis(BaseModel):
     """Structured interpretation of a mail produced by the processor chain."""
 
     summary: str
+    short_title: str = ""
     language: str = ""  # Empty for legacy results whose generation language is unknown.
     urgency: Urgency
     reason: str = ""
@@ -425,6 +426,12 @@ class MailRecord(BaseModel):
         if self.analysis is not None:
             return self.analysis.summary
         return self.mail.subject
+
+    @property
+    def display_title(self) -> str:
+        """Prefer the generated title without replacing the original subject."""
+        title = self.analysis.short_title if self.analysis is not None else ""
+        return " ".join(title.split()) or " ".join(self.mail.subject.split())
 
     @property
     def analysis_is_fallback(self) -> bool:

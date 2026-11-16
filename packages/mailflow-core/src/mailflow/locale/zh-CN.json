@@ -571,6 +571,7 @@
       "detail_reason": "原因",
       "detail_reply_required": "需要回复：{answer}",
       "detail_summary": "摘要",
+      "detail_original_subject": "原始主题",
       "empty": "这里还没有内容",
       "entry_added": "已新增一项{group}。",
       "entry_form_edit": "编辑{group}",

@@ -571,6 +571,7 @@
       "detail_reason": "Reason",
       "detail_reply_required": "Reply required: {answer}",
       "detail_summary": "Summary",
+      "detail_original_subject": "Original subject",
       "empty": "Nothing here yet",
       "entry_added": "Added a new {group} entry.",
       "entry_form_edit": "Edit {group} entry",

@@ -43,6 +43,7 @@ from mailflow_test_support.ui import mock_http_client
 # item whose due_at has already passed, so a fixed past date would make this
 # flow assert on an item the pipeline is designed to discard.
 EXAM_JSON = """{
+  "short_title": "Calculus exam June 10",
   "summary": "Final calculus exam on June 10 at 09:00, bring student ID",
   "urgency": "urgent",
   "reason": "mandatory exam requiring preparation",
@@ -217,6 +218,8 @@ async def test_full_service_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         record_id = record.record_id
         assert record.mail.message_id == "fixture-1"
         assert record.analysis is not None
+        assert record.display_title == "Calculus exam June 10"
+        assert record.mail.subject == "Final calculus exam"
         assert record.analysis.urgency is Urgency.URGENT
         assert record.analysis.summary.startswith("Final calculus exam")
         assert record.analysis.backend == "test-llm"
@@ -253,6 +256,9 @@ async def test_full_service_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             await remote_app.query_one(MailPane).refresh_mail()
             await remote_app.query_one(ActionsPane).refresh_actions()
             assert remote_app.query_one("#mail-table", DataTable).row_count == 1
+            assert str(
+                remote_app.query_one("#mail-table", DataTable).get_cell(record_id, "subject")
+            ) == record.display_title
             assert remote_app.query_one("#actions-table", DataTable).row_count == 1
             remote_app.query_one("#mail-table", DataTable).focus()
             await pilot.press("enter")
