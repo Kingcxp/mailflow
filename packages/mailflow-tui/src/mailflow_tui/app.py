@@ -1258,8 +1258,8 @@ class MailPane(Vertical):
             _remove_column(table, key)
         table.add_column(self._service.t("tui.column_date"), key="date")
         table.add_column(self._service.t("tui.column_urgency"), key="urgency")
-        table.add_column(self._service.t("tui.column_subject"), key="subject")
-        table.add_column(self._service.t("tui.column_sender"), key="sender")
+        table.add_column(self._service.t("tui.column_subject"), key="subject", width=36)
+        table.add_column(self._service.t("tui.column_sender"), key="sender", width=32)
         table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
         table.tooltip = None
         urgency = self._urgency_select()
@@ -1341,12 +1341,14 @@ class MailPane(Vertical):
     def _mail_cells(self, record: MailRecord) -> tuple[Any, ...]:
         urgency = record.effective_urgency
         title = RichText(record.display_title or self._service.t("tui.mail_no_subject"))
-        title.truncate(24, overflow="ellipsis")
+        title.truncate(36, overflow="ellipsis")
+        sender = RichText(record.mail.sender.address)
+        sender.truncate(32, overflow="ellipsis")
         return (
             _localize(self._service, record.mail.received_at, "%m-%d %H:%M"),
             RichText(f"■ {urgency_label(self._service, urgency)}", style=urgency.color),
             title,
-            RichText(record.mail.sender.address),
+            sender,
         )
 
     async def _refresh_mail_unlocked(self, *, reload: bool = True) -> None:
