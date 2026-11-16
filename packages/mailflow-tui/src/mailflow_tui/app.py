@@ -1770,17 +1770,8 @@ class MailPane(Vertical):
     def _show_operation_status(self) -> None:
         table = self._mail_table()
         messages: list[str] = []
-        if table is not None:
-            if table.checked_keys:
-                messages.append(
-                    self._service.t(
-                        "tui.selection_count",
-                        count=len(table.checked_keys),
-                        hidden=len(table.checked_keys - set(table.visible_keys())),
-                    )
-                )
-            if table.selection_mode:
-                messages.append(self._service.t("tui.selection_mode_active"))
+        if table is not None and table.selection_mode:
+            messages.append(self._service.t("tui.selection_mode_active"))
         self._set_static("#mail-operation-status", _status_content(self._operation_status, messages))
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -2856,10 +2847,7 @@ class ActionsPane(Vertical):
         hint = self.query_one_optional("#actions-hint", Static)
         if hint is not None:
             messages: list[str] = []
-            if count:
-                hidden = count - len(table.checked_keys & set(table.visible_keys()))
-                messages.append(self._service.t("tui.selection_count", count=count, hidden=hidden))
-            elif not table.row_count and not self._action_status:
+            if not count and not table.row_count and not self._action_status:
                 messages.append(self._service.t("tui.empty"))
             if table.selection_mode:
                 messages.append(self._service.t("tui.selection_mode_active"))

@@ -532,7 +532,6 @@
       "selection_toggle": "选择或取消当前行",
       "selection_all": "全选",
       "selection_help": "点击：只选当前行 · Ctrl+点击：增减选择\nShift+点击 / Shift+上下键：连续选择\nCtrl+A：全选已加载结果 · Esc / 点击空白：清空\nDelete：删除所选 · 右键 / M：操作菜单 · F1：帮助",
-      "selection_count": "已选 {count} 项（当前结果之外 {hidden} 项），批量操作作用于全部所选项目。",
       "selection_current_help": "此操作需要只选择一项。",
       "selection_more": "……另有 {count} 项",
       "filter_expired": "仅显示过期",
