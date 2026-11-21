@@ -194,7 +194,7 @@ def create_app(service: MailFlowService) -> FastAPI:
                 headers={"WWW-Authenticate": "Basic"},
             ) from None
         session = connection.headers.get("X-MailFlow-Session", "")
-        if connection.url.path.startswith("/smart/") and not session:
+        if connection.url.path.startswith(("/smart/", "/console/")) and not session:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -320,6 +320,57 @@ def create_app(service: MailFlowService) -> FastAPI:
     @app.post("/drafts/{draft_id}/cancel")
     async def cancel_reply(draft_id: str, _: None = Depends(guard)) -> Any:
         return await reply_result(service.cancel_reply(draft_id))
+
+    @app.get("/console/messages")
+    async def console_messages(
+        channel: str = "",
+        after: int = 0,
+        before: int = 0,
+        limit: int = 100,
+        _: None = Depends(guard),
+    ) -> Any:
+        return await service.console_messages(channel, after=after, before=before, limit=limit)
+
+    @app.post("/console/messages")
+    async def console_send(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return _jsonable(
+            await service.console_send(
+                str(body.get("text", "")),
+                channel=str(body.get("channel", "")),
+                request_id=str(body.get("request_id", "")),
+                quote_id=str(body.get("quote_id", "")),
+            )
+        )
+
+    @app.post("/console/control/{operation}")
+    async def console_control(
+        operation: str,
+        body: dict[str, Any],
+        _: None = Depends(guard),
+    ) -> Any:
+        channel = str(body.get("channel", ""))
+        actions = {
+            "cancel": service.console_cancel,
+            "clear": service.console_clear,
+            "enable": service.console_enable,
+        }
+        if operation not in actions:
+            raise http_failure(404, "common.unsupported")
+        await actions[operation](channel)
+        return {"ok": True}
+
+    @app.post("/console/files")
+    async def console_upload(body: dict[str, Any], _: None = Depends(guard)) -> Any:
+        return await service.console_upload(str(body.get("channel", "")), body.get("file") or {})
+
+    @app.get("/console/files/{message_id}/{file_id}")
+    async def console_file(
+        message_id: str,
+        file_id: str,
+        channel: str = "",
+        _: None = Depends(guard),
+    ) -> Any:
+        return await service.console_file(channel, message_id, file_id)
 
     def query_job(job_id: str) -> dict[str, Any]:
         job = jobs.get(job_id)
@@ -792,7 +843,13 @@ def create_app(service: MailFlowService) -> FastAPI:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
     def _ws_relay(queue: asyncio.Queue[Any]) -> Any:
+        identity = current_context()
+
         async def relay(event: str, **payload: Any) -> None:
+            if event.startswith("console."):
+                with permission_scope(identity):
+                    if not service.console.visible_event(payload):
+                        return
             await queue.put(event_frame(event, payload))
 
         return relay

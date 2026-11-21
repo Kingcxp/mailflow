@@ -250,6 +250,7 @@ class CommandRouter:
     def __init__(self, service: MailFlowService) -> None:
         self.service = service
         service.commands = self
+        self._console_selections: dict[str, list[str]] = {}
         self._handlers: dict[str, Callable[[list[str]], Awaitable[CommandResponse]]] = {
             "assistant": self._cmd_assistant,
             "notifications": self._cmd_notifications,
@@ -475,9 +476,24 @@ class CommandRouter:
         return f"command.selection.{kind}." + hashlib.sha256(identity.encode()).hexdigest()[:24]
 
     async def _remember_selection(self, kind: str, ids: list[str]) -> None:
+        if current_context().provider == "console":
+            self._console_selections[self._selection_key(kind)] = list(ids)
+            while len(self._console_selections) > 256:
+                self._console_selections.pop(next(iter(self._console_selections)))
+            return
         await self.service.storage.set_preference(self._selection_key(kind), json.dumps(ids))
 
+    def clear_console_selection(self) -> None:
+        for kind in ("mail", "action"):
+            self._console_selections.pop(self._selection_key(kind), None)
+
+    def clear_console_selections(self) -> None:
+        self._console_selections.clear()
+
     async def _selected_id(self, kind: str, index: int) -> str | None:
+        if current_context().provider == "console":
+            ids = self._console_selections.get(self._selection_key(kind))
+            return None if ids is None else ids[index] if 0 <= index < len(ids) else ""
         raw = await self.service.storage.get_preference(self._selection_key(kind))
         if raw is None:
             return None
@@ -527,7 +543,14 @@ class CommandRouter:
                 style=_STYLE_MUTED,
             )
         )
-        return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        return CommandResponse(
+            ok=True,
+            spans=spans,
+            text="".join(s.text for s in spans),
+            references=[
+                {"kind": "mail", "id": r.record_id, "title": r.mail.subject} for r in page_records
+            ],
+        )
 
     @staticmethod
     def _short_sender(address: str) -> str:
@@ -595,7 +618,15 @@ class CommandRouter:
                     style=_STYLE_ERROR,
                 )
             )
-        return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        return CommandResponse(
+            ok=True,
+            spans=spans,
+            text="".join(s.text for s in spans),
+            references=[
+                {"kind": "mail", "id": r.record_id, "title": r.mail.subject}
+                for r in matched[:_PAGE_SIZE]
+            ],
+        )
 
     async def _find_mail(self, mail_id: str) -> MailRecord | None:
         """Exact id wins; then the list's ``#n``/``n`` (newest-first index,
@@ -724,7 +755,12 @@ class CommandRouter:
                     style=_STYLE_MUTED,
                 )
             )
-        return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        return CommandResponse(
+            ok=True,
+            spans=spans,
+            text="".join(s.text for s in spans),
+            references=[{"kind": "mail", "id": record.record_id, "title": record.mail.subject}],
+        )
 
     async def _mail_delete(self, args: list[str]) -> CommandResponse:
         if not args:
@@ -1154,7 +1190,14 @@ class CommandRouter:
             if item.notes:
                 detail += f" · {item.notes}"
             spans.append(StyleSpan(text=f"     {detail}", style=_STYLE_MUTED))
-        return CommandResponse(ok=True, spans=spans, text="".join(s.text for s in spans))
+        return CommandResponse(
+            ok=True,
+            spans=spans,
+            text="".join(s.text for s in spans),
+            references=[
+                {"kind": "action", "id": item.item_id, "title": item.summary} for item in page_items
+            ],
+        )
 
     async def _action_add(self, args: list[str]) -> CommandResponse:
         """Parse ``action add <summary> --due <time> [--type <type>] [--notes <notes>]``."""

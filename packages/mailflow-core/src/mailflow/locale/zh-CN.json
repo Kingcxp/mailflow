@@ -2184,7 +2184,19 @@
       "plugin_unavailable": "控制台插件不可用或需要更新，仍可使用命令。",
       "mail_global_off": "渠道已开启，但全局新邮件通知已关闭。",
       "mail_channel_off": "此渠道的新邮件通知已关闭。",
-      "not_configured": "尚未开启控制台通知，仍可使用命令。"
+      "not_configured": "尚未开启控制台通知，仍可使用命令。",
+      "quote_missing": "这条消息已不在缓存中，请重新选择要引用的消息。",
+      "empty_input": "请先输入命令或需求。",
+      "request_required": "消息缺少请求标识，请从控制台页面重新发送。",
+      "mention_hint": "输入 @MailFlow 加上需求，或引用一条消息。普通消息不会调用模型。",
+      "processing": "正在处理…",
+      "stop_before_clear": "请先停止当前任务，再清空对话。",
+      "chat_confirm": "{changes}\n\n同意修改，请发送 @MailFlow 确认 {token}\n拒绝修改，请发送 @MailFlow 取消 {token}",
+      "uploaded": "已上传 {name}\n文件引用：{id}，可以在草稿或需求中使用。",
+      "subscribed": "本次服务运行期间，此对话会显示通知。",
+      "unsubscribed": "本次服务运行期间，此对话不再显示新通知，不影响其他查看者。",
+      "status": "控制台：{channel}\n{state}\n{subscription}",
+      "ready": "通知可以正常接收。"
     }
   }
 }

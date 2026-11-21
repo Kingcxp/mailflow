@@ -489,3 +489,100 @@ async def test_natural_chat_uses_admin_identity_and_one_owner_confirmation() -> 
     apply.assert_awaited_once()
     assert apply.await_args is not None and apply.await_args.args[0] == "plan"
     assert apply.await_args.args[1][0].arguments == {"record_ids": ["a"]}
+
+
+async def test_console_plain_text_quote_confirmation_and_cancellation() -> None:
+    from unittest.mock import AsyncMock
+
+    from mailflow.console import ConsoleMessage
+    from mailflow.domain import PendingOperation, SmartActionResult
+    from mailflow.permissions import PermissionContext, permission_scope
+
+    from mailflow_test_support.commands import commands_service
+
+    service = commands_service()
+    query = AsyncMock(
+        return_value=SmartActionResult(
+            final_text="Proposed",
+            plan_id="plan",
+            pending=[
+                PendingOperation(
+                    tool="delete_mail",
+                    arguments={"record_ids": ["a"]},
+                    summary_key="assistant.done",
+                )
+            ],
+        )
+    )
+    service.smart_action = query
+    apply = AsyncMock(return_value={"applied": 1, "failed": [], "errors": []})
+    service.apply_smart_plan = apply
+
+    async def settled() -> list[dict[str, Any]]:
+        async with asyncio.timeout(2):
+            while True:
+                page = await service.console_messages()
+                if not page["busy"]:
+                    return page["messages"]
+                await asyncio.sleep(0)
+
+    try:
+        await service.console_send("just a note", request_id="note")
+        query.assert_not_awaited()
+        notification = await service.console.append(
+            ConsoleMessage(
+                role="notification",
+                text="Invoice",
+                references=[{"kind": "mail", "id": "a", "title": "Invoice"}],
+            )
+        )
+        first, duplicate = await asyncio.gather(
+            *[
+                service.console_send("delete this", request_id="request", quote_id=notification.id)
+                for _ in range(2)
+            ]
+        )
+        assert first.id == duplicate.id
+        rows = await settled()
+        query.assert_awaited_once()
+        assert query.await_args is not None
+        assert query.await_args.kwargs["record_ids"] == ["a"]
+        assert query.await_args.kwargs["save_history"] is False
+        token = rows[-1]["text"].split("confirm ")[-1].split()[0]
+        with permission_scope(
+            PermissionContext(provider="server", sender="other", chat_id="other", is_admin=True)
+        ):
+            assert all(
+                row["role"] == "notification"
+                for row in (await service.console_messages())["messages"]
+            )
+            await service.console_send("@MailFlow confirm " + token, request_id="other")
+            await settled()
+        apply.assert_not_awaited()
+        await service.console_send("@MailFlow confirm " + token, request_id="confirm")
+        await settled()
+        await service.console_send("@MailFlow confirm " + token, request_id="confirm-again")
+        await settled()
+        apply.assert_awaited_once()
+        assert await service.storage.get_preference("chat.request_results") is None
+        await service.console_clear()
+        assert not (await service.console_messages())["messages"]
+        await service.console_send("delete this", request_id="request", quote_id=notification.id)
+        assert not (await service.console_messages())["messages"]
+        query.assert_awaited_once()
+
+        started = asyncio.Event()
+
+        async def slow(*args: Any, **kwargs: Any) -> SmartActionResult:
+            started.set()
+            await asyncio.Event().wait()
+            return SmartActionResult()
+
+        service.smart_action = slow
+        await service.console_send("@MailFlow find mail", request_id="slow")
+        await started.wait()
+        await service.console_cancel()
+        rows = await settled()
+        assert any(row["state"] == "cancelled" for row in rows)
+    finally:
+        await service.console.close()

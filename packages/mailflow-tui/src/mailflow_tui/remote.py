@@ -21,6 +21,7 @@ import httpx
 from httpx import AsyncClient
 from mailflow.action_store import action_has_ended, action_overdue_age
 from mailflow.config import MailFlowConfig
+from mailflow.console import ConsoleMessage
 from mailflow.domain import (
     ActionItem,
     ActionPlan,
@@ -389,6 +390,27 @@ class RemoteServiceAdapter:
         return self.events.on(event, handler)
 
     # -- reads -----------------------------------------------------------------
+    async def console_messages(self, channel: str = "", **page: int) -> dict[str, Any]:
+        return await self.client.console_messages(channel, **page)
+
+    async def console_send(self, text: str, **options: Any) -> ConsoleMessage:
+        return ConsoleMessage.model_validate(await self.client.console_send(text, **options))
+
+    async def console_cancel(self, channel: str = "") -> None:
+        await self.client.console_control("cancel", channel)
+
+    async def console_clear(self, channel: str = "") -> None:
+        await self.client.console_control("clear", channel)
+
+    async def console_enable(self, channel: str = "") -> None:
+        await self.client.console_control("enable", channel)
+
+    async def console_upload(self, channel: str, file: dict[str, Any]) -> dict[str, Any]:
+        return await self.client.console_upload(channel, file)
+
+    async def console_file(self, channel: str, message_id: str, file_id: str) -> dict[str, Any]:
+        return await self.client.console_file(channel, message_id, file_id)
+
     def snapshot(self) -> RuntimeSnapshot:
         return self._snapshot
 

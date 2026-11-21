@@ -2184,7 +2184,19 @@
       "plugin_unavailable": "The console plugin is unavailable or needs updating. Commands remain available.",
       "mail_global_off": "The channel is enabled, but new-mail notifications are globally disabled.",
       "mail_channel_off": "New-mail notifications are disabled for this channel.",
-      "not_configured": "Console notifications are not enabled. Commands remain available."
+      "not_configured": "Console notifications are not enabled. Commands remain available.",
+      "quote_missing": "This message is no longer available. Select a newer message to quote.",
+      "empty_input": "Enter a command or a request first.",
+      "request_required": "The message has no request identifier. Send it again from the Console page.",
+      "mention_hint": "Use @MailFlow followed by your request, or quote a message. Plain messages do not call a model.",
+      "processing": "Working…",
+      "stop_before_clear": "Stop the current task before clearing this conversation.",
+      "chat_confirm": "{changes}\n\nTo apply these changes, send @MailFlow confirm {token}\nTo reject them, send @MailFlow cancel {token}",
+      "uploaded": "Uploaded {name}\nFile reference: {id}. You can use this reference in a draft or request.",
+      "subscribed": "Notifications are visible in this conversation for this service run.",
+      "unsubscribed": "New notifications are hidden in this conversation for this service run. Other viewers are unaffected.",
+      "status": "Console: {channel}\n{state}\n{subscription}",
+      "ready": "Notifications are available."
     }
   }
 }

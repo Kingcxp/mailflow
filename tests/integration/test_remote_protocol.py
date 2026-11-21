@@ -67,6 +67,30 @@ def test_websocket_rejects_missing_credentials() -> None:
     assert error.value.code == 4401
 
 
+async def test_remote_console_reconnect_is_private_and_does_not_resend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = commands_service()
+    service.config.server.username, service.config.server.password = "admin", "secret"
+    transport = httpx.ASGITransport(app=create_app(service))
+    mock_http_client(monkeypatch, transport)
+    client = RemoteClient("http://fake", "admin", "secret", session_id="one")
+    other = RemoteClient("http://fake", "admin", "secret", session_id="two")
+    try:
+        sent = await client.console_send("a private note", request_id="one")
+        reconnected = RemoteClient("http://fake", "admin", "secret", session_id="one")
+        duplicate = await reconnected.console_send("a private note", request_id="one")
+        assert duplicate["id"] == sent["id"]
+        assert [row["text"] for row in (await reconnected.console_messages())["messages"]] == [
+            "a private note"
+        ]
+        assert not (await other.console_messages())["messages"]
+        await client.console_control("clear")
+        assert not (await reconnected.console_messages())["messages"]
+    finally:
+        await service.console.close()
+
+
 async def test_remote_tui_renders_mail_actions_runtime_and_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
