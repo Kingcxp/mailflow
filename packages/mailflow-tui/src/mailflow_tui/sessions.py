@@ -280,11 +280,19 @@ def _spawn(info: SessionInfo) -> subprocess.Popen[bytes]:
     creationflags = 0
     if sys.platform == "win32":
         creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    environment = {**os.environ, "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+    if (
+        os.name == "nt"
+        and environment.get("TEXTUAL_COLOR_SYSTEM", "auto").strip().lower() == "auto"
+    ):
+        # This host renders through the session socket, so Rich sees the log
+        # file instead of Windows Terminal and otherwise downgrades RGB to 256 colors.
+        environment["TEXTUAL_COLOR_SYSTEM"] = "truecolor"
     with os.fdopen(os.open(info.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "ab") as log:
         return subprocess.Popen(
             command,
             cwd=info.cwd,
-            env={**os.environ, "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"},
+            env=environment,
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=log,
