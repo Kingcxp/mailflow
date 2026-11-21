@@ -31,7 +31,7 @@ from mailflow.mail_body import mail_body_text
 from mailflow.mail_query import MailQuery
 from mailflow.plugin_market import MarketPlugin, Repository
 from mailflow.service import MailFlowService
-from mailflow.themes import DEFAULT_THEME
+from mailflow.themes import DEFAULT_THEME, TERMINAL_THEME
 from rich.console import Group as RichGroup
 from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text as RichText
@@ -87,7 +87,10 @@ from mailflow_tui.scaffold import PluginScaffoldScreen
 from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.settings import ConnectionsPane, MailHistoryScreen, SettingsPane
 from mailflow_tui.smart_action_review import SmartActionReviewModal
+from mailflow_tui.terminal_theme import terminal_background_mode
 from mailflow_tui.themes import apply_color_scheme, theme_catalog, urgency_style
+from mailflow_tui.theme_preferences import load_theme_preferences, save_theme_preferences
+from mailflow_tui.theme_welcome import ThemeWelcomeScreen
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 from mailflow_tui.view_state import TableRowEvent, TableView, update_table
 from mailflow_tui.widgets import (
@@ -5122,9 +5125,18 @@ class MailFlowApp(App[None]):
         remote: bool = False,
         splash: bool = False,
         session: SessionHost | None = None,
+        theme_welcome: bool = False,
+        terminal_background: str | None = None,
     ) -> None:
         super().__init__()
         self._service = service
+        self._theme_welcome = theme_welcome
+        self._theme_preference = load_theme_preferences() if theme_welcome else {}
+        self._terminal_background = terminal_background
+        if self._terminal_background is None and (
+            theme_welcome or self._service.config.general.theme == TERMINAL_THEME
+        ):
+            self._terminal_background = terminal_background_mode()
         self._theme_signature: tuple[str, str, str] | None = None
         self._missing_theme_notice = ""
         self._apply_color_scheme()
@@ -5150,7 +5162,19 @@ class MailFlowApp(App[None]):
     def _apply_color_scheme(self) -> None:
         configured = self._service.config.general.theme
         schemes = theme_catalog(self._service)
-        selected = configured if configured in schemes else DEFAULT_THEME
+        preference = self._theme_preference.get("theme")
+        selected = (
+            preference
+            if configured == DEFAULT_THEME and preference in schemes
+            else configured if configured in schemes else DEFAULT_THEME
+        )
+        if selected == TERMINAL_THEME or (
+            self._theme_welcome
+            and not self._theme_preference.get("theme_onboarding_complete")
+            and configured == DEFAULT_THEME
+            and not preference
+        ):
+            selected = "catppuccin-latte" if self._terminal_background == "light" else DEFAULT_THEME
         scheme = schemes[selected]
         signature = (configured, selected, scheme.model_dump_json())
         if signature != self._theme_signature:
@@ -5160,14 +5184,14 @@ class MailFlowApp(App[None]):
             self._theme_signature = signature
             if self.is_running:
                 self.call_after_refresh(self._refresh_color_content)
-        if self.is_running and selected != configured and self._missing_theme_notice != configured:
+        if self.is_running and configured not in schemes and self._missing_theme_notice != configured:
             self._missing_theme_notice = configured
             self.notify(
                 self._service.t("tui.theme_unavailable", theme=configured),
                 severity="warning",
                 timeout=12,
             )
-        elif selected == configured:
+        elif configured in schemes:
             self._missing_theme_notice = ""
 
     def _refresh_color_content(self) -> None:
@@ -5243,6 +5267,45 @@ class MailFlowApp(App[None]):
     def action_detach_session(self) -> None:
         if self._session is not None:
             self._session.detach()
+
+    def set_terminal_background(self, mode: str | None) -> None:
+        if mode not in {"dark", "light"} or mode == self._terminal_background:
+            return
+        self._terminal_background = mode
+        self._apply_color_scheme()
+
+    def _show_splash(self) -> None:
+        if self._splash:
+            from mailflow_tui.splash import SplashScreen
+
+            self.push_screen(SplashScreen(self._service.t, self._version_string()))
+
+    def _theme_welcome_selected(self, theme: str | None) -> None:
+        self.run_worker(
+            self._complete_theme_welcome(theme),
+            exclusive=True,
+            group="theme-welcome",
+            exit_on_error=False,
+        )
+
+    async def _complete_theme_welcome(self, theme: str | None) -> None:
+        saved = save_theme_preferences(theme, completed=True)
+        self._theme_preference = load_theme_preferences()
+        if theme is not None:
+            self._theme_preference["theme"] = theme
+            if not self._remote and getattr(self._service, "config_path", None) is not None:
+                try:
+                    await self._service.set_config_value("general.theme", theme)
+                except Exception:
+                    logger.warning("could not save initial theme to config", exc_info=True)
+                    self.notify(
+                        self._service.t("tui.theme_save_failed"),
+                        severity="warning",
+                    )
+            self._apply_color_scheme()
+        if not saved:
+            self.notify(self._service.t("tui.theme_preference_failed"), severity="warning")
+        self._show_splash()
 
     def set_plugin_entries(self, entries: list[tuple[Repository, MarketPlugin]]) -> None:
         """Record the market entries (called by MarketPane after a fetch)."""
@@ -5328,10 +5391,18 @@ class MailFlowApp(App[None]):
             self._eager_market_fetch(), exclusive=True, group="market-eager", exit_on_error=False
         )
         self._subscriptions = [self._service.on("*", self._on_service_event)]
-        if self._splash:
-            from mailflow_tui.splash import SplashScreen
-
-            self.push_screen(SplashScreen(self._service.t, self._version_string()))  # pyright: ignore[reportUnknownMemberType]
+        if self._theme_welcome and not self._theme_preference.get("theme_onboarding_complete"):
+            configured_theme = self._service.config.general.theme
+            if configured_theme != DEFAULT_THEME:
+                save_theme_preferences(configured_theme, completed=True)
+                self._theme_preference = load_theme_preferences()
+                self._show_splash()
+            else:
+                self.push_screen(
+                    ThemeWelcomeScreen(self._service.t), self._theme_welcome_selected
+                )
+        else:
+            self._show_splash()
         if self._session is not None:
             self.call_after_refresh(self._session.mark_ready)
 
@@ -5383,6 +5454,13 @@ class MailFlowApp(App[None]):
                 unsubscribe()
 
     async def _on_service_event(self, event: str, **payload: Any) -> None:
+        if event == "config.changed" and "general.theme" in {
+            *payload.get("keys", ()),
+            payload.get("key"),
+        }:
+            theme = self._service.config.general.theme
+            save_theme_preferences(theme, completed=True)
+            self._theme_preference = load_theme_preferences()
         if event.startswith(("config.", "plugin.", "backup.restored")):
             self.run_worker(
                 self._refresh_color_scheme(),

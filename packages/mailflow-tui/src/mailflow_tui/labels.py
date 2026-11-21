@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from mailflow.config import is_secret_key
 from mailflow.domain import MailRecord, Urgency
+from mailflow.themes import TERMINAL_THEME
 from rich.text import Text
 
 from mailflow_tui.themes import theme_catalog
@@ -60,6 +61,8 @@ def plugin_text(service: Any, plugin: Any, field: str, *, language: str | None =
 def form_choice_label(service: Any, field: str, value: str) -> str:
     """Translate menu choices while preserving their stored plugin values."""
     if field == "theme":
+        if value == TERMINAL_THEME:
+            return str(service.t("tui.theme_auto_name"))
         scheme = theme_catalog(service).get(value)
         return scheme.name if scheme else str(service.t("tui.theme_choice_unavailable", theme=value))
     if field == "initial_sync":

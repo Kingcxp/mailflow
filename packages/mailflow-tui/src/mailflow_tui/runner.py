@@ -135,7 +135,13 @@ async def run_local_host(
             server, server_task = await _start_embedded_server(service, config, log_queue)
         from mailflow_tui.app import MailFlowApp
 
-        app = MailFlowApp(service, log_queue, splash=session is None, session=session)
+        app = MailFlowApp(
+            service,
+            log_queue,
+            splash=session is None,
+            session=session,
+            theme_welcome=session is not None,
+        )
         try:
             await app.run_async()
         finally:
@@ -229,7 +235,16 @@ async def _run_remote() -> None:
     await client.start_events()
     await client.enable_logs()
 
-    app = MailFlowApp(adapter, log_queue, remote=True, splash=True)
+    from mailflow_tui.terminal_theme import terminal_background_mode
+
+    app = MailFlowApp(
+        adapter,
+        log_queue,
+        remote=True,
+        splash=True,
+        theme_welcome=True,
+        terminal_background=terminal_background_mode(),
+    )
     try:
         await app.run_async()
     finally:

@@ -93,7 +93,7 @@ def _interpolate_sequence(
 class GeneralConfig(BaseModel):
     theme: str = Field(
         default=DEFAULT_THEME,
-        description="Terminal color scheme from built-ins or enabled theme plugins",
+        description="Built-in, terminal-adaptive, or enabled plugin color scheme",
     )
     language: str = Field(
         default="en", description="Default display language code (en, zh-CN, or an external pack)"

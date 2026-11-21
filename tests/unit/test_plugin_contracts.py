@@ -17,7 +17,7 @@ from mailflow.plugin_validation import validate_result
 from mailflow.plugins import PluginInfo, PluginManager
 from mailflow.registry import ComponentRegistry, PluginRegistrar
 from mailflow.settings import EditorKind, apply_value, find_spec
-from mailflow.themes import DEFAULT_THEME, ColorScheme, builtin_themes
+from mailflow.themes import DEFAULT_THEME, TERMINAL_THEME, ColorScheme, builtin_themes
 from mailflow_bundled import create_plugin_manager
 
 
@@ -106,6 +106,7 @@ def test_builtin_theme_catalog_has_complete_palettes() -> None:
         "catppuccin-frappe",
         "catppuccin-macchiato",
         "catppuccin-mocha",
+        TERMINAL_THEME,
         *expected,
     }
     for theme_id, (is_dark, background) in expected.items():

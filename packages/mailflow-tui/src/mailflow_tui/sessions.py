@@ -355,7 +355,14 @@ async def start_instance(
 async def attach_instance(info: SessionInfo, *, takeover: bool = False) -> str:
     if not has_terminal():
         raise SessionError("sessions.terminal_required")
-    reader, writer, _response = await connect(info, "attach", takeover=takeover)
+    from mailflow_tui.terminal_theme import terminal_background_mode
+
+    reader, writer, _response = await connect(
+        info,
+        "attach",
+        takeover=takeover,
+        terminal_background=terminal_background_mode(),
+    )
     result = await attach_terminal(reader, writer)
     if result == "stopped":
         await asyncio.to_thread(_wait_for_exit, info.pid, cleanup_complete=True)
@@ -447,6 +454,9 @@ class SessionHost:
                         return
                     self.detach()
                 self.client = writer
+                terminal_background = hello.get("terminal_background")
+                if terminal_background in {"dark", "light"} and self.app is not None:
+                    self.app.set_terminal_background(terminal_background)
             state = (
                 "stopping"
                 if self.stopping

@@ -16,6 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 DEFAULT_THEME = "catppuccin-macchiato"
+TERMINAL_THEME = "terminal-auto"
 Flavor = Literal["latte", "frappe", "macchiato", "mocha"]
 
 _COLOR_NAMES = (
@@ -186,4 +187,5 @@ def builtin_themes() -> dict[str, ColorScheme]:
         themes[theme_id] = ColorScheme(
             name=name, base="macchiato", dark=dark, colors=colors
         )
+    themes[TERMINAL_THEME] = ColorScheme(name="Match terminal", base="macchiato", dark=True)
     return themes

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 from mailflow_tui.splash import SplashScreen
+from mailflow_tui.theme_preferences import load_theme_preferences
+from mailflow_tui.theme_welcome import ThemeWelcomeScreen
 
 from mailflow_test_support.app import make_app
 
@@ -53,5 +55,28 @@ async def test_splash_off_by_default(tmp_path: Path) -> None:
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
             assert not isinstance(app.screen, SplashScreen)
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_first_use_theme_choice_is_saved_for_this_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(tmp_path / "sessions"))
+    app, service = await make_app(tmp_path)
+    app._theme_welcome = True
+    app._theme_preference = {}
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, ThemeWelcomeScreen)
+            await pilot.click("#theme-light")
+            await pilot.pause(0.2)
+            assert app.theme == "catppuccin-latte"
+            assert load_theme_preferences() == {
+                "theme_onboarding_complete": True,
+                "theme": "catppuccin-latte",
+            }
     finally:
         await service.stop()
