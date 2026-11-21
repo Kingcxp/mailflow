@@ -71,6 +71,29 @@ light/dark mode. Reserve the built-in `catppuccin-*` IDs. A distribution may
 register several schemes; enabling, disabling and uninstalling them uses the
 normal plugin lifecycle. The scaffold wizard includes a `theme` category.
 
+Button colors use an optional `buttons` mapping, keyed by `default` (secondary
+actions), `primary` (main actions), `success` (save/confirm), `warning`
+(pause/reset), and `error` (delete). Values are `mailflow.themes.ButtonColors`:
+
+| State | Background and text fields |
+|---|---|
+| Normal | `background`, `foreground` |
+| Hover / keyboard focus | `hover_background`, `hover_foreground` |
+| Pressed | `active_background`, `active_foreground` |
+| Disabled | `disabled_background`, `disabled_foreground` |
+
+Each field is an optional `#RRGGBB` color. For example,
+`buttons={"primary": ButtonColors(background="#1e66f5", foreground="#ffffff")}`
+overrides the primary fill and text. Omitted states are derived from that fill;
+omitted roles use the palette's surface/blue/green/yellow/red. Existing plugins
+need no changes. Automatic foregrounds maintain at least 4.5:1 contrast, using
+the scheme's text/base tones where possible. Explicit foreground overrides are
+preserved. All pages, compact toggles and dialogs share these tokens, including
+live preview and remote terminals. State separation follows
+[Element Plus buttons](https://element-plus.org/en-US/component/button.html);
+colors come from the selected scheme, with VS Code Modern's published primary
+button colors retained.
+
 `FormField` supports optional `placeholder_key`, `group_key`, `advanced` and
 `choice_label_keys` presentation metadata. Use `select` for finite choices;
 option values remain stable while labels are translated. Older fields and
@@ -153,6 +176,19 @@ Keep live credentials and external services out of automated verification.
 `#RRGGBB` 覆盖颜色，其余继承基础配色。可用 `dark` 明确指定深浅模式。
 一个插件可注册多套配色，内置的 `catppuccin-*` 标识保留。无需导入界面库或连接网络；
 安装、启用、禁用和卸载复用现有流程，脚手架已包含该分类。
+
+`buttons` 可分别覆盖次要操作（`default`）、主要操作（`primary`）、保存与确认
+（`success`）、暂停与重置（`warning`）及删除（`error`）的颜色，值使用
+`mailflow.themes.ButtonColors`。普通状态使用 `background`、`foreground`；
+悬停与键盘聚焦使用 `hover_background`、`hover_foreground`；按下使用
+`active_background`、`active_foreground`；禁用使用 `disabled_background`、
+`disabled_foreground`。所有字段均可选，格式为 `#RRGGBB`。
+例如 `buttons={"primary": ButtonColors(background="#1e66f5", foreground="#ffffff")}`。
+未指定的状态根据按钮背景生成，未指定的按钮类型从基础配色继承，旧插件无需修改。
+自动选择的文字颜色保证至少 4.5:1 对比度，优先使用主题文字色与背景色；明确指定的
+文字色保持原值。所有页面、开关、弹窗、实时预览和远程终端共用同一规则。
+状态划分参考 [Element Plus](https://element-plus.org/en-US/component/button.html)，
+颜色沿用所选主题，VS Code Modern 的主要按钮使用其官方按钮颜色。
 
 `FormField` 可选声明示例、分组、高级选项和选项翻译键（`placeholder_key`、`group_key`、
 `advanced`、`choice_label_keys`）。有限选项使用 `select`，值保持稳定，显示名称经过翻译；

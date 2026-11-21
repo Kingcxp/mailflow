@@ -43,6 +43,7 @@ def theme_catalog(service: Any) -> dict[str, ColorScheme]:
 
 def textual_theme(name: str, scheme: ColorScheme) -> Theme:
     p = scheme.palette()
+    buttons = scheme.button_palette()
     selection = Color.parse(p["base"]).blend(Color.parse(p["blue"]), 0.25).hex
     return Theme(
         name=name,
@@ -59,6 +60,11 @@ def textual_theme(name: str, scheme: ColorScheme) -> Theme:
         dark=scheme.is_dark,
         variables={
             **{"ctp-" + key: value for key, value in p.items()},
+            **{
+                f"button-{variant}-{state.replace('_', '-')}": color
+                for variant, states in buttons.items()
+                for state, color in states.items()
+            },
             **_content_styles(p),
             "text": p["text"],
             "text-muted": p["subtext0"],
@@ -87,8 +93,8 @@ def textual_theme(name: str, scheme: ColorScheme) -> Theme:
             "footer-key-foreground": p["blue"],
             "footer-description-foreground": p["subtext1"],
             "button-focus-text-style": "bold underline",
-            "button-on-accent": p["base"],
-            "button-on-warning": p["base"] if scheme.is_dark else p["text"],
+            "button-foreground": buttons["default"]["foreground"],
+            "button-color-foreground": buttons["primary"]["foreground"],
             "scrollbar": p["surface2"],
             "scrollbar-hover": p["overlay0"],
             "scrollbar-active": p["lavender"],

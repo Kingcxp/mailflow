@@ -22,7 +22,7 @@ from mailflow.domain import (
 )
 from mailflow.i18n import I18n
 from mailflow.protocol import json_value
-from mailflow.themes import DEFAULT_THEME, TERMINAL_THEME, builtin_themes
+from mailflow.themes import DEFAULT_THEME, TERMINAL_THEME, ButtonVariant, builtin_themes
 from mailflow.tools import ToolRegistry
 from mailflow_server.app import create_app
 from mailflow_server.client import RemoteClient
@@ -170,6 +170,20 @@ async def test_theme_setting_applies_without_losing_input_or_restarting_connecti
             assert app.query_one("#mail-search", PromptInput) is search
             assert search.value == "Keep my unfinished search"
             assert service.config.general.theme == name
+            # Every page shares the same filled buttons, including disabled
+            # actions and compact toggles; theme previews must update both colors.
+            buttons = scheme.button_palette()
+            for button in app.query(Button):
+                colors = buttons[cast(ButtonVariant, button.variant)]
+                states = ("disabled_",) if button.is_disabled else ("", "hover_", "active_")
+                pairs = {
+                    (colors[state + "background"].lower(), colors[state + "foreground"].lower())
+                    for state in states
+                }
+                assert (
+                    button.styles.background.hex.lower(),
+                    button.styles.color.hex.lower(),
+                ) in pairs
         reload_runtime.assert_not_awaited()
         # An unavailable plugin must not destroy the saved preference or UI.
         service.config.general.theme = "uninstalled-theme"

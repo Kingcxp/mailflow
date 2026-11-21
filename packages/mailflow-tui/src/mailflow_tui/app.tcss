@@ -62,71 +62,125 @@ Markdown .code_inline {
     background: $ctp-surface0;
 }
 
-/* Official Catppuccin roles: neutral surfaces, restrained semantic accents. */
+/* Filled semantic buttons, with all colors supplied by the active scheme.
+   Keep focus visible without changing the fill or stacking Textual's tints. */
 Button {
     height: auto;
     min-width: 16;
     border: none;
     text-style: bold;
     content-align: center middle;
-    background: $ctp-surface0;
-    color: $text;
+    background: $button-default-background;
+    color: $button-default-foreground;
+    background-tint: transparent;
+    tint: transparent;
+    text-opacity: 1;
 }
 
-Button.-default {
-    background: $ctp-surface0;
-    color: $text;
+Button:enabled:hover,
+Button:enabled:focus {
+    background: $button-default-hover-background;
+    color: $button-default-hover-foreground;
 }
 
-Button.-primary {
-    background: $ctp-surface0;
-    color: $ctp-blue;
-}
-
-Button.-success {
-    background: $ctp-surface0;
-    color: $ctp-green;
-}
-
-Button.-warning {
-    background: $ctp-surface0;
-    color: $ctp-yellow;
-}
-
-Button.-error {
-    background: $ctp-surface0;
-    color: $ctp-red;
+Button:enabled.-active {
+    background: $button-default-active-background;
+    color: $button-default-active-foreground;
 }
 
 Button:disabled {
-    background: $surface;
-    color: $text-disabled;
+    background: $button-default-disabled-background;
+    color: $button-default-disabled-foreground;
     text-style: none;
+    text-opacity: 1;
 }
 
-Button:hover,
-Button:focus {
-    background: $ctp-surface1;
+Button.-primary {
+    background: $button-primary-background;
+    color: $button-primary-foreground;
+}
+
+Button.-primary:enabled:hover,
+Button.-primary:enabled:focus {
+    background: $button-primary-hover-background;
+    color: $button-primary-hover-foreground;
+}
+
+Button.-primary:enabled.-active {
+    background: $button-primary-active-background;
+    color: $button-primary-active-foreground;
+}
+
+Button.-primary:disabled {
+    background: $button-primary-disabled-background;
+    color: $button-primary-disabled-foreground;
+}
+
+Button.-success {
+    background: $button-success-background;
+    color: $button-success-foreground;
+}
+
+Button.-success:enabled:hover,
+Button.-success:enabled:focus {
+    background: $button-success-hover-background;
+    color: $button-success-hover-foreground;
+}
+
+Button.-success:enabled.-active {
+    background: $button-success-active-background;
+    color: $button-success-active-foreground;
+}
+
+Button.-success:disabled {
+    background: $button-success-disabled-background;
+    color: $button-success-disabled-foreground;
+}
+
+Button.-warning {
+    background: $button-warning-background;
+    color: $button-warning-foreground;
+}
+
+Button.-warning:enabled:hover,
+Button.-warning:enabled:focus {
+    background: $button-warning-hover-background;
+    color: $button-warning-hover-foreground;
+}
+
+Button.-warning:enabled.-active {
+    background: $button-warning-active-background;
+    color: $button-warning-active-foreground;
+}
+
+Button.-warning:disabled {
+    background: $button-warning-disabled-background;
+    color: $button-warning-disabled-foreground;
+}
+
+Button.-error {
+    background: $button-error-background;
+    color: $button-error-foreground;
+}
+
+Button.-error:enabled:hover,
+Button.-error:enabled:focus {
+    background: $button-error-hover-background;
+    color: $button-error-hover-foreground;
+}
+
+Button.-error:enabled.-active {
+    background: $button-error-active-background;
+    color: $button-error-active-foreground;
+}
+
+Button.-error:disabled {
+    background: $button-error-disabled-background;
+    color: $button-error-disabled-foreground;
 }
 
 Button:focus {
     text-style: bold underline;
-}
-
-Button:disabled:hover {
-    background-tint: transparent;
-}
-
-/* Keep compact search toggles readable without applying a bright fill. */
-SearchToggle:hover,
-SearchToggle:focus {
-    text-style: bold;
-    background-tint: $foreground 15%;
-}
-
-SearchToggle.-active {
-    tint: transparent;
-    text-style: bold;
 }
 
 #mail-search-row {
@@ -142,14 +196,6 @@ SearchToggle.-active {
 #actions-smart-action {
     height: 3;
     margin-left: 1;
-    background: $ctp-surface0;
-    color: $ctp-mauve;
-}
-
-#smart-action:disabled,
-#actions-smart-action:disabled {
-    background: $surface;
-    color: $text-disabled;
 }
 
 #actions-search-row,
@@ -909,31 +955,6 @@ DataTable > .datatable--hover {
 
 #runtime-plugin-actions Button {
     height: 3;
-}
-
-#runtime-plugin-actions Button.-primary:enabled {
-    background: $ctp-blue;
-    color: $button-on-accent;
-}
-
-#runtime-plugin-actions Button.-success:enabled {
-    background: $ctp-green;
-    color: $button-on-accent;
-}
-
-#runtime-plugin-actions Button.-warning:enabled {
-    background: $ctp-yellow;
-    color: $button-on-warning;
-}
-
-#runtime-plugin-actions Button.-error:enabled {
-    background: $ctp-red;
-    color: $button-on-accent;
-}
-
-#runtime-plugin-actions Button:enabled:hover,
-#runtime-plugin-actions Button:enabled:focus {
-    background-tint: $ctp-text 12%;
 }
 
 #runtime-adapters,

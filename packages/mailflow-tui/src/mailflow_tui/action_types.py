@@ -51,7 +51,7 @@ class ActionTypeNameModal(ModalScreen[str | None]):
             yield Static("", id="action-type-name-status", markup=False)
             with Horizontal():
                 yield Button(
-                    self._service.t("tui.btn_save"), id="action-type-save", variant="primary"
+                    self._service.t("tui.btn_save"), id="action-type-save", variant="success"
                 )
                 yield Button(self._service.t("tui.btn_cancel"), id="action-type-cancel")
 

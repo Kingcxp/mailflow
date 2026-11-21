@@ -64,7 +64,7 @@ class LogExportScreen(ModalScreen[str | None]):
             )
             yield Static("", id="log-export-error")
             with Horizontal(id="log-export-actions"):
-                yield Button(self._t("tui.btn_save"), id="log-export-save", variant="primary")
+                yield Button(self._t("tui.btn_save"), id="log-export-save", variant="success")
                 yield Button(self._t("tui.btn_cancel"), id="log-export-cancel", variant="default")
 
     async def on_mount(self) -> None:

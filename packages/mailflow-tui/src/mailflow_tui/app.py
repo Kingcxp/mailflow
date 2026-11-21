@@ -434,37 +434,37 @@ class ReplyModal(ModalScreen[Any]):
                     yield Button(
                         self._t("tui.reply_toolbar_bold"),
                         id="reply-bold",
-                        variant="primary",
+                        variant="default",
                         classes="reply-tool",
                     )
                     yield Button(
                         self._t("tui.reply_toolbar_italic"),
                         id="reply-italic",
-                        variant="primary",
+                        variant="default",
                         classes="reply-tool",
                     )
                     yield Button(
                         self._t("tui.reply_toolbar_left"),
                         id="reply-align-left",
-                        variant="primary",
+                        variant="default",
                         classes="reply-tool",
                     )
                     yield Button(
                         self._t("tui.reply_toolbar_center"),
                         id="reply-align-center",
-                        variant="primary",
+                        variant="default",
                         classes="reply-tool",
                     )
                     yield Button(
                         self._t("tui.reply_toolbar_right"),
                         id="reply-align-right",
-                        variant="primary",
+                        variant="default",
                         classes="reply-tool",
                     )
                 yield Static(self._t("tui.reply_markup_hint"), id="reply-markup-hint")
             yield DraftPreview(self._service, id="reply-preview")
             with Horizontal(id="reply-actions"):
-                yield Button(self._t("tui.reply_save"), id="reply-save", variant="primary")
+                yield Button(self._t("tui.reply_save"), id="reply-save", variant="success")
                 yield Button(self._t("tui.reply_prepare"), id="reply-prepare", variant="warning")
                 yield Button(
                     self._t("tui.reply_confirm"),
@@ -1123,7 +1123,7 @@ class MailPane(Vertical):
                     yield Button(
                         self._service.t("tui.btn_profile"),
                         id="btn-profile",
-                        variant="success",
+                        variant="primary",
                     )
 
     @staticmethod
@@ -4571,7 +4571,7 @@ class MarketDetailScreen(ModalScreen[Any]):
                 yield Button(
                     self._service.t("tui.btn_disable"), id="detail-disable", variant="warning"
                 )
-                yield Button(self._service.t("tui.btn_close"), id="detail-close", variant="primary")
+                yield Button(self._service.t("tui.btn_close"), id="detail-close", variant="default")
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)

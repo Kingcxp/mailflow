@@ -17,7 +17,7 @@ from mailflow.plugin_validation import validate_result
 from mailflow.plugins import PluginInfo, PluginManager
 from mailflow.registry import ComponentRegistry, PluginRegistrar
 from mailflow.settings import EditorKind, apply_value, find_spec
-from mailflow.themes import DEFAULT_THEME, TERMINAL_THEME, ColorScheme, builtin_themes
+from mailflow.themes import DEFAULT_THEME, TERMINAL_THEME, ButtonColors, ColorScheme, builtin_themes
 from mailflow_bundled import create_plugin_manager
 
 
@@ -64,7 +64,12 @@ def test_theme_plugins_discover_select_and_disable(monkeypatch: pytest.MonkeyPat
 
     @builder.theme("local-light")
     def local_theme() -> ColorScheme:
-        return ColorScheme(name="Local light", base="latte", colors={"blue": "#8839ef"})
+        return ColorScheme(
+            name="Local light",
+            base="latte",
+            colors={"blue": "#8839ef"},
+            buttons={"primary": ButtonColors(background="#1e66f5", foreground="#ffffff")},
+        )
 
     install_fake_entry_point(monkeypatch, builder.build())
     config = MailFlowConfig()
@@ -76,6 +81,11 @@ def test_theme_plugins_discover_select_and_disable(monkeypatch: pytest.MonkeyPat
     assert not scheme.is_dark
     assert scheme.palette()["blue"] == "#8839ef"
     assert scheme.palette()["base"] == builtin_themes()["catppuccin-latte"].palette()["base"]
+    restored = ColorScheme.model_validate(scheme.model_dump())
+    assert restored.button_palette() == scheme.button_palette()
+    assert restored.button_palette()["primary"]["background"] == "#1e66f5"
+    assert restored.button_palette()["primary"]["foreground"] == "#ffffff"
+    assert restored.button_palette()["error"]["background"] == scheme.palette()["red"]
     choices = (*builtin_themes(), *registry.component_ids(ComponentKind.THEME))
     spec = find_spec(config, "general.theme", theme_choices=choices)
     assert spec is not None and spec.editor is EditorKind.CHOICE and "local-light" in spec.choices
@@ -88,6 +98,13 @@ def test_theme_plugins_discover_select_and_disable(monkeypatch: pytest.MonkeyPat
 
 
 def test_builtin_theme_catalog_has_complete_palettes() -> None:
+    def luminance(color: str) -> float:
+        channels = [int(color[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+        return sum(
+            (c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4) * weight
+            for c, weight in zip(channels, (0.2126, 0.7152, 0.0722), strict=True)
+        )
+
     themes = builtin_themes()
     expected = {
         "dracula": (True, "#282a36"),
@@ -114,6 +131,20 @@ def test_builtin_theme_catalog_has_complete_palettes() -> None:
         assert scheme.is_dark is is_dark
         assert len(scheme.colors) == 26
         assert scheme.palette()["base"] == background
+    for scheme in themes.values():
+        buttons = scheme.button_palette()
+        assert len({colors["background"] for colors in buttons.values()}) == 5
+        for colors in buttons.values():
+            assert colors["disabled_background"] != colors["background"]
+            for state in ("", "hover_", "active_"):
+                light, dark = sorted(
+                    (
+                        luminance(colors[state + "foreground"]),
+                        luminance(colors[state + "background"]),
+                    ),
+                    reverse=True,
+                )
+                assert (light + 0.05) / (dark + 0.05) >= 4.5
 
 
 async def test_real_router_passes_all_chat_parameters() -> None:

@@ -291,7 +291,10 @@ class SyncScreen(WorkflowScreen):
                     disabled=not bool(self.account_id),
                 )
                 yield Button(
-                    self.t("sync.pause"), id="sync-stop", disabled=not bool(self.account_id)
+                    self.t("sync.pause"),
+                    id="sync-stop",
+                    variant="warning",
+                    disabled=not bool(self.account_id),
                 )
                 yield Button(self.t("tui.btn_back"), id="sync-close")
 
@@ -681,9 +684,14 @@ class TrashScreen(WorkflowScreen):
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
                 yield Button(
-                    self.t("ux.restore"), id="trash-restore", variant="primary", disabled=True
+                    self.t("ux.restore"), id="trash-restore", variant="success", disabled=True
                 )
-                yield Button(self.t("experience.source_restore"), id="trash-source", disabled=True)
+                yield Button(
+                    self.t("experience.source_restore"),
+                    id="trash-source",
+                    variant="success",
+                    disabled=True,
+                )
                 yield Button(
                     self.t("ux.permanent_delete"), id="trash-purge", variant="error", disabled=True
                 )
@@ -1038,8 +1046,18 @@ class DeliveriesScreen(WorkflowScreen):
             yield SelectionTable(t=self.t, id="delivery-table")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("ux.retry_delivery"), id="delivery-retry", disabled=True)
-                yield Button(self.t("experience.source"), id="delivery-source", disabled=True)
+                yield Button(
+                    self.t("ux.retry_delivery"),
+                    id="delivery-retry",
+                    variant="primary",
+                    disabled=True,
+                )
+                yield Button(
+                    self.t("experience.source"),
+                    id="delivery-source",
+                    variant="primary",
+                    disabled=True,
+                )
                 yield Button(
                     self.t("interface.failure_details"), id="delivery-details", disabled=True
                 )
@@ -1212,7 +1230,7 @@ class DataManagementScreen(WorkflowScreen):
                 yield AssistedInput(self.service, id="restore-path")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("ux.create_backup"), id="backup-create")
+                yield Button(self.t("ux.create_backup"), id="backup-create", variant="success")
                 yield Button(self.t("ux.restore_backup"), id="backup-restore", variant="warning")
                 yield Button(self.t("tui.btn_back"), id="backup-close")
 

@@ -56,7 +56,7 @@ class PluginScaffoldScreen(ModalScreen[Path | None]):
                 )
             with Horizontal(id="scaffold-actions"):
                 yield Button(self._t("tui.btn_generate"), id="scaffold-generate", variant="success")
-                yield Button(self._t("tui.btn_cancel"), id="scaffold-cancel", variant="primary")
+                yield Button(self._t("tui.btn_cancel"), id="scaffold-cancel", variant="default")
 
     def action_dismiss_modal(self) -> None:
         if not self._busy:

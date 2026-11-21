@@ -13,6 +13,7 @@ from mailflow.domain import ReplyDraft, ReplyState
 from mailflow.errors import error_text
 from mailflow.mail_query import MailQuery
 from mailflow.service import MailFlowService
+from mailflow.themes import ButtonVariant
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Button, Checkbox, Collapsible, Select, Static
@@ -49,6 +50,14 @@ class SourceSyncScreen(WorkflowScreen):
                 yield TextArea("", id="source-status", read_only=True)
             yield SafeSelect([], id="source-pending", prompt=self.t("experience.source_pending"))
             yield Static("", id="workflow-status", markup=False)
+            variants: dict[str, ButtonVariant] = {
+                "save": "success",
+                "detect": "primary",
+                "refresh": "primary",
+                "retry": "warning",
+                "delete": "error",
+                "restore": "success",
+            }
             for row in [
                 [("save", "saved"), ("detect", "source_detect"), ("refresh", "source_refresh")],
                 [
@@ -63,6 +72,7 @@ class SourceSyncScreen(WorkflowScreen):
                         yield Button(
                             self.t("experience." + key) if op != "save" else self.t("tui.btn_save"),
                             id="source-" + op,
+                            variant=variants.get(op, "default"),
                             disabled=op != "back",
                         )
 
@@ -272,11 +282,19 @@ class AttachmentLibraryScreen(WorkflowScreen):
             yield SelectionTable(t=self.t, id="library-table")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("experience.search"), id="library-search")
+                yield Button(self.t("experience.search"), id="library-search", variant="primary")
                 yield Button(
-                    self.t("experience.download_selected"), id="library-download", disabled=True
+                    self.t("experience.download_selected"),
+                    id="library-download",
+                    variant="success",
+                    disabled=True,
                 )
-                yield Button(self.t("experience.source"), id="library-source", disabled=True)
+                yield Button(
+                    self.t("experience.source"),
+                    id="library-source",
+                    variant="primary",
+                    disabled=True,
+                )
                 yield Button(self.t("tui.btn_back"), id="library-back")
 
     async def load_data(self) -> None:
@@ -462,8 +480,12 @@ class NotificationPreferencesScreen(WorkflowScreen):
             )
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("tui.btn_save"), id="notification-save")
-                yield Button(self.t("experience.connection_check"), id="notification-check")
+                yield Button(self.t("tui.btn_save"), id="notification-save", variant="success")
+                yield Button(
+                    self.t("experience.connection_check"),
+                    id="notification-check",
+                    variant="primary",
+                )
                 yield Button(
                     self.t("experience.connection_settings"),
                     id="notification-settings",
@@ -594,6 +616,12 @@ class AssistantHistoryScreen(WorkflowScreen):
             yield TextArea("", id="history-text", read_only=True)
             yield SafeSelect([], id="history-ref", prompt=self.t("experience.source"))
             yield Static("", id="workflow-status", markup=False)
+            variants: dict[str, ButtonVariant] = {
+                "open": "primary",
+                "delete": "error",
+                "clear": "error",
+                "toggle": "warning",
+            }
             for row in [
                 [("open", "source"), ("delete", "delete"), ("clear", "clear")],
                 [("toggle", "history_toggle"), ("close", "back")],
@@ -603,6 +631,7 @@ class AssistantHistoryScreen(WorkflowScreen):
                         yield Button(
                             self.t("experience." + key),
                             id="history-" + name,
+                            variant=variants.get(name, "default"),
                             disabled=name in {"open", "delete"},
                         )
 
@@ -719,7 +748,7 @@ class ActionFiltersScreen(WorkflowScreen):
                     )
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("tui.btn_apply"), id="action-filter-apply")
+                yield Button(self.t("tui.btn_apply"), id="action-filter-apply", variant="primary")
                 yield Button(self.t("tui.btn_back"), id="action-filter-close")
 
     async def load_data(self) -> None:
@@ -769,8 +798,18 @@ class PlansScreen(WorkflowScreen):
             yield SafeSelect([], id="plan-occurrence", prompt=self.t("tui.entry_pick_first"))
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
+                variants: dict[str, ButtonVariant] = {
+                    "pause": "warning",
+                    "resume": "success",
+                    "skip": "warning",
+                }
                 for op in ("pause", "resume", "skip", "back"):
-                    yield Button(self.t("experience." + op), id="plan-" + op, disabled=op != "back")
+                    yield Button(
+                        self.t("experience." + op),
+                        id="plan-" + op,
+                        variant=variants.get(op, "default"),
+                        disabled=op != "back",
+                    )
 
     async def load_data(self) -> None:
         self.rows = await self.service.action_plans()
@@ -858,9 +897,13 @@ class SavedFiltersScreen(WorkflowScreen):
             yield Input(placeholder=self.t("experience.filter_name"), id="filter-name")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("tui.btn_apply"), id="filter-open", disabled=True)
-                yield Button(self.t("tui.btn_save"), id="filter-save")
-                yield Button(self.t("tui.btn_delete"), id="filter-delete", disabled=True)
+                yield Button(
+                    self.t("tui.btn_apply"), id="filter-open", variant="primary", disabled=True
+                )
+                yield Button(self.t("tui.btn_save"), id="filter-save", variant="success")
+                yield Button(
+                    self.t("tui.btn_delete"), id="filter-delete", variant="error", disabled=True
+                )
                 yield Button(self.t("tui.btn_back"), id="filter-close")
 
     async def load_data(self) -> None:
@@ -948,7 +991,9 @@ class ThreadScreen(WorkflowScreen):
             yield TextArea(read_only=True, id="thread-body")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("ux.full_mail"), id="thread-open", disabled=True)
+                yield Button(
+                    self.t("ux.full_mail"), id="thread-open", variant="primary", disabled=True
+                )
                 yield Button(self.t("tui.btn_back"), id="thread-close")
 
     async def load_data(self) -> None:
@@ -1047,14 +1092,19 @@ class ComposeScreen(WorkflowScreen):
             yield DraftPreview(self.service, id="compose-preview")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("tui.btn_save"), id="compose-save", variant="primary")
+                yield Button(self.t("tui.btn_save"), id="compose-save", variant="success")
                 yield Button(
                     self.t("tui.reply_prepare"),
                     id="compose-prepare",
                     variant="warning",
                     disabled=True,
                 )
-                yield Button(self.t("tui.reply_confirm"), id="compose-confirm", disabled=True)
+                yield Button(
+                    self.t("tui.reply_confirm"),
+                    id="compose-confirm",
+                    variant="success",
+                    disabled=True,
+                )
                 yield Button(self.t("experience.sent_check"), id="compose-check", disabled=True)
                 yield Button(self.t("interface.saved_draft"), id="compose-close")
 
@@ -1309,7 +1359,9 @@ class FileSelectionScreen(WorkflowScreen):
             yield SelectionTable(t=self.t, id="files-table")
             yield Static("", id="workflow-status", markup=False)
             with Horizontal():
-                yield Button(self.t("tui.btn_apply"), id="files-apply", disabled=True)
+                yield Button(
+                    self.t("tui.btn_apply"), id="files-apply", variant="primary", disabled=True
+                )
                 yield Button(self.t("tui.btn_cancel"), id="files-close")
 
     async def load_data(self) -> None:

@@ -70,6 +70,7 @@ def validate_component(kind: ComponentKind, component: Any) -> None:
         if not isinstance(component, ColorScheme):
             raise TypeError("theme factory must return ColorScheme")
         component.palette()
+        component.button_palette()
         return
     if kind is ComponentKind.BOT_EXPORTER:
         if not isinstance(component, BotExportResult):

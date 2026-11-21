@@ -18,6 +18,15 @@ from pydantic import BaseModel, Field, field_validator
 DEFAULT_THEME = "catppuccin-macchiato"
 TERMINAL_THEME = "terminal-auto"
 Flavor = Literal["latte", "frappe", "macchiato", "mocha"]
+ButtonVariant = Literal["default", "primary", "success", "warning", "error"]
+
+_BUTTON_ACCENTS: dict[ButtonVariant, str] = {
+    "default": "surface0",
+    "primary": "blue",
+    "success": "green",
+    "warning": "yellow",
+    "error": "red",
+}
 
 _COLOR_NAMES = (
     "rosewater flamingo pink mauve red maroon peach yellow green teal sky sapphire "
@@ -148,6 +157,53 @@ _EXTRA_THEMES: dict[
 }
 
 
+def _blend(color: str, target: str, amount: float) -> str:
+    return "#" + "".join(
+        f"{round(int(color[i : i + 2], 16) * (1 - amount) + int(target[i : i + 2], 16) * amount):02x}"
+        for i in (1, 3, 5)
+    )
+
+
+def _luminance(color: str) -> float:
+    channels = [int(color[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return sum(c * weight for c, weight in zip(linear, (0.2126, 0.7152, 0.0722), strict=True))
+
+
+def _contrast(foreground: str, background: str) -> float:
+    light, dark = sorted((_luminance(foreground), _luminance(background)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+def _button_text(background: str, palette: dict[str, str], preferred: str = "") -> str:
+    # Keep the scheme's own text/base tones when readable; mid-tone accents may
+    # need white or black instead. Never assume all colored buttons take white.
+    candidates = [
+        c for c in (preferred, palette["text"], palette["base"], "#ffffff", "#000000") if c
+    ]
+    return next(c for c in candidates if _contrast(c, background) >= 4.5)
+
+
+class ButtonColors(BaseModel):
+    """Optional #RRGGBB overrides for one semantic button and its states."""
+
+    background: str | None = None
+    foreground: str | None = None
+    hover_background: str | None = None
+    hover_foreground: str | None = None
+    active_background: str | None = None
+    active_foreground: str | None = None
+    disabled_background: str | None = None
+    disabled_foreground: str | None = None
+
+    @field_validator("*")
+    @classmethod
+    def valid_color(cls, color: str | None) -> str | None:
+        if color is not None and not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            raise ValueError("expected #RRGGBB")
+        return color
+
+
 class ColorScheme(BaseModel):
     """Data-only theme contract; the core never imports a UI framework."""
 
@@ -155,6 +211,7 @@ class ColorScheme(BaseModel):
     base: Flavor = "macchiato"
     dark: bool | None = None
     colors: dict[str, str] = Field(default_factory=dict)
+    buttons: dict[ButtonVariant, ButtonColors] = Field(default_factory=dict)
 
     @field_validator("colors")
     @classmethod
@@ -170,6 +227,41 @@ class ColorScheme(BaseModel):
             **self.colors,
         }
 
+    def button_palette(self) -> dict[ButtonVariant, dict[str, str]]:
+        """Resolve legacy palettes and partial plugin overrides into all states.
+
+        Like Element Plus, semantic buttons have a filled background, a distinct
+        hover/pressed color and a subdued disabled color. Text is resolved per
+        fill so both pastel dark themes and saturated light themes stay legible.
+        """
+        palette = self.palette()
+        result: dict[ButtonVariant, dict[str, str]] = {}
+        for variant, accent in _BUTTON_ACCENTS.items():
+            custom = self.buttons.get(variant, ButtonColors())
+            background = custom.background or palette[accent]
+            foreground = custom.foreground or _button_text(background, palette)
+            hover = custom.hover_background or (
+                palette["surface1"] if variant == "default" else _blend(background, "#ffffff", 0.12)
+            )
+            active = custom.active_background or (
+                palette["surface2"] if variant == "default" else _blend(background, "#000000", 0.12)
+            )
+            disabled = custom.disabled_background or _blend(background, palette["base"], 0.72)
+            result[variant] = {
+                "background": background,
+                "foreground": foreground,
+                "hover_background": hover,
+                "hover_foreground": custom.hover_foreground
+                or _button_text(hover, palette, foreground),
+                "active_background": active,
+                "active_foreground": custom.active_foreground
+                or _button_text(active, palette, foreground),
+                "disabled_background": disabled,
+                "disabled_foreground": custom.disabled_foreground
+                or _blend(palette["subtext0"], disabled, 0.25),
+            }
+        return result
+
     @property
     def is_dark(self) -> bool:
         return self.dark if self.dark is not None else self.base != "latte"
@@ -184,8 +276,22 @@ def builtin_themes() -> dict[str, ColorScheme]:
     }
     for theme_id, (name, dark, accents, tones, surfaces) in _EXTRA_THEMES.items():
         colors = dict(zip(_COLOR_NAMES, (*accents, *tones, *surfaces), strict=True))
-        themes[theme_id] = ColorScheme(
-            name=name, base="macchiato", dark=dark, colors=colors
+        themes[theme_id] = ColorScheme(name=name, base="macchiato", dark=dark, colors=colors)
+    # Use VS Code's published button and status colors rather than syntax
+    # highlighting (whose "green" is teal and "yellow" is brown in Light Modern).
+    for theme_id, background, hover, green, yellow, red in (
+        ("vscode-dark-modern", "#0078d4", "#026ec1", "#89d185", "#cca700", "#f14c4c"),
+        ("vscode-light-modern", "#005fb8", "#0258a8", "#388a34", "#bf8803", "#e51400"),
+    ):
+        themes[theme_id].buttons["primary"] = ButtonColors(
+            background=background, foreground="#ffffff", hover_background=hover
         )
+        status_colors: dict[ButtonVariant, str] = {
+            "success": green,
+            "warning": yellow,
+            "error": red,
+        }
+        for variant, color in status_colors.items():
+            themes[theme_id].buttons[variant] = ButtonColors(background=color)
     themes[TERMINAL_THEME] = ColorScheme(name="Match terminal", base="macchiato", dark=True)
     return themes

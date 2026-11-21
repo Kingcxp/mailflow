@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 from mailflow.i18n import I18n
 from mailflow.mail_query import MailQuery
-from mailflow.themes import ColorScheme
+from mailflow.themes import ButtonColors, ColorScheme
 from mailflow_tui.app import MailFlowApp
 from mailflow_tui.remote import LoginApp, LoginScreen, RemoteServiceAdapter
 from mailflow_tui.widgets import Input
@@ -43,7 +43,13 @@ def test_remote_adapter_follows_server_language_event() -> None:
             "language": "en",
             "timezone": "UTC",
             "theme": "custom-latte",
-            "color_schemes": {"custom-latte": ColorScheme(name="Local light", base="latte")},
+            "color_schemes": {
+                "custom-latte": ColorScheme(
+                    name="Local light",
+                    base="latte",
+                    buttons={"primary": ButtonColors(background="#2855ba", foreground="#ffffff")},
+                ).model_dump()
+            },
         },
         I18n(),
     )
@@ -51,6 +57,8 @@ def test_remote_adapter_follows_server_language_event() -> None:
     assert adapter.t("tui.btn_quit") == I18n("en").t("tui.btn_quit")
     assert adapter.config.general.theme == "custom-latte"
     assert not adapter.color_schemes()["custom-latte"].is_dark
+    colors = adapter.color_schemes()["custom-latte"].button_palette()["primary"]
+    assert (colors["background"], colors["foreground"]) == ("#2855ba", "#ffffff")
 
     client.emit("language.changed", language="zh-CN")
 

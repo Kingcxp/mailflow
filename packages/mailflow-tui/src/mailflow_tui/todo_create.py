@@ -136,7 +136,7 @@ class TodoCreateModal(ModalScreen[bool]):
                     )
             yield Static("", id="todo-create-error")
             with Horizontal(id="todo-create-buttons"):
-                yield Button(self._t("tui.btn_save"), id="todo-save", variant="primary")
+                yield Button(self._t("tui.btn_save"), id="todo-save", variant="success")
                 yield Button(self._t("tui.btn_cancel"), id="todo-cancel", variant="default")
 
     async def on_mount(self) -> None:

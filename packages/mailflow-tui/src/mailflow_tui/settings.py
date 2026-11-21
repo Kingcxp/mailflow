@@ -240,7 +240,7 @@ class ListEditScreen(ModalScreen[str | None]):
             yield Static("", id="list-edit-status")
             with Horizontal(classes="dialog-actions"):
                 yield Button(self._t("tui.btn_save"), id="list-edit-save", variant="success")
-                yield Button(self._t("tui.btn_back"), id="list-edit-back", variant="primary")
+                yield Button(self._t("tui.btn_back"), id="list-edit-back", variant="default")
 
     def action_dismiss_modal(self) -> None:
         if not self._saving:
@@ -842,7 +842,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 yield Button(
                     self._t("tui.btn_save"), id="entry-form-save", variant="success", disabled=True
                 )
-                yield Button(self._t("tui.btn_back"), id="entry-form-back", variant="primary")
+                yield Button(self._t("tui.btn_back"), id="entry-form-back", variant="default")
 
     def _field_widgets(self, spec: OptionSpec) -> ComposeResult:
         widget_id = f"field-{_slug(spec.label)}"

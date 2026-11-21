@@ -564,7 +564,7 @@ class SmartOperationEditModal(ModalScreen[dict[str, Any] | None]):
                 yield Button(
                     self._t("tui.smart_review_save_edit"),
                     id="smart-review-save-edit",
-                    variant="primary",
+                    variant="success",
                 )
                 yield Button(self._t("tui.smart_review_cancel"), id="smart-review-cancel-edit")
 
