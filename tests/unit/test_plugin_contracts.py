@@ -87,6 +87,34 @@ def test_theme_plugins_discover_select_and_disable(monkeypatch: pytest.MonkeyPat
         validate_result(ComponentKind.THEME, "palette", {"base": "#000000"})
 
 
+def test_builtin_theme_catalog_has_complete_palettes() -> None:
+    themes = builtin_themes()
+    expected = {
+        "dracula": (True, "#282a36"),
+        "nord": (True, "#2e3440"),
+        "gruvbox-dark": (True, "#282828"),
+        "gruvbox-light": (False, "#fbf1c7"),
+        "solarized-dark": (True, "#002b36"),
+        "solarized-light": (False, "#fdf6e3"),
+        "tokyo-night": (True, "#1a1b26"),
+        "vscode-dark-modern": (True, "#1f1f1f"),
+        "vscode-light-modern": (False, "#ffffff"),
+    }
+    assert DEFAULT_THEME == "catppuccin-macchiato"
+    assert set(themes) == {
+        "catppuccin-latte",
+        "catppuccin-frappe",
+        "catppuccin-macchiato",
+        "catppuccin-mocha",
+        *expected,
+    }
+    for theme_id, (is_dark, background) in expected.items():
+        scheme = themes[theme_id]
+        assert scheme.is_dark is is_dark
+        assert len(scheme.colors) == 26
+        assert scheme.palette()["base"] == background
+
+
 async def test_real_router_passes_all_chat_parameters() -> None:
     manager = PluginManager()
     manager.register(fake_plugin())
