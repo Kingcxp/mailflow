@@ -339,6 +339,7 @@ class ShortcutHelp(ModalScreen[None]):
         table.add_column(width=22, style="bold $ctp-blue")
         table.add_column(ratio=1)
         for key, description in (
+            ("Ctrl+9", "help_console"),
             ("Tab / Shift+Tab", "help_focus"),
             ("Enter / Space", "help_activate"),
             ("Ctrl+A / F7", "help_edit_select"),
@@ -369,9 +370,7 @@ class ShortcutHelp(ModalScreen[None]):
                     ("tui.help_sessions", "sessions.help"),
                     ("tui.help_clipboard", "tui.help_terminal_clipboard"),
                 ):
-                    yield Static(
-                        self._t(title), classes="shortcut-section-title", markup=False
-                    )
+                    yield Static(self._t(title), classes="shortcut-section-title", markup=False)
                     note = Text(self._t(content))
                     note.highlight_words(
                         (

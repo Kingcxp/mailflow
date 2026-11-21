@@ -140,6 +140,22 @@ Attachment download is independent of OCR.
 
 ## Tasks and notifications
 
+The **Console** tab (`Ctrl+9`) combines console notifications and chat commands.
+Use the configured prefix, for example `/mailflow help`. Plain messages do not
+call a model: start with `@MailFlow` or quote a message using its right-click /
+`Shift+F10` menu. Changes require a text confirmation in the conversation. Enter
+sends; Shift+Enter adds a line. Stop cancels the current task, except a mail send
+already in progress, whose result must be checked before retrying.
+
+Messages remain only for the current service run, including across detach and
+remote reconnects. The view initially loads 100 messages and retains up to 1,000.
+Stopping the service clears conversations and pending confirmations. Managed
+uploads and saved drafts remain normal stored data. Remote conversations are
+isolated by authenticated user and client session. Clearing or unsubscribing in
+one conversation does not affect other viewers. Notifications are buffered even
+when the tab is closed; enable the console channel explicitly to receive them.
+Console delivery has no default two-second delay; external bots retain theirs.
+
 Tasks may have no deadline. Overdue unfinished tasks remain available. Completing
 a task permanently removes that occurrence; it cannot be reopened from a
 completed-history view. Daily/weekly/monthly plans keep generating future
@@ -333,6 +349,18 @@ for safe issue reports.
 `general.ocr_images` 或账户选项。已识别文字不因关闭功能而消失，附件下载与识别独立。
 
 ### 待办与通知
+
+**控制台**标签页（`Ctrl+9`）同时接收 console 通知和聊天命令。
+使用当前配置的命令前缀，例如 `/mailflow help`。普通消息不会调用模型；
+输入 `@MailFlow` 加上需求，或通过消息右键／`Shift+F10` 菜单引用后提问。
+修改操作通过聊天文字确认。Enter 发送，Shift+Enter 换行；停止按钮取消当前任务。
+已经开始发送的邮件需要先核对结果，避免重复发送。
+
+对话仅保留在本次服务运行内，转入后台、重新连接后仍可查看，停止服务后清空。
+页面先加载最近 100 条，最多保留 1,000 条；上传文件和草稿仍作为正常业务数据保存。
+远程对话按登录用户和客户端会话隔离；清空或取消订阅只影响当前对话。
+未打开页面时通知仍进入缓存，需要接收通知时手动开启 console 渠道。
+console 默认不等待两秒，其他机器人仍沿用原有发送间隔。
 
 待办允许没有截止时间，逾期后仍保留。完成会永久删除当期，不提供完成历史或重新打开；
 周期计划继续运行，暂停和结束计划是独立操作。未来预览不进入提醒。

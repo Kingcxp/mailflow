@@ -23,7 +23,7 @@ search and rule processing work without one.
 | Search and assistant | Search text, attachment names and extracted image text; use the mail page’s smart-action button for natural-language requests, progress and confirmed changes |
 | Writing | Compose, reply, reply all or forward with To/Cc/Bcc and attachments; keep drafts, preview and confirm before sending |
 | Tasks | Use optional deadlines, categories, tags and daily/weekly/monthly plans; postpone one occurrence, pause a plan or snooze its reminders |
-| Notifications | Connect supported bots or delivery plugins; choose presets, quiet hours and targets; inspect and retry failed deliveries |
+| Notifications | Connect bots or delivery plugins; use the Console tab for in-app notifications and chat commands; choose quiet hours and retry failed deliveries |
 | Files and recovery | Find and download attachments, exchange files on supported chat channels, restore trash and create portable or scheduled backups |
 | Access and extensions | Use local or remote TUI, CLI and existing bot integrations; extend sources, models, processing, delivery and storage through plugins |
 

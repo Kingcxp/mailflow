@@ -62,6 +62,7 @@ from textual.widgets import (
 
 from mailflow_tui.action_types import ActionTypePicker, ActionTypesModal
 from mailflow_tui.confirm import ConfirmModal
+from mailflow_tui.console import ConsolePane
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
 from mailflow_tui.labels import (
@@ -2816,6 +2817,27 @@ class ActionsPane(Vertical):
         if self.is_on_screen and self._actions_loaded and not self._delete_busy:
             await self.refresh_actions(reload=False)
 
+    async def select_action(self, item_id: str) -> None:
+        self._actions_filter_generation += 1
+        self._category_filter = self._tag_filter = ""
+        self._type_filters.clear()
+        self._smart_action_result = None
+        search = self.query_one("#actions-search", PromptInput)
+        with search.prevent(TextArea.Changed):
+            search.value = ""
+        try:
+            await self.refresh_actions()
+            table = self._actions_table()
+            if table is not None and item_id in table.visible_keys():
+                table.set_checks({item_id})
+                table.move_cursor(row=table.get_row_index(item_id), animate=False)
+                table.focus()
+                self._sync_action_controls()
+            else:
+                self.notify(self._service.t("console.source_missing"), severity="warning")
+        except Exception as exc:
+            self.notify(error_message(self._service, exc), severity="error")
+
     def _actions_table(self) -> SelectionTable | None:
         return self.query_one_optional("#actions-table", SelectionTable)
 
@@ -5446,6 +5468,7 @@ class MailFlowApp(App[None]):
             ("ctrl+6", "tab-notifications"),
             ("ctrl+7", "tab-settings"),
             ("ctrl+8", "tab-logs"),
+            ("ctrl+9", "tab-console"),
         ):
             if self._remote and tab_id in {
                 "tab-mailboxes",
@@ -5578,6 +5601,8 @@ class MailFlowApp(App[None]):
                     yield MarketPane(self._service)
             with TabPane(self._service.t("tui.tab_notifications"), id="tab-notifications"):
                 yield NotificationsPane(self._service)
+            with TabPane(self._service.t("tui.tab_console"), id="tab-console"):
+                yield ConsolePane(self._service)
             with TabPane(self._service.t("tui.tab_settings"), id="tab-settings"):
                 yield SettingsPane(self._service)
             with TabPane(self._service.t("tui.tab_logs"), id="tab-logs"):
@@ -5734,6 +5759,7 @@ class MailFlowApp(App[None]):
         remounted (logs survive language switches to keep their history)."""
         keys = {pane_id: key for pane_id, (_f, key) in self._pane_factories().items()}
         keys["tab-logs"] = "tui.tab_logs"
+        keys["tab-console"] = "tui.tab_console"
         return keys
 
     def _apply_language(self) -> None:
@@ -5788,6 +5814,8 @@ class MailFlowApp(App[None]):
                     raise
         # panes that survive remounting still need their statics retranslated
         for pane in self.query(LogsPane):
+            pane.relabel()
+        for pane in self.query(ConsolePane):
             pane.relabel()
         for screen in self.screen_stack:
             if isinstance(screen, (MailHistoryScreen, MarketDetailScreen)):
@@ -5887,6 +5915,9 @@ class MailFlowApp(App[None]):
         if active == "tab-notifications":
             for pane in self.query(NotificationsPane):
                 pane.check_if_visible()
+        elif active == "tab-console":
+            for pane in self.query(ConsolePane):
+                pane.activate()
 
     def _drain_logs(self) -> None:
         log_query = self.query(LogsPane)
@@ -5900,3 +5931,13 @@ class MailFlowApp(App[None]):
         tabs.active = "tab-mail"
         pane = self.query_one(MailPane)
         pane.select_mail(mail_id)
+
+    def open_action(self, item_id: str) -> None:
+        self.query_one(TabbedContent).active = "tab-actions"
+        pane = self.query_one(ActionsPane)
+        pane.run_worker(
+            pane.select_action(item_id),
+            group="action-navigation",
+            exclusive=True,
+            exit_on_error=False,
+        )

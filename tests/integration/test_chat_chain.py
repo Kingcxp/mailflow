@@ -498,7 +498,7 @@ async def test_console_plain_text_quote_confirmation_and_cancellation() -> None:
     from mailflow.domain import PendingOperation, SmartActionResult
     from mailflow.permissions import PermissionContext, permission_scope
 
-    from mailflow_test_support.commands import commands_service
+    from mailflow_test_support.commands import commands_service, make_record
 
     service = commands_service()
     query = AsyncMock(
@@ -584,5 +584,15 @@ async def test_console_plain_text_quote_confirmation_and_cancellation() -> None:
         await service.console_cancel()
         rows = await settled()
         assert any(row["state"] == "cancelled" for row in rows)
+        await service.storage.save_mail(make_record("invoice", subject="Invoice"))
+        await service.storage.save_mail(make_record("report", subject="Report"))
+        await service.console_send("/mailflow mail list Invoice", request_id="invoice-list")
+        listing = (await settled())[-1]
+        await service.console_send("/mailflow mail list Report", request_id="report-list")
+        await settled()
+        await service.console_send(
+            "/mailflow mail show 1", request_id="quoted-show", quote_id=listing["id"]
+        )
+        assert (await settled())[-1]["references"][0]["id"] == "invoice"
     finally:
         await service.console.close()

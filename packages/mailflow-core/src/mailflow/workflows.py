@@ -156,7 +156,10 @@ class UserWorkflows:
 
             require_admin(self.service.t)
             identity = current_context()
-            if identity.provider not in {"local", "server"} and identity.chat_id != identity.sender:
+            if (
+                identity.provider not in {"local", "server", "console"}
+                and identity.chat_id != identity.sender
+            ):
                 raise self.error("experience.backup_private")
             if action in {"backup_export", "backup_send"}:
                 async with self.service._backup_lock:  # pyright: ignore[reportPrivateUsage]
@@ -517,7 +520,7 @@ class UserWorkflows:
         context = current_context()
         if (
             bcc
-            and context.provider not in {"local", "server"}
+            and context.provider not in {"local", "server", "console"}
             and context.chat_id != context.sender
         ):
             raise self.error("experience.private_send")

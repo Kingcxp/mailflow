@@ -1076,3 +1076,78 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         assert app.query_one("#actions-edit", Button).disabled
         assert await service.list_actions_all() == []
         assert not await service.runtime.run_reminder_tick()
+
+
+async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: Any) -> None:
+    from mailflow.console import ConsoleMessage
+    from mailflow_tui.console import ConsoleCard, ConsolePane
+
+    service, view, app, emit, _failures = host
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def answer(*args: Any, **kwargs: Any) -> SmartActionResult:
+        entered.set()
+        await finish.wait()
+        return SmartActionResult(final_text="## Result\nThe request finished.")
+
+    service.smart_action = answer
+    unsubscribe = None
+    if getattr(view, "remote", False):
+
+        async def forward(event: str, **payload: Any) -> None:
+            await emit(event, **payload)
+
+        unsubscribe = service.on("console.changed", forward)
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+9")
+            pane = app.query_one(ConsolePane)
+            await pane.refresh_messages()
+            prompt = pane.query_one(PromptInput)
+            prompt.value = "a note without a model"
+            prompt.focus()
+            await pilot.press("enter")
+            await until(
+                pilot,
+                lambda: any(
+                    c.message.text == "a note without a model" for c in pane.query(ConsoleCard)
+                ),
+            )
+            await until(pilot, lambda: not prompt.value)
+            assert not entered.is_set()
+            prompt.value = "@MailFlow check the inbox"
+            await pilot.press("enter")
+            await until(pilot, entered.is_set)
+            prompt.value = "my next request"
+            await pilot.pause()
+            await pilot.press("ctrl+1", "ctrl+9")
+            assert pane.query_one(PromptInput).value == "my next request"
+            service.i18n.set_language("zh-CN")
+            await emit("language.changed", language="zh-CN")
+            await pilot.pause()
+            assert app.query_one(ConsolePane) is pane
+            assert prompt.value == "my next request"
+            finish.set()
+            await until(
+                pilot,
+                lambda: any(
+                    c.message.text.endswith("The request finished.")
+                    for c in pane.query(ConsoleCard)
+                ),
+            )
+            await until(pilot, lambda: pane.query_one("#console-stop", Button).disabled)
+            assert prompt.value == "my next request"
+            await service.console.append(
+                ConsoleMessage(role="notification", text="An incoming notification")
+            )
+            await until(
+                pilot,
+                lambda: any(
+                    c.message.text == "An incoming notification" for c in pane.query(ConsoleCard)
+                ),
+            )
+    finally:
+        finish.set()
+        if unsubscribe is not None:
+            unsubscribe()
+        await service.console.close()

@@ -472,6 +472,7 @@ class MailFlowService:
         self._needs_rebuild = True
         was_active = self._started or self._update_task is not None or self._expiry_task is not None
         self._stopped_event.set()
+        await self.console.close()
         tasks = [
             task
             for task in (
@@ -498,7 +499,7 @@ class MailFlowService:
         self._smart_history.clear()
         self._assistant_confirmations.clear()
         self._assistant_chats.clear()
-        await self.console.close()
+        self.console.requests.clear()
         if self.commands is not None:
             self.commands.clear_console_selections()
         # User-triggered analysis is temporary too, even in a host that never
@@ -3890,7 +3891,12 @@ Return every candidate in this batch."""
                     command = text.removeprefix(self.command_prefix()).strip().split()
                     sending = len(command) >= 3 and command[1:3] == ["reply", "confirm"]
                     confirmation = self._assistant_confirmations.get(actor)
-                    if mentioned and command[:1] in (["confirm"], ["确认"]) and confirmation:
+                    if (
+                        mentioned
+                        and command
+                        and command[0].casefold() in {"confirm", "确认"}
+                        and confirmation
+                    ):
                         sending = any(
                             op.tool in {"write_message", "write_reply"} and op.arguments.get("send")
                             for op in confirmation[1].pending
@@ -3952,6 +3958,8 @@ Return every candidate in this batch."""
                         return await self._assistant_chat(text.strip(), identity, turn=turn)
                 except Exception as exc:
                     logger.warning("assistant chat failed (%s)", type(exc).__name__)
+                    if turn is not None:
+                        turn.failed = True
                     return error_text(exc, self.t)
             # The bare word ("mailflow unsubscribe" without the prefix)
             # previously returned None — the bridge sent no reply at all
@@ -4155,6 +4163,8 @@ Return every candidate in this batch."""
                 turn=turn,
             )
         except PermissionError as exc:
+            if turn is not None:
+                turn.failed = True
             return error_text(exc, self.t)
         except Exception:
             # A chat command must NEVER die silently: the user has no way
@@ -4162,6 +4172,8 @@ Return every candidate in this batch."""
             # bot_server DEBUG swallow hid a live 500 with zero trace) and
             # return a visible error reply.
             logger.exception("chat command %s failed", args.split()[:1])
+            if turn is not None:
+                turn.failed = True
             return self.t("chat.error_reply")
 
     async def _mailflow_command_inner(
@@ -4291,7 +4303,10 @@ Return every candidate in this batch."""
             )
         if self.commands is None:
             return self.t("chat.router_missing")
-        response = await self.commands.execute(args)
+        if turn is not None and turn.quote is not None:
+            response = await self.commands.execute(args, references=turn.quote.references)
+        else:
+            response = await self.commands.execute(args)
         if turn is not None:
             turn.response = response
         rendered = str(response.render())

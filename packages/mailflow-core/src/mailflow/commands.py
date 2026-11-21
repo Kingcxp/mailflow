@@ -17,6 +17,7 @@ import logging
 import re
 import shlex
 from collections.abc import Awaitable, Callable, Sized
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -43,6 +44,8 @@ from mailflow.permissions import (
     permission_scope,
 )
 from mailflow.updates import UpdateReport
+
+_quoted_references: ContextVar[list[dict[str, str]] | None] = ContextVar("quoted_references", default=None)
 
 if TYPE_CHECKING:
     from rich.text import Text
@@ -302,7 +305,11 @@ class CommandRouter:
     # -- entry point --------------------------------------------------------------------
 
     async def execute(
-        self, line: str, *, context: PermissionContext | None = None
+        self,
+        line: str,
+        *,
+        context: PermissionContext | None = None,
+        references: list[dict[str, str]] | None = None,
     ) -> CommandResponse:
         try:
             parts = shlex.split(line)
@@ -324,7 +331,11 @@ class CommandRouter:
         try:
             with permission_scope(context or current_context()):
                 authorize_command(command, args, self._t)
-                return await handler(args)
+                token = _quoted_references.set(references)
+                try:
+                    return await handler(args)
+                finally:
+                    _quoted_references.reset(token)
         except KeyError as exc:
             return self._err(error_text(exc, self._t))
         except ValueError as exc:
@@ -491,6 +502,17 @@ class CommandRouter:
         self._console_selections.clear()
 
     async def _selected_id(self, kind: str, index: int) -> str | None:
+        references = _quoted_references.get()
+        if references:
+            scoped = [r for r in references if r["kind"] == kind]
+            return next(
+                (
+                    r["id"]
+                    for offset, r in enumerate(scoped, 1)
+                    if r.get("number", str(offset)) == str(index + 1)
+                ),
+                "",
+            )
         if current_context().provider == "console":
             ids = self._console_selections.get(self._selection_key(kind))
             return None if ids is None else ids[index] if 0 <= index < len(ids) else ""
@@ -548,7 +570,13 @@ class CommandRouter:
             spans=spans,
             text="".join(s.text for s in spans),
             references=[
-                {"kind": "mail", "id": r.record_id, "title": r.mail.subject} for r in page_records
+                {
+                    "kind": "mail",
+                    "id": r.record_id,
+                    "title": r.mail.subject,
+                    "number": str((page - 1) * _PAGE_SIZE + offset),
+                }
+                for offset, r in enumerate(page_records, 1)
             ],
         )
 
@@ -623,8 +651,8 @@ class CommandRouter:
             spans=spans,
             text="".join(s.text for s in spans),
             references=[
-                {"kind": "mail", "id": r.record_id, "title": r.mail.subject}
-                for r in matched[:_PAGE_SIZE]
+                {"kind": "mail", "id": r.record_id, "title": r.mail.subject, "number": str(offset)}
+                for offset, r in enumerate(matched[:_PAGE_SIZE], 1)
             ],
         )
 
@@ -1195,7 +1223,13 @@ class CommandRouter:
             spans=spans,
             text="".join(s.text for s in spans),
             references=[
-                {"kind": "action", "id": item.item_id, "title": item.summary} for item in page_items
+                {
+                    "kind": "action",
+                    "id": item.item_id,
+                    "title": item.summary,
+                    "number": str((page - 1) * _PAGE_SIZE + offset),
+                }
+                for offset, item in enumerate(page_items, 1)
             ],
         )
 

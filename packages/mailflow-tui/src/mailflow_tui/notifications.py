@@ -25,7 +25,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.markup import escape
-from textual.widgets import Button, DataTable, Static
+from textual.widgets import Button, DataTable, Static, TabbedContent
 
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.gateway_guide import GatewayGuideModal
@@ -408,6 +408,8 @@ class NotificationsPane(Vertical):
         if index is not None:
             choices.append((self._service.t("tui.notifications_minimum"), "notif-urgency"))
             entry = self._service.config.notifiers[index]
+            if entry.provider == "console":
+                choices.append((self._service.t("console.open_console"), "notif-console"))
             gateway = entry.options.get("gateway") or self._gateway_for(
                 self._service, entry.provider
             )
@@ -432,14 +434,14 @@ class NotificationsPane(Vertical):
                 return
             if action == "notif-urgency":
                 self._choose_urgency(notifier_id)
+            elif action == "notif-console":
+                self.app.query_one(TabbedContent).active = "tab-console"
             elif action == "notif-delete":
                 self.app.push_screen(
                     ConfirmModal(
                         self._service,
                         title=self._service.t("tui.notifications_remove"),
-                        body=self._service.t(
-                            "tui.notifications_remove_confirm", name=notifier_id
-                        ),
+                        body=self._service.t("tui.notifications_remove_confirm", name=notifier_id),
                         confirm_label=self._service.t("tui.btn_remove"),
                         variant="error",
                         focus_confirm=False,

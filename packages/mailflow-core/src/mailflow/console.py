@@ -56,6 +56,7 @@ class ConsoleTurn:
     progress: Callable[..., None] | None = None
     result: SmartActionResult | None = None
     response: CommandResponse | None = None
+    failed: bool = False
 
 
 class ConsoleInbox:
@@ -89,6 +90,7 @@ class ConsoleInbox:
 
     def channel(self, channel: str = "") -> str:
         channels = [n.notifier_id for n in self.service.config.notifiers if n.provider == "console"]
+        channels.extend(sorted(self._remembered_channels() - set(channels)))
         virtual = "console"
         used = {n.notifier_id for n in self.service.config.notifiers}
         while virtual in used and virtual not in channels:
@@ -97,6 +99,12 @@ class ConsoleInbox:
         if selected not in (channels or [virtual]):
             raise translated_error(ValueError, self.service.t, "console.channel_missing")
         return selected
+
+    def _remembered_channels(self) -> set[str]:
+        owner = self.owner()
+        return {
+            channel for channel, viewer in (*self._feeds, *self._cleared) if viewer in {"", owner}
+        }
 
     def bind(self, notifiers: list[Notifier], configs: list[NotifierConfig]) -> None:
         for notifier, config in zip(notifiers, configs, strict=True):
@@ -115,20 +123,19 @@ class ConsoleInbox:
                     raise translated_error(RuntimeError, self.service.t, "console.stopped")
                 if delivery_id and delivery_id in self._deliveries:
                     return
-                await self.append(
-                    ConsoleMessage(
-                        channel=channel,
-                        role="notification",
-                        kind=kind,
-                        text=text,
-                        references=references,
-                        markdown=False,
-                    )
+                message = ConsoleMessage(
+                    channel=channel,
+                    role="notification",
+                    kind=kind,
+                    text=text,
+                    references=references,
+                    markdown=False,
                 )
                 if delivery_id:
                     self._deliveries[delivery_id] = None
                     while len(self._deliveries) > MESSAGE_LIMIT * 4:
                         self._deliveries.popitem(last=False)
+                await self.append(message)
                 if self.service.config.logging.console:
                     logger.warning("%s", text)
 
@@ -176,6 +183,15 @@ class ConsoleInbox:
                     "configured": True,
                     "enabled": config.enabled,
                     "reason": self.service.t(reason) if reason else "",
+                }
+            )
+        for channel in sorted(self._remembered_channels() - {c["id"] for c in result}):
+            result.append(
+                {
+                    "id": channel,
+                    "configured": False,
+                    "enabled": False,
+                    "reason": self.service.t("console.not_configured"),
                 }
             )
         return result or [
@@ -448,10 +464,14 @@ class ConsoleInbox:
             from mailflow.chat_files import file_sender_scope
 
             async def file_sender(file: dict[str, Any]) -> None:
+                if len(str(file.get("data", ""))) > 64 * 1024 * 1024:
+                    raise translated_error(ValueError, self.service.t, "console.file_cache_limit")
                 reference = uuid4().hex
                 self._files[reference] = file
                 self._file_bytes += len(str(file.get("data", "")))
-                while self._file_bytes > 64 * 1024 * 1024 and self._files:
+                while self._files and (
+                    self._file_bytes > 64 * 1024 * 1024 or len(self._files) > MESSAGE_LIMIT
+                ):
                     _, dropped = self._files.popitem(last=False)
                     self._file_bytes -= len(str(dropped.get("data", "")))
                 reply.files.append(
@@ -499,7 +519,7 @@ class ConsoleInbox:
                 "cancelled"
                 if reply.text == self.service.t("chat.cancelled")
                 else "failed"
-                if turn.response is not None and not turn.response.ok
+                if turn.failed or (turn.response is not None and not turn.response.ok)
                 else "done"
             )
             self._update(
@@ -520,6 +540,10 @@ class ConsoleInbox:
                 await self.changed(channel, owner)
 
     async def cancel(self, channel: str = "") -> None:
+        async with self._submission_lock:
+            await self._cancel(channel)
+
+    async def _cancel(self, channel: str) -> None:
         channel = self.channel(channel)
         identity = self.identity(channel)
         actor = self.service._chat_actor("console", channel, identity.chat_id, identity.sender)
@@ -551,6 +575,10 @@ class ConsoleInbox:
         )
 
     async def clear(self, channel: str = "") -> None:
+        async with self._submission_lock:
+            await self._clear(channel)
+
+    async def _clear(self, channel: str) -> None:
         channel = self.channel(channel)
         owner = self.owner()
         if (channel, owner) in self._readers:
@@ -568,7 +596,7 @@ class ConsoleInbox:
                 await self.service.list_drafts(state="prepared") if identity.is_admin else []
             ):
                 if draft.owner == self.service.workflows_actor():
-                    await self.service.cancel_reply(draft.draft_id)
+                    await self.service.edit_draft(draft.draft_id, draft.subject, draft.body)
         for row in self._feeds.pop((channel, owner), ()):
             for file in row.files:
                 dropped = self._files.pop(file["id"], {})
@@ -631,7 +659,8 @@ class ConsoleInbox:
         return dict(self._files[file_id])
 
     async def close(self) -> None:
-        self.closed = True
+        async with self._submission_lock:
+            self.closed = True
         tasks = [*self._readers.values(), *self._updates]
         for task in tasks:
             task.cancel()
