@@ -51,7 +51,7 @@ def textual_theme(name: str, scheme: ColorScheme) -> Theme:
         accent=p["lavender"],
         foreground=p["text"],
         background=p["base"],
-        surface=p["surface0"],
+        surface=p["base"],
         panel=p["mantle"],
         success=p["green"],
         warning=p["yellow"],
