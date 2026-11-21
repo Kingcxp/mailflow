@@ -43,7 +43,7 @@ def theme_catalog(service: Any) -> dict[str, ColorScheme]:
 
 def textual_theme(name: str, scheme: ColorScheme) -> Theme:
     p = scheme.palette()
-    selection = Color.parse(p["base"]).blend(Color.parse(p["overlay2"]), 0.25).hex
+    selection = Color.parse(p["base"]).blend(Color.parse(p["blue"]), 0.25).hex
     return Theme(
         name=name,
         primary=p["blue"],
@@ -51,7 +51,7 @@ def textual_theme(name: str, scheme: ColorScheme) -> Theme:
         accent=p["lavender"],
         foreground=p["text"],
         background=p["base"],
-        surface=p["base"],
+        surface=p["surface0"],
         panel=p["mantle"],
         success=p["green"],
         warning=p["yellow"],
@@ -63,7 +63,7 @@ def textual_theme(name: str, scheme: ColorScheme) -> Theme:
             "text": p["text"],
             "text-muted": p["subtext0"],
             "text-disabled": p["overlay0"],
-            "border": p["lavender"],
+            "border": p["surface2"],
             "border-blurred": p["surface1"],
             "block-cursor-background": selection,
             "block-cursor-foreground": p["text"],
@@ -129,8 +129,6 @@ def apply_color_scheme(
         [rgb(key) for key in ("overlay1", "red", "green", "yellow", "blue", "pink", "sky", "text")],
     )
     app.ansi_theme_dark = app.ansi_theme_light = terminal
-    if replace_rich:
-        app.console.pop_theme()
     # The same tokens work in Textual markup and Rich renderables. Rich resolves
     # spans through its console; Textual resolves the matching CSS variables.
     styles = {"$" + key: Style.parse(value) for key, value in _content_styles(p).items()}
@@ -150,8 +148,12 @@ def apply_color_scheme(
             "markdown.hr": Style(color=p["surface2"]),
         }
     )
-    app.console.push_theme(RichTheme(styles))
-    app.register_theme(textual_theme(name, scheme))
+    rich_theme = RichTheme(styles)
+    ui_theme = textual_theme(name, scheme)
+    app.register_theme(ui_theme)
+    if replace_rich:
+        app.console.pop_theme()
+    app.console.push_theme(rich_theme)
     unchanged_name = app.theme == name
     app.theme = name
     if unchanged_name and app.is_running:

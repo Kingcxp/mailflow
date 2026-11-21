@@ -5171,10 +5171,9 @@ class MailFlowApp(App[None]):
             self._missing_theme_notice = ""
 
     def _refresh_color_content(self) -> None:
-        # Re-render colored content in place; editors and page state stay intact.
+        # Textual restyles widgets when the theme changes. Only render caches
+        # that are explicitly theme-aware need to be invalidated here.
         for screen in self.screen_stack:
-            for node in screen.query(Static):
-                node.update(node.content, layout=False)
             for table in screen.query(DataTable):
                 table.notify_style_update()
         for pane in self.query(LogsPane):

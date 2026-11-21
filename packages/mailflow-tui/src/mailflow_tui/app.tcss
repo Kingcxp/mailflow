@@ -79,23 +79,23 @@ Button.-default {
 }
 
 Button.-primary {
-    background: $ctp-blue;
-    color: $button-on-accent;
+    background: $ctp-surface0;
+    color: $ctp-blue;
 }
 
 Button.-success {
-    background: $ctp-green;
-    color: $button-on-accent;
+    background: $ctp-surface0;
+    color: $ctp-green;
 }
 
 Button.-warning {
-    background: $ctp-yellow;
-    color: $button-on-warning;
+    background: $ctp-surface0;
+    color: $ctp-yellow;
 }
 
 Button.-error {
-    background: $ctp-red;
-    color: $button-on-accent;
+    background: $ctp-surface0;
+    color: $ctp-red;
 }
 
 Button:disabled {
@@ -106,7 +106,7 @@ Button:disabled {
 
 Button:hover,
 Button:focus {
-    background-tint: $foreground 7%;
+    background: $ctp-surface1;
 }
 
 Button:focus {
@@ -117,10 +117,7 @@ Button:disabled:hover {
     background-tint: transparent;
 }
 
-/* The 3x3 toggles must read as one solid block: reverse-video on hover only
-   inverts the 2 label cells and looks half-lit, and the press animation's
-   tint blanks the block. Bold + slight tint instead; the on/off state is the
-   variant colour (grey -> green), which fills the whole square. */
+/* Keep compact search toggles readable without applying a bright fill. */
 SearchToggle:hover,
 SearchToggle:focus {
     text-style: bold;
@@ -145,8 +142,8 @@ SearchToggle.-active {
 #actions-smart-action {
     height: 3;
     margin-left: 1;
-    background: $ctp-mauve;
-    color: $button-on-accent;
+    background: $ctp-surface0;
+    color: $ctp-mauve;
 }
 
 #smart-action:disabled,
@@ -208,7 +205,7 @@ SmartOperationEditModal {
     width: 78;
     height: 90%;
     max-height: 90%;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
@@ -379,7 +376,7 @@ TodoCreateModal {
     width: 64;
     height: auto;
     max-height: 90%;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
@@ -480,7 +477,7 @@ ActionTypeField > Button {
 }
 
 #log-view {
-    border: round $accent;
+    border: round $border-blurred;
     height: 1fr;
     margin: 0 1;
     padding: 0 1;
@@ -498,7 +495,7 @@ BotExportScreen {
     width: 76;
     height: auto;
     max-height: 90%;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
@@ -523,7 +520,7 @@ BotExportScreen {
     width: 90%;
     max-width: 120;
     height: 90%;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 0 1;
 }
@@ -683,7 +680,7 @@ LogExportScreen {
 #reply-dialog {
     width: 90;
     height: 80%;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 0 1;
 }
@@ -746,7 +743,7 @@ DataTable {
 }
 
 DataTable:focus {
-    border: round $accent;
+    border: round $border-blurred;
 }
 
 DataTable > .datatable--header {
@@ -891,7 +888,7 @@ PluginScaffoldScreen {
 #scaffold-dialog {
     width: 72;
     height: 32;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
@@ -939,7 +936,7 @@ InstallScreen {
 #install-dialog {
     width: 72;
     height: 32;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
@@ -981,7 +978,7 @@ ReposScreen {
 #repos-dialog {
     width: 80;
     height: 24;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
@@ -1027,7 +1024,7 @@ MarketDetailScreen {
     width: 96;
     max-width: 95%;
     height: 85%;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
@@ -1180,7 +1177,7 @@ ListEditScreen, EntryFormScreen {
 #list-edit-dialog {
     width: 84;
     height: 26;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
@@ -1193,7 +1190,7 @@ ListEditScreen, EntryFormScreen {
 #entry-form-dialog {
     width: 88;
     height: 85%;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
@@ -1407,7 +1404,7 @@ MailHistoryScreen {
     min-width: 80%;
     max-width: 95%;
     height: 95%;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
@@ -1503,7 +1500,7 @@ UserProfileModal {
     width: 90;
     height: auto;
     max-height: 90%;
-    border: round $accent;
+    border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
