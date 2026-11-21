@@ -11,7 +11,9 @@ from textual.widgets import DataTable
 from textual.widgets._data_table import RowKey
 
 
-def update_table(table: DataTable[Any], rows: list[tuple[str, tuple[Any, ...]]]) -> bool:
+def update_table(
+    table: DataTable[Any], rows: list[tuple[str, tuple[Any, ...]]], *, row_height: int = 1
+) -> bool:
     """Change only differing cells; replace rows together when their order changes."""
     reordered = [key.value for key in table.rows] != [key for key, _ in rows]
     app = cast(App[Any], table.app)  # pyright: ignore[reportUnknownMemberType]
@@ -19,7 +21,7 @@ def update_table(table: DataTable[Any], rows: list[tuple[str, tuple[Any, ...]]])
         if reordered:
             table.clear()
             for key, cells in rows:
-                table.add_row(*cells, key=key)
+                table.add_row(*cells, key=key, height=row_height)
         else:
             columns = list(table.columns)
             for key, cells in rows:

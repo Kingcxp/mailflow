@@ -969,16 +969,15 @@ async def test_market_repos_screen(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
-    """Selecting a plugin row opens a full-screen detail modal with the
-    author, last-updated date and the markdown readme."""
+    """Installed plugins share localized introductions and full market documentation."""
     import json as jsonlib
 
     from mailflow.plugin_market import PluginMarket, Repository
-    from mailflow_tui.app import MarketDetailScreen, MarketPane
+    from mailflow_tui.app import MarketDetailScreen, MarketPane, RuntimePane
     from textual.widgets import Markdown
 
     repo_root = tmp_path / "market"
-    plugin_dir = repo_root / "notifier" / "mailflow-demo-notify"
+    plugin_dir = repo_root / "notifier" / "mailflow-tui-test"
     plugin_dir.mkdir(parents=True)
     (repo_root / "index.json").write_text(
         jsonlib.dumps(
@@ -989,16 +988,18 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
     (plugin_dir / "plugin.json").write_text(
         jsonlib.dumps(
             {
-                "id": "mailflow-demo-notify",
+                "id": "mailflow-tui-test",
                 "name": "Demo Notify",
                 "version": "1.0.0",
                 "description": "demo",
+                "descriptions": {"zh-CN": "测试插件的简介"},
                 "categories": ["notifier"],
-                "package": "mailflow-demo-notify",
+                "package": "mailflow-tui-test",
                 "source": str(plugin_dir),
                 "author": "Test Author",
                 "updated": "2026-08-01",
                 "readme": "# Demo\n\nFull markdown body.",
+                "readmes": {"zh-CN": "# 测试插件\n\n完整中文使用说明。"},
             }
         ),
         encoding="utf-8",
@@ -1025,11 +1026,11 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
             await market_pane.refresh_market()
             await cast(Any, app.workers).wait_for_complete()
             market_table = cast(DataTable[Any], app.query_one("#market-table", DataTable))
-            await until(pilot, lambda: "mailflow-demo-notify" in market_table.rows)
+            await until(pilot, lambda: "mailflow-tui-test" in market_table.rows)
             # select the row -> full-screen detail modal
             market_table.focus()
             market_table.move_cursor(
-                row=market_table.get_row_index("mailflow-demo-notify"), animate=False
+                row=market_table.get_row_index("mailflow-tui-test"), animate=False
             )
             await pilot.pause()
             market_table.action_select_cursor()  # equivalent of pressing Enter
@@ -1050,6 +1051,28 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
             app.screen.query_one("#detail-close", Button).press()  # pyright: ignore[reportUnknownMemberType]
             await pilot.pause(0.2)
             assert not isinstance(app.screen, MarketDetailScreen)
+            app.query_one(TabbedContent).active = "tab-runtime"
+            runtime = app.query_one(RuntimePane)
+            await runtime.refresh_runtime()
+            plugins = app.query_one("#runtime-plugins-table", DataTable)
+            plugins.move_cursor(row=plugins.get_row_index("mailflow-tui-test"), animate=False)
+            preview = app.query_one("#runtime-readme", Markdown)
+            await until(
+                pilot, lambda: "Full markdown body" in str(getattr(preview, "_markdown", ""))
+            )
+            assert "demo" in str(plugins.get_row("mailflow-tui-test")[0])
+            assert str(app.query_one("#runtime-description", Static).content) == "demo"
+            service.i18n.set_language("zh-CN")
+            await runtime.relabel()
+            await until(pilot, lambda: "完整中文使用说明" in str(getattr(preview, "_markdown", "")))
+            assert "测试插件的简介" in str(plugins.get_row("mailflow-tui-test")[0])
+            assert str(app.query_one("#runtime-description", Static).content) == "测试插件的简介"
+            # Turning a plugin off must not remove its documentation or its re-enable action.
+            service.config.plugins.disabled.append("mailflow-tui-test")
+            await runtime.refresh_runtime()
+            assert not app.query_one("#runtime-plugin-enable", Button).disabled
+            assert app.query_one("#runtime-plugin-disable", Button).disabled
+            assert "完整中文使用说明" in str(getattr(preview, "_markdown", ""))
             app.exit()
             await pilot.pause()
     finally:

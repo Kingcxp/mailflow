@@ -18,7 +18,9 @@ from zoneinfo import ZoneInfo
 from mailflow.domain import (
     ActionItem,
     BatchResult,
+    ComponentKind,
     MailRecord,
+    PluginSnapshot,
     ReplyDraft,
     ReplyState,
     SmartActionResult,
@@ -45,6 +47,7 @@ from textual.screen import ModalScreen
 from textual.widget import MountError
 from textual.widgets import (
     Button,
+    Collapsible,
     DataTable,
     Footer,
     Header,
@@ -3466,6 +3469,9 @@ class RuntimePane(Vertical):
         self._detail_open_for: str | None = None
         self._refresh_lock = asyncio.Lock()
         self._load_failed = False
+        self._plugins: dict[str, PluginSnapshot] = {}
+        self._document_signature: tuple[str, str, str] | None = None
+        self._plugin_busy = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="runtime-body"):
@@ -3477,23 +3483,46 @@ class RuntimePane(Vertical):
                     cursor_type="row",
                 )  # pyright: ignore[reportUnknownMemberType]
                 yield Static(self._service.t("tui.runtime_plugins_help"), id="runtime-plugins-hint")
-            with ScrollableContainer(id="runtime-scroll"):
-                yield Static("", id="runtime-adapters")
-                yield Static("", id="runtime-accounts")
-                yield Static("", id="runtime-llms")
-                yield Static("", id="runtime-bindings")
-                yield Static("", id="runtime-storage")
+            with Vertical(id="runtime-detail"):
+                yield Static(self._service.t("tui.runtime_select_plugin"), id="runtime-selection")
+                with ScrollableContainer(id="runtime-scroll"):
+                    yield Static("", id="runtime-description", markup=False)
+                    yield Static("", id="runtime-plugin-meta", markup=False)
+                    with Collapsible(
+                        title=self._service.t("tui.runtime_overview"),
+                        collapsed=True,
+                        id="runtime-overview",
+                    ):
+                        yield Static("", id="runtime-adapters")
+                        yield Static("", id="runtime-accounts")
+                        yield Static("", id="runtime-llms")
+                        yield Static("", id="runtime-bindings")
+                        yield Static("", id="runtime-storage")
+                    yield Markdown("", id="runtime-readme", open_links=False)
         with Horizontal(id="runtime-plugin-actions"):
             yield Button(
-                self._service.t("tui.btn_disable"), id="runtime-plugin-disable", variant="warning"
+                self._service.t("tui.market_view_detail"),
+                id="runtime-plugin-detail",
+                variant="primary",
+                disabled=True,
             )
             yield Button(
-                self._service.t("tui.btn_enable"), id="runtime-plugin-enable", variant="success"
+                self._service.t("tui.btn_disable"),
+                id="runtime-plugin-disable",
+                variant="warning",
+                disabled=True,
+            )
+            yield Button(
+                self._service.t("tui.btn_enable"),
+                id="runtime-plugin-enable",
+                variant="success",
+                disabled=True,
             )
             yield Button(
                 self._service.t("tui.btn_uninstall"),
                 id="runtime-plugin-uninstall",
                 variant="error",
+                disabled=True,
             )
         yield Static("", id="runtime-status")
 
@@ -3510,6 +3539,7 @@ class RuntimePane(Vertical):
         _relabel_buttons(
             self,
             {
+                "runtime-plugin-detail": "tui.market_view_detail",
                 "runtime-plugin-disable": "tui.btn_disable",
                 "runtime-plugin-enable": "tui.btn_enable",
                 "runtime-plugin-uninstall": "tui.btn_uninstall",
@@ -3517,6 +3547,9 @@ class RuntimePane(Vertical):
         )
         self.update_connection_status()
         self._set_static("#runtime-plugins-hint", self._service.t("tui.runtime_plugins_help"))
+        self.query_one("#runtime-overview", Collapsible).title = self._service.t(
+            "tui.runtime_overview"
+        )
         await self.refresh_runtime()
 
     def _runtime_title(self) -> str:
@@ -3527,7 +3560,7 @@ class RuntimePane(Vertical):
     def update_connection_status(self) -> None:
         self._set_static("#runtime-plugins", self._runtime_title())
 
-    def _set_static(self, selector: str, content: str) -> None:
+    def _set_static(self, selector: str, content: str | RichText) -> None:
         node = self.query_one_optional(selector, Static)
         if node is not None and node.content != content:
             node.update(content)
@@ -3548,6 +3581,148 @@ class RuntimePane(Vertical):
         table.cursor_type = "row"  # pyright: ignore[reportUnknownMemberType]
         self._columns_done = True
 
+    def _plugin_entry(self, plugin_id: str) -> MarketPlugin | None:
+        app = cast(MailFlowApp, self.app)
+        cached = app.plugin_entry(plugin_id)
+        if cached is not None:
+            plugin = self._plugins.get(plugin_id)
+            return cached.model_copy(
+                update={
+                    "version": plugin.version if plugin else cached.version,
+                    "categories": [kind.value for kind in plugin.kinds]
+                    if plugin
+                    else cached.categories,
+                    "source": "local",
+                }
+            )
+        plugin = self._plugins.get(plugin_id)
+        if plugin is None:
+            return None
+        return MarketPlugin(
+            id=plugin.plugin_id,
+            name=plugin.name,
+            version=plugin.version,
+            description=plugin.description,
+            categories=[kind.value for kind in plugin.kinds],
+            package=plugin.plugin_id,
+            source="local",
+        )
+
+    def _status_text(self, status: str) -> str:
+        return self._service.t(f"tui.plugin_status_{status}")
+
+    @staticmethod
+    def _status_style(status: str) -> str:
+        return {
+            "enabled": "$ctp-green",
+            "disabled": "$ctp-yellow",
+            "error": "$ctp-red",
+        }.get(status, "$ctp-subtext0")
+
+    def _sync_plugin_controls(self) -> None:
+        plugin_id = self._selected_plugin or ""
+        selected = plugin_id in self._plugins
+        status = self._service.plugin_status(plugin_id) if selected else ""
+        manager = getattr(self._service, "plugin_manager", None)
+        bundled = self._selected_plugin in getattr(manager, "bundled_plugin_ids", ())
+        plugin = self._plugins.get(self._selected_plugin or "")
+        active_storage = (
+            plugin is not None
+            and ComponentKind.STORAGE in plugin.kinds
+            and self._service.config.storage.provider in plugin.components
+        )
+        for ident, disabled in (
+            ("detail", False),
+            ("enable", status == "enabled"),
+            ("disable", status == "disabled" or active_storage),
+            ("uninstall", bundled or active_storage),
+        ):
+            self.query_one(f"#runtime-plugin-{ident}", Button).disabled = (
+                not selected or self._plugin_busy or disabled
+            )
+
+    def show_plugin_description(self) -> None:
+        """Update the selected plugin without replacing the list or its reading state."""
+        plugin_id = self._selected_plugin
+        plugin = self._plugin_entry(plugin_id) if plugin_id else None
+        self._sync_plugin_controls()
+        if plugin is None:
+            self._document_signature = None
+            self._set_static(
+                "#runtime-selection",
+                self._service.t(
+                    "tui.runtime_select_plugin" if self._plugins else "tui.runtime_no_plugins"
+                ),
+            )
+            self._set_static("#runtime-description", "")
+            self._set_static("#runtime-plugin-meta", "")
+            self.query_one("#runtime-readme", Markdown).update("")
+            return
+        status = self._service.plugin_status(plugin.id)
+        title = RichText(
+            plugin_text(self._service, plugin, "name") or plugin.id, style="bold $ctp-blue"
+        )
+        if plugin.version:
+            title.append(f"  v{plugin.version}", style="$ctp-subtext0")
+        title.append("  " + self._status_text(status), style=self._status_style(status))
+        self._set_static("#runtime-selection", title)
+        description = plugin_text(self._service, plugin, "description")
+        self._set_static(
+            "#runtime-description", description or self._service.t("tui.runtime_no_description")
+        )
+        capabilities = ", ".join(
+            self._service.i18n.component_label(kind) for kind in plugin.categories
+        )
+        self._set_static(
+            "#runtime-plugin-meta",
+            plugin.id + (f"\n{capabilities}" if capabilities else ""),
+        )
+        signature = (plugin.id, self._service.i18n.language, plugin.model_dump_json())
+        if signature == self._document_signature:
+            return
+        previous = self._document_signature
+        self._document_signature = signature
+        if previous is None or previous[0] != plugin.id:
+            self.query_one("#runtime-readme", Markdown).update(self._service.t("tui.loading"))
+            self.query_one("#runtime-scroll", ScrollableContainer).scroll_home(animate=False)
+        self.run_worker(
+            self._load_plugin_document(plugin, signature),
+            exclusive=True,
+            group="runtime-plugin-document",
+            exit_on_error=False,
+        )
+
+    async def _load_plugin_document(
+        self, plugin: MarketPlugin, signature: tuple[str, str, str]
+    ) -> None:
+        try:
+            readme = await asyncio.to_thread(plugin_readme, self._service, plugin, signature[1])
+            if not self.is_mounted or signature != self._document_signature:
+                return
+            if readme.startswith("# "):
+                readme = readme.partition("\n")[2].lstrip()
+            if (
+                not readme.strip()
+                or readme.strip() == plugin_text(self._service, plugin, "description").strip()
+            ):
+                readme = self._service.t("tui.runtime_no_readme")
+            scroll = self.query_one("#runtime-scroll", ScrollableContainer)
+            offset = (scroll.scroll_x, scroll.scroll_y)
+            await self.query_one("#runtime-readme", Markdown).update(readme)
+            if signature == self._document_signature:
+                scroll.scroll_to(x=offset[0], y=offset[1], animate=False, force=True)
+        except Exception as exc:
+            if self.is_mounted and signature == self._document_signature:
+                self._document_signature = None
+                self.query_one("#runtime-readme", Markdown).update(_load_error(self._service, exc))
+
+    async def on_markdown_link_clicked(self, event: Markdown.LinkClicked) -> None:
+        event.stop()
+        try:
+            self._service.open_url(event.href)
+        except Exception as exc:
+            self._set_static("#runtime-status", escape(error_message(self._service, exc)))
+
     async def refresh_runtime(self) -> None:
         async with self._refresh_lock:
             try:
@@ -3564,6 +3739,8 @@ class RuntimePane(Vertical):
             await cast(Any, self._service).refresh_snapshot()
         snapshot = self._service.snapshot()
         service = self._service
+        self._plugins = {plugin.plugin_id: plugin for plugin in snapshot.plugins}
+        previous_selection = self._selected_plugin
         scroll = self.query_one_optional("#runtime-scroll", ScrollableContainer)
         offset = (scroll.scroll_x, scroll.scroll_y) if scroll is not None else (0.0, 0.0)
         table = self._plugins_table()
@@ -3574,35 +3751,35 @@ class RuntimePane(Vertical):
         rows: list[tuple[str, tuple[Any, ...]]] = []
         for plugin in snapshot.plugins:
             status_key = service.plugin_status(plugin.plugin_id)
-            status_text = {
-                "enabled": service.t("tui.plugin_status_enabled"),
-                "disabled": service.t("tui.plugin_status_disabled"),
-                "not_loaded": service.t("tui.plugin_status_not_loaded"),
-                "error": service.t("tui.plugin_status_error"),
-            }.get(status_key, status_key)
+            entry = self._plugin_entry(plugin.plugin_id)
+            name = (
+                plugin_text(service, entry, "name")
+                if entry is not None
+                else service.i18n.plugin_text(plugin.plugin_id, "name", plugin.name)
+            )
+            description = (
+                plugin_text(service, entry, "description")
+                if entry is not None
+                else service.i18n.plugin_text(plugin.plugin_id, "description", plugin.description)
+            )
+            label = RichText(overflow="ellipsis", no_wrap=True)
+            label.append(name, style="bold $ctp-blue")
+            label.append("\n" + " ".join(description.split()), style="$ctp-subtext0")
             rows.append(
                 (
                     plugin.plugin_id,
                     (
+                        label,
                         RichText(
-                            service.i18n.plugin_text(plugin.plugin_id, "name", plugin.name),
-                            style="bold $ctp-blue",
-                            overflow="ellipsis",
-                            no_wrap=True,
-                        ),
-                        RichText(
-                            status_text,
-                            style={
-                                "enabled": "$ctp-green",
-                                "disabled": "$ctp-yellow",
-                                "error": "$ctp-red",
-                            }.get(status_key, "$ctp-subtext0"),
+                            self._status_text(status_key),
+                            style=self._status_style(status_key),
                         ),
                     ),
                 )
             )
-        if update_table(table, rows):
+        if update_table(table, rows, row_height=2) or self._selected_plugin not in self._plugins:
             self._selected_plugin = view.restore(table)
+        self.show_plugin_description()
         adapters = "\n".join(
             escape(f"  {c.component_id} (plugin: {c.plugin_id})")
             for c in snapshot.components
@@ -3675,7 +3852,11 @@ class RuntimePane(Vertical):
         )
         if scroll is not None:
             scroll.call_after_refresh(
-                lambda: scroll.scroll_to(x=offset[0], y=offset[1], animate=False, force=True)
+                lambda: (
+                    scroll.scroll_to(x=offset[0], y=offset[1], animate=False, force=True)
+                    if self._selected_plugin == previous_selection
+                    else None
+                )
             )
 
     async def on_data_table_row_selected(self, event: TableRowEvent) -> None:
@@ -3683,6 +3864,7 @@ class RuntimePane(Vertical):
             return
         plugin_id = cast(str, event.row_key.value)
         self._selected_plugin = plugin_id
+        self.show_plugin_description()
         status = self._service.plugin_status(plugin_id)
         plugin = self._service.snapshot().plugin(plugin_id)
         detail = f"\n{plugin.error}" if plugin is not None and plugin.error else ""
@@ -3696,6 +3878,7 @@ class RuntimePane(Vertical):
             and event.cursor_row == event.data_table.cursor_row
         ):
             self._selected_plugin = str(event.row_key.value)
+            self.show_plugin_description()
 
     def _open_plugin_detail(self, plugin_id: str) -> None:
         """Open the plugin's detail dialog instantly.
@@ -3728,19 +3911,25 @@ class RuntimePane(Vertical):
             self._detail_open_for = None
 
     def _local_market_plugin(self, plugin_id: str) -> MarketPlugin | None:
-        """App-wide local entry builder (shared with the Market tab)."""
-        return cast(MailFlowApp, self.app).local_plugin_entry(plugin_id)  # pyright: ignore[reportUnknownMemberType]
+        """Include installed plugins even when they are disabled or failed to load."""
+        return self._plugin_entry(plugin_id)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if self._selected_plugin is None:
+        button_id = event.button.id or ""
+        if not button_id.startswith("runtime-plugin-"):
             return
-        button_id = event.button.id
-        if button_id is None:
+        event.stop()
+        if self._selected_plugin is None or self._plugin_busy:
+            return
+        if button_id == "runtime-plugin-detail":
+            self._open_plugin_detail(self._selected_plugin)
             return
         # enable/disable rebuilds the runtime (bounded), uninstall runs pip:
         # neither belongs on the UI handler
         status = self.query_one("#runtime-status", Static)
         status.update(self._service.t("tui.loading"))
+        self._plugin_busy = True
+        self._sync_plugin_controls()
         self.run_worker(
             self._apply_plugin_action(button_id, self._selected_plugin),
             exclusive=True,
@@ -3778,6 +3967,10 @@ class RuntimePane(Vertical):
         except Exception as exc:  # uv failures surface here too
             status.update(f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]")
             return
+        finally:
+            self._plugin_busy = False
+            if self.is_mounted:
+                self._sync_plugin_controls()
         status.update(message)
         await self.refresh_runtime()
 
@@ -4268,6 +4461,22 @@ def plugin_doc_readme(info: Any) -> str:
     return "\n".join(lines).strip()
 
 
+def plugin_readme(service: Any, plugin: MarketPlugin, language: str) -> str:
+    """Use the same offline documentation in the inline panel and expanded reader."""
+    readme = plugin_text(service, plugin, "readme", language=language)
+    if readme:
+        return readme
+    name = plugin_text(service, plugin, "name", language=language) or plugin.id
+    if plugin.source == "local" and not getattr(service, "remote", False):
+        from mailflow.plugins import PluginInfo
+
+        doc = plugin_doc_readme(PluginInfo(plugin_id=plugin.id))
+        if doc:
+            return f"# {name}\n\n{doc}"
+    description = plugin_text(service, plugin, "description", language=language)
+    return f"# {name}\n\n{description}" if description else ""
+
+
 class _RuntimePluginTable(DataTable[Any]):
     """DataTable whose double-click opens the plugin detail.
 
@@ -4400,32 +4609,7 @@ class MarketDetailScreen(ModalScreen[Any]):
         self._content_loaded = True
 
     def _readme_for(self, plugin: MarketPlugin, language: str) -> str:
-        """Localized readme for the detail dialog.
-
-        Priority: translated market or bundled readme > the plugin
-        module's docstring (full local documentation) > the one-line
-        description. The docstring import runs here, in the worker, never
-        on the click path."""
-        readme = plugin_text(self._service, plugin, "readme", language=language)
-        if readme:
-            return readme
-        name = plugin_text(self._service, plugin, "name", language=language) or plugin.id
-        if plugin.source == "local":
-            from mailflow.plugins import PluginInfo
-
-            info = PluginInfo(
-                plugin_id=plugin.id,
-                name=plugin.name,
-                version=plugin.version,
-                description=plugin.description,
-            )
-            doc = plugin_doc_readme(info)
-            if doc:
-                return f"# {name}\n\n{doc}"
-        description = plugin_text(self._service, plugin, "description", language=language)
-        if description:
-            return f"# {name}\n\n{description}"
-        return ""
+        return plugin_readme(self._service, plugin, language)
 
     def _set_status(self, text: str) -> None:
         status = self.query_one_optional("#market-detail-status", Static)
@@ -5328,6 +5512,15 @@ class MailFlowApp(App[None]):
         """Record the market entries (called by MarketPane after a fetch)."""
         for _repo, plugin in entries:
             self._plugin_entries[plugin.id] = plugin
+        if self.is_running:
+            for pane in self.query(RuntimePane):
+                if pane.is_mounted:
+                    pane.run_worker(
+                        pane.refresh_runtime(),
+                        exclusive=True,
+                        group="runtime-refresh",
+                        exit_on_error=False,
+                    )
 
     def plugin_entry(self, plugin_id: str) -> MarketPlugin | None:
         """The shared entry for a plugin id ('' when unknown)."""

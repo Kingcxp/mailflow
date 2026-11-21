@@ -803,7 +803,7 @@ DataTable > .datatable--hover {
 }
 
 #market-detail,
-#runtime-scroll {
+#runtime-detail {
     width: 2fr;
     height: 1fr;
     border: round $border-blurred;
@@ -869,6 +869,71 @@ DataTable > .datatable--hover {
 
 #runtime-plugins-hint {
     color: $text-muted;
+}
+
+#runtime-selection {
+    height: auto;
+    padding-top: 1;
+    margin-bottom: 1;
+}
+
+#runtime-description,
+#runtime-plugin-meta {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#runtime-description {
+    color: $ctp-subtext1;
+}
+
+#runtime-plugin-meta {
+    color: $text-muted;
+}
+
+#runtime-scroll {
+    height: 1fr;
+}
+
+#runtime-overview {
+    padding: 0;
+    margin: 0 0 1 0;
+    border: none;
+    background: $ctp-mantle;
+}
+
+#runtime-readme {
+    height: auto;
+    padding: 0;
+}
+
+#runtime-plugin-actions Button {
+    height: 3;
+}
+
+#runtime-plugin-actions Button.-primary:enabled {
+    background: $ctp-blue;
+    color: $button-on-accent;
+}
+
+#runtime-plugin-actions Button.-success:enabled {
+    background: $ctp-green;
+    color: $button-on-accent;
+}
+
+#runtime-plugin-actions Button.-warning:enabled {
+    background: $ctp-yellow;
+    color: $button-on-warning;
+}
+
+#runtime-plugin-actions Button.-error:enabled {
+    background: $ctp-red;
+    color: $button-on-accent;
+}
+
+#runtime-plugin-actions Button:enabled:hover,
+#runtime-plugin-actions Button:enabled:focus {
+    background-tint: $ctp-text 12%;
 }
 
 #runtime-adapters,
