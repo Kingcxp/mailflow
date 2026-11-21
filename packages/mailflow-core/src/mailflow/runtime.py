@@ -56,7 +56,14 @@ from mailflow.i18n import I18n
 from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.message_media import summary_card
 from mailflow.notification_policy import defer_mail, flush_mail, in_quiet_hours
-from mailflow.notifications import DeliveryError, format_mail, option_enabled, targets_of
+from mailflow.notifications import (
+    DeliveryContext,
+    DeliveryError,
+    delivery_scope,
+    format_mail,
+    option_enabled,
+    targets_of,
+)
 from mailflow.outbound import defer, pace, split_text
 from mailflow.pipeline import PipelineEngine
 from mailflow.prompts import prompt_context
@@ -1264,14 +1271,13 @@ class MailFlowRuntime:
         records: list[MailRecord] | None = None,
         items: list[ActionItem] | None = None,
         text_receipts: list[str] | None = None,
+        kind: str = "mail",
     ) -> None:
         options = config.options if config is not None else {}
         want_images = option_enabled(options, "notification_images", False)
         want_card = option_enabled(options, "summary_cards", False)
         rich = (
-            isinstance(notifier, RichNotifier)
-            and notifier.capabilities.images
-            and target is not None
+            isinstance(notifier, RichNotifier) and notifier.capabilities.images and target is not None
         )
         card = None
         if (want_images or want_card) and not rich:
@@ -1287,7 +1293,15 @@ class MailFlowRuntime:
             if config is not None:
                 await pace(config)
             try:
-                await send()
+                references = [
+                    {"kind": "mail", "id": record.record_id, "title": record.mail.subject}
+                    for record in records or []
+                ] + [
+                    {"kind": "action", "id": item.item_id, "title": item.summary}
+                    for item in items or []
+                ]
+                with delivery_scope(DeliveryContext(kind, references, key)):
+                    await send()
             except DeliveryError as exc:
                 if config is not None:
                     defer(config, exc.retry_after)
@@ -1338,11 +1352,7 @@ class MailFlowRuntime:
                 ):
                     references[(linked_record.record_id, index)] = linked_record, index
         for (record_id, index), (record, _) in references.items():
-            key = (
-                receipt
-                + ".image."
-                + hashlib.sha256(f"{record_id}:{index}".encode()).hexdigest()[:20]
-            )
+            key = receipt + ".image." + hashlib.sha256(f"{record_id}:{index}".encode()).hexdigest()[:20]
             if await self._storage.get_preference(key):
                 continue
             attachment = record.mail.attachments[index]
@@ -1542,9 +1552,7 @@ class MailFlowRuntime:
                     continue
                 channels = [
                     (notifier, config)
-                    for notifier, config in zip(
-                        self._notifiers, self._notifier_configs, strict=True
-                    )
+                    for notifier, config in zip(self._notifiers, self._notifier_configs, strict=True)
                     if config.notifier_id == row.get("channel")
                     and option_enabled(config.options, "hourly_summary", False)
                 ]
@@ -1564,10 +1572,7 @@ class MailFlowRuntime:
                     for record in await self._storage.list_mails()
                     if hour_start <= record.mail.received_at < hour_end
                     and record.ingestion == "live"
-                    and (
-                        not window.get("unread_only")
-                        or (not record.is_read and not record.archived)
-                    )
+                    and (not window.get("unread_only") or (not record.is_read and not record.archived))
                 ]
                 if not mails:
                     await self.deliveries.update(receipt, None)
@@ -1639,6 +1644,7 @@ class MailFlowRuntime:
                         text,
                         send,
                         items=items,
+                        kind="digest" if option == "daily_digest" else "reminder",
                     )
                 except Exception as exc:
                     await self.deliveries.update(receipt, {**row, "error_code": error_code(exc)})
@@ -1970,6 +1976,7 @@ class MailFlowRuntime:
                     receipt,
                     briefing,
                     partial(self._send_text, notifier, target),
+                    kind="hourly",
                 )
             except Exception as exc:
                 complete = False
@@ -2171,7 +2178,8 @@ class MailFlowRuntime:
                     )
                     try:
                         await self._send_content(
-                            notifier, config, target, batch_key, text, send, text_receipts=receipts
+                            notifier, config, target, batch_key, text, send, text_receipts=receipts,
+                            items=[item for _, _, item in group], kind="reminder",
                         )
                     except Exception as exc:
                         for receipt, (key, value, item) in zip(receipts, group, strict=True):
@@ -2366,7 +2374,14 @@ class MailFlowRuntime:
                     if isinstance(payload.get("item"), ActionItem):
                         media_items.append(payload["item"])
                     await self._send_content(
-                        notifier, config, target, receipt, text, send, items=media_items
+                        notifier,
+                        config,
+                        target,
+                        receipt,
+                        text,
+                        send,
+                        items=media_items,
+                        kind="digest" if channel_kind == "daily_digest" else "reminder",
                     )
                 except Exception as exc:
                     complete = False

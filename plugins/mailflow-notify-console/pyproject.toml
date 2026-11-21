@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-notify-console"
 version = "0.1.0"
-description = "MailFlow console notifier: emits processed mail alerts via logging"
+description = "MailFlow console notifier: in-app mail alerts, reminders and summaries"
 requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 

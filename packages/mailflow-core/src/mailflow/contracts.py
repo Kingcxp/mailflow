@@ -276,6 +276,17 @@ class TextNotifier(Protocol):
     async def push_text(self, text: str) -> None: ...
 
 
+@runtime_checkable
+class ConsoleNotifierBinding(Protocol):
+    """Optional binding for a console transport; ordinary text plugins stay valid."""
+
+    def bind_console(
+        self,
+        publish: Callable[[str, str, list[dict[str, str]], str], Awaitable[None]],
+        translate: Callable[..., str],
+    ) -> None: ...
+
+
 class TargetedNotifier(Protocol):
     """Optional per-destination delivery. Return only on acceptance; raise on failure."""
 

@@ -36,6 +36,7 @@ from mailflow.config import (
     patch_config_value,
     write_config,
 )
+from mailflow.console import ConsoleInbox
 from mailflow.contracts import (
     GatewayInstance,
     HistoryCapableSource,
@@ -339,6 +340,8 @@ class MailFlowService:
         self.events = events
         self.i18n = i18n
         self._logging_runtime = logging_runtime
+        self.console = ConsoleInbox(self)
+        self.console.bind(notifiers, notifier_configs)
 
         self.runtime = MailFlowRuntime(
             config,
@@ -410,6 +413,10 @@ class MailFlowService:
             if self._started:
                 return
             self._stopped_event = asyncio.Event()
+            if self.console.closed:
+                self.console = ConsoleInbox(self)
+                channels = self.runtime.notification_channels()
+                self.console.bind([n for n, _ in channels], [c for _, c in channels])
             rebuild = self._needs_rebuild
             self._resources_closed = False
             try:
@@ -491,6 +498,7 @@ class MailFlowService:
         self._smart_history.clear()
         self._assistant_confirmations.clear()
         self._assistant_chats.clear()
+        await self.console.close()
         # User-triggered analysis is temporary too, even in a host that never
         # started background receiving. Cancel it before slow gateway teardown.
         closed = await self._stop_component(
@@ -593,6 +601,7 @@ class MailFlowService:
                 continue
             notifiers.append(registry.notifier_factory(notifier.provider)(notifier))
             notifier_configs.append(notifier)
+        self.console.bind(notifiers, notifier_configs)
         await self.runtime.reconfigure_notifiers(notifiers, notifier_configs)
 
     def notifier_capabilities(self, provider: str) -> set[str]:
@@ -656,6 +665,7 @@ class MailFlowService:
                 continue
             notifiers.append(registry.notifier_factory(notifier.provider)(notifier))
             notifier_configs.append(notifier)
+        self.console.bind(notifiers, notifier_configs)
         was_started = self.started
         await bounded(
             self.gateways.stop(persist_running=True), timeout_seconds=15.0, label="gateways reload"

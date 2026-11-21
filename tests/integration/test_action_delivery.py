@@ -81,6 +81,36 @@ async def schedule(storage: MemoryStorage) -> ActionItem:
     return item
 
 
+async def test_console_delivery_is_buffered_without_a_view_and_rebinds_cleanly() -> None:
+    from mailflow.notifications import DeliveryContext, delivery_scope
+    from mailflow_notify_console.plugin import ConsoleNotifier
+
+    storage = MemoryStorage()
+    service = make_service(storage)
+    service.config.logging.console = False
+    config = NotifierConfig(notifier_id="console", provider="console")
+    service.config.notifiers = [config]
+    notifier = ConsoleNotifier(config)
+    service.console.bind([notifier], [config])
+    await service.runtime.reconfigure_notifiers([notifier], [config])
+    await notifier.notify(make_record())
+    with delivery_scope(DeliveryContext("reminder", [], "reminder-1")):
+        await notifier.push_text("A task is due")
+    replacement = ConsoleNotifier(config)
+    service.console.bind([replacement], [config])
+    await service.runtime.reconfigure_notifiers([replacement], [config])
+    with delivery_scope(DeliveryContext("reminder", [], "reminder-1")):
+        await replacement.push_text("A task is due")
+    page = await service.console.read()
+    assert [row["kind"] for row in page["messages"]] == ["mail", "reminder"]
+    assert page["messages"][0]["references"][0]["kind"] == "mail"
+    assert not storage.preferences
+    await service.console.close()
+    with pytest.raises(RuntimeError):
+        await replacement.push_text("Must not be reported as delivered")
+    assert not (await service.console.read())["messages"]
+
+
 async def test_quiet_hours_merge_mail_and_retry_only_the_failed_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

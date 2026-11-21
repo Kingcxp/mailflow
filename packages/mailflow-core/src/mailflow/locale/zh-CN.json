@@ -427,9 +427,9 @@
           "description": "把 RSS/Atom 订阅源转成邮件进入收件箱（新闻通讯、博客等）"
         },
         "mailflow-notify-console": {
-          "name": "日志通知",
-          "description": "把已计算的邮件提醒输出到 MailFlow 日志",
-          "readme": "# 控制台通知器\n\n组件标识为 `console`，将邮件通知写入 MailFlow 日志，适合本地开发，无需外部服务。\n\n```toml\n[[notifiers]]\nnotifier_id = \"console\"\nprovider = \"console\"\nminimum_urgency = \"important\"\n```\n\n没有额外配置项，请按需开启控制台或文件日志查看输出，重要程度阈值仍然生效。\n本插件不是聊天平台，不提供订阅、接收命令或图片文件传输。\n"
+          "name": "控制台通知",
+          "description": "在控制台中接收邮件、待办提醒与摘要，并与机器人交互",
+          "readme": "# 控制台通知\n\n`console` 渠道将邮件通知、待办提醒和摘要发送到 TUI 的**控制台**标签页，无需外部账号、网关或扫码登录。\n\n```toml\n[[notifiers]]\nnotifier_id = \"console\"\nprovider = \"console\"\nminimum_urgency = \"important\"\n```\n\n控制台支持已有 MailFlow 命令。使用 `@MailFlow` 或引用消息提出智能操作需求；修改和发送仍须通过聊天确认，普通文字不会调用模型。\n\n消息只保留在本次服务运行的内存中。退到后台、重新连接仍可查看，停止服务后清空。通知开关、免打扰和投递去重继续生效。\n\nTUI 以外的宿主仍可按配置输出控制台日志。图片回退为文字。\n"
         },
         "mailflow-notify-dingtalk": {
           "name": "钉钉通知",
@@ -991,7 +991,7 @@
       "bots_verify_result": "连接检测：{result}",
       "bots_wizard_title": "添加机器人平台",
       "bots_wizard_pick": "选择要接入的平台：",
-      "bots_provider_console": "控制台（本地输出）",
+      "bots_provider_console": "控制台（内置聊天）",
       "bots_provider_onebot": "QQ（OneBot）",
       "bots_wizard_pick_first": "请先选择平台",
       "bots_wizard_no_runtime": "未发现{provider}运行时，请先启动对应服务后重试",
@@ -2176,6 +2176,15 @@
       },
       "environment_note": "只有 make sync 同步环境。make clean 保留环境、配置和邮件。",
       "examples": "示例：make test VENV=.venv312；make help HELP_LANG=zh-CN"
+    },
+    "console": {
+      "channel_missing": "此控制台实例已不存在，请选择其他实例。",
+      "stopped": "服务已停止，请重新连接后继续。",
+      "notifications_disabled": "通知已关闭，仍可使用命令。",
+      "plugin_unavailable": "控制台插件不可用或需要更新，仍可使用命令。",
+      "mail_global_off": "渠道已开启，但全局新邮件通知已关闭。",
+      "mail_channel_off": "此渠道的新邮件通知已关闭。",
+      "not_configured": "尚未开启控制台通知，仍可使用命令。"
     }
   }
 }

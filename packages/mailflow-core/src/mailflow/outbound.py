@@ -86,7 +86,12 @@ async def pace(config: NotifierConfig) -> None:
     loop = asyncio.get_running_loop()
     key = normalize_provider(config.provider) + ":" + config.notifier_id
     slot = _slots.setdefault(loop, {}).setdefault(key, _Slot())
-    interval = max(0.0, float(config.options.get("send_interval_seconds", 2)))
+    interval = max(
+        0.0,
+        float(
+            config.options.get("send_interval_seconds", 0 if config.provider == "console" else 2)
+        ),
+    )
     async with slot.lock:
         while (delay := slot.next_at - loop.time()) > 0:  # noqa: ASYNC110 -- cooldown can extend during the wait
             await asyncio.sleep(delay)

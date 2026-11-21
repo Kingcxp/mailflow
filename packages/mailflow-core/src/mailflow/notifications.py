@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import Any, cast
 from urllib.request import Request
 
@@ -13,6 +16,31 @@ import httpx
 from mailflow.config import NotifierConfig
 from mailflow.domain import MailRecord
 from mailflow.i18n import I18n
+
+
+@dataclass
+class DeliveryContext:
+    kind: str = "notification"
+    references: list[dict[str, str]] = field(default_factory=list)
+    delivery_id: str = ""
+
+
+_delivery_context: ContextVar[DeliveryContext | None] = ContextVar(
+    "mailflow_delivery", default=None
+)
+
+
+def current_delivery() -> DeliveryContext:
+    return _delivery_context.get() or DeliveryContext()
+
+
+@contextmanager
+def delivery_scope(context: DeliveryContext) -> Iterator[None]:
+    token = _delivery_context.set(context)
+    try:
+        yield
+    finally:
+        _delivery_context.reset(token)
 
 
 class DeliveryError(RuntimeError):

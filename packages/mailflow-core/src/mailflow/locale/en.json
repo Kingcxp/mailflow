@@ -427,9 +427,9 @@
           "description": "Turns RSS/Atom feeds into mail items (newsletters, blogs, release notes)"
         },
         "mailflow-notify-console": {
-          "name": "Console Notifier",
-          "description": "Delivers processed mail alerts to the MailFlow logs",
-          "readme": "# Console notifier\n\nComponent ID: `console`. Writes mail notifications to the MailFlow logger,\nuseful for local development without an external delivery service.\n\n```toml\n[[notifiers]]\nnotifier_id = \"console\"\nprovider = \"console\"\nminimum_urgency = \"important\"\n```\n\nThere are no plugin-specific options. Enable console/file logging as needed to\nsee the output. The configured urgency threshold still applies. This is not a\nchat platform: it has no subscriptions, incoming commands, image or file transport.\n"
+          "name": "Console",
+          "description": "Mail notifications, task reminders and summaries in the TUI console",
+          "readme": "# Console notifications\n\nThe `console` channel delivers mail notifications, task reminders and summaries to the TUI **Console** tab. No external account, gateway or login is required.\n\n```toml\n[[notifiers]]\nnotifier_id = \"console\"\nprovider = \"console\"\nminimum_urgency = \"important\"\n```\n\nThe Console tab accepts existing MailFlow commands. Use `@MailFlow` or quote a message to request an intelligent operation. Changes and sending still require chat confirmation. Ordinary text does not invoke a model.\n\nMessages remain in memory for the current service run. Detach and reconnect keep them; stopping the service clears them. Notification switches, quiet hours and delivery receipts still apply.\n\nOutside the TUI, console logging remains available when enabled. Images fall back to text.\n"
         },
         "mailflow-notify-dingtalk": {
           "name": "DingTalk Notifier",
@@ -991,7 +991,7 @@
       "bots_verify_result": "Connection check: {result}",
       "bots_wizard_title": "Add a bot platform",
       "bots_wizard_pick": "Choose the platform:",
-      "bots_provider_console": "Console (local output)",
+      "bots_provider_console": "Console (in-app conversation)",
       "bots_provider_onebot": "QQ (OneBot)",
       "bots_wizard_pick_first": "Pick a platform first",
       "bots_wizard_no_runtime": "No {provider} runtime found — start the service and retry",
@@ -2176,6 +2176,15 @@
       },
       "environment_note": "Only make sync synchronizes the environment. make clean keeps environments, configuration and mail.",
       "examples": "Examples: make test VENV=.venv312; make help HELP_LANG=zh-CN"
+    },
+    "console": {
+      "channel_missing": "This console instance no longer exists. Select another instance.",
+      "stopped": "The service has stopped. Reconnect to continue.",
+      "notifications_disabled": "Notifications are disabled; commands remain available.",
+      "plugin_unavailable": "The console plugin is unavailable or needs updating. Commands remain available.",
+      "mail_global_off": "The channel is enabled, but new-mail notifications are globally disabled.",
+      "mail_channel_off": "New-mail notifications are disabled for this channel.",
+      "not_configured": "Console notifications are not enabled. Commands remain available."
     }
   }
 }
