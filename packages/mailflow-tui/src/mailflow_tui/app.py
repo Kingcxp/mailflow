@@ -88,9 +88,9 @@ from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.settings import ConnectionsPane, MailHistoryScreen, SettingsPane
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.terminal_theme import terminal_background_mode
-from mailflow_tui.themes import apply_color_scheme, theme_catalog, urgency_style
 from mailflow_tui.theme_preferences import load_theme_preferences, save_theme_preferences
 from mailflow_tui.theme_welcome import ThemeWelcomeScreen
+from mailflow_tui.themes import apply_color_scheme, theme_catalog, urgency_style
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 from mailflow_tui.view_state import TableRowEvent, TableView, update_table
 from mailflow_tui.widgets import (
@@ -5131,6 +5131,7 @@ class MailFlowApp(App[None]):
         super().__init__()
         self._service = service
         self._theme_welcome = theme_welcome
+        self._theme_preview: str | None = None
         self._theme_preference = load_theme_preferences() if theme_welcome else {}
         self._terminal_background = terminal_background
         if self._terminal_background is None and (
@@ -5166,10 +5167,15 @@ class MailFlowApp(App[None]):
         selected = (
             preference
             if configured == DEFAULT_THEME and preference in schemes
-            else configured if configured in schemes else DEFAULT_THEME
+            else configured
+            if configured in schemes
+            else DEFAULT_THEME
         )
+        if self._theme_preview is not None and self._theme_preview in schemes:
+            selected = self._theme_preview
         if selected == TERMINAL_THEME or (
-            self._theme_welcome
+            self._theme_preview is None
+            and self._theme_welcome
             and not self._theme_preference.get("theme_onboarding_complete")
             and configured == DEFAULT_THEME
             and not preference
@@ -5184,7 +5190,11 @@ class MailFlowApp(App[None]):
             self._theme_signature = signature
             if self.is_running:
                 self.call_after_refresh(self._refresh_color_content)
-        if self.is_running and configured not in schemes and self._missing_theme_notice != configured:
+        if (
+            self.is_running
+            and configured not in schemes
+            and self._missing_theme_notice != configured
+        ):
             self._missing_theme_notice = configured
             self.notify(
                 self._service.t("tui.theme_unavailable", theme=configured),
@@ -5193,6 +5203,12 @@ class MailFlowApp(App[None]):
             )
         elif configured in schemes:
             self._missing_theme_notice = ""
+
+    def preview_color_scheme(self, theme: str | None) -> None:
+        """Apply a temporary palette without saving or reloading the service."""
+        if theme != self._theme_preview:
+            self._theme_preview = theme
+            self._apply_color_scheme()
 
     def _refresh_color_content(self) -> None:
         # Textual restyles widgets when the theme changes. Only render caches
@@ -5302,7 +5318,8 @@ class MailFlowApp(App[None]):
                         self._service.t("tui.theme_save_failed"),
                         severity="warning",
                     )
-            self._apply_color_scheme()
+        self._theme_preview = None
+        self._apply_color_scheme()
         if not saved:
             self.notify(self._service.t("tui.theme_preference_failed"), severity="warning")
         self._show_splash()
@@ -5399,7 +5416,8 @@ class MailFlowApp(App[None]):
                 self._show_splash()
             else:
                 self.push_screen(
-                    ThemeWelcomeScreen(self._service.t), self._theme_welcome_selected
+                    ThemeWelcomeScreen(self._service.t, on_preview=self.preview_color_scheme),
+                    self._theme_welcome_selected,
                 )
         else:
             self._show_splash()

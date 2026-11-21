@@ -22,7 +22,7 @@ from mailflow.domain import (
 )
 from mailflow.i18n import I18n
 from mailflow.protocol import json_value
-from mailflow.themes import DEFAULT_THEME, builtin_themes
+from mailflow.themes import DEFAULT_THEME, TERMINAL_THEME, builtin_themes
 from mailflow.tools import ToolRegistry
 from mailflow_server.app import create_app
 from mailflow_server.client import RemoteClient
@@ -40,6 +40,8 @@ from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.mail_workflows import DraftsScreen, MailMenu, MailReader, TaskMenu
 from mailflow_tui.remote import RemoteServiceAdapter
 from mailflow_tui.smart_action_review import SmartActionReviewModal
+from mailflow_tui.theme_preferences import load_theme_preferences
+from mailflow_tui.theme_select import ThemeSelect
 from mailflow_tui.widgets import Input as EditingInput
 from mailflow_tui.widgets import PromptInput, SearchToggle, SelectionTable, ShortcutHelp
 from mailflow_tui.widgets import TextArea as EditingTextArea
@@ -58,6 +60,7 @@ from textual.widgets import (
     TextArea,
     Tooltip,
 )
+from textual.widgets._select import SelectOverlay
 
 from mailflow_test_support.commands import MemoryStorage, commands_service, make_record
 from mailflow_test_support.tui import ThemedApp as App
@@ -125,7 +128,9 @@ async def test_theme_setting_applies_without_losing_input_or_restarting_connecti
     host: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, _view, app, emit, _failures = host
+    monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(tmp_path / "sessions"))
     service.config_path = tmp_path / "mailflow.toml"
+    app.set_terminal_background("light")
     reload_runtime = AsyncMock()
     monkeypatch.setattr(service, "reload_runtime", reload_runtime)
     async with app.run_test(size=(120, 36)) as pilot:
@@ -134,11 +139,32 @@ async def test_theme_setting_applies_without_losing_input_or_restarting_connecti
         search.value = "Keep my unfinished search"
         app.action_goto_tab("tab-settings")
         await settle(pilot)
-        for name, scheme in builtin_themes().items():
+        choice = app.query_one("#value-general-theme", ThemeSelect)
+        choice.focus()
+        await pilot.press("enter", "home", "down")
+        await until(pilot, lambda: app.theme == "catppuccin-frappe")
+        await pilot.hover(choice.query_one(SelectOverlay), offset=(3, 1))
+        await until(pilot, lambda: app.theme == "catppuccin-latte")
+        assert app.current_theme.background == "#eff1f5"
+        assert choice.value == service.config.general.theme == DEFAULT_THEME
+        assert load_theme_preferences() == {}
+        await pilot.press("escape")
+        await until(pilot, lambda: app.theme == DEFAULT_THEME)
+        choice.focus()
+        await pilot.press("enter", "home")
+        await until(pilot, lambda: app.theme == "catppuccin-latte")
+        app.action_goto_tab("tab-mail")
+        await until(pilot, lambda: app.theme == DEFAULT_THEME)
+        app.action_goto_tab("tab-settings")
+        await settle(pilot)
+        themes = builtin_themes()
+        for name in themes:
+            resolved = "catppuccin-latte" if name == TERMINAL_THEME else name
+            scheme = themes[resolved]
             app.query_one("#value-general-theme", Select).value = name
             await pilot.pause()
             app.query_one("#save-general-theme", Button).press()
-            await until(pilot, lambda: app.theme == name)
+            await until(pilot, lambda: app.theme == resolved)
             await settle(pilot)
             assert app.current_theme.dark == scheme.is_dark
             assert app.query_one("#mail-search", PromptInput) is search

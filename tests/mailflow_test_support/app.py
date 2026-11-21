@@ -13,7 +13,9 @@ from mailflow_tui.app import MailFlowApp
 from mailflow_test_support.tui import TUIPlugin, build_config
 
 
-async def make_app(db_path: Path, *, splash: bool = False) -> tuple[Any, Any]:
+async def make_app(
+    db_path: Path, *, splash: bool = False, theme_welcome: bool = False
+) -> tuple[Any, Any]:
     from mailflow_notify_console.plugin import plugin as notify_plugin
     from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 
@@ -26,5 +28,5 @@ async def make_app(db_path: Path, *, splash: bool = False) -> tuple[Any, Any]:
         plugin_manager=manager,
         discover_plugins=False,
     )
-    app = MailFlowApp(service, queue_module.Queue(), splash=splash)
+    app = MailFlowApp(service, queue_module.Queue(), splash=splash, theme_welcome=theme_welcome)
     return app, service

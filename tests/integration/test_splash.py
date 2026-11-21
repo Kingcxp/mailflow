@@ -7,11 +7,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from mailflow.themes import DEFAULT_THEME
 from mailflow_tui.splash import SplashScreen
 from mailflow_tui.theme_preferences import load_theme_preferences
 from mailflow_tui.theme_welcome import ThemeWelcomeScreen
 
 from mailflow_test_support.app import make_app
+from mailflow_test_support.ui import until
 
 
 @pytest.mark.asyncio
@@ -60,23 +62,35 @@ async def test_splash_off_by_default(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("confirm", [False, True], ids=["cancel", "confirm"])
 async def test_first_use_theme_choice_is_saved_for_this_machine(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, confirm: bool
 ) -> None:
     monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(tmp_path / "sessions"))
-    app, service = await make_app(tmp_path)
-    app._theme_welcome = True
-    app._theme_preference = {}
+    monkeypatch.setenv("MAILFLOW_TERMINAL_BACKGROUND", "dark")
+    app, service = await make_app(tmp_path, theme_welcome=True)
     try:
         async with app.run_test() as pilot:
-            await pilot.pause(0.2)
+            await until(pilot, lambda: isinstance(app.screen, ThemeWelcomeScreen))
             assert isinstance(app.screen, ThemeWelcomeScreen)
-            await pilot.click("#theme-light")
-            await pilot.pause(0.2)
-            assert app.theme == "catppuccin-latte"
-            assert load_theme_preferences() == {
-                "theme_onboarding_complete": True,
-                "theme": "catppuccin-latte",
-            }
+            await pilot.hover("#theme-light-row .theme-choice-title")
+            await until(pilot, lambda: app.theme == "catppuccin-latte")
+            assert app.current_theme.background == "#eff1f5"
+            assert service.config.general.theme == DEFAULT_THEME
+            assert load_theme_preferences() == {}
+            await pilot.hover("#theme-current")
+            await until(pilot, lambda: app.theme == DEFAULT_THEME)
+            # Hovering does not move keyboard focus from the first button.
+            await pilot.press("tab")
+            await until(pilot, lambda: app.theme == "catppuccin-latte")
+            await pilot.press("enter" if confirm else "escape")
+            await until(pilot, lambda: not isinstance(app.screen, ThemeWelcomeScreen))
+            await until(pilot, lambda: bool(load_theme_preferences()))
+            assert app.theme == ("catppuccin-latte" if confirm else DEFAULT_THEME)
+            assert load_theme_preferences() == (
+                {"theme_onboarding_complete": True, "theme": "catppuccin-latte"}
+                if confirm
+                else {"theme_onboarding_complete": True}
+            )
     finally:
         await service.stop()

@@ -125,7 +125,10 @@ def apply_color_scheme(
     terminal = TerminalTheme(
         rgb("base"),
         rgb("text"),
-        [rgb(key) for key in ("surface1", "red", "green", "yellow", "blue", "mauve", "teal", "subtext0")],
+        [
+            rgb(key)
+            for key in ("surface1", "red", "green", "yellow", "blue", "mauve", "teal", "subtext0")
+        ],
         [rgb(key) for key in ("overlay1", "red", "green", "yellow", "blue", "pink", "sky", "text")],
     )
     app.ansi_theme_dark = app.ansi_theme_light = terminal
@@ -134,8 +137,8 @@ def apply_color_scheme(
     styles = {"$" + key: Style.parse(value) for key, value in _content_styles(p).items()}
     for key, color in p.items():
         for attributes in ("", "bold", "dim", "underline", "dim bold", "bold dim"):
-            name = f"{attributes} $ctp-{key}".strip()
-            styles[name] = Style.parse(f"{attributes} {color}".strip())
+            style_name = f"{attributes} $ctp-{key}".strip()
+            styles[style_name] = Style.parse(f"{attributes} {color}".strip())
     styles.update(
         {
             "markdown.h1": Style(color=p["text"], bold=True),

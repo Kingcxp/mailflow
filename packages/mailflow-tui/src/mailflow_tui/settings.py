@@ -72,6 +72,7 @@ from mailflow_tui.labels import (
 )
 from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.search import SearchMatcher, build_search_matcher
+from mailflow_tui.theme_select import ThemeSelect
 from mailflow_tui.view_state import TableView
 from mailflow_tui.widgets import (
     Input,
@@ -1596,13 +1597,23 @@ class OptionCard(Vertical):
                 (form_choice_label(self._service, spec.label, choice), choice)
                 for choice in spec.choices
             ]
-            yield SafeSelect(
-                self._choice_signature,
-                value=str(spec.value) if spec.value in spec.choices else Select.NULL,
-                id=widget_id,
-                classes="option-input",
-                allow_blank=False,
-            )
+            value = str(spec.value) if spec.value in spec.choices else Select.NULL
+            if spec.key == "general.theme":
+                yield ThemeSelect(
+                    self._choice_signature,
+                    value=value,
+                    id=widget_id,
+                    classes="option-input",
+                    on_preview=self._preview_theme,
+                )
+            else:
+                yield SafeSelect(
+                    self._choice_signature,
+                    value=value,
+                    id=widget_id,
+                    classes="option-input",
+                    allow_blank=False,
+                )
         elif spec.editor in _MULTILINE_EDITORS:
             yield Static(spec.display_value(), id=widget_id, classes="option-summary")
             yield Button(
@@ -1629,6 +1640,11 @@ class OptionCard(Vertical):
                 password=spec.secret,
                 classes="option-input",
             )
+
+    def _preview_theme(self, theme: str | None) -> None:
+        preview = getattr(self.app, "preview_color_scheme", None)
+        if preview is not None:
+            preview(theme)
 
     def entered_value(self) -> Any:
         """Current editor content, ready for ``service.set_setting``."""
