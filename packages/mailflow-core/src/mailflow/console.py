@@ -16,7 +16,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from mailflow.contracts import ConsoleNotifierBinding
-from mailflow.domain import CommandResponse, ComponentKind, SmartActionResult, utcnow
+from mailflow.domain import CommandResponse, ComponentKind, SmartActionResult, StyleSpan, utcnow
 from mailflow.errors import error_text, translated_error
 from mailflow.notifications import option_enabled
 from mailflow.permissions import PermissionContext, current_context, permission_scope, require_admin
@@ -44,6 +44,7 @@ class ConsoleMessage(BaseModel):
     request_id: str = ""
     reply_to: str = ""
     references: list[dict[str, str]] = Field(default_factory=list)
+    spans: list[StyleSpan] = Field(default_factory=list)
     files: list[dict[str, Any]] = Field(default_factory=list)
     owner: str = Field(default="", exclude=True)
 
@@ -526,13 +527,18 @@ class ConsoleInbox:
                 reply,
                 state=state,
                 references=references,
+                spans=turn.response.spans if turn.response is not None else [],
                 markdown=turn.response is None and mentioned,
             )
         except asyncio.CancelledError:
             self._update(reply, state="cancelled", text=self.service.t("chat.cancelled"))
         except Exception as exc:
             self._update(
-                reply, state="failed", text=error_text(exc, self.service.t), markdown=False
+                reply,
+                state="failed",
+                text=error_text(exc, self.service.t),
+                spans=[],
+                markdown=False,
             )
         finally:
             self._readers.pop((channel, owner), None)

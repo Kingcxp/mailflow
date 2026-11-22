@@ -18,6 +18,7 @@ from mailflow.domain import (
     PluginSnapshot,
     ProcessorNote,
     SmartActionResult,
+    StyleSpan,
     Urgency,
 )
 from mailflow.i18n import I18n
@@ -45,6 +46,7 @@ from mailflow_tui.theme_select import ThemeSelect
 from mailflow_tui.widgets import Input as EditingInput
 from mailflow_tui.widgets import PromptInput, SearchToggle, SelectionTable, ShortcutHelp
 from mailflow_tui.widgets import TextArea as EditingTextArea
+from rich.text import Text as RichText
 from textual.app import ComposeResult
 from textual.containers import ScrollableContainer
 from textual.coordinate import Coordinate
@@ -1160,6 +1162,31 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
                     c.message.text == "An incoming notification" for c in pane.query(ConsoleCard)
                 ),
             )
+            formatted = await service.console.append(
+                ConsoleMessage(
+                    role="bot",
+                    text="Mail list\nInvoice found",
+                    markdown=False,
+                    spans=[
+                        StyleSpan(text="Mail list\n", style="bold cyan"),
+                        StyleSpan(text="Invoice found", style="green"),
+                    ],
+                )
+            )
+            await until(
+                pilot,
+                lambda: any(
+                    c.message.id == formatted.id
+                    and c.is_mounted
+                    and bool(c.query(".console-body"))
+                    for c in pane.query(ConsoleCard)
+                ),
+            )
+            card = next(c for c in pane.query(ConsoleCard) if c.message.id == formatted.id)
+            body = card.query_one(".console-body", Static).content
+            assert isinstance(body, RichText)
+            assert body.plain == formatted.text
+            assert len(body.spans) == 2
     finally:
         finish.set()
         if unsubscribe is not None:

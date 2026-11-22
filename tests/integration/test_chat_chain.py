@@ -588,6 +588,8 @@ async def test_console_plain_text_quote_confirmation_and_cancellation() -> None:
         await service.storage.save_mail(make_record("report", subject="Report"))
         await service.console_send("/mailflow mail list Invoice", request_id="invoice-list")
         listing = (await settled())[-1]
+        assert listing["spans"][0]["style"] == "bold cyan"
+        assert listing["spans"][0]["text"]
         await service.console_send("/mailflow mail list Report", request_id="report-list")
         await settled()
         await service.console_send(

@@ -13,6 +13,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from mailflow.console import ConsoleMessage
+from mailflow.domain import StyleSpan
 from mailflow.errors import translated_error
 from mailflow.permissions import current_context, permission_scope
 from rich.markdown import Markdown
@@ -57,6 +58,30 @@ class ConsoleCard(Vertical, can_focus=True):
         super().__init__(id="console-msg-" + message.id, classes=message.role)
         self.service, self.message = service, message
 
+    @staticmethod
+    def _styled_text(spans: list[StyleSpan]) -> Text:
+        colors = {
+            "cyan": "$ctp-blue",
+            "green": "$ctp-green",
+            "yellow": "$ctp-yellow",
+            "red": "$ctp-red",
+            "magenta": "$ctp-mauve",
+        }
+        output = Text()
+        for span in spans:
+            attributes: list[str] = []
+            color = ""
+            for token in span.style.split():
+                if token in colors:
+                    color = colors[token]
+                elif token == "dim":
+                    color = "$ctp-subtext0"
+                elif token in {"bold", "italic", "underline", "strike", "reverse"}:
+                    attributes.append(token)
+            style = " ".join((*attributes, color))
+            output.append(span.text, style=style or None)
+        return output
+
     def compose(self) -> ComposeResult:
         yield Static(classes="console-caption")
         yield Static(markup=False, classes="console-body")
@@ -87,20 +112,31 @@ class ConsoleCard(Vertical, can_focus=True):
             )
         self.query_one(Static).update(header)
         body = self.query_one(".console-body", Static)
-        body.update(Markdown(message.text) if message.markdown else Text(message.text))
-        parts = (
-            [self.service.t("console.quoted")]
-            if message.role == "user" and message.reply_to
-            else []
+        renderable = (
+            Markdown(message.text)
+            if message.markdown
+            else self._styled_text(message.spans)
+            if message.spans
+            else Text(message.text)
         )
-        parts.extend(
-            reference.get("title") or self.service.t("console.source_" + reference["kind"])
-            for reference in message.references[:3]
-        )
-        parts.extend(str(file["filename"]) for file in message.files)
+        body.update(renderable)
+        details: list[str] = []
+        if message.role == "user" and message.reply_to:
+            details.append(self.service.t("console.quoted"))
+        if message.references:
+            titles = [
+                reference.get("title") or self.service.t("console.source_" + reference["kind"])
+                for reference in message.references[:3]
+            ]
+            details.append(self.service.t("console.related_items") + ": " + " · ".join(titles))
+        if message.files:
+            filenames = [str(file["filename"]) for file in message.files[:3]]
+            if len(message.files) > len(filenames):
+                filenames.append("…")
+            details.append(self.service.t("console.attachments") + ": " + " · ".join(filenames))
         caption = self.query_one(".console-objects", Static)
-        caption.update(" · ".join(parts))
-        caption.display = bool(parts)
+        caption.update("\n".join(details))
+        caption.display = bool(details)
         self.set_class(message.state == "failed", "failed")
 
     def action_menu(self) -> None:

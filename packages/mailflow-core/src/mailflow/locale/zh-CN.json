@@ -2223,6 +2223,8 @@
       "message_menu": "消息操作",
       "source_mail": "来源邮件",
       "source_action": "关联待办",
+      "related_items": "关联内容",
+      "attachments": "附件",
       "quoted": "已引用消息",
       "source_missing": "这条待办已不存在，可能已完成或删除。",
       "save_file": "保存 {name}",

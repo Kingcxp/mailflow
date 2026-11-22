@@ -2223,6 +2223,8 @@
       "message_menu": "Message actions",
       "source_mail": "Source mail",
       "source_action": "Related task",
+      "related_items": "Related",
+      "attachments": "Attachments",
       "quoted": "Quoted message",
       "source_missing": "This task is no longer available. It may have been completed or deleted.",
       "save_file": "Save {name}",
