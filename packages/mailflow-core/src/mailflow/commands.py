@@ -36,7 +36,7 @@ from mailflow.domain import (
 )
 from mailflow.errors import error_text
 from mailflow.letters import LETTER_LANGUAGES, html_to_text, markup_to_html
-from mailflow.mail_body import mail_body_text
+from mailflow.mail_body import mail_body_markdown, mail_body_text, readable_markdown
 from mailflow.permissions import (
     PermissionContext,
     authorize_command,
@@ -45,7 +45,9 @@ from mailflow.permissions import (
 )
 from mailflow.updates import UpdateReport
 
-_quoted_references: ContextVar[list[dict[str, str]] | None] = ContextVar("quoted_references", default=None)
+_quoted_references: ContextVar[list[dict[str, str]] | None] = ContextVar(
+    "quoted_references", default=None
+)
 
 if TYPE_CHECKING:
     from rich.text import Text
@@ -708,6 +710,16 @@ class CommandRouter:
             StyleSpan(text=f"\n{self._t('mail.field_urgency')}: ", style=_STYLE_HEADER),
         ]
         spans.extend(self._urgency_span(record.effective_urgency))
+
+        def section(label: str, content: str, *, markdown: str | None = None) -> None:
+            spans.append(StyleSpan(text=f"\n\n{self._t(label)}:\n", style=_STYLE_HEADER))
+            spans.append(
+                StyleSpan(
+                    text=content,
+                    markdown=readable_markdown(content) if markdown is None else markdown,
+                )
+            )
+
         if record.manual_urgency is not None:
             spans.append(
                 StyleSpan(
@@ -724,19 +736,9 @@ class CommandRouter:
             )
         analysis = record.analysis
         if analysis is not None:
-            spans.append(
-                StyleSpan(
-                    text=f"\n{self._t('mail.field_summary')}: "
-                    f"{self.service.display_text(analysis.summary)}"
-                )
-            )
+            section("mail.field_summary", self.service.display_text(analysis.summary))
             if analysis.reason:
-                spans.append(
-                    StyleSpan(
-                        text=f"\n{self._t('mail.field_reason')}: "
-                        f"{self.service.display_text(analysis.reason)}"
-                    )
-                )
+                section("mail.field_reason", self.service.display_text(analysis.reason))
             if analysis.reply_required:
                 spans.append(
                     StyleSpan(
@@ -746,11 +748,7 @@ class CommandRouter:
                 )
                 spans.append(StyleSpan(text=self._t("common.yes"), style=_STYLE_ACCENT))
             if analysis.suggested_reply:
-                spans.append(
-                    StyleSpan(
-                        text=f"\n{self._t('mail.field_suggested_reply')}: {analysis.suggested_reply}"
-                    )
-                )
+                section("mail.field_suggested_reply", analysis.suggested_reply)
             if analysis.action_items:
                 spans.append(
                     StyleSpan(text=f"\n{self._t('mail.field_actions')}:", style=_STYLE_HEADER)
@@ -762,7 +760,7 @@ class CommandRouter:
                         )
                     )
             if analysis.notes:
-                spans.append(StyleSpan(text=f"\n{self._t('mail.field_notes')}: {analysis.notes}"))
+                section("mail.field_notes", analysis.notes)
         if feedback:
             spans.append(
                 StyleSpan(
@@ -771,11 +769,12 @@ class CommandRouter:
                 )
             )
         body = mail_body_text(mail) or self._t("tui.mail_no_body")
-        spans.append(StyleSpan(text=f"\n\n{self._t('mail.field_body')}:\n{body}"))
+        section("mail.field_body", body, markdown=mail_body_markdown(mail) or body)
         if mail.image_text.strip():
             spans.append(
-                StyleSpan(text=f"\n\n{self._t('mail.field_image_text')}:\n{mail.image_text}")
+                StyleSpan(text=f"\n\n{self._t('mail.field_image_text')}:\n", style=_STYLE_HEADER)
             )
+            spans.append(StyleSpan(text=mail.image_text))
         for note in record.processor_notes:
             spans.append(
                 StyleSpan(

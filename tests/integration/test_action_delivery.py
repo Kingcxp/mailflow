@@ -104,6 +104,7 @@ async def test_console_delivery_is_buffered_without_a_view_and_rebinds_cleanly()
     page = await service.console.read()
     assert [row["kind"] for row in page["messages"]] == ["mail", "reminder"]
     assert page["messages"][0]["references"][0]["kind"] == "mail"
+    assert all(row["markdown"] for row in page["messages"])
     assert not storage.preferences
     await service.console.close()
     with pytest.raises(RuntimeError):

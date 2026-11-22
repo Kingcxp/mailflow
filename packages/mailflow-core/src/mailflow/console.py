@@ -130,7 +130,7 @@ class ConsoleInbox:
                     kind=kind,
                     text=text,
                     references=references,
-                    markdown=False,
+                    markdown=True,
                 )
                 if delivery_id:
                     self._deliveries[delivery_id] = None

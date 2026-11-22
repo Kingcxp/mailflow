@@ -1,8 +1,16 @@
 """Readable mail content, without changing the stored original."""
 
-from mailflow.mail_body import html_to_text, mail_body_text
+from mailflow.mail_body import (
+    html_to_markdown,
+    html_to_text,
+    mail_body_markdown,
+    mail_body_text,
+    readable_markdown,
+)
 from mailflow.ocr import searchable_mail_text
 from mailflow_testkit.fakes import make_mail
+from rich.console import Console
+from rich.markdown import Markdown
 
 
 def test_html_body_keeps_reading_structure_links_and_literal_text() -> None:
@@ -31,9 +39,41 @@ def test_html_body_keeps_reading_structure_links_and_literal_text() -> None:
     assert mail.body_text == source and mail.body_html == source
     assert "https://example.com/details" in searchable_mail_text(mail)
     assert "secret-" not in searchable_mail_text(mail)
+    segments = list(Console(width=50).render(Markdown(html_to_markdown(source), justify="left")))
+    rendered = "".join(s.text for s in segments)
+    assert "你好 World" in rendered and "第二行 & <tag>" in rendered
+    assert "First item" in rendered and "Nested" in rendered and "Read details" in rendered
+    assert "secret-" not in rendered and "<p>" not in rendered and "tracker.invalid" not in rendered
+    assert any("World" in s.text and s.style and s.style.bold for s in segments)
+    assert any(
+        s.style and s.style.link and "https://example.com/details" in s.style.link for s in segments
+    )
 
 
 def test_plain_text_keeps_math_addresses_indentation_and_html_examples() -> None:
     original = "1 < 2 and 3 > 2\n\n    Keep indentation\n<user@example.com> <topic> &amp;"
     mail = make_mail(body_text=original, body_html="")
     assert mail_body_text(mail) == original
+    source = (
+        "## Summary\n\n**Important**<br>Next &lt;tag&gt; [red]\n\n"
+        "<strong>HTML emphasis </strong>and text\n\n"
+        "```html\n<p>literal &amp; code</p>\n```\n\n"
+        "`<b>literal inline</b>`\n\n<script>secret-script</script>"
+    )
+    mail.body_text = source
+    markup = readable_markdown(source)
+    assert mail_body_markdown(mail) == markup
+    assert "<p>literal &amp; code</p>" in markup and "`<b>literal inline</b>`" in markup
+    segments = list(Console(width=50).render(Markdown(markup, justify="left")))
+    rendered = "".join(s.text for s in segments)
+    assert "Next <tag> [red]" in rendered and "HTML emphasis and text" in rendered
+    assert "<p>literal &amp; code</p>" in rendered and "<b>literal inline</b>" in rendered
+    assert "secret-script" not in rendered and "<br>" not in rendered
+    assert any("HTML emphasis" in s.text and s.style and s.style.bold for s in segments)
+    lines = "First line\nSecond line\\\nThird line\n\n```text\nkeep\nthese lines\n```"
+    markup = readable_markdown(lines, preserve_lines=True)
+    rendered = "".join(s.text for s in Console(width=50).render(Markdown(markup)))
+    assert "First line\nSecond line\nThird line\n" in "\n".join(
+        line.rstrip() for line in rendered.splitlines()
+    )
+    assert "```text\nkeep\nthese lines\n```" in markup

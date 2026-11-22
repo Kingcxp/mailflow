@@ -15,9 +15,12 @@ from zoneinfo import ZoneInfo
 from mailflow.console import ConsoleMessage
 from mailflow.domain import StyleSpan
 from mailflow.errors import translated_error
+from mailflow.mail_body import readable_markdown
 from mailflow.permissions import current_context, permission_scope
 from rich.cells import cell_len
-from rich.markdown import Markdown
+from rich.console import Group, RenderableType
+from rich.control import strip_control_codes
+from rich.markdown import Heading, Markdown
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -31,6 +34,15 @@ from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.labels import error_message
 from mailflow_tui.pickers import PathPicker
 from mailflow_tui.widgets import PromptInput, SafeSelect, TextArea
+
+
+class _ConsoleHeading(Heading):
+    LEVEL_ALIGN = Heading.LEVEL_ALIGN.copy()
+    LEVEL_ALIGN["h1"] = "left"
+
+
+class _ConsoleMarkdown(Markdown):
+    elements = {**Markdown.elements, "heading_open": _ConsoleHeading}
 
 
 class ConsoleContextMenu(OptionList):
@@ -97,7 +109,48 @@ class ConsoleCard(Vertical, can_focus=True):
         self.service, self.message = service, message
 
     @staticmethod
-    def _styled_text(spans: list[StyleSpan]) -> Text:
+    def _clean_text(text: str) -> str:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        return strip_control_codes(Text.from_ansi(text).plain)
+
+    @classmethod
+    def _markdown(cls, text: str) -> Markdown:
+        return _ConsoleMarkdown(
+            readable_markdown(cls._clean_text(text), preserve_lines=True),
+            justify="left",
+            code_theme="ansi_dark",
+        )
+
+    @classmethod
+    def _body(cls, message: ConsoleMessage) -> RenderableType:
+        if message.markdown:
+            return cls._markdown(message.text)
+        if not message.spans:
+            return Text(cls._clean_text(message.text))
+        if not any(span.markdown is not None for span in message.spans):
+            return cls._styled_text(message.spans)
+        blocks: list[RenderableType] = []
+        pending: list[StyleSpan] = []
+
+        def flush() -> None:
+            if pending:
+                text = cls._styled_text(pending)
+                text.plain = text.plain.rstrip("\n")
+                if text.plain:
+                    blocks.append(text)
+                pending.clear()
+
+        for span in message.spans:
+            if span.markdown is None:
+                pending.append(span)
+            else:
+                flush()
+                blocks.append(cls._markdown(span.markdown))
+        flush()
+        return Group(*blocks)
+
+    @classmethod
+    def _styled_text(cls, spans: list[StyleSpan]) -> Text:
         colors = {
             "cyan": "$ctp-blue",
             "green": "$ctp-green",
@@ -108,7 +161,7 @@ class ConsoleCard(Vertical, can_focus=True):
         output = Text()
         previous_heading = False
         for span in spans:
-            value = span.text
+            value = cls._clean_text(span.text)
             if previous_heading and value.startswith("\n") and not value.startswith("\n\n"):
                 value = "\n" + value
             attributes: list[str] = []
@@ -155,14 +208,7 @@ class ConsoleCard(Vertical, can_focus=True):
             )
         self.query_one(Static).update(header)
         body = self.query_one(".console-body", Static)
-        renderable = (
-            Markdown(message.text, justify="left")
-            if message.markdown
-            else self._styled_text(message.spans)
-            if message.spans
-            else Text(message.text)
-        )
-        body.update(renderable)
+        body.update(self._body(message))
         details: list[str] = []
         if message.role == "user" and message.reply_to:
             details.append(self.service.t("console.quoted"))
@@ -649,9 +695,7 @@ class ConsolePane(Vertical):
             await self.query_one(ConsoleTimeline).remove_children(ConsoleCard)
             self._cards.clear()
             self.query_one(PromptInput).value = self.view.text
-            await self._render_messages(
-                list(self.view.rows.values()), following=self.view.follow
-            )
+            await self._render_messages(list(self.view.rows.values()), following=self.view.follow)
             if not self.view.follow:
                 self.call_after_refresh(
                     self.query_one(ConsoleTimeline).scroll_to, y=self.view.scroll, animate=False

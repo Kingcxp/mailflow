@@ -494,7 +494,8 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         app.screen.query_one("#workflow-apply", Button).press()
         await settle(pilot)
         assert not any(
-            item.reminder_enabled for item in await service.list_actions()
+            item.reminder_enabled
+            for item in await service.list_actions()
             if item.item_id != future.item_id
         )
         todos.focus()
@@ -1086,8 +1087,7 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         await settle(pilot)
         type_field = app.screen.query_one("#todo-type")
         assert (
-            type_field.query_one(Button).region.height
-            == type_field.query_one(Select).region.height
+            type_field.query_one(Button).region.height == type_field.query_one(Select).region.height
         )
         app.screen.query_one("#todo-completed", Checkbox).value = True
         app.screen.query_one("#todo-save", Button).press()
@@ -1197,6 +1197,8 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             )
             assert card.region.x == user_card.region.x
 
+            card.scroll_visible(animate=False, immediate=True)
+            await pilot.pause()
             original_screen = app.screen
             timeline = pane.query_one(ConsoleTimeline)
             timeline_region = timeline.region
@@ -1229,6 +1231,53 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             await until(pilot, lambda: menu.display)
             await pilot.press("escape")
             await until(pilot, lambda: not menu.display)
+
+            record = make_record("readable-mail", subject="[red] Mail & <user@example.com>")
+            record.mail.body_text = ""
+            record.mail.body_html = (
+                "<p><b>Important</b><br>Next &amp; &lt;tag&gt; [red]</p>"
+                '<ul><li>First item</li><li><a href="https://example.com/details">Details</a></li></ul>'
+                "<blockquote>Previous message</blockquote>"
+                '<pre>if 1 &lt; 2:\n    print("**literal**")</pre>'
+                "<style>secret-style</style><script>secret-script</script>"
+            )
+            assert record.analysis is not None
+            record.analysis.summary = "## Summary\n\n**Read this** and `file_01.txt`."
+            await service.storage.save_mail(record)
+            prompt.value = "/mailflow mail show readable-mail"
+            prompt.focus()
+            await pilot.press("enter")
+            await until(
+                pilot,
+                lambda: any(
+                    c.message.references
+                    == [{"kind": "mail", "id": record.record_id, "title": record.mail.subject}]
+                    and c.message.state == "done"
+                    for c in pane.query(ConsoleCard)
+                ),
+            )
+            mail_card = next(
+                c
+                for c in pane.query(ConsoleCard)
+                if c.message.references and c.message.references[0]["id"] == record.record_id
+            )
+            content = mail_card.query_one(".console-body", Static).content
+            for width in (40, 76):
+                segments = list(
+                    app.console.render(content, app.console.options.update(width=width))
+                )
+                rendered = "".join(s.text for s in segments)
+                assert "[red] Mail & <user@example.com>" in rendered
+                assert "Next & <tag> [red]" in rendered
+                assert "First item" in rendered and "Previous message" in rendered
+                assert "**literal**" in rendered and "file_01.txt" in rendered
+                assert (
+                    "secret-" not in rendered
+                    and "<p>" not in rendered
+                    and "## Summary" not in rendered
+                )
+                assert any("Read this" in s.text and s.style and s.style.bold for s in segments)
+                assert any("Important" in s.text and s.style and s.style.bold for s in segments)
     finally:
         finish.set()
         if unsubscribe is not None:

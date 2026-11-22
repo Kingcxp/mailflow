@@ -770,6 +770,7 @@ class RuntimeSnapshot(BaseModel):
 class StyleSpan(BaseModel):
     text: str
     style: str = ""
+    markdown: str | None = None  # Optional rich content; text remains the plain fallback.
 
 
 class CommandResponse(BaseModel):
