@@ -23,6 +23,7 @@ _CHOICES: dict[str, str | None] = {
 
 
 class ThemeWelcomeScreen(Screen[str | None]):
+    AUTO_FOCUS = "#theme-dark"
     BINDINGS: ClassVar[list[Any]] = [("escape", "keep_current", "")]
 
     DEFAULT_CSS = """
@@ -136,9 +137,6 @@ class ThemeWelcomeScreen(Screen[str | None]):
                     )
                 yield Button(self._t("tui.theme_welcome_auto"), id="theme-auto")
             yield Button(self._t("tui.theme_welcome_current"), id="theme-current")
-
-    def on_mount(self) -> None:
-        self.query_one("#theme-dark", Button).focus()
 
     def _preview_node(self, node: DOMNode | None) -> None:
         while node is not None and node is not self:

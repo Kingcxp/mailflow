@@ -121,6 +121,7 @@ async def test_first_use_theme_choice_is_saved_for_this_machine(
         async with app.run_test() as pilot:
             await until(pilot, lambda: isinstance(app.screen, ThemeWelcomeScreen))
             assert isinstance(app.screen, ThemeWelcomeScreen)
+            await until(pilot, lambda: app.focused is app.screen.query_one("#theme-dark"))
             await pilot.hover("#theme-light-row .theme-choice-title")
             await until(pilot, lambda: app.theme == "catppuccin-latte")
             assert app.current_theme.background == "#eff1f5"
