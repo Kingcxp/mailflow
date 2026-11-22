@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
+from textual.css.query import NoMatches
 
 
 def mock_http_client(monkeypatch: pytest.MonkeyPatch, transport: httpx.AsyncBaseTransport) -> None:
@@ -28,9 +29,13 @@ async def until(
 ) -> None:
     async with asyncio.timeout(deadline_seconds):
         while True:
-            result = condition()
-            if isawaitable(result):
-                result = await result
+            try:
+                result = condition()
+                if isawaitable(result):
+                    result = await result
+            except NoMatches:
+                # A new screen can be current before its children have mounted.
+                result = False
             if result:
                 return
             await pilot.pause(0.05)

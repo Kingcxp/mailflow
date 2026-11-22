@@ -1205,16 +1205,18 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             )
             assert card.region.x == user_card.region.x
 
-            card.scroll_visible(animate=False, immediate=True)
+            card.focus()
             await settle(pilot)
+            body_widget = card.query_one(".console-body", Static)
+            body_widget.scroll_visible(animate=False, immediate=True)
+            await pilot.pause()
             original_screen = app.screen
             timeline = pane.query_one(ConsoleTimeline)
             timeline_region = timeline.region
             if getattr(view, "remote", False):
-                card.focus()
                 await pilot.press("shift+f10")
             else:
-                await pilot.click(card, offset=(2, 1), button=3)
+                assert await pilot.click(body_widget, button=3)
             await until(
                 pilot,
                 lambda: pane.query_one(ConsoleContextMenu).display,

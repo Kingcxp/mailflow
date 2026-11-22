@@ -67,6 +67,13 @@ async def test_splash_skip_and_theme(
                 assert node.region.right <= size[0]
                 assert node.region.bottom <= size[1]
             await pilot.resize_terminal(60, 20)
+            await until(
+                pilot,
+                lambda: (
+                    splash.query_one("#splash-skip").region.right <= 60
+                    and splash.query_one("#splash-skip").region.bottom <= 20
+                ),
+            )
             assert splash.query_one("#splash-skip").region.bottom <= 20
             if gesture == "click":
                 await pilot.click("#splash-art")
