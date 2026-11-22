@@ -139,6 +139,10 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
 
     session_dir = cli_config.parent / "sessions"
     monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(session_dir))
+    session_dir.mkdir()
+    (session_dir / "theme-preferences.state").write_text(
+        json.dumps({"theme_onboarding_complete": True}), encoding="utf-8"
+    )
     config_before = await asyncio.to_thread(cli_config.read_bytes)
     run_cli(cli_config, "tui", "--background", "--name", "inbox", columns=80)
     info = await find_instance("inbox")
@@ -171,6 +175,8 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
         reader, writer, _ = await connect(info, "attach")
         attached.append(writer)
         send_frame(writer, {"event": "Resize", "size": [120, 40]})
+        await output_until(reader, "Press any key or click to skip")
+        send_frame(writer, {"event": "Key", "key": "escape", "character": None})
         await output_until(reader, "CLI account")
         assert (await request(info, "status"))["state"] == "attached"
         with pytest.raises(SessionError, match=r"sessions\.attached"):
@@ -233,6 +239,9 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
         # The TUI's exit action shuts down the host, rather than leaving it detached.
         reader, writer, _ = await connect(second, "attach")
         attached.append(writer)
+        await output_until(reader, "Press any key or click to skip")
+        send_frame(writer, {"event": "Key", "key": "escape", "character": None})
+        await output_until(reader, "CLI account")
         send_frame(writer, {"event": "Key", "key": "ctrl+q", "character": None})
         await event_until(reader, "stopped")
         assert {item.name for item, _state in await list_instances()} == {"inbox"}

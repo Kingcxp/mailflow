@@ -138,7 +138,7 @@ async def run_local_host(
         app = MailFlowApp(
             service,
             log_queue,
-            splash=session is None,
+            splash=True,
             session=session,
             theme_welcome=session is not None,
         )

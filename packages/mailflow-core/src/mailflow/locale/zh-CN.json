@@ -1039,6 +1039,7 @@
       "bots_select_first": "请先选中一个 bot 行",
       "extras_admins": "允许修改邮件、待办、发送回复和设置的平台用户标识，每行一个。其他用户仍可使用查看命令。",
       "splash_tagline": "每一封邮件，都被读懂。",
+      "splash_skip": "按任意键或点击跳过",
       "splash_status_plugins": "正在加载插件…",
       "splash_status_service": "正在启动服务…",
       "splash_status_ready": "就绪",

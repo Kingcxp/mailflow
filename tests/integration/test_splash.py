@@ -1,6 +1,4 @@
-"""Splash screen tests: shown at boot when enabled, auto-dismisses, Escape
-skips, and default (off) construction never shows it — so existing headless
-tests keep running against the main screen directly."""
+"""Themed welcome, immediate skip, and first-launch theme choice."""
 
 from __future__ import annotations
 
@@ -11,6 +9,9 @@ from mailflow.themes import DEFAULT_THEME
 from mailflow_tui.splash import SplashScreen
 from mailflow_tui.theme_preferences import load_theme_preferences
 from mailflow_tui.theme_welcome import ThemeWelcomeScreen
+from textual.color import Color
+from textual.screen import Screen
+from textual.widgets import Static
 
 from mailflow_test_support.app import make_app
 from mailflow_test_support.ui import until
@@ -24,26 +25,59 @@ async def test_splash_shows_then_dismisses(tmp_path: Path) -> None:
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
             assert isinstance(app.screen, SplashScreen)
-            # wait past the auto-dismiss duration (default 3.5s)
+            artwork = app.screen.query_one("#splash-art", Static).render()
+            await pilot.pause(0.15)
+            assert app.screen.query_one("#splash-art", Static).render() != artwork
+            # Wait past the automatic welcome (default 3 seconds).
             await pilot.pause(4.0)
             assert not isinstance(app.screen, SplashScreen)
             from textual.widgets import TabbedContent
 
             assert app.query_one(TabbedContent) is not None
+            app.show_startup_splash()
+            await pilot.pause()
+            assert not isinstance(app.screen, SplashScreen)
     finally:
         await service.stop()
 
 
 @pytest.mark.asyncio
-async def test_splash_escape_skips(tmp_path: Path) -> None:
-    """Escape closes the splash before the duration elapses."""
-    app, service = await make_app(tmp_path, splash=True)
+@pytest.mark.parametrize(
+    ("gesture", "theme", "size"),
+    [
+        ("f1", DEFAULT_THEME, (80, 24)),
+        ("a", "catppuccin-latte", (60, 24)),
+        ("click", "dracula", (120, 36)),
+    ],
+)
+async def test_splash_skip_and_theme(
+    tmp_path: Path, gesture: str, theme: str, size: tuple[int, int]
+) -> None:
+    """Skipping consumes the input and cannot later close another screen."""
+    app, service = await make_app(tmp_path)
+    app.preview_color_scheme(theme)
     try:
-        async with app.run_test() as pilot:
-            await pilot.pause(0.2)
-            assert isinstance(app.screen, SplashScreen)
-            await pilot.press("escape")
-            await pilot.pause(0.2)
+        async with app.run_test(size=size) as pilot:
+            splash = SplashScreen(service.t, duration=0.8)
+            await app.push_screen(splash)
+            await pilot.pause(0.05)
+            assert splash.styles.background == Color.parse(app.current_theme.background)
+            for node in splash.query(Static):
+                assert node.region.right <= size[0]
+                assert node.region.bottom <= size[1]
+            await pilot.resize_terminal(60, 20)
+            assert splash.query_one("#splash-skip").region.bottom <= 20
+            if gesture == "click":
+                await pilot.click("#splash-art")
+            else:
+                await pilot.press(gesture)
+            await until(pilot, lambda: not isinstance(app.screen, SplashScreen))
+            mail_search = app.query_one("#mail-search")
+            assert not mail_search.text
+            next_screen = Screen[None]()
+            await app.push_screen(next_screen)
+            await pilot.pause(0.9)
+            assert app.screen is next_screen
             assert not isinstance(app.screen, SplashScreen)
     finally:
         await service.stop()
@@ -53,10 +87,16 @@ async def test_splash_escape_skips(tmp_path: Path) -> None:
 async def test_splash_off_by_default(tmp_path: Path) -> None:
     """Default construction (tests) does not push the splash screen."""
     app, service = await make_app(tmp_path)
+    app.animation_level = "none"
     try:
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
             assert not isinstance(app.screen, SplashScreen)
+            await app.push_screen(SplashScreen(service.t))
+            artwork = app.screen.query_one("#splash-art", Static).render()
+            await pilot.pause(0.1)
+            assert app.screen.query_one("#splash-art", Static).render() == artwork
+            await until(pilot, lambda: not isinstance(app.screen, SplashScreen))
     finally:
         await service.stop()
 

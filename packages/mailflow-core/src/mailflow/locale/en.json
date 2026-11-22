@@ -1039,6 +1039,7 @@
       "bots_select_first": "Select a bot row first",
       "extras_admins": "Platform user IDs allowed to change mail, tasks, replies and settings. Read commands are available to other users. Separate entries by line.",
       "splash_tagline": "Every message, understood.",
+      "splash_skip": "Press any key or click to skip",
       "splash_status_plugins": "Loading plugins…",
       "splash_status_service": "Starting service…",
       "splash_status_ready": "Ready",

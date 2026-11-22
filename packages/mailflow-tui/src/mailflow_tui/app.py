@@ -5497,10 +5497,15 @@ class MailFlowApp(App[None]):
         self._terminal_background = mode
         self._apply_color_scheme()
 
-    def _show_splash(self) -> None:
-        if self._splash:
+    def show_startup_splash(self) -> None:
+        if (
+            self._splash
+            and (self._session is None or self._session.client is not None)
+            and not isinstance(self.screen, ThemeWelcomeScreen)
+        ):
             from mailflow_tui.splash import SplashScreen
 
+            self._splash = False
             self.push_screen(SplashScreen(self._service.t, self._version_string()))
 
     def _theme_welcome_selected(self, theme: str | None) -> None:
@@ -5529,7 +5534,7 @@ class MailFlowApp(App[None]):
         self._apply_color_scheme()
         if not saved:
             self.notify(self._service.t("tui.theme_preference_failed"), severity="warning")
-        self._show_splash()
+        self.show_startup_splash()
 
     def set_plugin_entries(self, entries: list[tuple[Repository, MarketPlugin]]) -> None:
         """Record the market entries (called by MarketPane after a fetch)."""
@@ -5631,14 +5636,14 @@ class MailFlowApp(App[None]):
             if configured_theme != DEFAULT_THEME:
                 save_theme_preferences(configured_theme, completed=True)
                 self._theme_preference = load_theme_preferences()
-                self._show_splash()
+                self.show_startup_splash()
             else:
                 self.push_screen(
                     ThemeWelcomeScreen(self._service.t, on_preview=self.preview_color_scheme),
                     self._theme_welcome_selected,
                 )
         else:
-            self._show_splash()
+            self.show_startup_splash()
         if self._session is not None:
             self.call_after_refresh(self._session.mark_ready)
 

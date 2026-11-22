@@ -477,6 +477,7 @@ class SessionHost:
             elif command == "attach":
                 assert self.app is not None
                 self.app.screen.refresh(repaint=True, layout=True)
+                self.app.call_after_refresh(self.app.show_startup_splash)
                 while self.client is writer and not writer.is_closing():
                     frame = await read_frame(reader)
                     if self.client is not writer:

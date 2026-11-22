@@ -1,35 +1,28 @@
-"""Animated boot splash for the MailFlow TUI.
+"""A short, theme-aware mail-flow animation, with immediate keyboard/mouse skip.
 
-Shown for a moment while the app mounts (service is already started by the
-runner; the splash just makes the handoff feel alive). Renders a large
-block-letter logo with a flowing brand-color wave, a hairline divider, a
-tiny equalizer bar and a step-advancing status line; dismisses itself after
-``duration`` seconds or on Escape. Needs only the translation callable — no
-service dependency.
-
-Rendering is deliberately gentle: slow terminals (headless containers, web
-shells) stall when a TUI floods them with frame updates, so the animation
-ticks at ~5fps, is disabled entirely when the app's animation level is
-``none``, and never uses Textual's `LoadingIndicator` (which repaints at
-16fps on its own timer).
+The service is already running. This is a welcome, not a loading indicator.
+Only the small artwork is repainted; elapsed time keeps slow terminals from
+building up animation frames. No tasks or network requests belong here.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from typing import Any, ClassVar
+from time import monotonic
+from typing import ClassVar, cast
 
-from rich.text import Text as RichText
-from textual.app import ComposeResult
-from textual.screen import Screen
+from rich.text import Text
+from textual import events
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.color import Color
+from textual.containers import Vertical
+from textual.screen import ModalScreen
+from textual.timer import Timer
 from textual.widgets import Static
 
-# The boot animation uses the selected theme, just like the application.
-_PALETTE = ("$ctp-blue", "$ctp-lavender", "$ctp-mauve", "$ctp-pink", "$ctp-teal")
-
-# 5-row block-letter font for the wordmark; one tuple of rows per glyph.
-_LOGO_ART: dict[str, tuple[str, str, str, str, str]] = {
+_LOGO_ART = {
     "M": ("█   █", "██ ██", "█ █ █", "█   █", "█   █"),
     "A": (" ███ ", "█   █", "█████", "█   █", "█   █"),
     "I": ("█████", "  █  ", "  █  ", "  █  ", "█████"),
@@ -38,163 +31,213 @@ _LOGO_ART: dict[str, tuple[str, str, str, str, str]] = {
     "O": (" ███ ", "█   █", "█   █", "█   █", " ███ "),
     "W": ("█   █", "█   █", "█ █ █", "██ ██", "█   █"),
 }
-
-# The wordmark: each glyph becomes one colour cell of the moving wave.
 _LOGO = "MAILFLOW"
 
-_LEVELS = "▁▃▅▇█"
 
-# frames per second for the color wave — a visible-but-light animation;
-# slow terminals still cope because each tick only rewrites two Statics
-_TICK_INTERVAL = 1 / 8
-
-
-def _color(palette_index: int) -> str:
-    return _PALETTE[palette_index % len(_PALETTE)]
-
-
-def _logo_text(frame: int) -> RichText:
-    """Render the block-letter wordmark, one colour per glyph.
-
-    Each glyph is tinted from a moving slice of the palette so the whole
-    mark reads as a single flowing wave; glyphs are joined by two spaces so
-    the block letters stay legible.
-    """
-    text = RichText(no_wrap=True)
-    for row in range(5):
-        for index, char in enumerate(_LOGO):
-            color = _color(int(frame / 2) + index * 2)
-            text.append(_LOGO_ART[char][row], style=f"bold {color}")
-            if index < len(_LOGO) - 1:
-                text.append("  ", style=color)
-        if row < 4:
+def _logo_text(elapsed: float, width: int, palette: dict[str, Color]) -> Text:
+    """Reveal the original wordmark, then send a soft highlight across it."""
+    if width < 48:
+        rows = [_LOGO]
+    else:
+        gap = "  " if width >= 60 else " "
+        rows = [gap.join(_LOGO_ART[letter][row] for letter in _LOGO) for row in range(5)]
+    columns = len(rows[0])
+    colors: list[str] = []
+    for x in range(columns):
+        position = x / max(1, columns - 1)
+        wave = (1 + math.sin(position * math.pi * 1.5 - elapsed)) / 2
+        color = palette["blue"].blend(palette["mauve"], wave)
+        color = color.blend(palette["teal"], position * 0.4)
+        reveal = min(1.0, max(0.0, elapsed * 2.8 - position * 0.8))
+        color = palette["surface1"].blend(color, 0.35 + reveal * 0.65)
+        shine = max(0.0, 1 - abs(position - (elapsed * 0.6 - 0.25)) / 0.14)
+        colors.append(color.blend(palette["text"], shine * 0.7).hex)
+    text = Text(no_wrap=True, overflow="crop", justify="center")
+    for row, line in enumerate(rows):
+        if row:
             text.append("\n")
+        text.append(" " * max(0, (width - columns) // 2))
+        for x, char in enumerate(line):
+            text.append(char, style=colors[x])
     return text
 
 
-def _divider_text() -> RichText:
-    """A quiet hairline under the wordmark to separate it from the status."""
-    return RichText("─" * 36, style="$ctp-surface2", no_wrap=True)
+def _flow_text(elapsed: float, width: int, palette: dict[str, Color]) -> Text:
+    """Small envelopes glide into an inbox, with no emoji-width dependency."""
+    width = max(9, min(60, width))
+    grid = [[(" ", "") for _ in range(width)] for _ in range(3)]
+    center = (width - 9) // 2
+    for x in range(width):
+        if x < center - 1 or x > center + 9:
+            grid[1][x] = ("·" if x % 3 == 0 else "─", palette["surface1"].hex)
 
+    def draw(x: int, rows: tuple[str, ...], color: str) -> None:
+        for y, line in enumerate(rows):
+            for offset, char in enumerate(line):
+                column = x + offset
+                if 0 <= column < width:
+                    grid[y][column] = (char, color)
 
-def _wave_text(frame: int) -> RichText:
-    """A 20-bar equalizer; bar heights follow sine, tinted like the logo."""
-    text = RichText(no_wrap=True)
-    for bar in range(20):
-        phase = bar * 0.55 + frame * 0.2
-        height = int(1 + 4 * (0.5 + 0.5 * math.sin(phase)))
-        color = _color(int(frame / 2) + bar * 2)
-        text.append(_LEVELS[height - 1] * 2, style=color)
+    if width >= 30:
+        for side, accent in ((0, "blue"), (1, "mauve")):
+            phase = (elapsed * 0.7 + side * 0.5) % 1
+            distance = center + 5
+            x = round(-5 + phase * distance) if side == 0 else round(width - phase * distance)
+            color = palette["surface1"].blend(palette[accent], min(1.0, phase * 4)).hex
+            draw(x, ("╭───╮", "│╲ ╱│", "╰───╯"), color)  # noqa: RUF001
+    pulse = 0.7 + 0.3 * math.sin(elapsed * math.pi * 1.4) ** 2
+    draw(
+        center,
+        ("╭───────╮", "│ ╲   ╱ │", "╰───────╯"),  # noqa: RUF001
+        palette["teal"].blend(palette["text"], (1 - pulse) * 0.5).hex,
+    )
+    text = Text(no_wrap=True, overflow="crop", justify="center")
+    for y, line in enumerate(grid):
+        if y:
+            text.append("\n")
+        for char, color in line:
+            text.append(char, style=color)
     return text
 
 
-class SplashScreen(Screen[None]):
-    """Full-screen boot animation; dismisses itself and returns to the app."""
+class SplashScreen(ModalScreen[None]):
+    """A skippable welcome which never pops a later screen or leaks timers."""
 
-    BINDINGS: ClassVar[list[Any]] = []
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("escape,enter,space", "skip", show=False, priority=True),
+    ]
 
     DEFAULT_CSS = """
     SplashScreen {
         align: center middle;
+        background: $ctp-base;
+        overflow: hidden;
     }
-    SplashScreen > Static {
+    #splash-content {
         width: 100%;
+        max-width: 76;
+        height: auto;
+    }
+    #splash-content > Static {
+        width: 100%;
+        height: auto;
         content-align: center middle;
     }
-    #splash-logo {
-        text-style: bold;
-        margin-bottom: 1;
-    }
-    #splash-divider {
-        margin-bottom: 1;
-    }
     #splash-tagline {
-        color: $text-muted;
-        margin-bottom: 1;
-    }
-    #splash-wave {
-        margin-bottom: 1;
-    }
-    #splash-status {
-        color: $text-muted;
+        color: $ctp-subtext0;
+        margin-top: 1;
         margin-bottom: 1;
     }
     #splash-version {
-        color: $text-disabled;
+        color: $ctp-overlay1;
+    }
+    #splash-skip {
+        color: $ctp-subtext1;
+        margin-top: 1;
+    }
+    SplashScreen.compact #splash-tagline {
+        margin-bottom: 0;
     }
     """
-
-    _STATUS_STEPS = (
-        "tui.splash_status_plugins",
-        "tui.splash_status_service",
-        "tui.splash_status_ready",
-    )
 
     def __init__(
         self,
         t: Callable[[str], str],
         version: str = "",
         *,
-        duration: float = 3.5,
+        duration: float = 3.0,
     ) -> None:
         super().__init__()
         self._t = t
         self._version = version
         self._duration = duration
-        self._frame = 0
-        self._status_step = 0
-        self._status_ticks = 0
-        self._timer: Any = None
-        self._bindings.bind("escape", "skip", self._t("tui.btn_skip"))
+        self._started = 0.0
+        self._motion_enabled = False
+        self._finished = False
+        self._animation_timer: Timer | None = None
+        self._dismiss_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="splash-logo")
-        yield Static(_divider_text(), id="splash-divider")
-        yield Static(self._t("tui.splash_tagline"), id="splash-tagline")
-        yield Static("", id="splash-wave")
-        yield Static("", id="splash-status")
-        yield Static(self._version, id="splash-version")
+        with Vertical(id="splash-content"):
+            yield Static("", id="splash-art")
+            yield Static(self._t("tui.splash_tagline"), id="splash-tagline")
+            yield Static(self._version, id="splash-version", markup=False)
+            yield Static(self._t("tui.splash_skip"), id="splash-skip")
 
-    async def on_mount(self) -> None:
-        self._render_logo()
-        # honour the app's animation setting: headless/slow hosts (which set
-        # animation_level to "none") get a static frame instead of a busy
-        # timer that can stall a slow terminal's output pipe
-        if self.app.animation_level != "none":  # pyright: ignore[reportUnknownMemberType]
-            self._timer = self.set_interval(_TICK_INTERVAL, self._tick)
-        else:
-            status = self.query_one("#splash-status", Static)
-            status.update(self._t(self._STATUS_STEPS[-1]))  # pyright: ignore[reportUnknownMemberType]
-        self.set_timer(self._duration, self._finish)
+    def on_mount(self) -> None:
+        app = cast(App[object], self.app)  # pyright: ignore[reportUnknownMemberType]
+        self._started = monotonic()
+        self._motion_enabled = app.animation_level != "none"
+        self._render_art()
+        if self._motion_enabled:
+            # One small region at 16 fps; reduced motion uses 8 fps.
+            interval = 1 / 8 if app.animation_level == "basic" else 1 / 16
+            self._animation_timer = self.set_interval(interval, self._render_art)
+        delay = self._duration if self._motion_enabled else min(self._duration, 0.5)
+        self._dismiss_timer = self.set_timer(delay, self._finish)
+
+    def on_resize(self, _event: events.Resize) -> None:
+        if self.is_mounted and not self._finished:
+            self._render_art()
+
+    def _render_art(self) -> None:
+        if self._finished:
+            return
+        app = cast(App[object], self.app)  # pyright: ignore[reportUnknownMemberType]
+        variables = app.get_css_variables()
+        palette = {
+            name: Color.parse(variables[f"ctp-{name}"])
+            for name in ("surface1", "blue", "mauve", "teal", "text")
+        }
+        width = max(9, min(60, self.size.width - 4))
+        compact = self.size.height < 22
+        self.set_class(compact, "compact")
+        if compact:
+            width = min(width, 47)
+        elapsed = monotonic() - self._started if self._motion_enabled else 1.0
+        art = _logo_text(elapsed, width, palette)
+        art.append("\n\n")
+        art.append_text(_flow_text(elapsed, width, palette))
+        self.query_one("#splash-art", Static).update(art)
+
+    def _stop_timers(self) -> None:
+        if self._animation_timer is not None:
+            self._animation_timer.stop()
+            self._animation_timer = None
+        if self._dismiss_timer is not None:
+            self._dismiss_timer.stop()
+            self._dismiss_timer = None
 
     def _finish(self) -> None:
-        """Return to the main screen, stopping the animation first.
+        if self._finished:
+            return
+        self._stop_timers()
+        self._finished = True
+        if self.is_current:
+            self.dismiss()
 
-        ``pop_screen`` returns an AwaitComplete that must not be awaited from
-        a message handler (Textual forbids it); fire-and-forget matches how
-        the app itself pushes screens. Stopping the tick timer explicitly
-        guarantees the animation can never outlive the screen even if the
-        pop is deferred."""
-        if self._timer is not None:
-            self._timer.stop()
-            self._timer = None
-        self.app.pop_screen()  # pyright: ignore[reportUnknownMemberType]
+    def on_unmount(self) -> None:
+        self._finished = True
+        self._stop_timers()
 
-    def _render_logo(self) -> None:
-        logo = self.query_one("#splash-logo", Static)
-        logo.update(_logo_text(self._frame))  # pyright: ignore[reportUnknownMemberType]
-        wave = self.query_one("#splash-wave", Static)
-        wave.update(_wave_text(self._frame))  # pyright: ignore[reportUnknownMemberType]
+    def check_consume_key(self, key: str, character: str | None) -> bool:
+        # Even global shortcuts skip first instead of opening a hidden dialog.
+        return True
 
-    def _tick(self) -> None:
-        self._frame += 1
-        self._render_logo()
-        self._status_ticks += 1
-        if self._status_ticks % 2 == 0 and self._status_step < len(self._STATUS_STEPS) - 1:
-            self._status_step += 1
-            status = self.query_one("#splash-status", Static)
-            status.update(self._t(self._STATUS_STEPS[self._status_step]))  # pyright: ignore[reportUnknownMemberType]
+    def on_key(self, event: events.Key) -> None:
+        event.stop()
+        event.prevent_default()
+        self._finish()
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        event.stop()
+        event.prevent_default()
+        self._finish()
+
+    def on_paste(self, event: events.Paste) -> None:
+        event.stop()
+        event.prevent_default()
+        self._finish()
 
     def action_skip(self) -> None:
-        """Escape closes the splash early."""
         self._finish()
