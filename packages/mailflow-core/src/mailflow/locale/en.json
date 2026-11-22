@@ -2201,7 +2201,7 @@
       "ready": "Notifications are ready.",
       "session_only": "Kept for this run only · up to 1,000 messages",
       "welcome": "Notifications and replies appear here. The conversation is cleared when the service stops.\n\nSend {prefix}mailflow help for commands. To ask MailFlow to do something, write @MailFlow followed by your request. Plain text does not call the model.",
-      "keys": "Enter: send · Shift+Enter: new line\nMessage actions: right-click or Shift+F10",
+      "keys": "Enter: send · Shift+Enter: new line\nEmpty input: ↑/↓ history · Messages: right-click or Shift+F10",
       "input_placeholder": "Send {prefix}mailflow help for commands, or write a request to @MailFlow",
       "menu": "Conversation actions",
       "send": "Send",

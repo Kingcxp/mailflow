@@ -1125,6 +1125,9 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             pane = app.query_one(ConsolePane)
             await pane.refresh_messages()
             prompt = pane.query_one(PromptInput)
+            prompt.focus()
+            await pilot.press("up", "down")
+            assert prompt.value == ""
             prompt.value = "a note without a model"
             prompt.focus()
             await pilot.press("enter")
@@ -1136,6 +1139,10 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             )
             await until(pilot, lambda: not prompt.value)
             assert not entered.is_set()
+            await pilot.press("up", "up")
+            assert prompt.value == "a note without a model"
+            await pilot.press("down", "down")
+            assert prompt.value == ""
             prompt.value = "@MailFlow check the inbox"
             await pilot.press("enter")
             await until(pilot, entered.is_set)
@@ -1261,6 +1268,7 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
                 for c in pane.query(ConsoleCard)
                 if c.message.references and c.message.references[0]["id"] == record.record_id
             )
+            await pilot.pause()
             content = mail_card.query_one(".console-body", Static).content
             for width in (40, 76):
                 segments = list(
@@ -1278,6 +1286,39 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
                 )
                 assert any("Read this" in s.text and s.style and s.style.bold for s in segments)
                 assert any("Important" in s.text and s.style and s.style.bold for s in segments)
+
+            await until(pilot, lambda: not prompt.value)
+            prompt.focus()
+            await pilot.press("up")
+            assert prompt.value == "/mailflow mail show readable-mail"
+            await pilot.press("up")
+            assert prompt.value == "@MailFlow check the inbox"
+            await pilot.press("up", "up")
+            assert prompt.value == "a note without a model"
+            await pilot.press("down", "down", "down")
+            assert prompt.value == ""
+            await pilot.press("up", "end", "shift+enter", *"edited")
+            edited = prompt.value
+            assert edited == "/mailflow mail show readable-mail\nedited"
+            await pilot.press("up")
+            assert prompt.value == edited and prompt.cursor_location[0] == 0
+            await pilot.press("down")
+            assert prompt.value == edited and prompt.cursor_location[0] == 1
+            assert sum(c.message.role == "user" for c in pane.query(ConsoleCard)) == 3
+
+            prompt.value = "a multiline\nnote"
+            await pilot.click(pane.query_one("#console-send", Button))
+            await until(pilot, lambda: not prompt.value)
+            prompt.focus()
+            await pilot.press("up")
+            assert prompt.value == "a multiline\nnote"
+            await pilot.press("down")
+            assert prompt.value == ""
+            await view.console_clear()
+            await pane.refresh_messages()
+            prompt.focus()
+            await pilot.press("up", "down")
+            assert prompt.value == ""
     finally:
         finish.set()
         if unsubscribe is not None:

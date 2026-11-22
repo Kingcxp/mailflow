@@ -20,7 +20,7 @@ from mailflow.permissions import current_context, permission_scope
 from rich.cells import cell_len
 from rich.console import Group, RenderableType
 from rich.control import strip_control_codes
-from rich.markdown import Heading, Markdown
+from rich.markdown import Heading, Markdown, MarkdownElement
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -42,7 +42,10 @@ class _ConsoleHeading(Heading):
 
 
 class _ConsoleMarkdown(Markdown):
-    elements = {**Markdown.elements, "heading_open": _ConsoleHeading}
+    elements: ClassVar[dict[str, type[MarkdownElement]]] = {
+        **Markdown.elements,
+        "heading_open": _ConsoleHeading,
+    }
 
 
 class ConsoleContextMenu(OptionList):
@@ -254,6 +257,20 @@ class ConsoleTimeline(VerticalScroll):
         self.post_message(self.PositionChanged())
 
 
+class ConsoleInput(PromptInput):
+    def __init__(self, recall: Callable[[int], bool], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._recall = recall
+
+    def action_cursor_up(self, select: bool = False) -> None:
+        if select or not self._recall(-1):
+            super().action_cursor_up(select)
+
+    def action_cursor_down(self, select: bool = False) -> None:
+        if select or not self._recall(1):
+            super().action_cursor_down(select)
+
+
 @dataclass
 class ConversationView:
     rows: dict[str, ConsoleMessage] = field(default_factory=dict)
@@ -267,6 +284,8 @@ class ConversationView:
     follow: bool = True
     unread: int = 0
     pending: tuple[str, str, str] | None = None
+    input_history: list[str] = field(default_factory=list)
+    history_index: int | None = None
 
 
 class ConsolePane(Vertical):
@@ -330,7 +349,7 @@ class ConsolePane(Vertical):
         with Horizontal(id="console-quote-row"):
             yield Static(id="console-quote", markup=False)
             yield Button(id="console-unquote")
-        yield PromptInput(id="console-input")
+        yield ConsoleInput(self._recall_input, id="console-input")
         with Horizontal(id="console-send-row"):
             yield Button(id="console-send", variant="primary", disabled=True)
             yield Button(id="console-stop", variant="error", disabled=True)
@@ -437,6 +456,8 @@ class ConsolePane(Vertical):
                     view.rows.clear()
                     view.quote = None
                     view.pending = None
+                    view.input_history.clear()
+                    view.history_index = None
                     await timeline.remove_children(ConsoleCard)
                     self._cards.clear()
                     view.has_more = False
@@ -628,6 +649,42 @@ class ConsolePane(Vertical):
         event.stop()
         self._send()
 
+    def _recall_input(self, direction: int) -> bool:
+        prompt = self.query_one(PromptInput)
+        if prompt.read_only:
+            return False
+        view = self.view
+        if (
+            view.history_index is not None
+            and prompt.value != view.input_history[view.history_index]
+        ):
+            view.history_index = None
+        if view.history_index is None:
+            if prompt.value or direction > 0:
+                return False
+            history: list[str] = []
+            for message in sorted(view.rows.values(), key=lambda row: row.sequence):
+                if (
+                    message.role == "user"
+                    and message.text
+                    and (not history or history[-1] != message.text)
+                ):
+                    history.append(message.text)
+            if not history:
+                return False
+            view.input_history = history
+            view.history_index = len(history)
+        index = max(0, min(len(view.input_history), view.history_index + direction))
+        if index == len(view.input_history):
+            view.history_index = None
+            value = ""
+        else:
+            view.history_index = index
+            value = view.input_history[index]
+        prompt.value = view.text = value
+        prompt.move_cursor(prompt.document.end)
+        return True
+
     def _send(self) -> None:
         if (
             not self._channel_valid
@@ -639,6 +696,7 @@ class ConsolePane(Vertical):
         self._sending = True
         text = self.query_one(PromptInput).value
         self.view.text = text
+        self.view.history_index = None
         self.view.follow, self.view.unread = True, 0
         self.query_one(ConsoleTimeline).scroll_end(animate=False, immediate=True)
         quote_id = self.view.quote.id if self.view.quote else ""

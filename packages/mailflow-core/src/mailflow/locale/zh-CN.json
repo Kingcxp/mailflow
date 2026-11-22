@@ -2201,7 +2201,7 @@
       "ready": "通知已就绪。",
       "session_only": "仅本次运行保留 · 最多 1,000 条消息",
       "welcome": "通知和回复会显示在这里。服务停止后，对话记录会清除。\n\n输入 {prefix}mailflow help 查看命令；输入 @MailFlow 后写下要处理的事。普通文字不会调用模型。",
-      "keys": "Enter 发送 · Shift+Enter 换行\n消息操作：右键或 Shift+F10",
+      "keys": "Enter 发送 · Shift+Enter 换行\n空输入时 ↑/↓ 翻阅历史 · 消息操作：右键或 Shift+F10",
       "input_placeholder": "输入 {prefix}mailflow help 查看命令，或用 @MailFlow 写下需求",
       "menu": "对话操作",
       "send": "发送",
