@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import tempfile
 from collections.abc import Callable
@@ -95,7 +96,18 @@ def read_database(path: Path) -> bytes:
             source.close()
 
 
-def legacy_database_path(config_path: Path, configured: str) -> Path:
+def legacy_database_path(config_path: Path, raw: dict[str, Any]) -> Path:
+    # A remote client only needs the data path; server-only credentials are
+    # expanded and validated by the destination service, never by the picker.
+    check_version(raw.get("schema_version", 0), "config")
+    storage = raw.get("storage", {})
+    if not isinstance(storage, dict):
+        raise ValueError("Invalid storage configuration")
+    configured = cast(dict[str, Any], storage).get("path", "data/mailflow.db")
+    if not isinstance(configured, str):
+        raise ValueError("Invalid database path")
+    if configured.startswith("${") and configured.endswith("}"):
+        configured = os.environ.get(configured[2:-1], configured)
     path = Path(configured).expanduser()
     if path.is_absolute():
         return path

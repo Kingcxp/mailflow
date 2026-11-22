@@ -149,6 +149,20 @@ class UserWorkflows:
             plan_id = str(values.get("plan_id", ""))
             plan = self.service._smart_plans.get(plan_id)  # pyright: ignore[reportPrivateUsage]
             return await self.service.apply_smart_plan(plan_id, plan[2] if plan else [])
+        if action in {"config_import_preview", "config_import"}:
+            from mailflow.backup import import_config, preview_config_import
+
+            require_admin(self.service.t)
+            configuration = base64.b64decode(str(values.get("configuration", "")), validate=True)
+            database = (
+                base64.b64decode(str(values["database"]), validate=True)
+                if values.get("database")
+                else None
+            )
+            if action == "config_import_preview":
+                return await preview_config_import(self.service, configuration, database)
+            async with self.service._backup_lock:  # pyright: ignore[reportPrivateUsage]
+                return await import_config(self.service, configuration, database)
         if action.startswith("backup_"):
             from pathlib import Path
 

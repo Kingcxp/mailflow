@@ -217,7 +217,7 @@
       "set_ok": "已设置 {option} = {value}",
       "title": "配置项（{count}）",
       "type": "类型",
-      "usage": "config <list [组]|get <键>|set <键> <值>>",
+      "usage": "config <list [组]|get <键>|set <键> <值>|import <旧配置> [--database auto|数据库] [CONFIRM]>",
       "value": "值"
     },
     "feedback": {

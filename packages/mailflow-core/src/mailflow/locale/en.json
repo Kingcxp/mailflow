@@ -217,7 +217,7 @@
       "set_ok": "Set {option} = {value}",
       "title": "Configuration options ({count})",
       "type": "TYPE",
-      "usage": "config <list [group]|get <key>|set <key> <value>>",
+      "usage": "config <list [group]|get <key>|set <key> <value>|import <file> [--database auto|file] [CONFIRM]>",
       "value": "VALUE"
     },
     "feedback": {

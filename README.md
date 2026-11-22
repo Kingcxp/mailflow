@@ -70,6 +70,11 @@ want summaries or the assistant; connect a notifier only if you want external
 delivery. The example has no account or model credentials. Keep your local
 configuration private and use environment variables for secrets.
 
+Already configured on `main`? In Settings → More → Import old settings, select
+the old TOML file and confirm the preview. Current mail is kept by default;
+optionally include the old SQLite database. Versions are detected automatically,
+and a recovery backup is created before import. See [data compatibility](docs/configuration/overview.md#data-backup-and-cleanup).
+
 To receive messages missed while MailFlow was stopped, enable the account's
 catch-up option. It uses a saved source cursor; it does not silently import the
 entire mailbox. See [account setup](docs/configuration/overview.md#accounts-and-startup).

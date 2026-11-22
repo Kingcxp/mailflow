@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import shlex
+import tomllib
 from collections.abc import Awaitable, Callable, Sized
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -2299,6 +2300,61 @@ class CommandRouter:
     # -- configuration ------------------------------------------------------------------
 
     async def _cmd_config(self, args: list[str]) -> CommandResponse:
+        if args and args[0] == "import":
+            import base64
+
+            from mailflow.migrations import legacy_database_path, read_database
+
+            if current_context().provider != "local":
+                return self._err(self._t("migration.local_only"))
+            positional, flags = _split_flags(args[1:])
+            if not positional:
+                return self._err(self._t("migration.usage"))
+            path = await asyncio.to_thread(lambda: Path(positional[0]).expanduser())
+            configuration = await asyncio.to_thread(path.read_bytes)
+            values = {"configuration": base64.b64encode(configuration).decode("ascii")}
+            if "database" in flags:
+                if flags["database"] == "auto":
+                    database_path = await asyncio.to_thread(
+                        legacy_database_path,
+                        path,
+                        tomllib.loads(configuration.decode("utf-8-sig")),
+                    )
+                else:
+                    database_path = await asyncio.to_thread(
+                        lambda: Path(flags["database"]).expanduser()
+                    )
+                database = await asyncio.to_thread(read_database, database_path)
+                values["database"] = base64.b64encode(database).decode("ascii")
+            preview = await self.service.workspace_call("config_import_preview", values)
+            summary = (
+                self._t(
+                    "migration.preview",
+                    version=preview["config_version"],
+                    target=preview["target_version"],
+                    accounts=len(preview["accounts"]),
+                    llms=preview["llms"],
+                    notifiers=preview["notifiers"],
+                )
+                + "\n"
+                + self._t(
+                    "migration.replace_data"
+                    if preview["includes_database"]
+                    else "migration.keep_data",
+                    mails=preview.get("mails", 0),
+                    tasks=preview.get("custom_actions", 0),
+                )
+            )
+            if preview["includes_database"]:
+                summary += "\n" + self._t(
+                    "migration.database_version",
+                    version=preview["database_version"],
+                    target=preview["target_database_version"],
+                )
+            if len(positional) < 2 or positional[-1] != "CONFIRM":
+                return self._ok(summary + "\n" + self._t("migration.usage"))
+            recovery = await self.service.workspace_call("config_import", values)
+            return self._ok(self._t("migration.imported", path=recovery))
         if not args or args[0] == "list":
             positionals, _ = _split_flags(args[1:])
             group = positionals[0] if positionals else ""

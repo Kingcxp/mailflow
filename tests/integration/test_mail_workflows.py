@@ -681,6 +681,168 @@ async def test_backup_restores_configuration_mail_and_tasks_without_accepting_in
     assert await service.get_language() == "zh-CN"
 
 
+async def test_old_settings_import_previews_keeps_or_replaces_data_and_rolls_back(
+    service: MailFlowService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+    import threading
+
+    from mailflow import backup
+    from mailflow.commands import CommandRouter
+    from mailflow.config import load_config, write_config
+    from mailflow.permissions import PermissionContext, permission_scope
+    from mailflow_tui.mail_workflows import ConfigImportScreen
+    from textual.widgets import Checkbox, Static
+
+    monkeypatch.setenv("MF_IMPORT_PASSWORD", "private-password")
+    monkeypatch.setenv("MF_CURRENT_LOGIN", "test-secret")
+    monkeypatch.setenv("MF_OLD_LOGIN", "old-login")
+    service.config.env_placeholders[("server", "password")] = "${MF_CURRENT_LOGIN}"
+    service.config_path = tmp_path / "current.toml"
+    write_config(service.config, service.config_path)
+    original_file = service.config_path.read_bytes()
+    await service.storage.save_mail(make_record("current"))
+    original_task = await service.add_action("Keep my current task")
+    old_root = tmp_path / "old"
+    old_config = old_root / "configs" / "mailflow.toml"
+    old_database = old_root / "data" / "old.db"
+    old_config.parent.mkdir(parents=True)
+    old_database.parent.mkdir(parents=True)
+    configuration = (
+        b'[general]\ntimezone = "Asia/Shanghai"\n'
+        b'[[accounts]]\naccount_id = "personal"\nprovider = "fake"\n'
+        b'email = "me@example.com"\nenabled = false\n'
+        b'[accounts.options]\npassword = "${MF_IMPORT_PASSWORD}"\n'
+        b'[storage]\npath = "data/old.db"\n'
+        b'[server]\npassword = "${MF_OLD_LOGIN}"\n'
+    )
+    old_config.write_bytes(configuration)
+    from mailflow.migrations import legacy_database_path
+
+    assert (
+        legacy_database_path(
+            old_config,
+            {"storage": {"path": "data/old.db"}, "password": "${SERVER_ONLY_IMPORT_PASSWORD}"},
+        )
+        == old_database
+    )
+    original_mail = make_record("unchanged-old-id")
+    source = sqlite3.connect(old_database)
+    try:
+        source.execute("PRAGMA journal_mode=WAL")
+        source.execute(
+            "CREATE TABLE mails(record_id TEXT PRIMARY KEY, record_json TEXT, received_ts REAL)"
+        )
+        source.execute(
+            "INSERT INTO mails VALUES (?, ?, ?)",
+            (original_mail.record_id, original_mail.model_dump_json(), 1.0),
+        )
+        source.execute("CREATE TABLE preferences(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        source.execute("INSERT INTO preferences VALUES ('subscriptions', 'keep-old-relations')")
+        source.commit()
+        transport = httpx.ASGITransport(app=create_app(service))
+        mock_http_client(monkeypatch, transport)
+        adapter = RemoteServiceAdapter(
+            RemoteClient("http://fake", "admin", "test-secret"),
+            json_value(service.snapshot()),
+            I18n(),
+        )
+        cli_preview = await CommandRouter(service).execute(f'config import "{old_config}"')
+        assert cli_preview.ok and service.config_path.read_bytes() == original_file
+        app = App[None]()
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = ConfigImportScreen(cast(Any, adapter))
+            await app.push_screen(screen)
+            await until(pilot, lambda: bool(screen.query("#import-apply")))
+            screen.query_one("#import-config-path", Input).value = str(old_config)
+            screen.query_one("#import-apply", Button).press()
+            await until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ConfirmModal)
+                    and bool(app.screen.query("#confirm-cancel"))
+                ),
+            )
+            assert service.config_path.read_bytes() == original_file
+            app.screen.query_one("#confirm-cancel", Button).press()
+            await until(pilot, lambda: not screen.busy)
+            assert (await service.list_mails())[0].record_id == "current"
+            screen.query_one("#import-apply", Button).press()
+            await until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run"))
+                ),
+            )
+            app.screen.query_one("#confirm-run", Button).press()
+            await until(pilot, lambda: not screen.busy)
+            assert service.config.general.timezone == "Asia/Shanghai"
+            account = service.config.account("personal")
+            assert account is not None and account.options["password"] == "private-password"
+            assert service.config.server.password == "test-secret"
+            assert (await service.list_mails())[0].record_id == "current"
+            assert (await service.list_actions_all())[0].item_id == original_task.item_id
+            assert "private-password" not in service.config_path.read_text(encoding="utf-8")
+            assert load_config(service.config_path).source_version == 1
+            assert load_config(service.config_path).server.password == "test-secret"
+            assert "Import complete" in str(screen.query_one("#workflow-status", Static).render())
+            screen.query_one("#import-with-data", Checkbox).value = True
+            screen.query_one("#import-apply", Button).press()
+            await until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run"))
+                ),
+            )
+            app.screen.query_one("#confirm-run", Button).press()
+            await until(pilot, lambda: not screen.busy)
+            assert [r.record_id for r in await service.list_mails()] == [original_mail.record_id]
+            assert not await service.list_actions_all()
+            assert await service.storage.get_preference("subscriptions") == "keep-old-relations"
+            assert old_config.read_bytes() == configuration
+            assert source.execute("PRAGMA user_version").fetchone() == (0,)
+            screen.query_one("#import-close", Button).press()
+        saved_file = service.config_path.read_bytes()
+        await service.storage.save_mail(make_record("retained-after-failure"))
+
+        def fail_save(*_args: Any) -> None:
+            raise OSError("simulated full disk")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(backup, "write_config", fail_save)
+            with pytest.raises(OSError):
+                await backup.import_config(service, configuration)
+        assert service.config_path.read_bytes() == saved_file
+        assert await service.storage.get_mail("retained-after-failure") is not None
+        entered, release = threading.Event(), threading.Event()
+
+        def delayed_write(config: MailFlowConfig, path: Path) -> None:
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("test did not release config write")
+            write_config(config, path)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(backup, "write_config", delayed_write)
+            importing = asyncio.create_task(backup.import_config(service, configuration))
+            try:
+                assert await asyncio.to_thread(entered.wait, 5)
+                importing.cancel()
+            finally:
+                release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await importing
+        assert service.config_path.read_bytes() == saved_file
+        assert await service.storage.get_mail("retained-after-failure") is not None
+        with (
+            permission_scope(PermissionContext(provider="telegram", sender="reader")),
+            pytest.raises(PermissionError),
+        ):
+            await service.workspace_call("config_import", {"configuration": ""})
+    finally:
+        source.close()
+
+
 def test_remembered_remote_password_uses_vault_and_migrates_old_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

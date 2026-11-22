@@ -2083,11 +2083,19 @@ class SettingsPane(Vertical):
             for key in keys:
                 self._drafts.pop(key, None)
             await self._render_options()
-        elif operation in {"settings-backup", "settings-connection"}:
-            from mailflow_tui.mail_workflows import DataManagementScreen, RemoteConnectionScreen
+        elif operation in {"settings-backup", "settings-connection", "settings-import"}:
+            from mailflow_tui.mail_workflows import (
+                ConfigImportScreen,
+                DataManagementScreen,
+                RemoteConnectionScreen,
+            )
 
             screen = (
-                DataManagementScreen if operation == "settings-backup" else RemoteConnectionScreen
+                ConfigImportScreen
+                if operation == "settings-import"
+                else DataManagementScreen
+                if operation == "settings-backup"
+                else RemoteConnectionScreen
             )
             cast("Any", self).app.push_screen(screen(self._service))
 
@@ -2100,6 +2108,7 @@ class SettingsPane(Vertical):
                 (self._t("interface.save_section"), "settings-save-section"),
                 (self._t("interface.discard_section"), "settings-discard-section"),
                 (self._t("ux.backup_title"), "settings-backup"),
+                (self._t("migration.import_title"), "settings-import"),
                 (
                     self._t(
                         "interface.hide_advanced"

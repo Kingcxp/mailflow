@@ -1208,6 +1208,106 @@ class DeliveriesScreen(WorkflowScreen):
                 self._sync_controls()
 
 
+class ConfigImportScreen(WorkflowScreen):
+    def __init__(self, service: MailFlowService) -> None:
+        super().__init__(service)
+        self.busy = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self.t("migration.import_title"))
+            with ScrollableContainer():
+                yield Static(self.t("migration.import_hint"), markup=False)
+                yield Static(self.t("migration.config_file"))
+                yield AssistedInput(self.service, id="import-config-path")
+                yield Checkbox(self.t("migration.include_database"), id="import-with-data")
+                yield Static(self.t("migration.database_hint"), markup=False)
+                yield AssistedInput(self.service, id="import-database-path")
+            yield Static("", id="workflow-status", markup=False)
+            with Horizontal():
+                yield Button(self.t("migration.import_title"), id="import-apply", variant="warning")
+                yield Button(self.t("tui.btn_back"), id="import-close")
+
+    def action_close(self) -> None:
+        if not self.busy:
+            super().action_close()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if self.busy:
+            return
+        if event.button.id == "import-close":
+            self.dismiss(None)
+        elif event.button.id == "import-apply":
+            self.busy = True
+            self.run_worker(self._import(), group="config-import", exit_on_error=False)
+
+    async def _import(self) -> None:
+        for node in self.query("Button, Input, Checkbox"):
+            node.disabled = True
+        try:
+            import tomllib
+
+            from mailflow.migrations import legacy_database_path, read_database
+
+            raw_config = self.query_one("#import-config-path", Input).value.strip()
+            path = await asyncio.to_thread(lambda: Path(raw_config).expanduser())
+            if not await asyncio.to_thread(path.is_file):
+                self.status(self.t("migration.choose_config"))
+                return
+            self.status(self.t("migration.inspecting"))
+            configuration = await asyncio.to_thread(path.read_bytes)
+            values = {"configuration": base64.b64encode(configuration).decode("ascii")}
+            if self.query_one("#import-with-data", Checkbox).value:
+                configured = tomllib.loads(configuration.decode("utf-8-sig"))
+                raw_path = self.query_one("#import-database-path", Input).value.strip()
+                database_path = (
+                    await asyncio.to_thread(lambda: Path(raw_path).expanduser())
+                    if raw_path
+                    else await asyncio.to_thread(legacy_database_path, path, configured)
+                )
+                if not await asyncio.to_thread(database_path.is_file):
+                    self.status(self.t("migration.database_missing"))
+                    return
+                database = await asyncio.to_thread(read_database, database_path)
+                values["database"] = base64.b64encode(database).decode("ascii")
+            preview = await self.service.workspace_call("config_import_preview", values)
+            summary = self.t(
+                "migration.preview",
+                version=preview["config_version"],
+                target=preview["target_version"],
+                accounts=len(preview["accounts"]),
+                llms=preview["llms"],
+                notifiers=preview["notifiers"],
+            )
+            summary += "\n\n" + self.t(
+                "migration.replace_data" if preview["includes_database"] else "migration.keep_data",
+                mails=preview.get("mails", 0),
+                tasks=preview.get("custom_actions", 0),
+            )
+            if preview["includes_database"]:
+                summary += "\n" + self.t(
+                    "migration.database_version",
+                    version=preview["database_version"],
+                    target=preview["target_database_version"],
+                )
+            if not await self.ask(
+                self.confirmation(summary + "\n\n" + self.t("migration.confirm"))
+            ):
+                self.status("")
+                return
+            self.status(self.t("migration.importing"))
+            recovery = await self.service.workspace_call("config_import", values)
+            self.status(self.t("migration.imported", path=recovery))
+        except Exception as exc:
+            self.status(error_text(exc, self.t))
+        finally:
+            self.busy = False
+            if self.is_mounted:
+                for node in self.query("Button, Input, Checkbox"):
+                    node.disabled = False
+
+
 class DataManagementScreen(WorkflowScreen):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__(service)
@@ -1234,6 +1334,9 @@ class DataManagementScreen(WorkflowScreen):
             with Horizontal():
                 yield Button(self.t("ux.create_backup"), id="backup-create", variant="success")
                 yield Button(self.t("ux.restore_backup"), id="backup-restore", variant="warning")
+                yield Button(
+                    self.t("migration.import_title"), id="backup-import", variant="primary"
+                )
                 yield Button(self.t("tui.btn_back"), id="backup-close")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1242,6 +1345,8 @@ class DataManagementScreen(WorkflowScreen):
             return
         if event.button.id == "backup-close":
             self.dismiss(None)
+        elif event.button.id == "backup-import":
+            self.app.push_screen(ConfigImportScreen(self.service))  # pyright: ignore[reportUnknownMemberType]
         else:
             self.busy = True
             self.run_worker(

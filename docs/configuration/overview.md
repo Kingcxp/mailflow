@@ -253,6 +253,34 @@ uncached source attachments still require mailbox access. A restore creates a
 recovery backup and rolls back on failure. Treat backup archives as secrets;
 bot backup export is only available to an administrator in a private chat.
 
+To reuse an existing `main` installation, open Settings → More → Import old
+settings and select its TOML file. Preview the account/model/notifier counts
+before confirming. By default, only settings are replaced; current mail, tasks
+and subscriptions stay in place. To replace these with the old installation's
+data, select **Include old database**. An empty database path is resolved from
+the old configuration, including paths relative to its project directory.
+The old files stay unchanged. The current storage location and server login
+remain in use; environment variable references are preserved and must be
+available on the destination server. Remote TUI uploads files from the client.
+
+The equivalent local command previews without `CONFIRM`:
+
+```bash
+uv run --no-sync mailflow command 'config import "OLD/configs/local.toml"' -c configs/local.toml
+uv run --no-sync mailflow command 'config import "OLD/configs/local.toml" --database auto CONFIRM' -c configs/local.toml
+```
+
+Configuration `schema_version` and SQLite `PRAGMA user_version` identify data
+formats independently from the application version. Unversioned files are
+legacy version 0; the first release format is version 1. Opening an old local
+configuration/database upgrades it once, retaining an adjacent
+`*.before-v1-*.bak` recovery copy. Database upgrades are transactional and
+include committed WAL data. Existing mail IDs, drafts, preferences and
+subscriptions are preserved. A newer unsupported format is refused before
+modification. Old format-1 ZIP backups remain readable. For a downgrade, use
+the pre-upgrade files or recovery archive with the matching older MailFlow.
+Recovery files contain private data; keep them outside version control.
+
 `make clean` removes development output, not mail. The separately named
 `clean-records` and `clean-trash` targets modify data in
 `configs/development.toml`; the latter is irreversible. They are not setup steps.
@@ -409,6 +437,19 @@ console 默认不等待两秒，其他机器人仍沿用原有发送间隔。
 由 `auto_backup`、`backup_directory`、`backup_time`、`backup_keep` 控制。
 备份包含配置、SQLite 数据和受管／已缓存文件，未下载附件仍需从原邮箱获取。
 恢复前生成保护备份，失败可回滚。备份包含敏感数据，机器人仅允许管理员私聊导出。
+
+复用 main 的设置：打开“设置 → 更多 → 导入旧配置”，选择原 TOML 文件并确认预览。
+默认只替换设置，保留当前邮件、待办和订阅；勾选“一并导入旧数据库”才替换这些数据。
+数据库路径留空时，根据旧配置及其项目目录自动查找。原文件保持不变，当前数据库位置和
+远程服务登录设置继续保留；环境变量引用也保留，目标服务需设置相应变量。
+远程终端读取并上传客户端文件。本地命令见上方，省略 `CONFIRM` 仅预览。
+
+配置用 `schema_version`、SQLite 用 `user_version` 独立记录数据格式，未标记的旧数据
+视为 0，首个正式版格式为 1。直接使用旧文件启动时自动升级一次，并在原文件旁生成
+`*.before-v1-*.bak` 保护副本。数据库升级使用事务，备份包含已提交的 WAL 数据，
+保留邮件标识、草稿、偏好和订阅；导入失败会回滚。遇到更高版本时拒绝修改，提示升级程序。
+旧格式 ZIP 备份仍可读取。需要降级时，用升级前副本或恢复归档配合对应旧版程序，
+不要直接让旧程序打开新格式。保护副本含隐私数据，请妥善保存，不要提交到仓库。
 
 `make clean` 只清理开发产物。`clean-records`、`clean-trash` 使用
 `configs/development.toml` 修改用户数据，后者不可恢复，不应作为安装步骤执行。
