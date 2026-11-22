@@ -44,3 +44,4 @@ configs/development.toml
 
 # Managed local backups
 backups/
+*.before-v*-*.bak

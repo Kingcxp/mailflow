@@ -2243,6 +2243,28 @@
       "model_settings": "Model settings",
       "file_cache_limit": "This file is too large to keep in the Console. Download it from Mail or export a backup in Settings.",
       "refresh": "Refresh messages"
+    },
+    "migration": {
+      "import_title": "Import old settings",
+      "import_hint": "Choose the TOML configuration from your old MailFlow installation. Accounts, models and notification settings are imported together. Original files stay unchanged.",
+      "config_file": "Old configuration file (.toml)",
+      "include_database": "Also import the old mailbox data",
+      "database_hint": "Optional SQLite file. Leave blank to find it beside the old configuration or in its project folder. Enable the option above to replace current mailbox data.",
+      "choose_config": "Choose an existing TOML configuration file.",
+      "database_missing": "The old database could not be found. Choose its SQLite file, or import settings only.",
+      "inspecting": "Reading settings and checking data versions…",
+      "preview": "Configuration version {version} → {target}\nAccounts: {accounts} · Models: {llms} · Notification channels: {notifiers}",
+      "database_version": "Database version {version} → {target}",
+      "keep_data": "Current mail, tasks, drafts and subscriptions will be kept.",
+      "replace_data": "Current mailbox data will be replaced: {mails} mail records and {tasks} custom tasks from the old database. Old trash, drafts, preferences and subscriptions are included.",
+      "confirm": "These settings replace the current settings. The current database location and remote connection settings stay unchanged. A recovery backup is created first; a failed import rolls back. Continue?",
+      "importing": "Backing up current data and importing…",
+      "imported": "Import complete. Recovery backup: {path}",
+      "config_newer": "This configuration uses version {found}; this MailFlow supports version {supported}. Open it with a newer MailFlow. The file has not been changed.",
+      "database_newer": "This database uses version {found}; this MailFlow supports version {supported}. Open it with a newer MailFlow. The database has not been changed.",
+      "usage": "config import OLD.toml [--database auto|OLD.db] [CONFIRM]\nOmit CONFIRM to preview. Without --database, current mailbox data is kept.",
+      "local_only": "Use Settings → Import old settings to upload a configuration, or run config import in the local command line.",
+      "environment_missing": "Environment variable {name} is missing. Set it on this computer before importing or opening this configuration."
     }
   }
 }

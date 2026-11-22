@@ -33,38 +33,20 @@ from mailflow.domain import (
     Urgency,
     to_utc,
 )
+from mailflow.lifecycle import complete_io
 from mailflow.mail_query import MailPage, MailQuery
+from mailflow.migrations import (
+    DATABASE_VERSION,
+    backup_database,
+    check_version,
+    migrate_database,
+    recovery_path,
+)
 from mailflow.ocr import searchable_record_text
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
 logger = logging.getLogger("mailflow.storage.sqlite")
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS mails (
-    record_id   TEXT PRIMARY KEY,
-    record_json TEXT NOT NULL,
-    received_ts REAL NOT NULL,
-    search_text TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS trash_records (
-    record_id   TEXT PRIMARY KEY,
-    record_json TEXT NOT NULL,
-    deleted_ts  REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS drafts (
-    draft_id   TEXT PRIMARY KEY,
-    draft_json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS preferences (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS custom_actions (
-    item_id   TEXT PRIMARY KEY,
-    item_json TEXT NOT NULL
-);
-"""
 
 
 class SQLiteStorage:
@@ -86,68 +68,32 @@ class SQLiteStorage:
 
     # -- lifecycle ---------------------------------------------------------------
 
-    @staticmethod
-    def _prepare_mail_search(conn: sqlite3.Connection) -> None:
-        with conn:
-            conn.execute("BEGIN IMMEDIATE")
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(mails)")}
-            if "search_text" not in columns:
-                conn.execute("ALTER TABLE mails ADD COLUMN search_text TEXT NOT NULL DEFAULT ''")
-                rows = conn.execute("SELECT record_id, record_json FROM mails")
-                while batch := rows.fetchmany(200):
-                    conn.executemany(
-                        "UPDATE mails SET search_text = ? WHERE record_id = ?",
-                        [
-                            (
-                                searchable_record_text(
-                                    MailRecord.model_validate_json(raw)
-                                ).casefold(),
-                                key,
-                            )
-                            for key, raw in batch
-                        ],
-                    )
-            if conn.execute(
-                "SELECT value FROM preferences WHERE key = 'schema.mail_received_index'"
-            ).fetchone() != ("1",):
-                rows = conn.execute("SELECT record_id, record_json FROM mails")
-                while batch := rows.fetchmany(200):
-                    conn.executemany(
-                        "UPDATE mails SET received_ts = ? WHERE record_id = ?",
-                        [
-                            (
-                                to_utc(
-                                    MailRecord.model_validate_json(raw).mail.received_at
-                                ).timestamp(),
-                                key,
-                            )
-                            for key, raw in batch
-                        ],
-                    )
-                conn.execute(
-                    "INSERT OR REPLACE INTO preferences VALUES('schema.mail_received_index', '1')"
-                )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS mails_received ON mails(received_ts DESC, record_id)"
-            )
+    def _open(self) -> sqlite3.Connection:
+        if self._path != ":memory:":
+            Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self._path, check_same_thread=False)
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+            version = check_version(conn.execute("PRAGMA user_version").fetchone()[0], "database")
+            existing = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
+            ).fetchone()
+            if version < DATABASE_VERSION and existing and self._path != ":memory:":
+                backup_database(conn, recovery_path(Path(self._path), DATABASE_VERSION))
+            migrate_database(conn)
+            conn.execute("PRAGMA journal_mode=WAL")
+        except BaseException:
+            conn.close()
+            raise
+        return conn
 
     async def initialize(self) -> None:
+        def open_storage() -> None:
+            self._conn = self._open()
+
         async with self._lock:
-            if self._conn is not None:
-                return  # idempotent: hosts may initialize early (language
-                # preference must be readable before pipeline construction)
-            if self._path != ":memory:":
-                Path(self._path).parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self._path, check_same_thread=False)
-            try:
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA busy_timeout=5000")
-                conn.executescript(_SCHEMA)
-                self._prepare_mail_search(conn)
-            except BaseException:
-                conn.close()
-                raise
-            self._conn = conn
+            if self._conn is None:
+                await complete_io(open_storage)
 
     async def close(self) -> None:
         async with self._lock:
@@ -156,7 +102,7 @@ class SQLiteStorage:
                 self._conn = None
 
     async def export_backup(self) -> bytes:
-        async with self._lock:
+        def export() -> bytes:
             with tempfile.TemporaryDirectory(prefix="mailflow-backup-") as folder:
                 path = Path(folder) / "snapshot.db"
                 snapshot = sqlite3.connect(path)
@@ -169,13 +115,22 @@ class SQLiteStorage:
                     snapshot.close()
                 return path.read_bytes()
 
+        async with self._lock:
+            return await complete_io(export)
+
     @staticmethod
     def _backup_connection(payload: bytes) -> sqlite3.Connection:
-        snapshot = sqlite3.connect(":memory:")
+        snapshot = sqlite3.connect(":memory:", check_same_thread=False)
         try:
             snapshot.deserialize(payload)
+            check_version(snapshot.execute("PRAGMA user_version").fetchone()[0], "database")
+            if not snapshot.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='mails'"
+            ).fetchone():
+                raise ValueError("Not a MailFlow database")
             if snapshot.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ValueError("invalid database backup")
+            migrate_database(snapshot)
             for table, column, model in (
                 ("mails", "record_json", MailRecord),
                 ("trash_records", "record_json", MailRecord),
@@ -191,10 +146,22 @@ class SQLiteStorage:
             raise
 
     async def validate_backup(self, payload: bytes) -> None:
-        self._backup_connection(payload).close()
+        await asyncio.to_thread(lambda: self._backup_connection(payload).close())
 
     async def inspect_backup(self, payload: bytes) -> dict[str, Any]:
-        snapshot = self._backup_connection(payload)
+        return await asyncio.to_thread(self._inspect_backup, payload)
+
+    @staticmethod
+    def _inspect_backup(payload: bytes) -> dict[str, Any]:
+        versioned = sqlite3.connect(":memory:")
+        try:
+            versioned.deserialize(payload)
+            version = check_version(
+                versioned.execute("PRAGMA user_version").fetchone()[0], "database"
+            )
+        finally:
+            versioned.close()
+        snapshot = SQLiteStorage._backup_connection(payload)
         try:
             counts = {
                 table: snapshot.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
@@ -206,19 +173,23 @@ class SQLiteStorage:
             ):
                 files += len(json.loads(value)) if key.startswith("files.") else 1
             counts["files"] = files
+            counts["database_version"] = version
             return counts
         finally:
             snapshot.close()
 
     async def restore_backup(self, payload: bytes) -> None:
-        snapshot = self._backup_connection(payload)
-        try:
-            async with self._lock:
+        def restore() -> None:
+            snapshot = self._backup_connection(payload)
+            try:
                 snapshot.backup(self._check_conn())
                 self._check_conn().execute("PRAGMA journal_mode=WAL")
-                self._prepare_mail_search(self._check_conn())
-        finally:
-            snapshot.close()
+                migrate_database(self._check_conn())
+            finally:
+                snapshot.close()
+
+        async with self._lock:
+            await complete_io(restore)
 
     def _check_conn(self) -> sqlite3.Connection:
         if self._conn is None:

@@ -8,7 +8,6 @@ placeholders are expanded; ``prefix-${VAR}-suffix`` is left literal.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 import tempfile
@@ -21,9 +20,8 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic.fields import FieldInfo
 
 from mailflow.domain import Urgency
+from mailflow.migrations import CONFIG_VERSION, check_version, migrate_config, recovery_path
 from mailflow.themes import DEFAULT_THEME
-
-logger = logging.getLogger("mailflow.config")
 
 _ENV_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
@@ -65,7 +63,9 @@ def _expand_string(value: str, origin: str) -> str:
     if match:
         name = match.group(1)
         if name not in os.environ:
-            raise ValueError(f"environment variable {name!r} (referenced by {origin}) is not set")
+            error = ValueError(f"environment variable {name!r} (referenced by {origin}) is not set")
+            error.__dict__.update(code="migration.environment_missing", params={"name": name})
+            raise error
         return os.environ[name]
     return value
 
@@ -466,6 +466,7 @@ class I18nConfig(BaseModel):
 
 
 class MailFlowConfig(BaseModel):
+    schema_version: int = CONFIG_VERSION
     general: GeneralConfig = Field(
         default_factory=GeneralConfig,
         description="Runtime-wide behavior: language, timezone, retention, reminders",
@@ -502,14 +503,13 @@ class MailFlowConfig(BaseModel):
     # file. Excluded from serialization so the placeholder — never the
     # resolved secret — is written back by ``write_config``.
     env_placeholders: PlaceholderMap = Field(default_factory=lambda: {}, exclude=True, repr=False)
-    timeouts_migrated: bool = Field(default=False, exclude=True, repr=False)
-    """True when ``load_config`` raised a legacy timeout default; the host
-    persists the config once so the file reflects the value in effect."""
+    source_version: int = Field(default=CONFIG_VERSION, exclude=True, repr=False)
 
     # -- cross-reference validation ------------------------------------------
 
     @model_validator(mode="after")
     def validate_references(self) -> MailFlowConfig:
+        check_version(self.schema_version, "config")
         llm_ids = {llm.llm_id for llm in self.llms}
         if len(llm_ids) != len(self.llms):
             raise ValueError("duplicate llm_id in [[llms]]: ids must be unique")
@@ -616,48 +616,34 @@ def load_config(path: str | Path | None = None) -> MailFlowConfig:
 
 def parse_config(raw: dict[str, Any], origin: str = "<memory>") -> MailFlowConfig:
     """Validate configuration data, preserving environment placeholders."""
+    version = check_version(raw.get("schema_version", 0), "config")
     placeholders: PlaceholderMap = {}
-    interpolated = _interpolate(raw, origin, placeholders)
+    interpolated = _interpolate(migrate_config(raw), origin, placeholders)
     config = MailFlowConfig.model_validate(interpolated)
+    config.schema_version = CONFIG_VERSION
+    config.source_version = version
     config.env_placeholders = placeholders
-    if migrate_legacy_timeouts(config):
-        config.timeouts_migrated = True
     return config
 
 
-LEGACY_LLM_TIMEOUT = 60.0
-"""The per-request default shipped before first-token latency was accounted for."""
-LEGACY_PROCESSOR_TIMEOUT = 30.0
-"""The per-processor default that made cold local models time out on every mail."""
+def upgrade_config_file(path: Path) -> Path | None:
+    """Upgrade a legacy file once, retaining placeholders and unknown plugin options."""
+    import tomllib
 
+    import tomli_w
 
-def migrate_legacy_timeouts(config: MailFlowConfig) -> list[str]:
-    """Raise timeouts that still carry the old shipped defaults.
-
-    A config written by an earlier version pins 60 s per LLM request and 30 s
-    per processor. Those values are indistinguishable from "never touched", and
-    they demonstrably fail: waiting for a model's first token plus the answer
-    needs minutes, and every timeout turns into a fallback subject summary. The
-    migration only rewrites values that equal the old defaults, so a timeout the
-    user raised (or lowered on purpose to something else) is preserved. Returns
-    the changed option keys; the caller decides whether to persist.
-    """
-    changed: list[str] = []
-    for index, llm in enumerate(config.llms):
-        if llm.timeout_seconds == LEGACY_LLM_TIMEOUT:
-            llm.timeout_seconds = LLMConfig.model_fields["timeout_seconds"].default
-            changed.append(f"llms[{index}].timeout_seconds")
-    for index, processor in enumerate(config.processors):
-        if processor.timeout_seconds == LEGACY_PROCESSOR_TIMEOUT:
-            processor.timeout_seconds = ProcessorConfig.model_fields["timeout_seconds"].default
-            changed.append(f"processors[{index}].timeout_seconds")
-    if changed:
-        logger.info(
-            "raised legacy timeout defaults (%s); a slow model needs the wait for its "
-            "first token plus the whole answer",
-            ", ".join(changed),
-        )
-    return changed
+    original = path.read_bytes()
+    raw = tomllib.loads(original.decode("utf-8-sig"))
+    config = parse_config(raw, str(path))
+    if config.source_version == CONFIG_VERSION:
+        return None
+    migrated = migrate_config(raw)
+    backup = recovery_path(path, CONFIG_VERSION)
+    with backup.open("xb") as handle:
+        backup.chmod(0o600)
+        handle.write(original)
+    _write_atomic(path, tomli_w.dumps(migrated))
+    return backup
 
 
 # ---------------------------------------------------------------------------
@@ -731,6 +717,8 @@ def inspect_config(config: MailFlowConfig) -> list[OptionInfo]:
     """Flatten the config into per-option rows for commands and the TUI."""
     options: list[OptionInfo] = []
     for group_name, field in type(config).__pydantic_fields__.items():
+        if field.exclude or group_name == "schema_version":
+            continue
         type_name, required, default = _field_info(field)
         options.append(
             OptionInfo(

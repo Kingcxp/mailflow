@@ -6,6 +6,8 @@
 #
 # No accounts or LLMs are predefined: uncomment/add your own below.
 
+schema_version = 1              # managed by MailFlow; older files are upgraded with a backup
+
 [general]
 language = "en"                 # default display language (en | zh-CN | custom packs)
 theme = "catppuccin-macchiato"  # latte | frappe | macchiato | mocha, prefixed with catppuccin-

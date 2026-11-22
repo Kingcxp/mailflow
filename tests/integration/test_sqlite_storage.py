@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -41,6 +42,8 @@ def make_record(record_id: str = "r1", *, urgency: Urgency = Urgency.IMPORTANT) 
 
 
 async def test_existing_database_rows_survive_initialize_and_reopen(tmp_path: Path) -> None:
+    from mailflow.migrations import DATABASE_VERSION, DataVersionError
+
     path = tmp_path / "existing.db"
     record = make_record("legacy-message-id")
     record.mail.body_html = "<p>旧邮件 <strong>RéSUMÉ</strong></p>"
@@ -69,12 +72,17 @@ async def test_existing_database_rows_survive_initialize_and_reopen(tmp_path: Pa
         if _ == 0:
             with (
                 patch(
-                    "mailflow_storage_sqlite.plugin.searchable_record_text",
+                    "mailflow.migrations.searchable_record_text",
                     side_effect=RuntimeError("interrupted"),
                 ),
                 pytest.raises(RuntimeError, match="interrupted"),
             ):
                 await backend.initialize()
+            with sqlite3.connect(path) as interrupted:
+                assert interrupted.execute("PRAGMA user_version").fetchone() == (0,)
+                assert "search_text" not in {
+                    r[1] for r in interrupted.execute("PRAGMA table_info(mails)")
+                }
         await backend.initialize()
         for term in ("résumé", "Update", "合同.pdf", "旧邮件"):
             assert (await backend.query_mails(MailQuery(text=term))).total == 1
@@ -89,6 +97,7 @@ async def test_existing_database_rows_survive_initialize_and_reopen(tmp_path: Pa
             with sqlite3.connect(":memory:") as old_backup:
                 old_backup.deserialize(await backend.export_backup())
                 old_backup.execute("ALTER TABLE mails DROP COLUMN search_text")
+                old_backup.execute("PRAGMA user_version=0")
                 old_backup.commit()
                 await backend.restore_backup(old_backup.serialize())
             assert (await backend.query_mails(MailQuery(text="合同.pdf"))).total == 1
@@ -101,8 +110,19 @@ async def test_existing_database_rows_survive_initialize_and_reopen(tmp_path: Pa
         finally:
             await backend.close()
         with sqlite3.connect(path) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone() == (DATABASE_VERSION,)
             assert conn.execute("SELECT record_json FROM mails").fetchone() == (raw,)
             assert conn.execute("SELECT note FROM user_notes").fetchone() == ("保留用户扩展数据",)
+    backups = await asyncio.to_thread(lambda: list(tmp_path.glob("existing.db.before-v*.bak")))
+    assert len(backups) == 2  # Failed and successful attempts each keep an original snapshot.
+    with sqlite3.connect(backups[0]) as snapshot:
+        assert snapshot.execute("SELECT record_json FROM mails").fetchone() == (raw,)
+    with sqlite3.connect(path) as future:
+        future.execute(f"PRAGMA user_version={DATABASE_VERSION + 1}")
+    before = path.read_bytes()
+    with pytest.raises(DataVersionError):
+        await SQLiteStorage(StorageConfig(path=str(path))).initialize()
+    assert path.read_bytes() == before
 
 
 class TestSQLiteStorage:

@@ -34,6 +34,7 @@ from mailflow.config import (
     ProcessorConfig,
     load_config,
     patch_config_value,
+    upgrade_config_file,
     write_config,
 )
 from mailflow.console import ConsoleInbox, ConsoleMessage, ConsoleTurn
@@ -5044,6 +5045,10 @@ async def start_service(
 
         storage = registry.storage_factory(config.storage.provider)(config.storage)
         await storage.initialize()
+        if config_path is not None:
+            path = Path(config_path)
+            if await asyncio.to_thread(path.is_file):
+                await asyncio.to_thread(upgrade_config_file, path)
         # the persisted UI preference must be applied BEFORE the pipeline is
         # built: the summary language is baked into the llm-importance
         # processor at construction time, and a pipeline built from the
@@ -5095,13 +5100,6 @@ async def start_service(
         if config_path is not None:
             service.config_path = Path(config_path)
         await service.runtime.invalidate_analysis_language()
-        if getattr(config, "timeouts_migrated", False) and service.config_path is not None:
-            # a legacy 30 s/60 s default was raised at load time: write it back so
-            # the file (and every settings screen reading it) shows the value in
-            # effect instead of the stale one
-            service.config.timeouts_migrated = False
-            write_config(service.config, service.config_path)
-            service.config.timeouts_migrated = True
         if background:
             await service.start()
         return service

@@ -251,13 +251,19 @@ def test_failed_config_replace_keeps_original_file(
 class TestTimeoutMigration:
     """Configs written by earlier versions pin timeouts a slow model cannot meet."""
 
-    def test_legacy_defaults_are_raised(self, tmp_path: Path) -> None:
-        from mailflow.config import load_config
+    def test_legacy_defaults_are_raised(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mailflow.config import load_config, upgrade_config_file
+        from mailflow.migrations import CONFIG_VERSION, DataVersionError
+
+        monkeypatch.setenv("MF_MIGRATION_SECRET", "do-not-persist")
 
         path = tmp_path / "legacy.toml"
         path.write_text(
             '[general]\ntimezone = "UTC"\n'
             '[[llms]]\nllm_id = "a"\nprovider = "openai-compatible"\ntimeout_seconds = 60\n'
+            'api_key = "${MF_MIGRATION_SECRET}"\n'
             '[[processors]]\nprocessor_id = "llm-importance"\n'
             'provider = "llm-importance"\nllm = "a"\ntimeout_seconds = 30\n',
             encoding="utf-8",
@@ -267,7 +273,21 @@ class TestTimeoutMigration:
 
         assert [llm.timeout_seconds for llm in config.llms] == [120.0]
         assert [p.timeout_seconds for p in config.processors] == [120.0]
-        assert config.timeouts_migrated is True
+        original = path.read_bytes()
+        assert config.source_version == 0 and config.schema_version == CONFIG_VERSION
+        backup = upgrade_config_file(path)
+        assert backup is not None and backup.read_bytes() == original
+        assert "do-not-persist" not in path.read_text(encoding="utf-8")
+        assert "${MF_MIGRATION_SECRET}" in path.read_text(encoding="utf-8")
+        assert load_config(path).source_version == CONFIG_VERSION
+        assert upgrade_config_file(path) is None
+        path.write_text(path.read_text(encoding="utf-8").replace("120.0", "60.0"), encoding="utf-8")
+        assert load_config(path).llms[0].timeout_seconds == 60.0
+        future = f"schema_version = {CONFIG_VERSION + 1}\n".encode()
+        path.write_bytes(future)
+        with pytest.raises(DataVersionError):
+            upgrade_config_file(path)
+        assert path.read_bytes() == future
 
     def test_a_deliberate_value_is_preserved(self, tmp_path: Path) -> None:
         from mailflow.config import load_config
@@ -285,4 +305,3 @@ class TestTimeoutMigration:
         assert [llm.timeout_seconds for llm in config.llms] == [15.0]
         processor = config.processor("rules")
         assert processor is not None and processor.timeout_seconds == 5.0
-        assert config.timeouts_migrated is False

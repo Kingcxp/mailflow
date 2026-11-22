@@ -118,6 +118,18 @@ and generated-content checks rather than new business tests.
 
 ## Packaging and releases
 
+For every formal release, review configuration/database compatibility in
+`mailflow.migrations` and add the required upgrade step and legacy-data behavior
+coverage before tagging. Application versions and data format versions are
+independent: keep data versions unchanged when a release needs no format
+change, and do not bump them for ordinary `dev` iterations. Once a format ships,
+retain its upgrade path; never rewrite old steps to match the newest model.
+Configuration/database version 1 is the first-release baseline. Upgrades must
+preserve identifiers, secrets references and user state, create recovery
+copies, reject newer formats and roll back on failure. Keep the SQLite plugin
+mirror in the plugin repository aligned with core; both use the same migration
+implementation rather than maintaining separate SQL upgrade scripts.
+
 Workspace packages have individual `pyproject.toml` files.
 [tools/build_all.py](../../tools/build_all.py) defines the wheel build list;
 keep it aligned with workspace members and bundled registrations. Core does not
@@ -194,6 +206,12 @@ CI 覆盖 Windows/Linux 和 Python 3.11/3.12。测试分为组件隔离、真实
 配置示例和生成结果，不为文档额外堆业务测试。
 
 构建命令见上表；冻结程序先构建并试运行 standalone，再构建 onefile。
+
+每个正式发布前都要复核配置与数据库兼容，必要时在 `mailflow.migrations` 补充升级步骤和
+旧数据行为验证。程序版本与数据格式版本分别管理：没有格式变化就沿用数据版本，
+普通 dev 开发不递增迁移版本。已发布的升级步骤保留，不随新模型改写。
+格式 1 是首个正式版基线；迁移保留标识、凭据引用和用户状态，先备份，失败回滚，
+拒绝修改更高版本数据。两个仓库的 SQLite 插件同步，统一调用核心迁移实现。
 额外插件需要纳入构建，工具下载需显式开启。NoneBot/AstrBot 导出不启动邮件运行时，
 导出内容可能包含凭据；管理员按导出说明配置匹配的 MailFlow 通知器，框架管理员不会自动导入。
 发布工作流由 `v*` 标签触发，检查核心版本并读取更新记录，

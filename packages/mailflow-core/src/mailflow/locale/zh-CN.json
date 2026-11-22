@@ -2243,6 +2243,28 @@
       "model_settings": "模型设置",
       "file_cache_limit": "这个文件太大，无法暂存在控制台。请到邮件页下载，或在设置中导出备份。",
       "refresh": "刷新消息"
+    },
+    "migration": {
+      "import_title": "导入旧配置",
+      "import_hint": "选择旧 MailFlow 的 TOML 配置文件，即可导入邮箱、模型和通知设置。不会修改旧文件。",
+      "config_file": "旧配置文件（.toml）",
+      "include_database": "同时导入旧邮箱数据",
+      "database_hint": "数据库文件可留空，自动从旧配置附近或所属项目目录查找。勾选上方选项后，旧数据会替换当前邮箱数据。",
+      "choose_config": "请选择已有的 TOML 配置文件。",
+      "database_missing": "没有找到旧数据库。请选择对应的 SQLite 文件，或仅导入配置。",
+      "inspecting": "正在读取配置并识别数据版本…",
+      "preview": "配置版本 {version} → {target}\n邮箱 {accounts} 个 · 模型 {llms} 个 · 通知渠道 {notifiers} 个",
+      "database_version": "数据库版本 {version} → {target}",
+      "keep_data": "保留当前邮件、待办、草稿和订阅关系。",
+      "replace_data": "将用旧数据库替换当前邮箱数据：邮件 {mails} 封、自建待办 {tasks} 项，同时包含旧回收站、草稿、偏好和订阅关系。",
+      "confirm": "旧配置将替换当前设置，保留当前数据库位置和远程连接设置。导入前自动备份，失败时回滚。是否继续？",
+      "importing": "正在备份当前数据并导入…",
+      "imported": "导入完成。恢复备份：{path}",
+      "config_newer": "配置版本为 {found}，当前程序仅支持到 {supported}。请使用更新的 MailFlow 打开，原文件未修改。",
+      "database_newer": "数据库版本为 {found}，当前程序仅支持到 {supported}。请使用更新的 MailFlow 打开，原数据库未修改。",
+      "usage": "config import 旧配置.toml [--database auto|旧数据库.db] [CONFIRM]\n不加 CONFIRM 仅预览，不加 --database 则保留当前邮箱数据。",
+      "local_only": "请在设置中选择“导入旧配置”并上传文件，或在本地命令行执行 config import。",
+      "environment_missing": "缺少环境变量 {name}。请先在当前电脑设置该变量，再导入或打开此配置。"
     }
   }
 }

@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Any, TypeVar
+from typing import Any, ParamSpec, TypeVar
 
 logger = logging.getLogger("mailflow.lifecycle")
 _T = TypeVar("_T")
+_P = ParamSpec("_P")
+
+
+async def complete_io(operation: Callable[_P, _T], *args: _P.args, **kwargs: _P.kwargs) -> _T:
+    """Finish disk I/O before cancellation releases its lock or starts rollback."""
+    task = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await task
+        raise
 
 
 def _observe(task: asyncio.Future[Any]) -> None:
