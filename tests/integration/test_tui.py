@@ -436,7 +436,13 @@ async def test_smart_query_task_crud_requires_confirmation(
             assert prompt is not None
             assert (await service.storage.list_custom_actions())[0].due_end is not None
             prompt.query_one("#smart-review-edit-0", Button).press()
-            await until(pilot, lambda: isinstance(app.screen, SmartOperationEditModal))
+            await until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, SmartOperationEditModal)
+                    and bool(app.screen.query("#smart-review-end"))
+                ),
+            )
             assert app.screen.query_one("#smart-review-end", Input).value == ""
             assert app.screen.query_one("#smart-review-type", ActionTypeField).value == "meeting"
             app.screen.query_one("#smart-review-location", Input).value = "Office 4"
@@ -455,7 +461,13 @@ async def test_smart_query_task_crud_requires_confirmation(
             await _smart_review(app, pilot)
             await until(pilot, lambda: modal() is not None)
             app.screen.query_one("#smart-review-edit-0", Button).press()
-            await until(pilot, lambda: isinstance(app.screen, SmartOperationEditModal))
+            await until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, SmartOperationEditModal)
+                    and bool(app.screen.query("#smart-review-start"))
+                ),
+            )
             assert app.screen.query_one("#smart-review-start", Input).value == ""
             app.screen.query_one("#smart-review-notes", TextArea).text = "Keep without a deadline"
             await pilot.press("ctrl+s")
