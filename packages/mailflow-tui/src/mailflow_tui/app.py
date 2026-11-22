@@ -4103,7 +4103,6 @@ class LogsPane(Vertical):
         self._seen_sources: set[str] = set()
         self._follow_logs = True
         self._source_signature = ""
-        self._query = ""
         self._log_filter_generation = 0
         self._log_matcher = SearchMatcher("")
         self._rendered_logs: list[Any] = []
@@ -4222,11 +4221,18 @@ class LogsPane(Vertical):
             self._refresh_source_options()
             self._append_new_lines([self._buffer[-1]])
 
+        matcher = self._current_log_matcher()
+        if matcher.error:
+            matcher = self._log_matcher
         cast(MailFlowApp, self.app).push_screen(  # pyright: ignore[reportUnknownMemberType]
             LogExportScreen(
                 self._service,
                 list(self._buffer),
-                filtered=[line for line in self._buffer if self._line_to_text(line) is not None],
+                filtered=[
+                    line
+                    for line in self._buffer
+                    if self._line_to_text(line, matcher=matcher) is not None
+                ],
             ),
             callback=_on_saved,
         )
@@ -4253,10 +4259,11 @@ class LogsPane(Vertical):
             self.call_after_refresh(self.drain)
 
     def _current_log_matcher(self) -> SearchMatcher:
+        search = self.query_one_optional("#log-search", Input)
         regex = self.query_one_optional("#log-search-regex", SearchToggle)
         case = self.query_one_optional("#log-search-case", SearchToggle)
         return build_search_matcher(
-            self._query,
+            search.value if search is not None else "",
             regex=bool(regex.value) if regex is not None else False,
             case_sensitive=bool(case.value) if case is not None else False,
         )
@@ -4329,22 +4336,19 @@ class LogsPane(Vertical):
                 lambda: log_view.scroll_to(y=offset, animate=False, force=True)
             )
 
-    def _line_to_text(self, line: str) -> Any:
+    def _line_to_text(self, line: str, *, matcher: SearchMatcher | None = None) -> Any:
         """Format one buffered line under the current filters; '' means the
         line is filtered out (or is a non-log line that passes through)."""
+        matcher = self._log_matcher if matcher is None else matcher
         parts = line.split("|", 3)
         if len(parts) != 4:
-            return (
-                line
-                if not self._source and (not self._query or self._log_matcher.matches(line))
-                else None
-            )
+            return line if not self._source and matcher.matches(line) else None
         time_part, level, logger_name, message = parts
         if self._LEVEL_RANK.get(level, 0) < self._LEVEL_RANK.get(
             self._min_level, self._LEVEL_RANK[self._DEFAULT_MIN_LEVEL]
         ):
             return None
-        if self._query and not self._log_matcher.matches(message):
+        if not matcher.matches(message):
             return None
         from rich.text import Text
 
@@ -4410,6 +4414,7 @@ class LogsPane(Vertical):
                 exit_on_error=False,
             )
             return
+        self._log_matcher = matcher
 
         async def _filter() -> None:
             await asyncio.sleep(0.3)
@@ -4435,7 +4440,6 @@ class LogsPane(Vertical):
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "log-search":
-            self._query = str(event.input.value)
             self._schedule_log_filter()
 
     def on_select_changed(self, event: Any) -> None:
