@@ -350,7 +350,9 @@ class ConsolePane(Vertical):
                         r.id not in view.rows and r.sequence > previous for r in messages
                     )
                 view.rows.update({r.id: r for r in messages})
-                await self._render(messages, following=following and not older, history=older)
+                await self._render_messages(
+                    messages, following=following and not older, history=older
+                )
                 self.query_one("#console-empty", Static).update(
                     self.service.t("console.welcome", prefix=self._prefix)
                 )
@@ -377,7 +379,7 @@ class ConsolePane(Vertical):
                         Text(error_message(self.service, exc), style="$ctp-red")
                     )
 
-    async def _render(
+    async def _render_messages(
         self, rows: list[ConsoleMessage], *, following: bool, history: bool = False
     ) -> None:
         timeline, view = self.query_one(ConsoleTimeline), self.view
@@ -564,7 +566,9 @@ class ConsolePane(Vertical):
             await self.query_one(ConsoleTimeline).remove_children(ConsoleCard)
             self._cards.clear()
             self.query_one(PromptInput).value = self.view.text
-            await self._render(list(self.view.rows.values()), following=self.view.follow)
+            await self._render_messages(
+                list(self.view.rows.values()), following=self.view.follow
+            )
             if not self.view.follow:
                 self.call_after_refresh(
                     self.query_one(ConsoleTimeline).scroll_to, y=self.view.scroll, animate=False
