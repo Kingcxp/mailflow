@@ -618,7 +618,13 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         await pilot.pause()
         service.i18n.set_language("zh-CN")
         await emit("language.changed", language="zh-CN")
-        await pilot.pause()
+        await until(
+            pilot,
+            lambda: (
+                str(panel.query_one("#smart-action-cancel", Button).label)
+                == service.t("tui.btn_cancel")
+            ),
+        )
         app.query_one(TabbedContent).active = "tab-mail"
         await pilot.pause()
         assert instruction.value == "Next question, not executed yet"

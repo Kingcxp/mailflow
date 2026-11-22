@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import sys
 import xml.etree.ElementTree as ET
+from io import TextIOWrapper
+from typing import cast
 
 
 def main() -> int:
@@ -32,4 +34,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    cast(TextIOWrapper, sys.stdout).reconfigure(encoding="utf-8")
     sys.exit(main())

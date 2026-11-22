@@ -1814,14 +1814,9 @@ async def test_bulk_reparse_stop_covers_reanalyze_failed_and_never_latches(
             gate.set()
             started.clear()
             failed_button.press()
-            for _ in range(80):
-                if isinstance(app.screen, ConfirmModal):
-                    app.screen.query_one("#confirm-cancel", Button).press()
-                    break
-                await pilot.pause(0.05)
-            await pilot.pause(0.1)
-            assert not failed_button.disabled
+            await until(pilot, started.is_set)
             await cast(Any, app.workers).wait_for_complete()
+            assert not failed_button.disabled
             table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
             table.focus()
             table.move_cursor(row=0)
@@ -1833,11 +1828,14 @@ async def test_bulk_reparse_stop_covers_reanalyze_failed_and_never_latches(
                 expected.add(selected.mail.message_id)
             processed.clear()
             app.query_one("#btn-reparse", Button).press()
-            for _ in range(80):
-                if isinstance(app.screen, ConfirmModal):
-                    app.screen.query_one("#confirm-run", Button).press()
-                    break
-                await pilot.pause(0.05)
+            await until(
+                pilot,
+                lambda: (
+                    isinstance(app.screen, ConfirmModal)
+                    and app.screen.query_one("#confirm-run", Button).is_mounted
+                ),
+            )
+            app.screen.query_one("#confirm-run", Button).press()
             await cast(Any, app.workers).wait_for_complete()
             assert set(processed) == expected, "only the two checked messages are re-analyzed"
             app.exit()

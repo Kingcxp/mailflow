@@ -29,6 +29,25 @@ def load_tool(name: str) -> Any:
     return module
 
 
+def test_ci_annotations_preserve_translated_failures_with_legacy_encoding(tmp_path: Path) -> None:
+    report = tmp_path / "pytest.xml"
+    report.write_text(
+        '<testsuite><testcase classname="tui" name="language">'
+        '<failure message="取消按钮未更新"/></testcase></testsuite>',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "tools/annotate_pytest_failures.py"), str(report)],
+        env={**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"},
+        capture_output=True,
+        encoding="utf-8",
+        timeout=10,
+    )
+    assert result.returncode == 1
+    assert "::error file=tui::language 取消按钮未更新" in result.stdout
+    assert result.stderr == ""
+
+
 def test_make_help_and_cleanup_need_no_project_environment(tmp_path: Path) -> None:
     make = shutil.which("make")
     if make is None:
