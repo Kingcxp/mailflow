@@ -138,10 +138,12 @@ Choose tools from the user's actual request; there is no fixed topic or workflow
   been applied, and never submit the same change twice.
 - Tool errors explain what to fix. Correct the call or explain the limitation;
   do not repeat an identical rejected call or hide an incomplete scan.
-- Stop once the request is addressed. Give a concise useful answer, including
-  the requested task/mail details where appropriate, without tool syntax or
-  internal arguments. Do not ask for confirmation inside the answer; the host
-  handles the proposed changes."""
+- Reply in plain, natural language. Lead with the answer and use short
+  paragraphs separated by a blank line. Use bullets for distinct results;
+  avoid stock openings, repeated summaries and generic offers to help.
+- Stop once the request is addressed. Include the requested mail or task details
+  without tool syntax or internal arguments. Do not ask for confirmation in the
+  answer; the host handles proposed changes."""
 
 
 class ToolError(Exception):

@@ -1096,7 +1096,7 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
 
 async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: Any) -> None:
     from mailflow.console import ConsoleMessage
-    from mailflow_tui.console import ConsoleCard, ConsolePane
+    from mailflow_tui.console import ConsoleCard, ConsoleContextMenu, ConsolePane
 
     service, view, app, emit, _failures = host
     entered, finish = asyncio.Event(), asyncio.Event()
@@ -1168,25 +1168,42 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
                     text="Mail list\nInvoice found",
                     markdown=False,
                     spans=[
-                        StyleSpan(text="Mail list\n", style="bold cyan"),
-                        StyleSpan(text="Invoice found", style="green"),
+                        StyleSpan(text="Mail list", style="bold cyan"),
+                        StyleSpan(text="\nInvoice found", style="green"),
                     ],
                 )
             )
             await until(
                 pilot,
                 lambda: any(
-                    c.message.id == formatted.id
-                    and c.is_mounted
-                    and bool(c.query(".console-body"))
+                    c.message.id == formatted.id and c.is_mounted and bool(c.query(".console-body"))
                     for c in pane.query(ConsoleCard)
                 ),
             )
             card = next(c for c in pane.query(ConsoleCard) if c.message.id == formatted.id)
             body = card.query_one(".console-body", Static).content
             assert isinstance(body, RichText)
-            assert body.plain == formatted.text
+            assert body.plain == "Mail list\n\nInvoice found"
             assert len(body.spans) == 2
+            user_card = next(
+                c
+                for c in pane.query(ConsoleCard)
+                if c.message.role == "user" and c.message.text == "a note without a model"
+            )
+            assert card.region.x == user_card.region.x
+
+            if getattr(view, "remote", False):
+                card.focus()
+                await pilot.press("shift+f10")
+            else:
+                await pilot.click(card, offset=(2, 1), button=3)
+            await until(pilot, lambda: isinstance(app.screen, ConsoleContextMenu))
+            menu = app.screen.query_one("#console-context-menu")
+            assert menu.region.width < app.size.width // 2
+            assert menu.region.height < app.size.height // 2
+            await pilot.press("enter")
+            await until(pilot, lambda: pane.view.quote is not None)
+            assert pane.view.quote.id == formatted.id
     finally:
         finish.set()
         if unsubscribe is not None:

@@ -16,19 +16,85 @@ from mailflow.console import ConsoleMessage
 from mailflow.domain import StyleSpan
 from mailflow.errors import translated_error
 from mailflow.permissions import current_context, permission_scope
+from rich.cells import cell_len
 from rich.markdown import Markdown
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.geometry import Offset
 from textual.message import Message
-from textual.widgets import Button, Select, Static, TabbedContent
+from textual.screen import ModalScreen
+from textual.widgets import Button, OptionList, Select, Static, TabbedContent
 
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.labels import error_message
 from mailflow_tui.pickers import ChoicePicker, PathPicker
 from mailflow_tui.widgets import PromptInput, SafeSelect, TextArea
+
+
+class ConsoleContextMenu(ModalScreen[str | None]):
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss_menu", show=False)]
+    DEFAULT_CSS = """
+    ConsoleContextMenu { background: transparent; }
+    ConsoleContextMenu #console-context-menu {
+        position: absolute;
+        width: 28;
+        height: auto;
+        border: round $ctp-surface1;
+        padding: 0;
+        background: $ctp-mantle;
+        color: $ctp-text;
+    }
+    ConsoleContextMenu #console-context-menu:focus {
+        border: round $ctp-blue;
+    }
+    ConsoleContextMenu #console-context-menu > .option-list--option-highlighted {
+        color: $ctp-text;
+        background: $ctp-surface0;
+        text-style: bold;
+    }
+    ConsoleContextMenu #console-context-menu > .option-list--option-hover {
+        color: $ctp-text;
+        background: $ctp-surface1;
+    }
+    """
+
+    def __init__(self, choices: list[tuple[str, str]], x: int, y: int) -> None:
+        super().__init__()
+        self.choices = choices
+        self.anchor = Offset(x, y)
+
+    def compose(self) -> ComposeResult:
+        yield OptionList(
+            *(label for label, _ in self.choices),
+            id="console-context-menu",
+        )
+
+    def on_mount(self) -> None:
+        menu = self.query_one(OptionList)
+        width = min(max(22, max(cell_len(label) for label, _ in self.choices) + 4), self.size.width)
+        height = min(len(self.choices) + 2, 14, self.size.height)
+        menu.styles.width = width
+        menu.styles.height = height
+        menu.styles.offset = Offset(
+            min(max(0, self.anchor.x), max(0, self.size.width - width)),
+            min(max(0, self.anchor.y), max(0, self.size.height - height)),
+        )
+        menu.highlighted = 0
+        menu.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self.dismiss(self.choices[event.option_index][1])
+
+    def on_click(self, event: events.Click) -> None:
+        if event.screen_offset not in self.query_one(OptionList).region:
+            self.dismiss(None)
+
+    def action_dismiss_menu(self) -> None:
+        self.dismiss(None)
 
 
 class ConsoleCard(Vertical, can_focus=True):
@@ -39,20 +105,21 @@ class ConsoleCard(Vertical, can_focus=True):
     ]
     DEFAULT_CSS = """
     ConsoleCard { height: auto; margin: 0 0 1 0; padding: 0 1; border-left: solid $ctp-teal; }
-    ConsoleCard.user { margin-left: 3; border-left: solid $ctp-blue; }
+    ConsoleCard.user { border-left: solid $ctp-blue; }
     ConsoleCard.notification { border-left: solid $ctp-peach; }
     ConsoleCard.system { border-left: solid $ctp-overlay0; }
     ConsoleCard.failed { border-left: solid $ctp-red; }
     ConsoleCard:focus { background: $ctp-surface0; }
     ConsoleCard Static { height: auto; }
+    ConsoleCard .console-body { text-align: left; }
     ConsoleCard .console-caption { color: $ctp-subtext0; }
     ConsoleCard .console-objects { max-height: 3; }
     """
 
     class MenuRequested(Message):
-        def __init__(self, card: ConsoleCard) -> None:
+        def __init__(self, card: ConsoleCard, x: int, y: int) -> None:
             super().__init__()
-            self.card = card
+            self.card, self.x, self.y = card, x, y
 
     def __init__(self, service: Any, message: ConsoleMessage) -> None:
         super().__init__(id="console-msg-" + message.id, classes=message.role)
@@ -68,7 +135,11 @@ class ConsoleCard(Vertical, can_focus=True):
             "magenta": "$ctp-mauve",
         }
         output = Text()
+        previous_heading = False
         for span in spans:
+            value = span.text
+            if previous_heading and value.startswith("\n") and not value.startswith("\n\n"):
+                value = "\n" + value
             attributes: list[str] = []
             color = ""
             for token in span.style.split():
@@ -79,7 +150,8 @@ class ConsoleCard(Vertical, can_focus=True):
                 elif token in {"bold", "italic", "underline", "strike", "reverse"}:
                     attributes.append(token)
             style = " ".join((*attributes, color))
-            output.append(span.text, style=style or None)
+            output.append(value, style=style or None)
+            previous_heading = "bold" in attributes and "cyan" in span.style.split()
         return output
 
     def compose(self) -> ComposeResult:
@@ -113,7 +185,7 @@ class ConsoleCard(Vertical, can_focus=True):
         self.query_one(Static).update(header)
         body = self.query_one(".console-body", Static)
         renderable = (
-            Markdown(message.text)
+            Markdown(message.text, justify="left")
             if message.markdown
             else self._styled_text(message.spans)
             if message.spans
@@ -140,7 +212,7 @@ class ConsoleCard(Vertical, can_focus=True):
         self.set_class(message.state == "failed", "failed")
 
     def action_menu(self) -> None:
-        self.post_message(self.MenuRequested(self))
+        self.post_message(self.MenuRequested(self, self.region.x + 1, self.region.y + 1))
 
     def action_adjacent(self, offset: int) -> None:
         cards = list(self.parent.query(ConsoleCard)) if self.parent is not None else []
@@ -153,7 +225,7 @@ class ConsoleCard(Vertical, can_focus=True):
         if event.button == 3:
             event.stop()
             event.prevent_default()
-            self.action_menu()
+            self.post_message(self.MenuRequested(self, event.screen_x, event.screen_y))
 
 
 class ConsoleTimeline(VerticalScroll):
@@ -707,13 +779,13 @@ class ConsolePane(Vertical):
     def on_console_card_menu_requested(self, event: ConsoleCard.MenuRequested) -> None:
         event.stop()
         self.run_worker(
-            self._message_menu(event.card.message),
+            self._message_menu(event.card.message, event.x, event.y),
             group="console-menu",
             exclusive=True,
             exit_on_error=False,
         )
 
-    async def _message_menu(self, message: ConsoleMessage) -> None:
+    async def _message_menu(self, message: ConsoleMessage, x: int, y: int) -> None:
         if message.channel != self._channel:
             return
         choices = [
@@ -734,9 +806,7 @@ class ConsolePane(Vertical):
             (self.service.t("console.save_file", name=f["filename"]), "file:" + str(i))
             for i, f in enumerate(message.files)
         )
-        choice = await cast(Any, self.app).push_screen_wait(
-            ChoicePicker(self.service, choices, title=self.service.t("console.message_menu"))
-        )
+        choice = await cast(Any, self.app).push_screen_wait(ConsoleContextMenu(choices, x, y))
         if choice not in {value for _, value in choices}:
             return
         if choice == "quote":
