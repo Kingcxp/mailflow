@@ -25,20 +25,19 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.geometry import Offset
 from textual.message import Message
-from textual.screen import ModalScreen
 from textual.widgets import Button, OptionList, Select, Static, TabbedContent
 
 from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.labels import error_message
-from mailflow_tui.pickers import ChoicePicker, PathPicker
+from mailflow_tui.pickers import PathPicker
 from mailflow_tui.widgets import PromptInput, SafeSelect, TextArea
 
 
-class ConsoleContextMenu(ModalScreen[str | None]):
+class ConsoleContextMenu(OptionList):
     BINDINGS: ClassVar[list[Any]] = [Binding("escape", "dismiss_menu", show=False)]
     DEFAULT_CSS = """
-    ConsoleContextMenu { background: transparent; }
-    ConsoleContextMenu #console-context-menu {
+    ConsoleContextMenu {
+        layer: overlay;
         position: absolute;
         width: 28;
         height: auto;
@@ -46,55 +45,27 @@ class ConsoleContextMenu(ModalScreen[str | None]):
         padding: 0;
         background: $ctp-mantle;
         color: $ctp-text;
+        display: none;
     }
-    ConsoleContextMenu #console-context-menu:focus {
+    ConsoleContextMenu:focus {
         border: round $ctp-blue;
     }
-    ConsoleContextMenu #console-context-menu > .option-list--option-highlighted {
+    ConsoleContextMenu > .option-list--option-highlighted {
         color: $ctp-text;
         background: $ctp-surface0;
         text-style: bold;
     }
-    ConsoleContextMenu #console-context-menu > .option-list--option-hover {
+    ConsoleContextMenu > .option-list--option-hover {
         color: $ctp-text;
         background: $ctp-surface1;
     }
     """
 
-    def __init__(self, choices: list[tuple[str, str]], x: int, y: int) -> None:
-        super().__init__()
-        self.choices = choices
-        self.anchor = Offset(x, y)
-
-    def compose(self) -> ComposeResult:
-        yield OptionList(
-            *(label for label, _ in self.choices),
-            id="console-context-menu",
-        )
-
-    def on_mount(self) -> None:
-        menu = self.query_one(OptionList)
-        width = min(max(22, max(cell_len(label) for label, _ in self.choices) + 4), self.size.width)
-        height = min(len(self.choices) + 2, 14, self.size.height)
-        menu.styles.width = width
-        menu.styles.height = height
-        menu.styles.offset = Offset(
-            min(max(0, self.anchor.x), max(0, self.size.width - width)),
-            min(max(0, self.anchor.y), max(0, self.size.height - height)),
-        )
-        menu.highlighted = 0
-        menu.focus()
-
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        event.stop()
-        self.dismiss(self.choices[event.option_index][1])
-
-    def on_click(self, event: events.Click) -> None:
-        if event.screen_offset not in self.query_one(OptionList).region:
-            self.dismiss(None)
-
     def action_dismiss_menu(self) -> None:
-        self.dismiss(None)
+        self.post_message(self.DismissRequested())
+
+    class DismissRequested(Message):
+        pass
 
 
 class ConsoleCard(Vertical, can_focus=True):
@@ -254,7 +225,7 @@ class ConversationView:
 
 class ConsolePane(Vertical):
     DEFAULT_CSS = """
-    ConsolePane { height: 1fr; padding: 0 1; }
+    ConsolePane { height: 1fr; padding: 0 1; layers: base overlay; }
     ConsolePane .console-toolbar { height: 3; align-vertical: middle; }
     ConsolePane #console-session { width: 1fr; height: auto; color: $ctp-subtext0; }
     ConsolePane #console-channel { display: none; width: 24; height: 3; }
@@ -290,6 +261,9 @@ class ConsolePane(Vertical):
         self._loading = self._dirty = self._sending = self._operating = False
         self._rendering = False
         self._channel_valid = True
+        self._context_menu_choices: list[tuple[str, str]] = []
+        self._context_menu_message: ConsoleMessage | None = None
+        self._context_menu_focus: Any | None = None
 
     @property
     def view(self) -> ConversationView:
@@ -315,6 +289,7 @@ class ConsolePane(Vertical):
             yield Button(id="console-send", variant="primary", disabled=True)
             yield Button(id="console-stop", variant="error", disabled=True)
             yield Static(id="console-keys", markup=False)
+        yield ConsoleContextMenu(id="console-context-menu")
 
     def on_mount(self) -> None:
         for event in (
@@ -701,7 +676,7 @@ class ConsolePane(Vertical):
                 self.refresh_messages(older=True), group="console-feed", exit_on_error=False
             )
         elif name == "console-menu":
-            self.run_worker(self._menu(), group="console-menu", exclusive=True, exit_on_error=False)
+            self._menu()
         elif name in {"console-stop", "console-enable"} and not self._operating:
             self.run_worker(
                 self._control("cancel" if name == "console-stop" else "enable"),
@@ -726,16 +701,91 @@ class ConsolePane(Vertical):
             self._operating = False
             self._sync_controls()
 
-    async def _menu(self) -> None:
+    def _menu(self) -> None:
         choices = [
             (self.service.t("console." + name), name)
             for name in ("help", "refresh", "upload", "notification_settings", "clear")
         ]
         if not getattr(self.service, "remote", False):
             choices.insert(2, (self.service.t("console.model_settings"), "model_settings"))
-        choice = await cast(Any, self.app).push_screen_wait(
-            ChoicePicker(self.service, choices, title=self.service.t("console.menu"))
+        button = self.query_one("#console-menu", Button)
+        self._open_context_menu(choices, button.region.x, button.region.bottom)
+
+    def _open_context_menu(
+        self,
+        choices: list[tuple[str, str]],
+        x: int,
+        y: int,
+        *,
+        message: ConsoleMessage | None = None,
+    ) -> None:
+        if not choices:
+            return
+        menu = self.query_one(ConsoleContextMenu)
+        menu.clear_options()
+        menu.add_options(label for label, _ in choices)
+        self._context_menu_choices = choices
+        self._context_menu_message = message
+        self._context_menu_focus = self.app.focused
+        width = min(max(22, max(cell_len(label) for label, _ in choices) + 4), self.size.width)
+        height = min(len(choices) + 2, 14, self.size.height)
+        menu.styles.width = width
+        menu.styles.height = height
+        menu.styles.offset = Offset(
+            min(max(0, x - self.region.x), max(0, self.size.width - width)),
+            min(max(0, y - self.region.y), max(0, self.size.height - height)),
         )
+        menu.highlighted = 0
+        menu.display = True
+        menu.focus()
+
+    def _close_context_menu(self, *, restore_focus: bool) -> None:
+        if not self.is_mounted:
+            return
+        menu = self.query_one(ConsoleContextMenu)
+        menu.display = False
+        self._context_menu_choices = []
+        self._context_menu_message = None
+        focus, self._context_menu_focus = self._context_menu_focus, None
+        if restore_focus and focus is not None and getattr(focus, "is_mounted", False):
+            focus.focus()
+
+    def on_click(self, event: events.Click) -> None:
+        menu = self.query_one(ConsoleContextMenu)
+        if menu.display and event.screen_offset not in menu.region:
+            self._close_context_menu(restore_focus=False)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        menu = self.query_one(ConsoleContextMenu)
+        if event.option_list is not menu or not 0 <= event.option_index < len(
+            self._context_menu_choices
+        ):
+            return
+        event.stop()
+        choice = self._context_menu_choices[event.option_index][1]
+        message = self._context_menu_message
+        self._close_context_menu(restore_focus=True)
+        if message is None:
+            self.run_worker(
+                self._run_conversation_action(choice),
+                group="console-menu",
+                exclusive=True,
+                exit_on_error=False,
+            )
+        else:
+            self.run_worker(
+                self._run_message_action(message, choice),
+                group="console-menu",
+                exclusive=True,
+                exit_on_error=False,
+            )
+
+    def on_console_context_menu_dismiss_requested(
+        self, _event: ConsoleContextMenu.DismissRequested
+    ) -> None:
+        self._close_context_menu(restore_focus=True)
+
+    async def _run_conversation_action(self, choice: str) -> None:
         if choice == "help":
             try:
                 with permission_scope(self._identity):
@@ -778,14 +828,9 @@ class ConsolePane(Vertical):
 
     def on_console_card_menu_requested(self, event: ConsoleCard.MenuRequested) -> None:
         event.stop()
-        self.run_worker(
-            self._message_menu(event.card.message, event.x, event.y),
-            group="console-menu",
-            exclusive=True,
-            exit_on_error=False,
-        )
+        self._message_menu(event.card.message, event.x, event.y)
 
-    async def _message_menu(self, message: ConsoleMessage, x: int, y: int) -> None:
+    def _message_menu(self, message: ConsoleMessage, x: int, y: int) -> None:
         if message.channel != self._channel:
             return
         choices = [
@@ -806,9 +851,9 @@ class ConsolePane(Vertical):
             (self.service.t("console.save_file", name=f["filename"]), "file:" + str(i))
             for i, f in enumerate(message.files)
         )
-        choice = await cast(Any, self.app).push_screen_wait(ConsoleContextMenu(choices, x, y))
-        if choice not in {value for _, value in choices}:
-            return
+        self._open_context_menu(choices, x, y, message=message)
+
+    async def _run_message_action(self, message: ConsoleMessage, choice: str) -> None:
         if choice == "quote":
             self.view.quote = message
             self._sync_controls()

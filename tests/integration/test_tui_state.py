@@ -1101,7 +1101,7 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
 
 async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: Any) -> None:
     from mailflow.console import ConsoleMessage
-    from mailflow_tui.console import ConsoleCard, ConsoleContextMenu, ConsolePane
+    from mailflow_tui.console import ConsoleCard, ConsoleContextMenu, ConsolePane, ConsoleTimeline
 
     service, view, app, emit, _failures = host
     entered, finish = asyncio.Event(), asyncio.Event()
@@ -1197,18 +1197,38 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             )
             assert card.region.x == user_card.region.x
 
+            original_screen = app.screen
+            timeline = pane.query_one(ConsoleTimeline)
+            timeline_region = timeline.region
             if getattr(view, "remote", False):
                 card.focus()
                 await pilot.press("shift+f10")
             else:
                 await pilot.click(card, offset=(2, 1), button=3)
-            await until(pilot, lambda: isinstance(app.screen, ConsoleContextMenu))
-            menu = app.screen.query_one("#console-context-menu")
+            await until(
+                pilot,
+                lambda: pane.query_one(ConsoleContextMenu).display,
+            )
+            menu = pane.query_one("#console-context-menu")
+            assert app.screen is original_screen
+            assert timeline.region == timeline_region
+            assert card.display and card.region.height > 0
+            assert card.query_one(".console-body").display
             assert menu.region.width < app.size.width // 2
             assert menu.region.height < app.size.height // 2
             await pilot.press("enter")
             await until(pilot, lambda: pane.view.quote is not None)
             assert pane.view.quote.id == formatted.id
+
+            await pilot.click(pane.query_one("#console-menu"))
+            await until(pilot, lambda: menu.display)
+            assert app.screen is original_screen
+            await pilot.click(prompt)
+            await until(pilot, lambda: not menu.display)
+            await pilot.click(pane.query_one("#console-menu"))
+            await until(pilot, lambda: menu.display)
+            await pilot.press("escape")
+            await until(pilot, lambda: not menu.display)
     finally:
         finish.set()
         if unsubscribe is not None:
