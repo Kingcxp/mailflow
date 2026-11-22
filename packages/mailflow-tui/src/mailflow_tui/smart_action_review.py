@@ -147,13 +147,23 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
                 yield Vertical(id="smart-review-operations")
                 yield Static("", id="smart-review-error", markup=False)
             with Horizontal(id="smart-review-buttons"):
-                yield Button(
-                    self._t("tui.smart_action_reject"), id="smart-review-cancel", variant="error"
+                reject = Button(
+                    self._t("tui.smart_action_reject"),
+                    id="smart-review-cancel",
+                    variant="error",
+                    disabled=True,
                 )
+                reject.display = False
+                yield reject
                 yield Button(self._t("tui.btn_cancel"), id="smart-action-cancel", variant="error")
-                yield Button(
-                    self._t("tui.smart_action_finish"), id="smart-review-apply", variant="success"
+                finish = Button(
+                    self._t("tui.smart_action_finish"),
+                    id="smart-review-apply",
+                    variant="success",
+                    disabled=True,
                 )
+                finish.display = False
+                yield finish
 
     def _scope_text(self) -> str:
         return self._t("assistant.scope", scope=self._scope_name or self._t("assistant.all"))
@@ -164,7 +174,11 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
         self.query_one("#smart-review-operations").display = False
         self.query_one("#smart-review-error").display = False
         self._sync_controls()
-        self._operation_task = asyncio.create_task(self._execute(), name="smart-action")
+        self.call_after_refresh(self._start_operation)
+
+    def _start_operation(self) -> None:
+        if self.is_mounted and self._state == "running" and not self._stopping:
+            self._operation_task = asyncio.create_task(self._execute(), name="smart-action")
 
     def on_resize(self, _event: events.Resize) -> None:
         if self.is_mounted:

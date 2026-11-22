@@ -1206,7 +1206,7 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             assert card.region.x == user_card.region.x
 
             card.scroll_visible(animate=False, immediate=True)
-            await pilot.pause()
+            await settle(pilot)
             original_screen = app.screen
             timeline = pane.query_one(ConsoleTimeline)
             timeline_region = timeline.region

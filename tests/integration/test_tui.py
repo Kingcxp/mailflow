@@ -179,6 +179,8 @@ async def test_smart_action_keeps_cancellation_and_relevance_order(
             await pilot.pause()
             log = panel.query_one("#smart-action-log", Static)
             assert service.t("tui.smart_action_tools.find_mail") in str(log.render())
+            assert not panel.query_one("#smart-review-apply", Button).display
+            assert not panel.query_one("#smart-review-cancel", Button).display
             assert panel.query_one("#smart-action-cancel", Button).variant == "error"
             animation = panel.query_one("#smart-action-animation", MailAnimation)
             animation.scroll_visible(animate=False)
@@ -1388,13 +1390,22 @@ async def test_notifications_pane_lists_all_notifiers_and_toggles(
             assert qq.enabled is False
             # Change mail urgency through More, then choose a level.
             pane.query_one("#notif-more", Button).press()
-            await pilot.pause()
+            await until(
+                pilot, lambda: isinstance(app.screen, ChoicePicker) and app.screen.is_mounted
+            )
             menu = cast(ChoicePicker, app.screen)
             menu.query_one(DataTable).move_cursor(
                 row=next(i for i, (_, value) in enumerate(menu.matches) if value == "notif-urgency")
             )
             await pilot.press("enter")
-            await pilot.pause()
+            await until(
+                pilot,
+                lambda: (
+                    app.screen is not menu
+                    and isinstance(app.screen, ChoicePicker)
+                    and app.screen.is_mounted
+                ),
+            )
             levels = cast(ChoicePicker, app.screen)
             levels.query_one(DataTable).move_cursor(
                 row=next(i for i, (_, value) in enumerate(levels.matches) if value == "urgent")

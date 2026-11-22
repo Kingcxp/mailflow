@@ -187,13 +187,14 @@ class ActionTypesModal(ModalScreen[set[str] | None]):
                     variant="primary",
                     disabled=True,
                 )
-                yield Button(
+                retry = Button(
                     self._service.t("interface.retry"), id="action-types-retry", disabled=True
                 )
+                retry.display = False
+                yield retry
                 yield Button(self._service.t("tui.btn_cancel"), id="action-types-cancel")
 
     def on_mount(self) -> None:
-        self.query_one("#action-types-retry", Button).display = False
         self.call_after_refresh(self._start_load, self._selected)
 
     def _start_load(self, selected: set[str]) -> None:
