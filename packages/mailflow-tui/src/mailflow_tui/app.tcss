@@ -953,10 +953,6 @@ DataTable > .datatable--hover {
     padding: 0;
 }
 
-#runtime-plugin-actions Button {
-    height: 3;
-}
-
 #runtime-adapters,
 #runtime-accounts,
 #runtime-llms,

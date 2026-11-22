@@ -735,6 +735,11 @@ async def test_events_language_and_refresh_keep_reading_state(
         action_state = cursor(action_table), action_table.scroll_y
         assert action_state[1] > 0
         app.query_one(TabbedContent).active = "tab-runtime"
+        await settle(pilot)
+        assert (
+            app.query_one("#runtime-plugin-detail", Button).styles.height
+            == app.query_one("#actions-add", Button).styles.height
+        )
         plugin_table = app.query_one("#runtime-plugins-table", DataTable)
         plugin_table.move_cursor(row=25)
         await pilot.pause()
