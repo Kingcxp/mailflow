@@ -1180,6 +1180,7 @@
       "smart_action_partial": "Query incomplete — {failed} mail(s) could not be checked ({reasons}); showing the rest.",
       "smart_action_progress": "{stage} · {detail}",
       "smart_action_working": "Working… You can cancel at any time.",
+      "smart_action_cancelling": "Stopping the current operation…",
       "smart_action_steps": "Completed {count} tool calls",
       "logs_cat_llm": "LLM",
       "logs_cat_parse": "Parsing",

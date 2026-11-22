@@ -277,8 +277,8 @@ SmartOperationEditModal {
 #smart-action-confirm-title { color: $accent; margin-bottom: 1; }
 #smart-action-confirm-hint { color: $text-muted; margin-bottom: 1; }
 #smart-action-scope { color: $text-muted; margin-bottom: 1; }
-#smart-action-animation { height: 1; margin-bottom: 1; }
-#smart-action-animation LoadingIndicator { width: 8; height: 1; }
+#smart-action-animation { height: 6; margin-bottom: 1; }
+#smart-action-animation.compact { height: 1; }
 #smart-action-log { height: auto; color: $text-muted; padding-left: 1; }
 #smart-action-result { border-top: solid $border-blurred; padding: 1 1 0 1; margin-top: 1; }
 #smart-action-objects { margin-top: 1; }
@@ -1288,6 +1288,14 @@ ListEditScreen, EntryFormScreen {
     color: $error;
 }
 
+#entry-form-dialog .dialog-actions Button {
+    height: 1;
+    min-width: 0;
+    width: 1fr;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
 .dialog-title {
     content-align: center middle;
     text-style: bold;
@@ -1381,6 +1389,12 @@ ListEditScreen, EntryFormScreen {
     width: 1fr;
 }
 
+#accounts-actions Button {
+    height: 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
 #accounts-status, #llms-status, #history-status, #notifications-status {
     height: auto;
     padding: 0 1;
@@ -1463,7 +1477,7 @@ MailHistoryScreen {
 }
 
 .secret-row .eye-btn {
-    height: 3;
+    height: 1;
     content-align: center middle;
 }
 

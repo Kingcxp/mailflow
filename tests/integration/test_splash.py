@@ -26,6 +26,7 @@ async def test_splash_shows_then_dismisses(tmp_path: Path) -> None:
             await pilot.pause(0.2)
             assert isinstance(app.screen, SplashScreen)
             artwork = app.screen.query_one("#splash-art", Static).render()
+            assert str(app.screen.query_one("#splash-art", Static).content).isascii()
             await pilot.pause(0.15)
             assert app.screen.query_one("#splash-art", Static).render() != artwork
             # Wait past the automatic welcome (default 3 seconds).
@@ -58,7 +59,7 @@ async def test_splash_skip_and_theme(
     app.preview_color_scheme(theme)
     try:
         async with app.run_test(size=size) as pilot:
-            splash = SplashScreen(service.t, duration=0.8)
+            splash = SplashScreen(service.t, duration=2.0)
             await app.push_screen(splash)
             await pilot.pause(0.05)
             assert splash.styles.background == Color.parse(app.current_theme.background)
@@ -76,7 +77,7 @@ async def test_splash_skip_and_theme(
             assert not mail_search.text
             next_screen = Screen[None]()
             await app.push_screen(next_screen)
-            await pilot.pause(0.9)
+            await pilot.pause(2.1)
             assert app.screen is next_screen
             assert not isinstance(app.screen, SplashScreen)
     finally:

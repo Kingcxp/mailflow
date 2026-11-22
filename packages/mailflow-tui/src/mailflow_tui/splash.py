@@ -15,12 +15,14 @@ from typing import ClassVar, cast
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.color import Color
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.timer import Timer
 from textual.widgets import Static
+
+from mailflow_tui.animation import mailroom_frame, theme_palette
 
 _LOGO_ART = {
     "M": ("█   █", "██ ██", "█ █ █", "█   █", "█   █"),
@@ -58,52 +60,14 @@ def _logo_text(elapsed: float, width: int, palette: dict[str, Color]) -> Text:
             text.append("\n")
         text.append(" " * max(0, (width - columns) // 2))
         for x, char in enumerate(line):
-            text.append(char, style=colors[x])
-    return text
-
-
-def _flow_text(elapsed: float, width: int, palette: dict[str, Color]) -> Text:
-    """Small envelopes glide into an inbox, with no emoji-width dependency."""
-    width = max(9, min(60, width))
-    grid = [[(" ", "") for _ in range(width)] for _ in range(3)]
-    center = (width - 9) // 2
-    for x in range(width):
-        if x < center - 1 or x > center + 9:
-            grid[1][x] = ("·" if x % 3 == 0 else "─", palette["surface1"].hex)
-
-    def draw(x: int, rows: tuple[str, ...], color: str) -> None:
-        for y, line in enumerate(rows):
-            for offset, char in enumerate(line):
-                column = x + offset
-                if 0 <= column < width:
-                    grid[y][column] = (char, color)
-
-    if width >= 30:
-        for side, accent in ((0, "blue"), (1, "mauve")):
-            phase = (elapsed * 0.7 + side * 0.5) % 1
-            distance = center + 5
-            x = round(-5 + phase * distance) if side == 0 else round(width - phase * distance)
-            color = palette["surface1"].blend(palette[accent], min(1.0, phase * 4)).hex
-            draw(x, ("╭───╮", "│╲ ╱│", "╰───╯"), color)  # noqa: RUF001
-    pulse = 0.7 + 0.3 * math.sin(elapsed * math.pi * 1.4) ** 2
-    draw(
-        center,
-        ("╭───────╮", "│ ╲   ╱ │", "╰───────╯"),  # noqa: RUF001
-        palette["teal"].blend(palette["text"], (1 - pulse) * 0.5).hex,
-    )
-    text = Text(no_wrap=True, overflow="crop", justify="center")
-    for y, line in enumerate(grid):
-        if y:
-            text.append("\n")
-        for char, color in line:
-            text.append(char, style=color)
+            text.append("#" if char == "█" else char, style=colors[x])
     return text
 
 
 class SplashScreen(ModalScreen[None]):
     """A skippable welcome which never pops a later screen or leaks timers."""
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape,enter,space", "skip", show=False, priority=True),
     ]
 
@@ -154,6 +118,7 @@ class SplashScreen(ModalScreen[None]):
         self._started = 0.0
         self._motion_enabled = False
         self._finished = False
+        self._art_size: tuple[int, bool] | None = None
         self._animation_timer: Timer | None = None
         self._dismiss_timer: Timer | None = None
 
@@ -183,12 +148,7 @@ class SplashScreen(ModalScreen[None]):
     def _render_art(self) -> None:
         if self._finished:
             return
-        app = cast(App[object], self.app)  # pyright: ignore[reportUnknownMemberType]
-        variables = app.get_css_variables()
-        palette = {
-            name: Color.parse(variables[f"ctp-{name}"])
-            for name in ("surface1", "blue", "mauve", "teal", "text")
-        }
+        palette = theme_palette(self)
         width = max(9, min(60, self.size.width - 4))
         compact = self.size.height < 22
         self.set_class(compact, "compact")
@@ -197,8 +157,10 @@ class SplashScreen(ModalScreen[None]):
         elapsed = monotonic() - self._started if self._motion_enabled else 1.0
         art = _logo_text(elapsed, width, palette)
         art.append("\n\n")
-        art.append_text(_flow_text(elapsed, width, palette))
-        self.query_one("#splash-art", Static).update(art)
+        art.append_text(mailroom_frame(elapsed, width, palette, "welcome", compact=compact))
+        shape = (width, compact)
+        self.query_one("#splash-art", Static).update(art, layout=shape != self._art_size)
+        self._art_size = shape
 
     def _stop_timers(self) -> None:
         if self._animation_timer is not None:

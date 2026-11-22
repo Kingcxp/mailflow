@@ -16,6 +16,7 @@ from mailflow.service import start_service
 from mailflow_storage_sqlite.plugin import plugin as storage_plugin
 from mailflow_testkit.fakes import make_mail
 from mailflow_tui.action_types import ActionTypeField
+from mailflow_tui.animation import MailAnimation
 from mailflow_tui.app import MailFlowApp
 from mailflow_tui.pickers import ChoicePicker
 from mailflow_tui.smart_action_review import SmartActionReviewModal, SmartOperationEditModal
@@ -36,7 +37,6 @@ from mailflow_test_support.tui import (
     build_config,
     find_mail_ids,
     find_settings_status,
-    set_select_value,
 )
 from mailflow_test_support.ui import until
 
@@ -51,8 +51,10 @@ async def _smart_review(
     app.query_one(f"#{entry}", Button).press()
     await until(
         pilot,
-        lambda: isinstance(app.screen, SmartActionReviewModal)
-        and app.screen.query_one("#smart-review-apply", Button).display,
+        lambda: (
+            isinstance(app.screen, SmartActionReviewModal)
+            and app.screen.query_one("#smart-review-apply", Button).display
+        ),
     )
     return cast(SmartActionReviewModal, app.screen)
 
@@ -178,6 +180,19 @@ async def test_smart_action_keeps_cancellation_and_relevance_order(
             log = panel.query_one("#smart-action-log", Static)
             assert service.t("tui.smart_action_tools.find_mail") in str(log.render())
             assert panel.query_one("#smart-action-cancel", Button).variant == "error"
+            animation = panel.query_one("#smart-action-animation", MailAnimation)
+            animation.scroll_visible(animate=False)
+            await pilot.pause()
+            assert animation.display and animation.region.height == 1
+            frame = animation.content
+            await until(pilot, lambda: animation.content != frame)
+            await pilot.resize_terminal(120, 36)
+            await until(pilot, lambda: animation.region.height == 6)
+            assert animation.region.height == 6
+            assert panel.query_one("#smart-action-cancel", Button).region.bottom <= 36
+            await pilot.resize_terminal(80, 24)
+            await until(pilot, lambda: animation.region.height == 1)
+            assert animation.region.height == 1
             tabs.active = "tab-actions"
             await pilot.pause()
             assert not router.cancelled.is_set()
@@ -361,8 +376,10 @@ async def test_smart_query_task_crud_requires_confirmation(
             await pilot.press("enter")
             await until(
                 pilot,
-                lambda: isinstance(app.screen, SmartActionReviewModal)
-                and app.screen.query_one("#smart-review-apply", Button).display,
+                lambda: (
+                    isinstance(app.screen, SmartActionReviewModal)
+                    and app.screen.query_one("#smart-review-apply", Button).display
+                ),
             )
             prompt = modal()
             assert prompt is not None, "a staged schedule entry must ask before it is added"
@@ -462,8 +479,10 @@ async def test_smart_query_task_crud_requires_confirmation(
             assert await service.storage.list_custom_actions() == []
             await until(
                 pilot,
-                lambda: str(app.query_one("#smart-action", Button).label)
-                == service.t("tui.smart_action"),
+                lambda: (
+                    str(app.query_one("#smart-action", Button).label)
+                    == service.t("tui.smart_action")
+                ),
             )
             app.exit()
             await pilot.pause()
@@ -554,6 +573,11 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
                 await pilot.pause(0.05)
             prompt = modal()
             assert prompt is not None, "a staged delete must ask before removing mail"
+            animation = prompt.query_one("#smart-action-animation", MailAnimation)
+            frame = animation.content
+            await pilot.pause(0.2)
+            assert animation.display and animation.region.height == 1
+            assert animation.content == frame
             body = str(prompt.query_one("#smart-review-op-0", Static).render())
             assert "1" in body  # the real matched count, not the mailbox size
 
@@ -595,7 +619,10 @@ async def test_smart_action_deletes_only_after_confirmation(tmp_path: Path) -> N
                 if "1" in str(hint.render()):
                     break
                 await pilot.pause(0.05)
-            assert "1" in str(hint.render()), str(hint.render())
+            hint_text = "".join(
+                segment.text for segment in Console().render(cast(Any, hint.content))
+            )
+            assert "1" in hint_text, hint_text
             app.exit()
             await pilot.pause()
     finally:

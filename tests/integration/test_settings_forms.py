@@ -42,6 +42,9 @@ async def test_mailbox_presets_are_selectable_and_save_real_server_settings(tmp_
                 app.push_screen(form, results.append)
                 await pilot.pause()
                 preset = cast(Select[str], form.query_one("#extra-preset", Select))
+                assert all(
+                    button.region.height == 1 for button in form.query(".dialog-actions Button")
+                )
                 preset.focus()
                 await pilot.press("enter", "down", "enter")
                 await pilot.pause()
@@ -57,6 +60,16 @@ async def test_mailbox_presets_are_selectable_and_save_real_server_settings(tmp_
                 form.query_one("#extra-password", Input).value = "fake-password"
                 preset.value = "custom"
                 await pilot.pause()
+                eye = form.query_one("#extra-password-eye", Button)
+                eye.scroll_visible(animate=False)
+                await pilot.pause()
+                assert eye.region.height == 1
+                password = form.query_one("#extra-password", Input)
+                assert password.password
+                eye.press()
+                await pilot.pause()
+                assert not password.password
+                eye.press()
                 form.query_one("#extra-imap-host", Input).value = "imap.example.com"
                 form.query_one("#extra-smtp-host", Input).value = "smtp.example.com"
                 form.query_one("#entry-form-save", Button).press()
@@ -68,6 +81,16 @@ async def test_mailbox_presets_are_selectable_and_save_real_server_settings(tmp_
                 assert payload["options"]["smtp_host"] == "smtp.example.com"
                 assert payload["options"]["smtp_port"] == 587
                 await pilot.pause()
+            await pilot.resize_terminal(60, 24)
+            editing = EntryFormScreen(service, "accounts", values=payload)
+            await app.push_screen(editing)
+            await pilot.pause()
+            for button in editing.query(".dialog-actions Button"):
+                assert button.region.height == 1
+                assert button.region.right <= 60 and button.region.bottom <= 24
+            assert editing.query_one("#field-email", Input).value == "user@example.com"
+            assert await pilot.click(editing.query_one("#entry-form-back", Button))
+            await until(pilot, lambda: app.screen is not editing)
     finally:
         await service.stop()
 

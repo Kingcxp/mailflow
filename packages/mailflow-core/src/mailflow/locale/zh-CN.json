@@ -1180,6 +1180,7 @@
       "smart_action_partial": "查询未完成：有 {failed} 封邮件未能检查（{reasons}），其余结果如下。",
       "smart_action_progress": "{stage} · {detail}",
       "smart_action_working": "正在处理，可随时取消。",
+      "smart_action_cancelling": "正在停止本次操作…",
       "smart_action_steps": "已完成 {count} 次工具调用",
       "logs_cat_llm": "大模型",
       "logs_cat_parse": "解析",

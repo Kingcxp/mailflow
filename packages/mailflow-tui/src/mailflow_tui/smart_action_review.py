@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 from collections import deque
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
@@ -14,12 +15,13 @@ from mailflow.domain import ActionItem, PendingOperation, SmartActionResult
 from mailflow.service import MailFlowService
 from rich.text import Text
 from textual import events
-from textual.app import ComposeResult
+from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, LoadingIndicator, Markdown, Static
+from textual.widgets import Button, Checkbox, Markdown, Static
 
 from mailflow_tui.action_types import ActionTypeField
+from mailflow_tui.animation import MailAnimation, Scene
 from mailflow_tui.labels import error_message
 from mailflow_tui.pickers import AssistedInput
 from mailflow_tui.widgets import Input, TextArea
@@ -42,7 +44,7 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
         super().__init__()
         self._service = service
         self._instruction = instruction
-        self._scope = {
+        self._scope: dict[str, Any] = {
             key: list(cast(list[Any], value)) if isinstance(value, list) else value
             for key, value in (scope or {}).items()
         }
@@ -51,21 +53,22 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
         self._operations: list[PendingOperation] = []
         self._labels: dict[int, Static] = {}
         self._result: SmartActionResult | None = None
-        self._task: asyncio.Task[None] | None = None
+        self._operation_task: asyncio.Task[None] | None = None
         self._state = "running"
         self._stopping = False
         self._apply_started = False
         self._error: Exception | None = None
         self._log_entries: deque[tuple[str, dict[str, Any]]] = deque(maxlen=300)
+        self._activity_scene: Scene = "thinking"
+        self._activity_key = "assistant.working"
+        self._activity_params: dict[str, Any] = {}
         self._bindings.bind("escape", "cancel", self._t("tui.btn_cancel"))
 
     @property
     def cancel_message(self) -> str:
         if self._error is not None and not self._apply_started:
             return error_message(self._service, self._error)
-        return self._t(
-            "tui.smart_action_stopped" if self._apply_started else "assistant.cancelled"
-        )
+        return self._t("tui.smart_action_stopped" if self._apply_started else "assistant.cancelled")
 
     def _t(self, key: str, **params: Any) -> str:
         return self._service.t(key, **params)
@@ -137,9 +140,7 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
                 yield Static(self._t("tui.smart_action_request"), id="smart-action-request-title")
                 yield Static(self._instruction, id="smart-action-request", markup=False)
                 yield Static(self._scope_text(), id="smart-action-scope", markup=False)
-                with Horizontal(id="smart-action-animation"):
-                    yield LoadingIndicator()
-                    yield Static(self._t("assistant.working"), id="smart-action-activity")
+                yield MailAnimation(id="smart-action-animation")
                 yield Static("", id="smart-action-log", markup=False)
                 yield Markdown("", id="smart-action-result")
                 yield Static("", id="smart-action-objects", markup=False)
@@ -149,9 +150,7 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
                 yield Button(
                     self._t("tui.smart_action_reject"), id="smart-review-cancel", variant="error"
                 )
-                yield Button(
-                    self._t("tui.btn_cancel"), id="smart-action-cancel", variant="error"
-                )
+                yield Button(self._t("tui.btn_cancel"), id="smart-action-cancel", variant="error")
                 yield Button(
                     self._t("tui.smart_action_finish"), id="smart-review-apply", variant="success"
                 )
@@ -165,7 +164,7 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
         self.query_one("#smart-review-operations").display = False
         self.query_one("#smart-review-error").display = False
         self._sync_controls()
-        self._task = asyncio.create_task(self._execute(), name="smart-action")
+        self._operation_task = asyncio.create_task(self._execute(), name="smart-action")
 
     def on_resize(self, _event: events.Resize) -> None:
         if self.is_mounted:
@@ -183,8 +182,21 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
         self.query_one("#smart-review-apply", Button).display = not busy
         self.query_one("#smart-review-apply", Button).disabled = self._stopping
         self.query_one("#smart-review-operations").disabled = busy or self._stopping
-        self.query_one("#smart-action-animation").display = (
-            busy and self.app.size.width >= 100 and self.app.size.height >= 30
+        animation = self.query_one("#smart-action-animation", MailAnimation)
+        app = cast(App[object], self.app)  # pyright: ignore[reportUnknownMemberType]
+        animation.display = busy or (self._state == "review" and bool(self._operations))
+        scene: Scene = self._activity_scene
+        caption = self._log_text(self._activity_key, self._activity_params)
+        if self._stopping:
+            scene, caption = "stopping", self._t("tui.smart_action_cancelling")
+        elif self._state == "applying":
+            scene, caption = "applying", self._t("tui.smart_action_applying")
+        elif self._state == "review":
+            scene, caption = "review", self._t("tui.smart_review_title")
+        animation.set_activity(
+            scene,
+            caption,
+            compact=not busy or app.size.width < 100 or app.size.height < 30,
         )
 
     def _log_text(self, key: str, params: dict[str, Any]) -> str:
@@ -207,11 +219,15 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
             "\n".join("· " + self._log_text(key, params) for key, params in self._log_entries)
         )
 
-    def _progress(self, _stage: str, _done: int, _total: int, detail: Any) -> None:
+    def _progress(self, stage: str, _done: int, _total: int, detail: Any) -> None:
         if self._stopping or not self.is_mounted:
             return
-        if isinstance(detail, (tuple, list)) and len(detail) == 2:
+        if isinstance(detail, (tuple, list)) and len(cast(Sequence[object], detail)) == 2:
             key, params = cast(tuple[str, dict[str, Any]], detail)
+            self._activity_scene = "reading" if stage in {"tool", "match"} else "thinking"
+            self._activity_key = "tui." + str(key)
+            self._activity_params = {k: v for k, v in params.items() if k not in {"args", "result"}}
+            self._sync_controls()
             # Progress names the operation; tool arguments and raw responses stay out of the log.
             self._log(
                 "tui." + str(key),
@@ -263,9 +279,9 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
                     for identity in operation.record_ids
                 ]
             elif operation.tool in {"edit_action", "delete_action"}:
-                item = tasks.get(str(operation.arguments.get("item_id") or ""))
-                if item is not None:
-                    operation.arguments = {**item.model_dump(mode="json"), **operation.arguments}
+                action = tasks.get(str(operation.arguments.get("item_id") or ""))
+                if action is not None:
+                    operation.arguments = {**action.model_dump(mode="json"), **operation.arguments}
                     if operation.arguments.get("clear_due"):
                         operation.arguments["due_at"] = operation.arguments["due_end"] = None
                     elif operation.arguments.get("clear_end"):
@@ -404,10 +420,10 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
 
     async def _stop(self) -> None:
         try:
-            if self._task is not None and not self._task.done():
-                self._task.cancel()
+            if self._operation_task is not None and not self._operation_task.done():
+                self._operation_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
-                    await self._task
+                    await self._operation_task
             await self._discard_plan()
             self._finish(None)
         except Exception as exc:
@@ -421,10 +437,10 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
         self.dismiss(result)
 
     async def on_unmount(self) -> None:
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
+        if self._operation_task is not None and not self._operation_task.done():
+            self._operation_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._task
+                await self._operation_task
         try:
             await self._discard_plan()
         except Exception:
@@ -434,7 +450,6 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
         for ident, key in (
             ("smart-review-title", "tui.smart_action"),
             ("smart-action-request-title", "tui.smart_action_request"),
-            ("smart-action-activity", "assistant.working"),
             ("smart-action-confirm-title", "tui.smart_review_title"),
             ("smart-action-confirm-hint", "tui.smart_action_confirm_hint"),
         ):
@@ -478,7 +493,9 @@ class SmartActionReviewModal(ModalScreen[SmartActionResult | None]):
             self._state = "applying"
             self._sync_controls()
             self.query_one("#smart-action-cancel", Button).focus()
-            self._task = asyncio.create_task(self._apply(selected), name="smart-action-apply")
+            self._operation_task = asyncio.create_task(
+                self._apply(selected), name="smart-action-apply"
+            )
         elif ident.startswith("smart-review-edit-") and self._state == "review":
             index = int(ident.rsplit("-", 1)[1])
             self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
