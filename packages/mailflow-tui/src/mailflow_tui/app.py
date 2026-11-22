@@ -1592,7 +1592,9 @@ class MailPane(Vertical):
             await asyncio.sleep(0.3)
             if generation != self._mail_filter_generation:
                 return
-            await self.refresh_mail(reload=True)
+            client = getattr(self._service, "client", None)
+            offline = getattr(client, "connection_state", "") in {"retrying", "connecting"}
+            await self.refresh_mail(reload=not offline)
 
         self.run_worker(
             cast(Any, _filter), exclusive=True, group="mail-filter", exit_on_error=False
@@ -5439,7 +5441,7 @@ class MailFlowApp(App[None]):
                 exit_on_error=False,
             )
 
-    async def _refresh_color_scheme(self) -> None:
+    async def _refresh_color_scheme(self, *, remember: bool = False) -> None:
         if self._remote:
             try:
                 await self._service.refresh_snapshot()
@@ -5450,6 +5452,9 @@ class MailFlowApp(App[None]):
                     severity="warning",
                 )
                 return
+        if remember:
+            save_theme_preferences(self._service.config.general.theme, completed=True)
+            self._theme_preference = load_theme_preferences()
         self._apply_color_scheme()
 
     def _reset_shortcuts(self, *, refresh: bool = False) -> None:
@@ -5704,16 +5709,13 @@ class MailFlowApp(App[None]):
                 unsubscribe()
 
     async def _on_service_event(self, event: str, **payload: Any) -> None:
-        if event == "config.changed" and "general.theme" in {
-            *payload.get("keys", ()),
-            payload.get("key"),
-        }:
-            theme = self._service.config.general.theme
-            save_theme_preferences(theme, completed=True)
-            self._theme_preference = load_theme_preferences()
         if event.startswith(("config.", "plugin.", "backup.restored")):
+            theme_changed = event == "config.changed" and "general.theme" in {
+                *payload.get("keys", ()),
+                payload.get("key"),
+            }
             self.run_worker(
-                self._refresh_color_scheme(),
+                self._refresh_color_scheme(remember=theme_changed),
                 exclusive=True,
                 group="theme-refresh",
                 exit_on_error=False,

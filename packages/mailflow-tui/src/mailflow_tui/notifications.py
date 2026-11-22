@@ -279,8 +279,9 @@ class NotificationsPane(Vertical):
             )
         # re-rendering clears the table and drops the cursor: restore the
         # previously selected row so in-place actions keep targeting it
-        if update_table(table, rows):
-            self._selected_id = view.restore(table)
+        with table.prevent(DataTable.RowHighlighted, DataTable.RowSelected):
+            if update_table(table, rows):
+                self._selected_id = view.restore(table)
         if table.row_count == 0 and not getattr(self._service, "remote", False):
             self.query_one("#notifications-status", Static).update(
                 self._service.t("tui.notifications_empty")
@@ -348,10 +349,14 @@ class NotificationsPane(Vertical):
         )
 
     def on_data_table_row_highlighted(self, event: Any) -> None:
+        if event.data_table.id != "notifications-table" or event.row_key.value is None:
+            return
         self._selected_id = str(event.row_key.value)
         self._sync_selection_controls()
 
     async def on_data_table_row_selected(self, event: Any) -> None:
+        if event.data_table.id != "notifications-table" or event.row_key.value is None:
+            return
         self._selected_id = str(event.row_key.value)
         self._sync_selection_controls()
         if self._mutating or getattr(self._service, "remote", False):

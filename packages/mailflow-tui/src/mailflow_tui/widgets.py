@@ -237,11 +237,21 @@ class TextArea(TextualTextArea):
 
     BINDINGS: ClassVar[list[Any]] = [
         Binding("ctrl+a", "select_all", show=False),
+        Binding("ctrl+home", "cursor_document_start", show=False),
+        Binding("ctrl+end", "cursor_document_end", show=False),
+        Binding("ctrl+shift+home", "cursor_document_start(True)", show=False),
+        Binding("ctrl+shift+end", "cursor_document_end(True)", show=False),
         Binding("ctrl+shift+z", "redo", show=False),
         Binding("ctrl+insert", "copy", show=False),
         Binding("shift+insert", "paste", show=False),
         Binding("shift+delete", "cut", show=False),
     ]
+
+    def action_cursor_document_start(self, select: bool = False) -> None:
+        self.move_cursor((0, 0), select=select)
+
+    def action_cursor_document_end(self, select: bool = False) -> None:
+        self.move_cursor(self.document.end, select=select)
 
     def action_copy(self) -> None:
         if self.selected_text:

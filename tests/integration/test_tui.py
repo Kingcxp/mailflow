@@ -984,7 +984,10 @@ async def test_market_repos_screen(tmp_path: Path, monkeypatch: pytest.MonkeyPat
             # only way out (regression: the dialog had no return control)
             back = cast(Button, app.screen.query_one("#repos-cancel"))
             assert str(back.label).strip()
-            assert back.variant != "default"  # never the black default variant
+            assert (
+                back.styles.background.hex.lower()
+                == app.current_theme.variables["button-default-background"].lower()
+            )
             back.press()
             await pilot.pause(0.2)
             assert not isinstance(app.screen, ReposScreen)
@@ -1270,7 +1273,7 @@ async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
             app.query_one("#account-history", Button).press()
             await until(pilot, lambda: isinstance(app.screen, MailHistoryScreen))
             pane = cast(MailHistoryScreen, app.screen)
-            history = cast(DataTable[Any], app.query_one("#history-table", DataTable))
+            history = cast(DataTable[Any], app.screen.query_one("#history-table", DataTable))
             await until(pilot, lambda: history.row_count == 3)
             assert history.row_count == 3
             # every one of them is already stored, so the browser marks them
@@ -1281,8 +1284,8 @@ async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
             known_id = str(next(iter(history.rows)).value)
             pane._picked = {known_id}  # pyright: ignore[reportPrivateUsage]
             pane._render_history()  # pyright: ignore[reportPrivateUsage]
-            app.query_one("#history-analyze", Button).press()
-            await until(pilot, lambda: app.query_one("#history-analyze", Button).disabled)
+            app.screen.query_one("#history-analyze", Button).press()
+            await until(pilot, lambda: app.screen.query_one("#history-analyze", Button).disabled)
             assert await service.count_mails() == 3
 
             # a mail that never came through the live stream *is* analyzed
@@ -1297,8 +1300,8 @@ async def test_mailbox_history_analyzes_selected_mail(tmp_path: Path) -> None:
             pane._history = [*pane._history, unseen]  # pyright: ignore[reportPrivateUsage]
             pane._picked = {unseen.normalized_message_id()}  # pyright: ignore[reportPrivateUsage]
             pane._render_history()  # pyright: ignore[reportPrivateUsage]
-            app.query_one("#history-analyze", Button).press()
-            await until(pilot, lambda: app.query_one("#history-analyze", Button).disabled)
+            app.screen.query_one("#history-analyze", Button).press()
+            await until(pilot, lambda: app.screen.query_one("#history-analyze", Button).disabled)
             assert await service.count_mails() == 4
             stored = await service.get_mail(unseen.normalized_message_id())
             assert stored is not None
@@ -1799,7 +1802,7 @@ async def test_bulk_reparse_stop_covers_reanalyze_failed_and_never_latches(
             table = cast(DataTable[Any], app.query_one("#mail-table", DataTable))
             table.focus()
             table.move_cursor(row=0)
-            await pilot.press("space", "down", "space")
+            await pilot.press("escape", "ctrl+enter", "shift+down")
             expected: set[str] = set()
             for key in list(table.rows)[:2]:
                 selected = await service.get_mail(str(key.value))

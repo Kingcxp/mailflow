@@ -2047,13 +2047,18 @@ class SettingsPane(Vertical):
         if event.toggle.id in {"settings-search-regex", "settings-search-case"}:
             self._schedule_settings_filter()
 
-    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id != "settings-sections":
             return
         index = event.list_view.index or 0
         if 0 <= index < len(self._sections):
             self._active = self._sections[index].section_id
-            await self._render_options()
+            self.run_worker(
+                self._render_options(),
+                group="settings-options",
+                exclusive=True,
+                exit_on_error=False,
+            )
 
     def _card_of(self, button: Button) -> OptionCard | None:
         node: Any = button.parent

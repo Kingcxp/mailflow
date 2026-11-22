@@ -728,17 +728,17 @@ async def test_history_count_controls_page_size_across_pages(tmp_path: Path) -> 
             app.query_one(TabbedContent).active = "tab-mailboxes"
             await _wait_until(pilot, lambda: not app.query_one("#account-history", Button).disabled)
             app.query_one("#account-history", Button).press()
-            await _wait_until(pilot, lambda: bool(app.query("#history-more")))
+            await _wait_until(pilot, lambda: bool(app.screen.query("#history-more")))
             pane = _history_screen(app)
             await _wait_until(pilot, lambda: len(pane._history) == 25)
-            count = app.query_one("#history-count", Input)
-            more = app.query_one("#history-more", Button)
+            count = app.screen.query_one("#history-count", Input)
+            more = app.screen.query_one("#history-more", Button)
             assert not more.disabled
-            assert app.query_one("#history-analyze", Button).disabled
+            assert app.screen.query_one("#history-analyze", Button).disabled
             count.value = "3"
             more.press()
             await _wait_until(pilot, lambda: len(pane._history) == 28)
-            assert app.query_one("#history-table", DataTable).row_count == 28
+            assert app.screen.query_one("#history-table", DataTable).row_count == 28
             count.value = "0"
             await pilot.pause()
             assert more.disabled
@@ -779,11 +779,11 @@ async def test_history_bulk_load_beyond_hundred_mails(tmp_path: Path) -> None:
             app.query_one(TabbedContent).active = "tab-mailboxes"
             await _wait_until(pilot, lambda: not app.query_one("#account-history", Button).disabled)
             app.query_one("#account-history", Button).press()
-            await _wait_until(pilot, lambda: bool(app.query("#history-more")))
+            await _wait_until(pilot, lambda: bool(app.screen.query("#history-more")))
             pane = _history_screen(app)
             await _wait_until(pilot, lambda: len(pane._history) == 25)
 
-            more = app.query_one("#history-more", Button)
+            more = app.screen.query_one("#history-more", Button)
             for _expected in range(50, 126, 25):  # five pages including the initial load
                 before = len(pane._history)
                 more.press()
@@ -793,7 +793,7 @@ async def test_history_bulk_load_beyond_hundred_mails(tmp_path: Path) -> None:
                     pilot,
                     lambda: len(pane._history) > before,  # noqa: B023
                 )
-            table = cast(DataTable[Any], app.query_one("#history-table", DataTable))
+            table = cast(DataTable[Any], app.screen.query_one("#history-table", DataTable))
             assert table.row_count == 125
     finally:
         await service.stop()

@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any, ClassVar, cast
 
 from mailflow.service import MailFlowService
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
@@ -264,15 +265,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         node = self.query_one_optional("#guide-log", RichLog)  # pyright: ignore[reportUnknownVariableType]
         if node is None:
             return
-        message = escape(
-            error_detail(self._service, message, extra_secrets=secret_values(self._options))
-        )
+        message = error_detail(self._service, message, extra_secrets=secret_values(self._options))
         stamp = datetime.now().strftime("%H:%M:%S")
         color = _LEVEL_COLORS.get(level, "")
-        if color:
-            node.write(f"[{color}]{stamp} {level:5}[/{color}] {message}")  # pyright: ignore[reportUnknownMemberType]
-        else:
-            node.write(f"{stamp} {level:5} {message}")  # pyright: ignore[reportUnknownMemberType]
+        line = Text(f"{stamp} {level:5}", style=color)
+        line.append(" " + message)
+        node.write(line)  # pyright: ignore[reportUnknownMemberType]
 
     def _set_status(self, text: str, style: str = "") -> None:
         node = self.query_one_optional("#guide-status", Static)

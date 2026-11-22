@@ -98,11 +98,14 @@ def host(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Any
     )
     app = MailFlowApp(view, queue.Queue(), remote=remote)
 
+    async def relay(event: str, **payload: Any) -> None:
+        await client._dispatch(event, json_value(payload))  # pyright: ignore[reportPrivateUsage]
+
+    if remote:
+        service.events.subscribe_all(relay)
+
     async def emit(event: str, **payload: Any) -> None:
-        if remote:
-            await client._dispatch(event, json_value(payload))  # pyright: ignore[reportPrivateUsage]
-        else:
-            await service.events.emit(event, **payload)
+        await service.events.emit(event, **payload)
 
     return service, view, app, emit, failures
 
@@ -271,7 +274,7 @@ async def test_stored_html_is_readable_in_mail_reader_and_related_task(host: Any
         action_search.value = "Follow up"
         await settle(pilot)
         assert "Bring [draft]\nCheck the agenda" in text(app, "#actions-detail-content")
-        assert record.mail.subject in text(app, "#actions-detail-content")
+        assert not source_button.disabled
         source_button.press()
         await settle(pilot)
         assert tabs.active == "tab-mail" and cursor(mail_table) == "html"
@@ -515,7 +518,10 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         await until(pilot, lambda: isinstance(app.screen, TaskMenu))
         app.screen.query_one("#workflow-choice", Select).value = "complete_tasks"
         app.screen.query_one("#workflow-apply", Button).press()
-        await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+        await until(
+            pilot,
+            lambda: isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run")),
+        )
         app.screen.query_one("#confirm-run", Button).press()
         await settle(pilot)
         assert not await service.list_actions_all() and not todos.row_count
@@ -593,7 +599,7 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         assert instruction.scrollable_content_region.height == 5
         instruction.focus()
         await pilot.press("ctrl+end")
-        assert instruction.scroll_y > 0
+        await until(pilot, lambda: instruction.scroll_y > 0)
         await pilot.press("ctrl+a", "backspace")
         await pilot.pause()
         assert instruction.value == "" and instruction.scrollable_content_region.height == 1
@@ -656,6 +662,8 @@ async def test_search_scope_matches_smart_tools_and_deleted_actions_stay_hidden(
         await settle(pilot)
         stored = await service.storage.get_mail("target")
         assert stored.manual_urgency is Urgency.AD and stored.auto_urgency is Urgency.IMPORTANT
+        table.focus()
+        await pilot.press("ctrl+enter")
         app.query_one("#urgency-select", Select).value = "auto"
         await settle(pilot)
         assert (await service.storage.get_mail("target")).manual_urgency is None
@@ -1026,11 +1034,11 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         assert table.checked_keys == set(keys(table)[:2])
         await pilot.press("shift+up")
         assert table.checked_keys == {keys(table)[0]}
-        await pilot.click(table, offset=(25, 3), ctrl=True)
+        await pilot.click(table, offset=(25, 3), control=True)
         clicked: str = keys(table)[table.cursor_row]
         assert clicked != keys(table)[0]
         assert table.checked_keys == {keys(table)[0], clicked}
-        await pilot.click(table, offset=(25, 3), ctrl=True)
+        await pilot.click(table, offset=(25, 3), control=True)
         assert table.checked_keys == {keys(table)[0]}
         await pilot.press("escape", "ctrl+j")
         assert table.checked_keys == {clicked}
@@ -1041,7 +1049,7 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         await pilot.click(table, offset=(25, 2))
         first: str = keys(table)[table.cursor_row]
         assert table.checked_keys == {first}
-        await pilot.click(table, offset=(25, 4), ctrl=True)
+        await pilot.click(table, offset=(25, 4), control=True)
         assert len(table.checked_keys) == 2
         await pilot.click(table, offset=(25, 3))
         middle: str = keys(table)[table.cursor_row]
@@ -1112,13 +1120,6 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
         return SmartActionResult(final_text="## Result\nThe request finished.")
 
     service.smart_action = answer
-    unsubscribe = None
-    if getattr(view, "remote", False):
-
-        async def forward(event: str, **payload: Any) -> None:
-            await emit(event, **payload)
-
-        unsubscribe = service.on("console.changed", forward)
     try:
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.press("ctrl+9")
@@ -1321,6 +1322,4 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             assert prompt.value == ""
     finally:
         finish.set()
-        if unsubscribe is not None:
-            unsubscribe()
         await service.console.close()

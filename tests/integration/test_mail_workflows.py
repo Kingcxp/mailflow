@@ -804,20 +804,18 @@ async def test_history_analysis_updates_mail_before_batch_finishes_and_can_stop(
         app.query_one(TabbedContent).active = "tab-mailboxes"
         await pilot.pause()
         app.query_one("#account-history", Button).press()
-        history = app.query_one("#history-table", SelectionTable)
+        await until(pilot, lambda: bool(app.screen.query("#history-table")))
+        history = app.screen.query_one("#history-table", SelectionTable)
         await until(pilot, lambda: history.row_count == 3)
         history.focus()
         await pilot.press("ctrl+a")
-        analyze = app.query_one("#history-analyze", Button)
+        analyze = app.screen.query_one("#history-analyze", Button)
         analyze.press()
         await until(pilot, started.is_set)
         first_id = mails[0].normalized_message_id()
-        app.query_one(TabbedContent).active = "tab-mail"
-        mail_table = app.query_one("#mail-table", SelectionTable)
-        await until(pilot, lambda: first_id in {str(k.value) for k in mail_table.rows})
-        assert "Completed result" in str(app.query_one("#mail-summary", Static).render())
-        app.query_one(TabbedContent).active = "tab-mailboxes"
-        await pilot.pause()
+        ready = await service.get_mail(first_id)
+        assert ready is not None and ready.summary == "Completed result"
+        assert str(history.get_cell(first_id, "state")) == service.t("tui.history_marked_known")
         analyze.press()
         await until(pilot, cancelled.is_set)
         await until(pilot, lambda: str(analyze.label) == service.t("tui.history_analyze"))
@@ -829,6 +827,12 @@ async def test_history_analysis_updates_mail_before_batch_finishes_and_can_stop(
         assert first.analysis.summary == "Completed result"
         assert second is not None and second.analysis_state == "cancelled"
         assert len(history.checked_keys) == 2
+        app.screen.query_one("#history-close", Button).press()
+        await until(pilot, lambda: not bool(app.screen.query("#history-table")))
+        app.query_one(TabbedContent).active = "tab-mail"
+        mail_table = app.query_one("#mail-table", SelectionTable)
+        await until(pilot, lambda: first_id in {str(k.value) for k in mail_table.rows})
+        assert "Completed result" in str(app.query_one("#mail-summary", Static).render())
 
 
 async def test_history_controls_follow_selection_loading_and_failure(

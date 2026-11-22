@@ -625,6 +625,17 @@ class RemoteServiceAdapter:
     def settings_sections(self) -> list[SettingsSection]:
         return self._sections
 
+    def settings_option(self, key: str) -> OptionSpec | None:
+        return next(
+            (
+                option
+                for section in self._sections
+                for option in section.options
+                if option.key == key
+            ),
+            None,
+        )
+
     async def refresh_settings(self) -> None:
         self._sections = [_section(item) for item in await self.client.settings_sections()]
 
