@@ -274,7 +274,7 @@ class ActionTypesModal(ModalScreen[set[str] | None]):
                 next_selected.add(result)
             self._start_load(next_selected)
 
-        cast(Any, self.app).push_screen(ActionTypeNameModal(self._service, name), closed)
+        cast(Any, self).app.push_screen(ActionTypeNameModal(self._service, name), closed)
 
     async def _delete(self, name: str) -> None:
         if self._busy:
@@ -283,7 +283,7 @@ class ActionTypesModal(ModalScreen[set[str] | None]):
         self._deleting = True
         self._sync_controls()
         try:
-            confirmed = await cast(Any, self.app).push_screen_wait(
+            confirmed = await cast(Any, self).app.push_screen_wait(
                 ConfirmModal(
                     self._service,
                     title=self._service.t("tui.todo_type_delete"),
@@ -395,4 +395,4 @@ class ActionTypeField(Horizontal):
                 self.set_value(result)
             self.run_worker(self._load(), group="action-type-options", exit_on_error=False)
 
-        cast(Any, self.app).push_screen(ActionTypeNameModal(self._service), closed)
+        cast(Any, self).app.push_screen(ActionTypeNameModal(self._service), closed)

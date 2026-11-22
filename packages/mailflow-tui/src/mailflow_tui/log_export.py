@@ -102,7 +102,9 @@ class LogExportScreen(ModalScreen[str | None]):
             base = base.parent
         name = str(self.query_one("#log-export-filename", Input).value).strip()
         if not name:
-            error.update(f"[$ctp-yellow]{self._t('tui.log_export_filename_required')}[/$ctp-yellow]")
+            error.update(
+                f"[$ctp-yellow]{self._t('tui.log_export_filename_required')}[/$ctp-yellow]"
+            )
             return
         if not name.endswith(".log"):
             name += ".log"

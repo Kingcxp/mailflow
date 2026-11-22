@@ -221,7 +221,7 @@ class TestCommandRouter:
         assert response.ok
         item = next(iter(storage.custom_actions.values()))
         assert item.summary == "Renew passport at the office"
-        assert item.action_type == "errand"  # default type
+        assert item.action_type == ""  # Types are chosen by the user, not preassigned.
 
     async def test_reply_flow_through_commands(
         self, router: tuple[CommandRouter, MemoryStorage]

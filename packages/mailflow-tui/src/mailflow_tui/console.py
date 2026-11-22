@@ -273,7 +273,7 @@ class ConsoleInput(PromptInput):
 
 @dataclass
 class ConversationView:
-    rows: dict[str, ConsoleMessage] = field(default_factory=dict)
+    rows: dict[str, ConsoleMessage] = field(default_factory=lambda: {})
     runtime_id: str = ""
     cursor: int = 0
     has_more: bool = False
@@ -284,7 +284,7 @@ class ConversationView:
     follow: bool = True
     unread: int = 0
     pending: tuple[str, str, str] | None = None
-    input_history: list[str] = field(default_factory=list)
+    input_history: list[str] = field(default_factory=lambda: [])
     history_index: int | None = None
 
 
@@ -480,7 +480,7 @@ class ConsolePane(Vertical):
                     self._views.pop("", None)
                     self._channel = data["channel"]
                     self._views[self._channel] = view
-                selector = self.query_one("#console-channel", Select)
+                selector = cast(Select[str], self.query_one("#console-channel", Select))
                 with selector.prevent(Select.Changed):
                     selector.set_options([(c["id"], c["id"]) for c in self._channels])
                     selector.value = self._channel
@@ -519,7 +519,7 @@ class ConsolePane(Vertical):
                         with permission_scope(self._identity):
                             available = await self.service.console_messages()
                         self._channels = available["channels"]
-                        selector = self.query_one("#console-channel", Select)
+                        selector = cast(Select[str], self.query_one("#console-channel", Select))
                         with selector.prevent(Select.Changed):
                             selector.set_options([(c["id"], c["id"]) for c in self._channels])
                             selector.value = Select.NULL
@@ -828,7 +828,7 @@ class ConsolePane(Vertical):
         menu.add_options(label for label, _ in choices)
         self._context_menu_choices = choices
         self._context_menu_message = message
-        self._context_menu_focus = self.app.focused
+        self._context_menu_focus = cast(Any, self).app.focused
         width = min(max(22, max(cell_len(label) for label, _ in choices) + 4), self.size.width)
         height = min(len(choices) + 2, 14, self.size.height)
         menu.styles.width = width
@@ -854,7 +854,7 @@ class ConsolePane(Vertical):
 
     def on_click(self, event: events.Click) -> None:
         menu = self.query_one(ConsoleContextMenu)
-        if menu.display and event.screen_offset not in menu.region:
+        if menu.display and not menu.region.contains(*event.screen_offset):
             self._close_context_menu(restore_focus=False)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -904,9 +904,9 @@ class ConsolePane(Vertical):
         elif choice == "refresh":
             self.request_refresh()
         elif choice == "notification_settings":
-            self.app.query_one(TabbedContent).active = "tab-notifications"
+            cast(Any, self).app.query_one(TabbedContent).active = "tab-notifications"
         elif choice == "model_settings":
-            self.app.query_one(TabbedContent).active = "tab-mailboxes"
+            cast(Any, self).app.query_one(TabbedContent).active = "tab-mailboxes"
         elif choice == "upload":
             await self._upload()
         elif choice == "clear":
@@ -915,7 +915,7 @@ class ConsolePane(Vertical):
                     self.service.t("console.stop_before_clear")
                 )
                 return
-            confirmed = await cast(Any, self.app).push_screen_wait(
+            confirmed = await cast(Any, self).app.push_screen_wait(
                 ConfirmModal(
                     self.service,
                     title=self.service.t("console.clear"),
@@ -961,20 +961,20 @@ class ConsolePane(Vertical):
             self._sync_controls()
             self.query_one(PromptInput).focus()
         elif choice == "copy":
-            self.app.copy_to_clipboard(message.text)
+            cast(Any, self).app.copy_to_clipboard(message.text)
             self.notify(self.service.t("console.copied"))
         elif choice and choice.startswith("ref:"):
             reference = message.references[int(choice[4:])]
             if reference["kind"] == "mail":
-                cast(Any, self.app).open_mail(reference["id"])
+                cast(Any, self).app.open_mail(reference["id"])
             elif reference["kind"] == "action":
-                cast(Any, self.app).open_action(reference["id"])
+                cast(Any, self).app.open_action(reference["id"])
         elif choice and choice.startswith("file:"):
             await self._download(message, message.files[int(choice[5:])])
 
     async def _upload(self) -> None:
         channel = self._channel
-        path = await cast(Any, self.app).push_screen_wait(
+        path = await cast(Any, self).app.push_screen_wait(
             PathPicker(self.service, self._last_upload)
         )
         if not path:
@@ -1006,15 +1006,15 @@ class ConsolePane(Vertical):
 
     async def _download(self, message: ConsoleMessage, file: dict[str, Any]) -> None:
         name = str(file["filename"]).replace("\\", "/").rsplit("/", 1)[-1]
-        path = await cast(Any, self.app).push_screen_wait(
+        path = await cast(Any, self).app.push_screen_wait(
             PathPicker(self.service, str(Path.home() / name))
         )
         if not path:
             return
         try:
-            destination = Path(path).expanduser()
+            destination = await asyncio.to_thread(Path(path).expanduser)
             if await asyncio.to_thread(destination.exists):
-                confirmed = await cast(Any, self.app).push_screen_wait(
+                confirmed = await cast(Any, self).app.push_screen_wait(
                     ConfirmModal(
                         self.service,
                         title=self.service.t("console.save_file", name=name),

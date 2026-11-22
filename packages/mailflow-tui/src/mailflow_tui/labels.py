@@ -47,7 +47,7 @@ def model_provider_label(service: Any, provider: str) -> str:
 
 def plugin_text(service: Any, plugin: Any, field: str, *, language: str | None = None) -> str:
     """Prefer publisher translations, with bundled text available offline."""
-    language = language or service.i18n.language
+    language = language or str(service.i18n.language or "en")
     default = str(getattr(plugin, field, "") or "")
     translations = getattr(
         plugin, {"name": "names", "description": "descriptions", "readme": "readmes"}[field], {}
@@ -64,7 +64,9 @@ def form_choice_label(service: Any, field: str, value: str) -> str:
         if value == TERMINAL_THEME:
             return str(service.t("tui.theme_auto_name"))
         scheme = theme_catalog(service).get(value)
-        return scheme.name if scheme else str(service.t("tui.theme_choice_unavailable", theme=value))
+        return (
+            scheme.name if scheme else str(service.t("tui.theme_choice_unavailable", theme=value))
+        )
     if field == "initial_sync":
         return str(service.t("ux.initial_" + value))
     if field == "minimum_urgency":

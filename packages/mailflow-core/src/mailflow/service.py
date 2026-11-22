@@ -3354,8 +3354,10 @@ Return every candidate in this batch."""
                 continue
             installed.append(plugin_id)
             owned = self._plugin_components(plugin_id)
-            themes_only = themes_only and bool(owned) and all(
-                kind is ComponentKind.THEME for kind, _ in owned
+            themes_only = (
+                themes_only
+                and bool(owned)
+                and all(kind is ComponentKind.THEME for kind, _ in owned)
             )
         if not installed:
             raise translated_error(
@@ -3754,6 +3756,22 @@ Return every candidate in this batch."""
         return sha256(
             json.dumps([normalize_provider(provider), instance_id, chat_id, sender]).encode()
         ).hexdigest()
+
+    def chat_is_running(self, context: PermissionContext) -> bool:
+        actor = self._chat_actor(
+            context.provider, context.instance_id, context.chat_id, context.sender
+        )
+        return any(not task.done() for task in self._chat_running.get(actor, ()))
+
+    async def clear_chat_session(self, context: PermissionContext) -> str:
+        actor = self._chat_actor(
+            context.provider, context.instance_id, context.chat_id, context.sender
+        )
+        confirmation = self._assistant_confirmations.pop(actor, None)
+        if confirmation is not None:
+            await self.cancel_smart_plan(confirmation[1].plan_id)
+        self._assistant_chats.pop(actor, None)
+        return actor
 
     async def console_messages(self, channel: str = "", **page: int) -> dict[str, Any]:
         return await self.console.read(channel, **page)

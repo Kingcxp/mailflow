@@ -6,7 +6,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 _WINDOWS_BUILTIN_BACKGROUNDS = {
     "campbell": "#0c0c0c",
@@ -38,8 +38,22 @@ def _color_mode(value: str) -> str | None:
 
 def _xterm_color(index: int) -> str | None:
     standard = (
-        "000000", "cd0000", "00cd00", "cdcd00", "0000ee", "cd00cd", "00cdcd", "e5e5e5",
-        "7f7f7f", "ff0000", "00ff00", "ffff00", "5c5cff", "ff00ff", "00ffff", "ffffff",
+        "000000",
+        "cd0000",
+        "00cd00",
+        "cdcd00",
+        "0000ee",
+        "cd00cd",
+        "00cdcd",
+        "e5e5e5",
+        "7f7f7f",
+        "ff0000",
+        "00ff00",
+        "ffff00",
+        "5c5cff",
+        "ff00ff",
+        "00ffff",
+        "ffffff",
     )
     if 0 <= index < 16:
         return standard[index]
@@ -122,30 +136,32 @@ def _windows_terminal_mode() -> str | None:
                 settings = json.loads(_remove_jsonc_comments(raw))
         except (OSError, ValueError):
             continue
-        profiles = settings.get("profiles", {}) if isinstance(settings, dict) else {}
-        profile_list = profiles.get("list", []) if isinstance(profiles, dict) else []
-        profile = next(
-            (
-                item
-                for item in profile_list
-                if isinstance(item, dict)
-                and str(item.get("guid", "")).strip("{} ").casefold() == profile_id
-            ),
-            {},
-        )
-        defaults = profiles.get("defaults", {}) if isinstance(profiles, dict) else {}
-        scheme_name = profile.get("colorScheme") if isinstance(profile, dict) else None
+        if not isinstance(settings, dict):
+            continue
+        settings = cast(dict[str, Any], settings)
+        raw_profiles: Any = settings.get("profiles", {})
+        profiles = cast(dict[str, Any], raw_profiles) if isinstance(raw_profiles, dict) else {}
+        profile_list: list[Any] = profiles.get("list", [])
+        profile: dict[str, Any] = {}
+        for item in profile_list:
+            if isinstance(item, dict):
+                candidate = cast(dict[str, Any], item)
+                if str(candidate.get("guid", "")).strip("{} ").casefold() == profile_id:
+                    profile = candidate
+                    break
+        defaults: Any = profiles.get("defaults", {})
+        scheme_name: Any = profile.get("colorScheme")
         if not scheme_name and isinstance(defaults, dict):
-            scheme_name = defaults.get("colorScheme")
+            scheme_name = cast(dict[str, Any], defaults).get("colorScheme")
         if not scheme_name:
             return None
         normalized_name = re.sub(r"[^a-z0-9]", "", str(scheme_name).casefold())
-        for scheme in settings.get("schemes", []):
-            if (
-                isinstance(scheme, dict)
-                and re.sub(r"[^a-z0-9]", "", str(scheme.get("name", "")).casefold())
-                == normalized_name
-            ):
+        schemes: list[Any] = settings.get("schemes", [])
+        for raw_scheme in schemes:
+            if not isinstance(raw_scheme, dict):
+                continue
+            scheme = cast(dict[str, Any], raw_scheme)
+            if re.sub(r"[^a-z0-9]", "", str(scheme.get("name", "")).casefold()) == normalized_name:
                 return _color_mode(str(scheme.get("background", "")))
         return _color_mode(_WINDOWS_BUILTIN_BACKGROUNDS.get(normalized_name, ""))
     return None

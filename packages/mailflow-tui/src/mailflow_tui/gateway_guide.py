@@ -370,7 +370,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             finally:
                 self._show_progress(False)
             self._log("INFO", self._t("tui.bots_guide_running", endpoint=instance.endpoint))
-            self._set_status(self._t("tui.bots_guide_running", endpoint=instance.endpoint), "$ctp-green")
+            self._set_status(
+                self._t("tui.bots_guide_running", endpoint=instance.endpoint), "$ctp-green"
+            )
             # 3. QR login loop (NapCat); the result is set now
             # so the Done button (or the manual 'I'm logged in' button)
             # can finish the flow even before automatic detection fires
@@ -524,7 +526,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         method waits for the gateway HTTP endpoint to become reachable
         so the subsequent connectivity check succeeds."""
         self._log("INFO", self._t("tui.bots_guide_qr_wait", provider=self._provider))
-        self._set_status(self._t("tui.bots_guide_qr_pending", provider=self._provider), "$ctp-yellow")
+        self._set_status(
+            self._t("tui.bots_guide_qr_pending", provider=self._provider), "$ctp-yellow"
+        )
         # first AppImage launch is slow (extract + QQ boot): 5 minutes
         deadline = time.monotonic() + float(self._options.get("login_timeout_seconds", 300))
         last_qr = ""

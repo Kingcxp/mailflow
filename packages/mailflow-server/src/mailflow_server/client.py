@@ -272,25 +272,33 @@ class RemoteClient:
     async def console_messages(self, channel: str = "", **page: int) -> dict[str, Any]:
         from urllib.parse import urlencode
 
-        return await self._request(
+        result: dict[str, Any] = await self._request(
             "GET", "/console/messages?" + urlencode({"channel": channel, **page})
         )
+        return result
 
     async def console_send(self, text: str, **options: Any) -> dict[str, Any]:
-        return await self._request("POST", "/console/messages", {"text": text, **options})
+        result: dict[str, Any] = await self._request(
+            "POST", "/console/messages", {"text": text, **options}
+        )
+        return result
 
     async def console_control(self, operation: str, channel: str = "") -> None:
         await self._request("POST", "/console/control/" + operation, {"channel": channel})
 
     async def console_upload(self, channel: str, file: dict[str, Any]) -> dict[str, Any]:
-        return await self._request("POST", "/console/files", {"channel": channel, "file": file})
+        result: dict[str, Any] = await self._request(
+            "POST", "/console/files", {"channel": channel, "file": file}
+        )
+        return result
 
     async def console_file(self, channel: str, message_id: str, file_id: str) -> dict[str, Any]:
         from urllib.parse import urlencode
 
-        return await self._request(
+        result: dict[str, Any] = await self._request(
             "GET", f"/console/files/{message_id}/{file_id}?" + urlencode({"channel": channel})
         )
+        return result
 
     async def snapshot(self) -> dict[str, Any]:
         data: dict[str, Any] = await self._request("GET", "/snapshot")

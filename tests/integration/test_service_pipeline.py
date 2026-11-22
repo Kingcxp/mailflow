@@ -11,7 +11,7 @@ import asyncio
 import inspect
 import queue
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -256,9 +256,8 @@ async def test_full_service_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             await remote_app.query_one(MailPane).refresh_mail()
             await remote_app.query_one(ActionsPane).refresh_actions()
             assert remote_app.query_one("#mail-table", DataTable).row_count == 1
-            assert str(
-                remote_app.query_one("#mail-table", DataTable).get_cell(record_id, "subject")
-            ) == record.display_title
+            table = cast(DataTable[Any], remote_app.query_one("#mail-table", DataTable))
+            assert str(table.get_cell(record_id, "subject")) == record.display_title
             assert remote_app.query_one("#actions-table", DataTable).row_count == 1
             remote_app.query_one("#mail-table", DataTable).focus()
             await pilot.press("enter")

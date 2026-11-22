@@ -86,7 +86,9 @@ class UserProfileModal(ModalScreen[bool]):
             for field in self.query(TextArea):
                 field.disabled = False
         status = self._t("tui.profile_saved") if stored else self._t("tui.profile_cleared")
-        self.query_one("#profile-status", Static).update(f"[$ctp-green]{escape(status)}[/$ctp-green]")
+        self.query_one("#profile-status", Static).update(
+            f"[$ctp-green]{escape(status)}[/$ctp-green]"
+        )
         self._dismiss_once(True)
 
     def action_save(self) -> None:

@@ -166,7 +166,7 @@ async def test_theme_setting_applies_without_losing_input_or_restarting_connecti
             app.query_one("#value-general-theme", Select).value = name
             await pilot.pause()
             app.query_one("#save-general-theme", Button).press()
-            await until(pilot, lambda: app.theme == resolved)
+            await until(pilot, lambda resolved=resolved: app.theme == resolved)
             await settle(pilot)
             assert app.current_theme.dark == scheme.is_dark
             assert app.query_one("#mail-search", PromptInput) is search
@@ -361,7 +361,7 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
     monkeypatch.setattr(storage, "delete_mail", delete_with_failure)
     async with app.run_test(size=(140, 45)) as pilot:
         await settle(pilot)
-        table = app.query_one("#mail-table", SelectionTable)
+        table: SelectionTable = app.query_one("#mail-table", SelectionTable)
         app.query_one("#mail-urgency-filter", Select).value = "expired"
         await settle(pilot)
         assert set(keys(table)) == {"old-1", "old-2"}
@@ -1006,7 +1006,7 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         await service.storage.save_mail(make_record(f"select-{index}", subject=f"Select {index}"))
     async with app.run_test(size=(120, 36), tooltips=True) as pilot:
         await settle(pilot)
-        table = app.query_one("#mail-table", SelectionTable)
+        table: SelectionTable = app.query_one("#mail-table", SelectionTable)
         await pilot.hover(table, offset=(10, 2))
         await pilot.pause(app.TOOLTIP_DELAY + 0.1)
         assert not app.screen.query_one(Tooltip).visible
@@ -1027,7 +1027,7 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         await pilot.press("shift+up")
         assert table.checked_keys == {keys(table)[0]}
         await pilot.click(table, offset=(25, 3), ctrl=True)
-        clicked = keys(table)[table.cursor_row]
+        clicked: str = keys(table)[table.cursor_row]
         assert clicked != keys(table)[0]
         assert table.checked_keys == {keys(table)[0], clicked}
         await pilot.click(table, offset=(25, 3), ctrl=True)
@@ -1039,12 +1039,12 @@ async def test_multiselect_and_task_edit_in_original_tabs(host: Any) -> None:
         await pilot.press("space", "ctrl+down", "ctrl+down", "f3")
         assert len(table.checked_keys) == 3
         await pilot.click(table, offset=(25, 2))
-        first = keys(table)[table.cursor_row]
+        first: str = keys(table)[table.cursor_row]
         assert table.checked_keys == {first}
         await pilot.click(table, offset=(25, 4), ctrl=True)
         assert len(table.checked_keys) == 2
         await pilot.click(table, offset=(25, 3))
-        middle = keys(table)[table.cursor_row]
+        middle: str = keys(table)[table.cursor_row]
         assert table.checked_keys == {middle} and middle != first
         await pilot.click(table, offset=(25, 4), shift=True)
         assert table.checked_keys == set(keys(table)[1:])

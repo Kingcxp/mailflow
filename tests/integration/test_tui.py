@@ -394,7 +394,7 @@ async def test_smart_query_task_crud_requires_confirmation(
             prompt.query_one("#smart-review-apply", Button).press()
             await until(
                 pilot,
-                lambda: (
+                lambda prompt=prompt: (
                     service.t("errors.connection")
                     in str(prompt.query_one("#smart-review-error", Static).render())
                 ),
@@ -1081,7 +1081,7 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
             app.query_one(TabbedContent).active = "tab-runtime"
             runtime = app.query_one(RuntimePane)
             await runtime.refresh_runtime()
-            plugins = app.query_one("#runtime-plugins-table", DataTable)
+            plugins = cast(DataTable[Any], app.query_one("#runtime-plugins-table", DataTable))
             plugins.move_cursor(row=plugins.get_row_index("mailflow-tui-test"), animate=False)
             preview = app.query_one("#runtime-readme", Markdown)
             await until(
@@ -1317,7 +1317,6 @@ async def test_notifications_pane_lists_all_notifiers_and_toggles(
     """The Notifications tab shows every notifier (not just IM providers),
     toggles the selected one enabled/disabled in place, and edits urgency."""
     from mailflow_tui.notifications import NotificationsPane
-    from mailflow_tui.pickers import ChoicePicker
 
     manager = PluginManager(build_config(tmp_path / "unused.db"))
     manager.register(TUIPlugin())

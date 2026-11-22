@@ -175,7 +175,9 @@ class TrashChoiceScreen(WorkflowScreen):
 
 
 class MailMenu(WorkflowScreen):
-    def __init__(self, service: MailFlowService, *, scope: str = "", count: int | None = None) -> None:
+    def __init__(
+        self, service: MailFlowService, *, scope: str = "", count: int | None = None
+    ) -> None:
         super().__init__(service)
         self.scope, self.count = scope, count
 

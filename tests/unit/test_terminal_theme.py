@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from mailflow_tui.terminal_theme import terminal_background_mode
 
 
@@ -21,11 +20,11 @@ def test_windows_terminal_profile_and_colorfgbg_are_detected(
     )
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(
-        '''{
+        """{
           // Active Windows Terminal profile
           "profiles": {"list": [{"guid": "{profile-1}", "colorScheme": "Paper"},]},
           "schemes": [{"name": "Paper", "background": "#fdf6e3"},],
-        }''',
+        }""",
         encoding="utf-8",
     )
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))

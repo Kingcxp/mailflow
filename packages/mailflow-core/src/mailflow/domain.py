@@ -777,7 +777,7 @@ class CommandResponse(BaseModel):
     ok: bool
     spans: list[StyleSpan] = Field(default_factory=lambda: [])
     text: str = ""  # plain rendering for transports without rich support
-    references: list[dict[str, str]] = Field(default_factory=list)
+    references: list[dict[str, str]] = Field(default_factory=lambda: [])
 
     @classmethod
     def plain(cls, text: str, *, ok: bool = True) -> CommandResponse:

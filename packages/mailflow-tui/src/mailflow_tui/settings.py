@@ -1358,7 +1358,9 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             detail = escape(
                 error_detail(self._service, exc, max_chars=200, extra_secrets=(password,))
             )
-            status.update(f"[$ctp-red]{self._t('tui.account_test_failed', reason=detail)}[/$ctp-red]")
+            status.update(
+                f"[$ctp-red]{self._t('tui.account_test_failed', reason=detail)}[/$ctp-red]"
+            )
             return
         finally:
             cancelled.set()
@@ -1642,7 +1644,7 @@ class OptionCard(Vertical):
             )
 
     def _preview_theme(self, theme: str | None) -> None:
-        preview = getattr(self.app, "preview_color_scheme", None)
+        preview = getattr(cast(Any, self).app, "preview_color_scheme", None)
         if preview is not None:
             preview(theme)
 
@@ -1823,7 +1825,9 @@ class SettingsPane(Vertical):
             try:
                 await cast(Any, self._service).refresh_settings()
             except Exception as exc:
-                self._set_status(f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]")
+                self._set_status(
+                    f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]"
+                )
                 return
         self._sections = self._service.settings_sections()
         listing = self.query_one_optional("#settings-sections", ListView)
@@ -1873,7 +1877,9 @@ class SettingsPane(Vertical):
     async def _render_options(self) -> None:
         matcher = self._current_matcher()
         if matcher.error:
-            self._set_status(f"[$ctp-red]{self._t('tui.invalid_regex')}: {escape(matcher.error)}[/$ctp-red]")
+            self._set_status(
+                f"[$ctp-red]{self._t('tui.invalid_regex')}: {escape(matcher.error)}[/$ctp-red]"
+            )
             return
         self._settings_matcher = matcher
         async with self._render_lock:
@@ -2624,7 +2630,9 @@ class AccountsPane(Vertical):
         if button_id == "account-edit":
             self._open_form(index)
         elif button_id == "account-delete":
-            await self._mutate(self._service.remove_config_entry("accounts", index), "entry_removed")
+            await self._mutate(
+                self._service.remove_config_entry("accounts", index), "entry_removed"
+            )
             self._select_account(None)
         else:
             self.app.push_screen(MailHistoryScreen(self._service, self._selected_account_id()))
@@ -2728,7 +2736,9 @@ class MailHistoryScreen(ModalScreen[None]):
                 )
             yield SelectionTable(t=self._t, id="history-table")
             with Horizontal(id="history-actions"):
-                yield Button(self._t("tui.history_analyze"), id="history-analyze", variant="success")
+                yield Button(
+                    self._t("tui.history_analyze"), id="history-analyze", variant="success"
+                )
                 yield Button(
                     self._t("tui.history_select_all"), id="history-select-all", variant="primary"
                 )
@@ -3019,7 +3029,7 @@ class MailHistoryScreen(ModalScreen[None]):
         processed = 0
         failed: list[str] = []
         cancelled = False
-        refresh = getattr(self.app, "schedule_reload", lambda: None)
+        refresh = getattr(cast(Any, self).app, "schedule_reload", lambda: None)
         try:
             for position, mail in enumerate(chosen, start=1):
                 subject = escape(mail.subject[:36])

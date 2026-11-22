@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 def _preferences_path() -> Path:
@@ -20,7 +21,7 @@ def load_theme_preferences() -> dict[str, Any]:
         data = json.loads(_preferences_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return data if isinstance(data, dict) else {}
+    return cast(dict[str, Any], data) if isinstance(data, dict) else {}
 
 
 def save_theme_preferences(theme: str | None, *, completed: bool = True) -> bool:
@@ -40,8 +41,6 @@ def save_theme_preferences(theme: str | None, *, completed: bool = True) -> bool
         temporary.replace(path)
         return True
     except OSError:
-        try:
+        with suppress(OSError):
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
         return False

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 from mailflow.themes import ColorScheme, builtin_themes
 from rich.style import Style
@@ -37,7 +38,7 @@ def theme_catalog(service: Any) -> dict[str, ColorScheme]:
     schemes = builtin_themes()
     provider = getattr(service, "color_schemes", None)
     if callable(provider):
-        schemes.update(provider())
+        schemes.update(cast(Callable[[], dict[str, ColorScheme]], provider)())
     return schemes
 
 

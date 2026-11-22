@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -21,7 +21,7 @@ from mailflow.i18n import I18n
 @dataclass
 class DeliveryContext:
     kind: str = "notification"
-    references: list[dict[str, str]] = field(default_factory=list)
+    references: list[dict[str, str]] = field(default_factory=lambda: [])
     delivery_id: str = ""
 
 
@@ -35,7 +35,7 @@ def current_delivery() -> DeliveryContext:
 
 
 @contextmanager
-def delivery_scope(context: DeliveryContext) -> Iterator[None]:
+def delivery_scope(context: DeliveryContext) -> Generator[None]:
     token = _delivery_context.set(context)
     try:
         yield

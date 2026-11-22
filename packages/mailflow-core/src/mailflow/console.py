@@ -6,11 +6,11 @@ import asyncio
 import logging
 import re
 from collections import OrderedDict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -43,9 +43,9 @@ class ConsoleMessage(BaseModel):
     markdown: bool = True
     request_id: str = ""
     reply_to: str = ""
-    references: list[dict[str, str]] = Field(default_factory=list)
-    spans: list[StyleSpan] = Field(default_factory=list)
-    files: list[dict[str, Any]] = Field(default_factory=list)
+    references: list[dict[str, str]] = Field(default_factory=lambda: [])
+    spans: list[StyleSpan] = Field(default_factory=lambda: [])
+    files: list[dict[str, Any]] = Field(default_factory=lambda: [])
     owner: str = Field(default="", exclude=True)
 
 
@@ -262,7 +262,7 @@ class ConsoleInbox:
         state = next(c for c in self.channels() if c["id"] == channel)
         if sub in {"subscribe", "unsubscribe"}:
             if sub == "subscribe" and (not state["configured"] or not state["enabled"]):
-                return state["reason"]
+                return str(state["reason"])
             spans = self._muted.setdefault((channel, self.owner()), [])
             if sub == "unsubscribe" and self.subscribed(channel):
                 spans.append((self.revision, None))
@@ -277,7 +277,7 @@ class ConsoleInbox:
             if arg not in {"", "on", "off"}:
                 return self.service.t("chat.hourly_usage")
             if not state["configured"] or not state["enabled"]:
-                return state["reason"]
+                return str(state["reason"])
             index = next(
                 i for i, n in enumerate(self.service.config.notifiers) if n.notifier_id == channel
             )
@@ -451,8 +451,8 @@ class ConsoleInbox:
         def progress(_stage: str, _done: int, _total: int, detail: Any) -> None:
             if self.closed or reply.state != "running":
                 return
-            if isinstance(detail, (tuple, list)) and len(detail) == 2:
-                name, params = detail
+            if isinstance(detail, (tuple, list)) and len(cast(Sequence[object], detail)) == 2:
+                name, params = cast(tuple[str, dict[str, Any]], detail)
                 params = {k: v for k, v in params.items() if k not in {"args", "result"}}
                 self._update(reply, text=self.service.t("tui." + str(name), **params))
                 update = asyncio.create_task(self.changed(channel, owner))
@@ -552,16 +552,15 @@ class ConsoleInbox:
     async def _cancel(self, channel: str) -> None:
         channel = self.channel(channel)
         identity = self.identity(channel)
-        actor = self.service._chat_actor("console", channel, identity.chat_id, identity.sender)
         reader = self._readers.get((channel, self.owner()))
-        if reader is not None and not self.service._chat_running.get(actor):
+        if reader is not None and not self.service.chat_is_running(identity):
             reader.cancel()
             await asyncio.gather(reader, return_exceptions=True)
             self._readers.pop((channel, self.owner()), None)
             reply = self.service.t("chat.cancelled")
         else:
             with permission_scope(identity):
-                reply = await self.service.command_dispatch(
+                response = await self.service.command_dispatch(
                     self.service.command_prefix() + "mailflow cancel",
                     context=identity,
                     provider="console",
@@ -570,6 +569,7 @@ class ConsoleInbox:
                     chat_id=identity.chat_id,
                     chat_type="group",
                 )
+                reply = "\n\n".join(response) if isinstance(response, list) else response or ""
         await self.append(
             ConsoleMessage(
                 channel=channel,
@@ -590,12 +590,8 @@ class ConsoleInbox:
         if (channel, owner) in self._readers:
             raise translated_error(RuntimeError, self.service.t, "console.stop_before_clear")
         identity = self.identity(channel)
-        actor = self.service._chat_actor("console", channel, identity.chat_id, identity.sender)
         with permission_scope(identity):
-            confirmation = self.service._assistant_confirmations.pop(actor, None)
-            if confirmation is not None:
-                await self.service.cancel_smart_plan(confirmation[1].plan_id)
-            self.service._assistant_chats.pop(actor, None)
+            actor = await self.service.clear_chat_session(identity)
             if self.service.commands is not None:
                 self.service.commands.clear_console_selection()
             for draft in (
@@ -642,7 +638,7 @@ class ConsoleInbox:
     async def upload(self, channel: str, file: dict[str, Any]) -> dict[str, Any]:
         channel = self.channel(channel)
         with permission_scope(self.identity(channel)):
-            reference = await self.service.workspace_call("upload", file)
+            reference: dict[str, Any] = await self.service.workspace_call("upload", file)
         await self.append(
             ConsoleMessage(
                 channel=channel,

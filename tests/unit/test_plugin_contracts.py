@@ -78,6 +78,7 @@ def test_theme_plugins_discover_select_and_disable(monkeypatch: pytest.MonkeyPat
     manager.discover()
     registry = manager.build_registry()
     scheme = registry.theme_factory("local-light")()
+    assert scheme == local_theme()
     assert not scheme.is_dark
     assert scheme.palette()["blue"] == "#8839ef"
     assert scheme.palette()["base"] == builtin_themes()["catppuccin-latte"].palette()["base"]

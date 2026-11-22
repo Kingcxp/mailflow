@@ -1277,7 +1277,9 @@ class MailFlowRuntime:
         want_images = option_enabled(options, "notification_images", False)
         want_card = option_enabled(options, "summary_cards", False)
         rich = (
-            isinstance(notifier, RichNotifier) and notifier.capabilities.images and target is not None
+            isinstance(notifier, RichNotifier)
+            and notifier.capabilities.images
+            and target is not None
         )
         card = None
         if (want_images or want_card) and not rich:
@@ -1352,7 +1354,11 @@ class MailFlowRuntime:
                 ):
                     references[(linked_record.record_id, index)] = linked_record, index
         for (record_id, index), (record, _) in references.items():
-            key = receipt + ".image." + hashlib.sha256(f"{record_id}:{index}".encode()).hexdigest()[:20]
+            key = (
+                receipt
+                + ".image."
+                + hashlib.sha256(f"{record_id}:{index}".encode()).hexdigest()[:20]
+            )
             if await self._storage.get_preference(key):
                 continue
             attachment = record.mail.attachments[index]
@@ -1552,7 +1558,9 @@ class MailFlowRuntime:
                     continue
                 channels = [
                     (notifier, config)
-                    for notifier, config in zip(self._notifiers, self._notifier_configs, strict=True)
+                    for notifier, config in zip(
+                        self._notifiers, self._notifier_configs, strict=True
+                    )
                     if config.notifier_id == row.get("channel")
                     and option_enabled(config.options, "hourly_summary", False)
                 ]
@@ -1572,7 +1580,10 @@ class MailFlowRuntime:
                     for record in await self._storage.list_mails()
                     if hour_start <= record.mail.received_at < hour_end
                     and record.ingestion == "live"
-                    and (not window.get("unread_only") or (not record.is_read and not record.archived))
+                    and (
+                        not window.get("unread_only")
+                        or (not record.is_read and not record.archived)
+                    )
                 ]
                 if not mails:
                     await self.deliveries.update(receipt, None)
@@ -2178,8 +2189,15 @@ class MailFlowRuntime:
                     )
                     try:
                         await self._send_content(
-                            notifier, config, target, batch_key, text, send, text_receipts=receipts,
-                            items=[item for _, _, item in group], kind="reminder",
+                            notifier,
+                            config,
+                            target,
+                            batch_key,
+                            text,
+                            send,
+                            text_receipts=receipts,
+                            items=[item for _, _, item in group],
+                            kind="reminder",
                         )
                     except Exception as exc:
                         for receipt, (key, value, item) in zip(receipts, group, strict=True):

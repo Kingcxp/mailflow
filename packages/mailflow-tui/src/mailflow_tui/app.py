@@ -26,7 +26,6 @@ from mailflow.domain import (
     SmartActionResult,
     Urgency,
     looks_binary,
-    to_utc,
 )
 from mailflow.errors import error_text
 from mailflow.mail_body import mail_body_text
@@ -51,7 +50,6 @@ from textual.widgets import (
     DataTable,
     Footer,
     Header,
-    Label,
     Markdown,
     RichLog,
     Select,
@@ -65,6 +63,7 @@ from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.console import ConsolePane
 from mailflow_tui.export import BotExportScreen
 from mailflow_tui.install import InstallScreen
+from mailflow_tui.labels import action_type_label as _action_type_label
 from mailflow_tui.labels import (
     error_detail,
     error_message,
@@ -73,7 +72,6 @@ from mailflow_tui.labels import (
     remote_connection_status,
     urgency_label,
 )
-from mailflow_tui.labels import action_type_label as _action_type_label
 from mailflow_tui.labels import relabel_buttons as _relabel_buttons
 from mailflow_tui.mail_workflows import (
     AttachmentsScreen,
@@ -269,7 +267,9 @@ def _action_detail_text(service: MailFlowService, item: ActionItem) -> RichText:
     detail.append("\n\n")
     detail.append(
         _detail_section(
-            service.t("tui.action_source"), source, style="$ctp-sapphire" if item.mail_id else _DETAIL_MUTED
+            service.t("tui.action_source"),
+            source,
+            style="$ctp-sapphire" if item.mail_id else _DETAIL_MUTED,
         )
     )
     if style := _action_age_style(service, item):
@@ -973,9 +973,7 @@ class ActionModal(ModalScreen[Any]):
         )
         if mail.image_text.strip():
             lines.append("\n\n")
-            lines.append(
-                _detail_section(self._service.t("mail.field_image_text"), mail.image_text)
-            )
+            lines.append(_detail_section(self._service.t("mail.field_image_text"), mail.image_text))
         node.update(lines)
 
     def _open_editor(self) -> None:
@@ -989,7 +987,7 @@ class ActionModal(ModalScreen[Any]):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "action-source-mail" and self._item.mail_id:
-            app = cast(MailFlowApp, self.app)
+            app = cast(MailFlowApp, cast(Any, self).app)
             self.dismiss(None)
             app.call_after_refresh(app.open_mail, self._item.mail_id)
         elif event.button.id == "action-edit":
@@ -1529,9 +1527,7 @@ class MailPane(Vertical):
         reparse = self.query_one_optional("#btn-reparse", Button)
         if reparse is not None and (reparse_idle or not self._reparse_active()):
             reparse.disabled = (
-                self._trash_busy
-                or getattr(self._service, "remote", False)
-                or not count
+                self._trash_busy or getattr(self._service, "remote", False) or not count
             )
             reparse.label = (
                 self._service.t("tui.btn_reparse_selected", count=count)
@@ -1740,7 +1736,9 @@ class MailPane(Vertical):
             self._clear_mail_detail()
             self._set_static_text(
                 "#mail-analysis-status",
-                RichText(self._service.t("mail.not_found", mail_id=selected_id), style="$ctp-yellow"),
+                RichText(
+                    self._service.t("mail.not_found", mail_id=selected_id), style="$ctp-yellow"
+                ),
             )
             return
         same_record = self._detail_record_id == selected_id
@@ -1854,9 +1852,7 @@ class MailPane(Vertical):
                 style="bold $ctp-yellow",
             )
         if existing:
-            reply_line.append(
-                "\n" + service.t("tui.feedback_marker") + ": ", style=_DETAIL_HEADING
-            )
+            reply_line.append("\n" + service.t("tui.feedback_marker") + ": ", style=_DETAIL_HEADING)
             reply_line.append(existing)
         self._set_static_text("#mail-notes", reply_line)
         if detail is not None and not same_record:
@@ -1887,7 +1883,7 @@ class MailPane(Vertical):
         finally:
             self._urgency_suppress = False
 
-    def _set_static(self, selector: str, content: str | RichGroup) -> None:
+    def _set_static(self, selector: str, content: str | RichGroup | RichMarkdown) -> None:
         node = self.query_one_optional(selector, Static)
         if node is None:
             return
@@ -1906,7 +1902,9 @@ class MailPane(Vertical):
         messages: list[str] = []
         if table is not None and table.selection_mode:
             messages.append(self._service.t("tui.selection_mode_active"))
-        self._set_static("#mail-operation-status", _status_content(self._operation_status, messages))
+        self._set_static(
+            "#mail-operation-status", _status_content(self._operation_status, messages)
+        )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         try:
@@ -2064,9 +2062,7 @@ class MailPane(Vertical):
             elif choice == "thread":
                 from mailflow_tui.workspace_screens import ThreadScreen
 
-                chosen = await self._ask_screen(
-                    ThreadScreen(self._service, selected_id)
-                )
+                chosen = await self._ask_screen(ThreadScreen(self._service, selected_id))
                 if chosen:
                     self.select_mail(chosen)
             elif choice == "saved_filters":
@@ -2393,7 +2389,9 @@ class MailPane(Vertical):
         worker = self._reparse_worker
         if worker is not None and not worker.is_finished:
             worker.cancel()
-        self._set_operation_status(f"[$ctp-yellow]{self._service.t('tui.reparse_stopping')}[/$ctp-yellow]")
+        self._set_operation_status(
+            f"[$ctp-yellow]{self._service.t('tui.reparse_stopping')}[/$ctp-yellow]"
+        )
 
     async def _reparse_one(self, targets: list[str] | None = None) -> None:
         """Re-analyze the selected mail, with the same run/cancel controls."""
@@ -2446,7 +2444,9 @@ class MailPane(Vertical):
         try:
             records = await self._service.list_mails()
             if not records:
-                self._set_operation_status(f"[$ctp-yellow]{self._service.t('tui.mail_empty')}[/$ctp-yellow]")
+                self._set_operation_status(
+                    f"[$ctp-yellow]{self._service.t('tui.mail_empty')}[/$ctp-yellow]"
+                )
                 return
             confirmed = await self._confirm(
                 title=self._service.t("tui.reparse_all_title"),
@@ -2629,7 +2629,9 @@ class MailPane(Vertical):
 
     def _report_bulk_failure(self, exc: BaseException) -> None:
         """A bulk action that cannot run says so instead of doing nothing."""
-        self._set_operation_status(f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]")
+        self._set_operation_status(
+            f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]"
+        )
 
     async def _edit_profile(self) -> None:
         """Open the recipient-profile form; the text personalizes analysis."""
@@ -2644,7 +2646,9 @@ class MailPane(Vertical):
             return
         if not saved:
             return
-        self._set_operation_status(f"[$ctp-green]{self._service.t('tui.profile_saved')}[/$ctp-green]")
+        self._set_operation_status(
+            f"[$ctp-green]{self._service.t('tui.profile_saved')}[/$ctp-green]"
+        )
 
     async def _confirm(self, *, title: str, body: str, confirm_label: str) -> bool:
         """Ask before a destructive or expensive bulk action.
@@ -3094,7 +3098,9 @@ class ActionsPane(Vertical):
         if event.input.id == "actions-search":
             event.stop()
             self.run_worker(
-                self._open_smart_action(event.value), group="actions-smart-action", exit_on_error=False
+                self._open_smart_action(event.value),
+                group="actions-smart-action",
+                exit_on_error=False,
             )
 
     def _sync_smart_button(self) -> None:
@@ -3121,7 +3127,7 @@ class ActionsPane(Vertical):
         self._sync_smart_button()
         panel = SmartActionReviewModal(self._service, text, conversation=self._smart_history[-12:])
         try:
-            result = await cast(Any, self.app).push_screen_wait(panel)
+            result = await cast(Any, self).app.push_screen_wait(panel)
             if result is None:
                 self._action_status = escape(panel.cancel_message)
             else:
@@ -3247,7 +3253,7 @@ class ActionsPane(Vertical):
         if button_id == "actions-source-mail":
             item = next((i for i in self._items if i.item_id == self._detail_item_id), None)
             if not self._delete_busy and item is not None and item.mail_id:
-                cast(MailFlowApp, self.app).open_mail(item.mail_id)
+                cast(MailFlowApp, cast(Any, self).app).open_mail(item.mail_id)
             return
         if button_id == "actions-type-filter":
             if self._delete_busy:
@@ -3258,14 +3264,14 @@ class ActionsPane(Vertical):
             else:
                 modal = ActionTypesModal(self._service)
 
-                def closed(selected: set[str] | None) -> None:
+                def type_filter_closed(selected: set[str] | None) -> None:
                     if selected is not None:
                         self._type_filters = selected
                     self.run_worker(
                         self.refresh_actions(), group="actions-refresh", exit_on_error=False
                     )
 
-                cast(Any, self.app).push_screen(modal, closed)
+                cast(Any, self).app.push_screen(modal, type_filter_closed)
             return
         if button_id == "actions-more":
             self.run_worker(
@@ -3384,7 +3390,7 @@ class ActionsPane(Vertical):
             return True
         preview = "\n".join("• " + item.summary for item in self._items if item.item_id in targets)
         return bool(
-            await cast(Any, self.app).push_screen_wait(
+            await cast(Any, self).app.push_screen_wait(
                 ConfirmModal(
                     self._service,
                     title=self._service.t(
@@ -3604,7 +3610,7 @@ class RuntimePane(Vertical):
         self._columns_done = True
 
     def _plugin_entry(self, plugin_id: str) -> MarketPlugin | None:
-        app = cast(MailFlowApp, self.app)
+        app = cast(MailFlowApp, cast(Any, self).app)
         cached = app.plugin_entry(plugin_id)
         if cached is not None:
             plugin = self._plugins.get(plugin_id)
@@ -4142,7 +4148,7 @@ class LogsPane(Vertical):
 
     async def on_mount(self) -> None:
         self.run_worker(
-            cast(Any, self._render_logs), exclusive=True, group="logs-render", exit_on_error=False
+            cast(Any, self.render_logs), exclusive=True, group="logs-render", exit_on_error=False
         )
 
     def relabel(self) -> None:
@@ -4268,7 +4274,7 @@ class LogsPane(Vertical):
             pending, self._pending_log_lines = self._pending_log_lines, None
             self._append_new_lines(pending or [], preserve_follow=True)
 
-    async def _render_logs(self, generation: int | None = None) -> None:
+    async def render_logs(self, generation: int | None = None) -> None:
         async with self._log_render_lock:
             await self._rebuild_logs(generation)
 
@@ -4373,7 +4379,7 @@ class LogsPane(Vertical):
             return
         log_view = self.query_one_optional("#log-view", RichLog)
         if log_view is None:
-            return  # detached: on remount, _render_logs rebuilds cleanly
+            return  # detached: on remount, render_logs rebuilds cleanly
         if not preserve_follow and log_view.lines:
             self._follow_logs = log_view.is_vertical_scroll_end
         log_view.auto_scroll = self._follow_logs
@@ -4396,7 +4402,7 @@ class LogsPane(Vertical):
                     f"[$ctp-red]{self._service.t('tui.invalid_regex')}: {escape(self._service.t('errors.invalid_value'))}[/$ctp-red]"
                 )
             self.run_worker(
-                cast(Any, self._render_logs),
+                cast(Any, self.render_logs),
                 exclusive=True,
                 group="logs-render",
                 exit_on_error=False,
@@ -4408,7 +4414,7 @@ class LogsPane(Vertical):
             if generation == self._log_filter_generation:
 
                 async def _render() -> None:
-                    await self._render_logs(generation)
+                    await self.render_logs(generation)
 
                 self.run_worker(
                     cast(Any, _render),
@@ -4440,7 +4446,7 @@ class LogsPane(Vertical):
         generation = self._log_filter_generation
 
         async def _render() -> None:
-            await self._render_logs(generation)
+            await self.render_logs(generation)
 
         self.run_worker(
             cast(Any, _render),
@@ -4677,8 +4683,7 @@ class MarketDetailScreen(ModalScreen[Any]):
             return
         note = "plugin.applies_now" if plugin.categories == ["theme"] else "plugin.restart_note"
         self._set_status(
-            self._service.t(message_key, plugin_id=plugin.id)
-            + f" ({self._service.t(note)})"
+            self._service.t(message_key, plugin_id=plugin.id) + f" ({self._service.t(note)})"
         )
         await asyncio.sleep(0.4)
         self.dismiss(button_id)
@@ -4754,7 +4759,9 @@ class MarketPane(Vertical):
                 variant="success",
                 disabled=True,
             )
-            yield Button(self._service.t("tui.notifications_toggle"), id="market-toggle", disabled=True)
+            yield Button(
+                self._service.t("tui.notifications_toggle"), id="market-toggle", disabled=True
+            )
             yield Button(self._service.t("tui.market_tools"), id="market-tools")
         yield Static("", id="market-status")
 
@@ -4955,9 +4962,7 @@ class MarketPane(Vertical):
         await self._service.market_cache_save(self._entries)
         if failures:
             detail = "; ".join(f"{repo.name}: {reason}" for repo, reason in failures)
-            self._market_stale_status = (
-                f"[$ctp-yellow]{self._service.t('tui.market_stale')}: {escape(detail)}[/$ctp-yellow]"
-            )
+            self._market_stale_status = f"[$ctp-yellow]{self._service.t('tui.market_stale')}: {escape(detail)}[/$ctp-yellow]"
         else:
             self._market_stale_status = ""
         await self._render_entries()
@@ -5086,7 +5091,9 @@ class MarketPane(Vertical):
         name = plugin_text(self._service, plugin, "name") or plugin.id
         summary = RichText(name, style="bold $ctp-mauve")
         summary.append(f"  v{plugin.version}", style="$ctp-subtext0")
-        summary.append("  " + self._market_status_of(plugin), style=self._market_status_style(plugin))
+        summary.append(
+            "  " + self._market_status_of(plugin), style=self._market_status_style(plugin)
+        )
         self.query_one("#market-selection", Static).update(summary)
         readme = plugin_text(self._service, plugin, "readme")
         if readme.startswith("# "):
@@ -5200,7 +5207,12 @@ class MarketPane(Vertical):
             if action not in {value for _, value in choices} or self._plugin_busy:
                 return
             if action == "market-uninstall" and plugin is not None:
-                self.app.push_screen(
+
+                def uninstall_confirmed(confirmed: bool, selected: MarketPlugin = plugin) -> None:
+                    if confirmed:
+                        self._start_plugin_action("market-uninstall", selected)
+
+                cast(Any, self).app.push_screen(
                     ConfirmModal(
                         self._service,
                         title=self._service.t("tui.btn_uninstall"),
@@ -5209,14 +5221,12 @@ class MarketPane(Vertical):
                         variant="error",
                         focus_confirm=False,
                     ),
-                    callback=lambda confirmed: (
-                        self._start_plugin_action("market-uninstall", plugin) if confirmed else None
-                    ),
+                    callback=uninstall_confirmed,
                 )
             else:
                 self._open_tool(action)
 
-        self.app.push_screen(
+        cast(Any, self).app.push_screen(
             ChoicePicker(self._service, choices, title=self._service.t("tui.market_tools")),
             chosen,
         )
@@ -5293,8 +5303,7 @@ class MarketPane(Vertical):
         await self._render_entries()
         note = "plugin.applies_now" if plugin.categories == ["theme"] else "plugin.restart_note"
         status_node.update(
-            self._service.t(message_key, plugin_id=plugin.id)
-            + f" ({self._service.t(note)})"
+            self._service.t(message_key, plugin_id=plugin.id) + f" ({self._service.t(note)})"
         )
 
 
@@ -5420,11 +5429,11 @@ class MailFlowApp(App[None]):
         # Textual restyles widgets when the theme changes. Only render caches
         # that are explicitly theme-aware need to be invalidated here.
         for screen in self.screen_stack:
-            for table in screen.query(DataTable):
+            for table in screen.query(cast(type[DataTable[Any]], DataTable)):
                 table.notify_style_update()
         for pane in self.query(LogsPane):
             pane.run_worker(
-                cast(Any, pane._render_logs),
+                cast(Any, pane.render_logs),
                 exclusive=True,
                 group="logs-render",
                 exit_on_error=False,
@@ -5820,8 +5829,8 @@ class MailFlowApp(App[None]):
         # panes that survive remounting still need their statics retranslated
         for pane in self.query(LogsPane):
             pane.relabel()
-        for pane in self.query(ConsolePane):
-            pane.relabel()
+        for console in self.query(ConsolePane):
+            console.relabel()
         for screen in self.screen_stack:
             if isinstance(screen, (MailHistoryScreen, MarketDetailScreen)):
                 await screen.relabel()
@@ -5921,8 +5930,8 @@ class MailFlowApp(App[None]):
             for pane in self.query(NotificationsPane):
                 pane.check_if_visible()
         elif active == "tab-console":
-            for pane in self.query(ConsolePane):
-                pane.activate()
+            for console in self.query(ConsolePane):
+                console.activate()
 
     def _drain_logs(self) -> None:
         log_query = self.query(LogsPane)

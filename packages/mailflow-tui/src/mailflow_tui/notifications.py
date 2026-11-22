@@ -202,11 +202,7 @@ class NotificationsPane(Vertical):
         if identity is None:
             return None
         return next(
-            (
-                i
-                for i, n in enumerate(self._service.config.notifiers)
-                if n.notifier_id == identity
-            ),
+            (i for i, n in enumerate(self._service.config.notifiers) if n.notifier_id == identity),
             None,
         )
 
@@ -488,9 +484,7 @@ class NotificationsPane(Vertical):
             exit_on_error=False,
         )
 
-    async def _run_action(
-        self, action: str, notifier_id: str | None, urgency: str | None
-    ) -> None:
+    async def _run_action(self, action: str, notifier_id: str | None, urgency: str | None) -> None:
         try:
             await self._button_action(action, notifier_id, urgency)
         except Exception as exc:
@@ -797,7 +791,9 @@ class NotificationsPane(Vertical):
                     instance=entry.notifier_id,
                     error=escape(error_detail(self._service, exc)),
                 )
-                self.query_one("#notifications-status", Static).update(f"[$ctp-red]{message}[/$ctp-red]")
+                self.query_one("#notifications-status", Static).update(
+                    f"[$ctp-red]{message}[/$ctp-red]"
+                )
                 return
         warning = ""
         try:

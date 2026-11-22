@@ -521,8 +521,8 @@ class CommandRouter:
         raw = await self.service.storage.get_preference(self._selection_key(kind))
         if raw is None:
             return None
-        ids: list[str] = json.loads(raw)
-        return ids[index] if 0 <= index < len(ids) else ""
+        stored_ids: list[str] = json.loads(raw)
+        return stored_ids[index] if 0 <= index < len(stored_ids) else ""
 
     async def _mail_list(self, *, page: int = 1, query: str = "") -> CommandResponse:
         records = await self.service.list_mails()

@@ -431,7 +431,7 @@ class {Category}Enhancer:
 
 '''.replace("{Category}", "LLM")
 
-_THEME_BODY = '''from mailflow.themes import ColorScheme
+_THEME_BODY = """from mailflow.themes import ColorScheme
 
 
 @PLUGIN.theme("{component_id}")
@@ -441,7 +441,7 @@ def color_scheme():
         base="macchiato",
         colors={"blue": "#b7bdf8"},
     )
-'''
+"""
 
 _GATEWAY_PROVISIONER_BODY = '''@PLUGIN.gateway_provisioner("{component_id}")
 class {Category}Provisioner:
