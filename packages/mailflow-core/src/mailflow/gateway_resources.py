@@ -186,6 +186,7 @@ async def run_command(
     timeout_seconds: float,
     cwd: str | None = None,
     env: dict[str, str] | None = None,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     def terminate(process: subprocess.Popen[Any]) -> None:
         terminate_process(process, tree=True)
@@ -198,6 +199,7 @@ async def run_command(
             command,
             cwd=cwd,
             env=env,
+            stdin=subprocess.PIPE if input_text is not None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=creationflags,
@@ -207,7 +209,9 @@ async def run_command(
     )
     try:
         stdout, stderr = await bounded(
-            asyncio.to_thread(process.communicate),
+            asyncio.to_thread(process.communicate, input_text.encode("utf-8"))
+            if input_text is not None
+            else asyncio.to_thread(process.communicate),
             timeout_seconds=timeout_seconds,
             label=f"gateway command {command[0]}",
         )

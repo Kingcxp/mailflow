@@ -1013,7 +1013,7 @@ class NapCatProvisioner(GatewayFiles):
         if not options.get("_reinstall") and await asyncio.to_thread(_installed_marker, target):
             image = docker_image(target) if not _IS_WINDOWS else ""
             if image:
-                await require_docker()
+                await require_docker(options)
             if not image or await image_available(image):
                 logger.info("napcat %s already installed at %s", instance_id, target)
                 return
@@ -1028,7 +1028,7 @@ class NapCatProvisioner(GatewayFiles):
     async def _install_linux_archive(
         self, instance_id: str, options: dict[str, Any], target: Path
     ) -> None:
-        await require_docker()
+        await require_docker(options)
         url, digest = linux_asset()
         archive = target / "napcat-docker.tar"
         progress = options.get("_progress")

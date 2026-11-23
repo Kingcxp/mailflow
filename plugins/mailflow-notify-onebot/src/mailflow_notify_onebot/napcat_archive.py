@@ -9,12 +9,15 @@ import logging
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from mailflow.gateway import GatewaySetupError
 from mailflow.gateway_resources import run_command, terminate_process
@@ -60,17 +63,163 @@ def docker_image(target: Path) -> str:
     return image if re.fullmatch(r"sha256:[0-9a-f]{64}", image) else ""
 
 
-async def require_docker() -> None:
+def _linux_user() -> tuple[int, str]:
+    if sys.platform == "win32":
+        raise GatewaySetupError("gateway.napcat_docker_unsupported")
+    import pwd
+
+    uid = os.getuid()
+    return uid, pwd.getpwuid(uid).pw_name
+
+
+def _pending_group_access() -> bool:
+    """An approved group change can be used without restarting MailFlow."""
+    if sys.platform == "win32":
+        return False
+    import grp
+
+    try:
+        uid, username = _linux_user()
+        group = grp.getgrnam("docker")
+    except (KeyError, OSError):
+        return False
+    return (
+        uid != 0 and group.gr_gid not in {*os.getgroups(), os.getgid()} and username in group.gr_mem
+    )
+
+
+def docker_command(command: list[str]) -> list[str]:
+    if _pending_group_access() and (sg := shutil.which("sg")):
+        return [sg, "docker", "-c", shlex.join(command)]
+    return command
+
+
+async def _docker_ready() -> bool:
     if shutil.which("docker") is None:
-        raise GatewaySetupError("gateway.napcat_docker_required")
-    result = await run_command(["docker", "info", "--format", "{{.OSType}}"], timeout_seconds=20.0)
+        return False
+    result = await run_command(
+        docker_command(["docker", "info", "--format", "{{.OSType}}"]), timeout_seconds=20.0
+    )
     if result.returncode or result.stdout.strip() != "linux":
-        logger.error("NapCat Docker unavailable: %s", result.stderr.strip())
+        logger.debug("NapCat Docker unavailable: %s", result.stderr.strip())
+        return False
+    return True
+
+
+async def require_docker(options: dict[str, Any] | None = None) -> None:
+    if await _docker_ready():
+        return
+    if options is None:
         raise GatewaySetupError("gateway.napcat_docker_required")
+    confirm = cast(Callable[[], Awaitable[bool]] | None, options.get("_confirm_docker_setup"))
+    if not callable(confirm) and not options.get("install_dependencies", False):
+        raise GatewaySetupError("gateway.napcat_docker_required")
+    try:
+        distribution = platform.freedesktop_os_release()
+    except OSError as exc:
+        raise GatewaySetupError("gateway.napcat_docker_unsupported") from exc
+    families = {distribution.get("ID", ""), *distribution.get("ID_LIKE", "").split()}
+    if (
+        not families.intersection({"debian", "ubuntu"})
+        or shutil.which("apt-get") is None
+        or shutil.which("systemctl") is None
+    ):
+        raise GatewaySetupError("gateway.napcat_docker_unsupported")
+    if os.environ.get("DOCKER_HOST", "") not in {
+        "",
+        "unix:///var/run/docker.sock",
+    } or os.environ.get("DOCKER_CONTEXT", "") not in {"", "default"}:
+        raise GatewaySetupError("gateway.napcat_docker_context")
+    if shutil.which("docker") is not None:
+        context = await run_command(["docker", "context", "show"], timeout_seconds=10.0)
+        if context.returncode or context.stdout.strip() != "default":
+            raise GatewaySetupError("gateway.napcat_docker_context")
+    if callable(confirm) and not await confirm():
+        raise asyncio.CancelledError
+    await _prepare_docker(options)
+    if not await _docker_ready():
+        raise GatewaySetupError("gateway.napcat_docker_access")
+
+
+async def _prepare_docker(options: dict[str, Any]) -> None:
+    uid, username = _linux_user()
+    password: str | None = None
+    progress = options.get("_progress")
+    try:
+        if uid != 0:
+            if shutil.which("sudo") is None:
+                raise GatewaySetupError("gateway.napcat_docker_admin")
+            cached = await run_command(["sudo", "-n", "true"], timeout_seconds=10.0)
+            if cached.returncode:
+                ask = options.get("_ask_sudo_password")
+                if not callable(ask):
+                    raise GatewaySetupError("gateway.napcat_docker_admin")
+                password = str(await asyncio.to_thread(ask))
+
+        async def step(command: list[str], key: str, percent: float, limit: float) -> None:
+            if progress is not None:
+                progress.update(percent, f"gateway.napcat_docker_{key}", "installing")
+            if uid != 0:
+                command = [
+                    "sudo",
+                    *(["-k", "-S", "-p", ""] if password is not None else ["-n"]),
+                    *command,
+                ]
+            result = await run_command(
+                command,
+                timeout_seconds=limit,
+                input_text=password + "\n" if password is not None else None,
+            )
+            if result.returncode:
+                detail = (result.stderr or result.stdout).strip()
+                if password:
+                    detail = detail.replace(password, "***")
+                logger.error("NapCat Docker %s failed: %s", key, detail)
+                if "incorrect password" in detail.lower() or "not in the sudoers" in detail.lower():
+                    raise GatewaySetupError("gateway.napcat_docker_admin")
+                raise GatewaySetupError(f"gateway.napcat_docker_{key}_failed")
+
+        service = await run_command(
+            ["systemctl", "show", "--property=LoadState", "--value", "docker"],
+            timeout_seconds=10.0,
+        )
+        if shutil.which("docker") is None or service.stdout.strip() == "not-found":
+            apt = [
+                "env",
+                "DEBIAN_FRONTEND=noninteractive",
+                "NEEDRESTART_MODE=l",
+                "apt-get",
+                "-o",
+                "DPkg::Lock::Timeout=60",
+            ]
+            await step([*apt, "update"], "installing", 2.0, 300.0)
+            await step(
+                [*apt, "install", "-y", "--no-remove", "docker.io"],
+                "installing",
+                5.0,
+                900.0,
+            )
+            # Debian 13 splits the client into a recommended package; minimal
+            # systems may have disabled installation of recommendations.
+            if shutil.which("docker") is None:
+                await step(
+                    [*apt, "install", "-y", "--no-remove", "docker-cli"],
+                    "installing",
+                    6.0,
+                    300.0,
+                )
+        # Starting an active service is a no-op; do not restart other containers.
+        await step(["systemctl", "enable", "--now", "docker"], "starting", 8.0, 90.0)
+        if uid != 0:
+            await step(["usermod", "-aG", "docker", username], "permissions", 9.0, 15.0)
+    finally:
+        password = None
 
 
 async def image_available(image: str) -> bool:
-    result = await run_command(["docker", "image", "inspect", image], timeout_seconds=20.0)
+    result = await run_command(
+        docker_command(["docker", "image", "inspect", image]), timeout_seconds=20.0
+    )
     return result.returncode == 0
 
 
@@ -90,7 +239,9 @@ def _archive_image(archive: Path) -> str:
 
 async def load_image(archive: Path) -> str:
     image = await asyncio.to_thread(_archive_image, archive)
-    result = await run_command(["docker", "load", "--input", str(archive)], timeout_seconds=300.0)
+    result = await run_command(
+        docker_command(["docker", "load", "--input", str(archive)]), timeout_seconds=300.0
+    )
     if result.returncode or not await image_available(image):
         logger.error("NapCat image import failed: %s", result.stderr.strip())
         raise GatewaySetupError("gateway.napcat_docker_load_failed")
@@ -138,7 +289,7 @@ class DockerLaunch:
             container_env["ACCOUNT"] = uin
         for key, value in container_env.items():
             command += ["--env", f"{key}={value}"]
-        return [*command, image]
+        return docker_command([*command, image])
 
     def terminate(self, process: subprocess.Popen[Any] | None) -> None:
         try:
@@ -146,14 +297,16 @@ class DockerLaunch:
                 terminate_process(process, tree=True)
         finally:
             result = subprocess.run(
-                [
-                    "docker",
-                    "ps",
-                    "--all",
-                    "--quiet",
-                    "--filter",
-                    f"label={_OWNER_LABEL}={self.owner}",
-                ],
+                docker_command(
+                    [
+                        "docker",
+                        "ps",
+                        "--all",
+                        "--quiet",
+                        "--filter",
+                        f"label={_OWNER_LABEL}={self.owner}",
+                    ]
+                ),
                 capture_output=True,
                 text=True,
                 timeout=2,
@@ -164,7 +317,7 @@ class DockerLaunch:
             containers = result.stdout.split()
             if containers:
                 removed = subprocess.run(
-                    ["docker", "rm", "--force", *containers],
+                    docker_command(["docker", "rm", "--force", *containers]),
                     capture_output=True,
                     text=True,
                     timeout=3,

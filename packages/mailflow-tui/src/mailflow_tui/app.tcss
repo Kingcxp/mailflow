@@ -1550,17 +1550,6 @@ MailHistoryScreen {
     margin-bottom: 1;
 }
 
-#guide-actions {
-    align: center middle;
-    height: 3;
-    margin: 0;
-}
-
-#guide-actions Button {
-    height: 3;
-    min-width: 12;
-}
-
 /* Bulk-action confirmation and the recipient profile form: the same centered
    bordered chrome as every other standalone dialog. */
 ConfirmModal,

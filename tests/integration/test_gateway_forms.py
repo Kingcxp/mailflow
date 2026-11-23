@@ -12,6 +12,7 @@ import httpx
 import pytest
 from mailflow.i18n import I18n
 from mailflow_tui.notifications import NotificationsPane
+from rich.cells import cell_len
 from textual.widgets import Button, Static
 
 from mailflow_test_support.tui import ThemedApp as App
@@ -103,6 +104,10 @@ async def test_existing_gateway_menu_reuses_or_reinstalls_the_same_instance(
     pane = NotificationsPane(service)
 
     class Host(App[None]):
+        CSS_PATH = (
+            Path(__file__).resolve().parents[2] / "packages/mailflow-tui/src/mailflow_tui/app.tcss"
+        )
+
         def compose(self) -> ComposeResult:
             yield pane
 
@@ -134,6 +139,32 @@ async def test_existing_gateway_menu_reuses_or_reinstalls_the_same_instance(
             assert installed == (["existing-qq"] if reinstall else [])
             instance = service.gateways.instance("napcat", "existing-qq")
             assert instance is not None and "_reinstall" not in instance.extra["options"]
+            assert "_confirm_docker_setup" not in instance.extra["options"]
+            for width, height in ((120, 40), (80, 24), (60, 24)):
+                await pilot.resize_terminal(width, height)
+                buttons = list(guide.query_one("#guide-actions").query(Button))
+                await until(
+                    pilot,
+                    lambda buttons=buttons: all(
+                        guide.region.contains_region(button.region)
+                        and button.region.width >= cell_len(str(button.label)) + 2
+                        for button in buttons
+                    ),
+                )
+                assert all(button.region.height == 1 for button in buttons)
+                if width != 80:
+                    assert len({button.region.y for button in buttons}) == (
+                        1 if width == 120 else 2
+                    )
+                assert all(guide.region.contains_region(button.region) for button in buttons), (
+                    width,
+                    guide.region,
+                    [(button.id, button.region) for button in buttons],
+                )
+                assert all(
+                    button.region.width >= cell_len(str(button.label)) + 2 for button in buttons
+                ), (width, [(str(button.label), button.region) for button in buttons])
+            await pilot.resize_terminal(120, 40)
             guide.query_one("#guide-done", Button).press()
             await until(
                 pilot,
@@ -147,6 +178,111 @@ async def test_existing_gateway_menu_reuses_or_reinstalls_the_same_instance(
             ]
     finally:
         await service.gateways.stop()
+
+
+async def test_docker_setup_confirmation_password_and_qr_can_be_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mailflow_tui import gateway_guide
+    from mailflow_tui.confirm import ConfirmModal
+    from mailflow_tui.widgets import Input
+
+    def fake_qr(_: str) -> str:
+        return "\n".join(["██  ██"] * 20)
+
+    monkeypatch.setattr(gateway_guide, "_ascii_qr", fake_qr)
+
+    async def check(decision: str) -> None:
+        approve = decision != "decline"
+
+        class GuideService:
+            def __init__(self) -> None:
+                self.t = I18n("zh-CN").t
+                self.gateways = self
+                self.started = False
+                self.shutdowns = 0
+
+            async def gateway_detect(self, provider: str) -> str:
+                return "gateway.napcat_archive"
+
+            async def gateway_provision(
+                self, provider: str, instance_id: str, options: dict[str, Any]
+            ) -> Any:
+                if not await options["_confirm_docker_setup"]():
+                    raise asyncio.CancelledError
+                password = await asyncio.to_thread(options["_ask_sudo_password"])
+                assert password == "private-password" and password not in str(options)
+                self.started = True
+                return SimpleNamespace(endpoint="http://fake-endpoint")
+
+            def progress(self, provider: str, instance_id: str) -> None:
+                return None
+
+            async def gateway_qr(self, provider: str, instance_id: str) -> str:
+                return "fake-qr-data"
+
+            async def gateway_shutdown(self, provider: str, instance_id: str) -> None:
+                self.shutdowns += 1
+
+        service = GuideService()
+        guide = gateway_guide.GatewayGuideModal(cast(Any, service), "napcat", "qq", {})
+        results: list[dict[str, Any] | None] = []
+
+        class GuideApp(App[None]):
+            CSS_PATH = (
+                Path(__file__).resolve().parents[2]
+                / "packages/mailflow-tui/src/mailflow_tui/app.tcss"
+            )
+
+            def on_mount(self) -> None:
+                self.push_screen(guide, results.append)
+
+        app = GuideApp()
+        async with app.run_test(size=(100, 36)) as pilot:
+            await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
+            await pilot.pause()
+            assert await pilot.click("#confirm-run" if approve else "#confirm-cancel")
+            if approve:
+                await until(pilot, lambda: guide.query_one("#sudo-prompt-input", Input).has_focus)
+                field = guide.query_one("#sudo-prompt-input", Input)
+                assert field.password
+                await until(
+                    pilot,
+                    lambda: guide.region.contains_region(
+                        guide.query_one("#guide-cancel", Button).region
+                    ),
+                )
+                if decision == "cancel-password":
+                    assert await pilot.click("#guide-cancel")
+                    await until(pilot, lambda: results == [None])
+                    assert not service.started and service.shutdowns >= 1
+                    return
+                field.value = "private-password"
+                await pilot.click("#sudo-prompt-ok")
+                await until(pilot, lambda: not guide.query_one("#guide-view-qr", Button).disabled)
+                assert field.value == "" and service.started
+                await pilot.resize_terminal(60, 24)
+                await until(
+                    pilot,
+                    lambda: all(
+                        guide.region.contains_region(button.region)
+                        for button in guide.query_one("#guide-actions").query(Button)
+                    ),
+                )
+                await pilot.click("#guide-view-qr")
+                await until(pilot, lambda: isinstance(app.screen, gateway_guide.QRScreen))
+                await pilot.click("#qr-close")
+                await until(pilot, lambda: app.screen is guide)
+                await pilot.pause()
+                assert await pilot.click("#guide-cancel"), [
+                    (button.id, button.region)
+                    for button in guide.query_one("#guide-actions").query(Button)
+                ]
+            await until(pilot, lambda: results == [None])
+            assert service.started == approve and service.shutdowns >= 1
+
+    for decision in ("decline", "cancel-password", "approve"):
+        await check(decision)
 
 
 @pytest.mark.parametrize("failure", ["qr-timeout", "unreachable-endpoint"])

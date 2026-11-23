@@ -17,8 +17,9 @@ from datetime import datetime
 from typing import Any, ClassVar, cast
 
 from mailflow.service import MailFlowService
+from rich.cells import cell_len
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.markup import escape
@@ -30,6 +31,7 @@ from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
     Static,
 )
 
+from mailflow_tui.confirm import ConfirmModal
 from mailflow_tui.labels import error_detail, redact_operation_logs, secret_values
 from mailflow_tui.mail_workflows import WorkflowScreen
 from mailflow_tui.widgets import Input
@@ -87,15 +89,27 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         height: 1fr;
         min-height: 0;
     }
+    #guide-content {
+        height: 1fr;
+        min-height: 0;
+    }
     #guide-status {
         height: 1;
         padding: 0 1;
     }
     #guide-actions {
-        height: auto;
-        padding: 0 1;
-        align: center middle;
-        grid-gutter: 2 2;
+        layout: grid;
+        grid-size: 4;
+        grid-columns: 1fr;
+        grid-rows: 1;
+        grid-gutter: 0 1;
+        height: 1;
+        padding: 0;
+    }
+    #guide-actions.compact {
+        grid-size: 2;
+        grid-gutter: 1 1;
+        height: 3;
     }
     #guide-progress-row {
         display: none;
@@ -136,6 +150,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         content-align: center middle;
         text-style: bold;
     }
+    #sudo-prompt-row {
+        height: 3;
+    }
     #sudo-prompt-input {
         width: 1fr;
         height: 3;
@@ -144,10 +161,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         height: 3;
         margin-left: 1;
     }
-    #guide-done, #guide-logged-in, #guide-cancel {
+    #guide-actions Button {
+        width: 1fr;
+        min-width: 0;
         height: 1;
         min-height: 1;
-        padding: 0 2;
+        padding: 0 1;
         margin: 0;
         border: none;
     }
@@ -196,13 +215,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._t("tui.bots_guide_title", provider=self._provider),
                 id="guide-title",
             )
-            # QR panel above the log: the QR (up to 33 rows) must stay
-            # visible without scrolling the log pane
-            yield Static("", id="guide-qr")
-            with Vertical(id="guide-log-wrap"):
-                yield RichLog(
-                    id="guide-log", wrap=True, highlight=True, markup=True, max_lines=5000
-                )
+            # Keep actions reachable even when a QR is taller than the terminal.
+            with ScrollableContainer(id="guide-content"):
+                yield Static("", id="guide-qr")
+                with Vertical(id="guide-log-wrap"):
+                    yield RichLog(
+                        id="guide-log", wrap=True, highlight=True, markup=True, max_lines=5000
+                    )
             # live install progress: real bar + phase label, shown while
             # the provisioner works
             with Horizontal(id="guide-progress-row"):
@@ -242,12 +261,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 yield Button(self._t("interface.login_qr"), id="guide-view-qr", disabled=True)
 
     async def on_mount(self) -> None:
-        # pin the chrome sizes in code: Textual's Button variant CSS can
-        # override height declarations, so set them directly here
-        for button_id in ("guide-done", "guide-logged-in", "guide-cancel"):
-            button = self.query_one(f"#{button_id}", Button)
-            button.styles.height = 1  # pyright: ignore[reportUnknownMemberType]
-            button.styles.min_height = 1  # pyright: ignore[reportUnknownMemberType]
+        self.call_after_refresh(self._layout_actions)
         title = self.query_one("#guide-title", Static)
         title.styles.margin = (0, 0, 0, 0)  # pyright: ignore[reportUnknownMemberType]
         self._log(
@@ -257,6 +271,15 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._guide_worker = self.run_worker(
             self._run_guide(), exclusive=True, group="gateway-guide", exit_on_error=False
         )
+
+    def on_resize(self, _: events.Resize) -> None:
+        self.call_after_refresh(self._layout_actions)
+
+    def _layout_actions(self) -> None:
+        actions = self.query_one_optional("#guide-actions", Horizontal)
+        if actions is not None:
+            button_width = max(cell_len(str(button.label)) + 2 for button in actions.query(Button))
+            actions.set_class(actions.content_size.width < 4 * button_width + 3, "compact")
 
     async def on_unmount(self) -> None:
         """Never leave QR polling alive after the modal closes."""
@@ -397,6 +420,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             if not self._cancelling:
                 with contextlib.suppress(Exception):
                     await service.gateway_shutdown(provider, self._instance_id)
+                if self.is_current:
+                    self.dismiss(None)
             raise
         except Exception as exc:
             self._set_phase("cleanup")
@@ -448,6 +473,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             return future.result()
 
         install_options["_ask_sudo_password"] = _ask_sudo_password
+        install_options["_confirm_docker_setup"] = self._confirm_docker_setup
         if self._reinstall:
             install_options["_reinstall"] = True
 
@@ -473,6 +499,21 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
 
             await cancel_tasks([task])
             raise
+
+    async def _confirm_docker_setup(self) -> bool:
+        app = cast(Any, self).app
+        return bool(
+            await app.push_screen_wait(
+                ConfirmModal(
+                    self._service,
+                    title=self._t("tui.docker_setup_title"),
+                    body=self._t("tui.docker_setup_body"),
+                    confirm_label=self._t("tui.docker_setup_continue"),
+                    variant="primary",
+                    focus_confirm=False,
+                )
+            )
+        )
 
     # -- sudo password prompt -----------------------------------------------
 

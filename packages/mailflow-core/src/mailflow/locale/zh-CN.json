@@ -7,7 +7,7 @@
       "napcat_retired": "NapCat 已停止维护，原官方下载不可用。自动部署改用经过校验的 XingYunStar/NapCatQQ v4.18.42 归档；已有安装和 OneBot HTTP 服务继续可用。",
       "napcat_missing": "此实例在 {directory} 中的 NapCat 程序已缺失。重新部署即可自动下载归档，也可连接已有 OneBot HTTP 服务；已保存的登录数据会保留。",
       "napcat_package_hint": "可选：自行指定 Windows Shell ZIP 地址。留空使用已核验的 XingYunStar/NapCatQQ v4.18.42 归档；已有安装直接复用。",
-      "napcat_appimage_hint": "可选：自行指定 Linux AppImage 地址。留空使用已核验的 v4.18.42 Docker 归档，需要 Docker Engine；已有 AppImage 直接复用。",
+      "napcat_appimage_hint": "可选：自行指定 Linux AppImage 地址。留空使用已核验的 v4.18.42 Docker 归档，Debian、Ubuntu 可在部署时自动安装并启动 Docker；已有 AppImage 直接复用。",
       "node_required": "请从 https://nodejs.org/en/download 安装 Node.js {version} 或更新版本，确保 node 已加入 PATH，然后重试。",
       "npm_required": "请随 Node.js 安装 npm，确保 npm 已加入 PATH，然后重试。",
       "git_required": "WhatsApp 的依赖需要 Git。请从 https://git-scm.com/downloads 安装 Git，确保 git 已加入 PATH，然后重试。",
@@ -15,15 +15,25 @@
       "go_required": "请从 https://go.dev/dl/ 安装 Go 1.21 或更新版本（Debian/Ubuntu：apt-get install -y golang-go），确保 go 已加入 PATH，然后重试。",
       "go_build_failed": "微信桥接构建失败。请检查 Go 版本和模块下载网络后重试。详细原因见日志；已保存的登录信息会保留。",
       "telegram_webhook": "这个 Telegram 机器人已配置 webhook，MailFlow 无法同时轮询接收命令。请先在原应用停用 webhook，或使用另一个机器人。MailFlow 没有移除它，也没有丢弃待处理消息。",
-      "napcat_archive": "自动部署使用 XingYunStar/NapCatQQ v4.18.42 归档，并校验 SHA-256。Windows 需要已安装 QQ，Linux 需要正在运行的 Docker Engine；已有安装直接复用。",
-      "napcat_docker_required": "Linux 自动部署需要 Docker Engine。请先安装、启动 Docker，并允许当前用户访问后重试；也可复用已有 AppImage 或连接已有 OneBot HTTP 服务。",
+      "napcat_archive": "自动部署使用 XingYunStar/NapCatQQ v4.18.42 归档，并校验 SHA-256。Windows 需要本机 QQ；Debian、Ubuntu 可在确认后自动安装并启动 Docker。已有安装直接复用。",
+      "napcat_docker_required": "Docker 尚未就绪。请通过自动部署或“重新安装并启动”安装、启动 Docker 并配置访问权限，也可连接已有 OneBot HTTP 服务。",
       "napcat_architecture": "NapCat 归档没有 {architecture} 架构的 Linux 镜像。请使用 amd64／arm64 主机，或连接已有 OneBot HTTP 服务。",
       "napcat_checksum": "下载的 NapCat 安装包未通过 SHA-256 校验，尚未安装。请检查网络或下载来源后重试。",
       "napcat_archive_invalid": "NapCat 归档不完整或结构不受支持，部署尚未完成。请重新下载后重试。",
       "napcat_importing": "正在将归档中的 QQ 和 NapCat 镜像导入 Docker，可能需要几分钟，可随时取消。",
       "napcat_docker_load_failed": "Docker 未能导入 NapCat 镜像。请检查 Docker 权限和剩余磁盘空间后重试，详细原因见日志。",
       "napcat_image_missing": "已安装的 NapCat Docker 镜像已被清除。请重新部署以导入归档，已保存的登录数据会保留。",
-      "napcat_docker_stop_failed": "未能停止此 NapCat 容器。请检查 Docker 后重试停止，已保存的登录数据会保留。"
+      "napcat_docker_stop_failed": "未能停止此 NapCat 容器。请检查 Docker 后重试停止，已保存的登录数据会保留。",
+      "napcat_docker_unsupported": "Docker 自动安装支持使用 apt 和 systemd 的 Debian、Ubuntu，包括基于 Debian 的 PVE 虚拟机或容器。当前系统请先手动安装并启动 Docker 后重试。",
+      "napcat_docker_context": "当前 Docker 使用的自定义连接无法访问。请检查该连接，或切回本机 Docker 后重新部署；原 Docker 连接设置已保留。",
+      "napcat_docker_admin": "配置 Docker 需要系统管理员权限。请检查 sudo 权限和密码后重试，或请管理员安装并启动 Docker。",
+      "napcat_docker_installing": "正在从系统软件源安装 Docker…",
+      "napcat_docker_starting": "正在启动 Docker 并设置开机自启…",
+      "napcat_docker_permissions": "正在配置当前用户的 Docker 访问权限…",
+      "napcat_docker_installing_failed": "未能安装 Docker 软件包。请检查网络、剩余磁盘空间，以及是否有其他软件安装任务正在运行，然后重试；详细原因见日志。",
+      "napcat_docker_starting_failed": "Docker 服务未能启动，请查看服务日志。若运行于 PVE/LXC，请在宿主机检查嵌套功能和容器权限；MailFlow 无法从容器内修改宿主机设置。",
+      "napcat_docker_permissions_failed": "Docker 已安装，但未能配置当前用户的访问权限。请管理员授予 Docker 访问权限后，重新打开 MailFlow 再试。",
+      "napcat_docker_access": "Docker 配置已完成，但当前会话仍无法访问。请重新打开 MailFlow 后重试；若仍失败，请检查 Docker 服务和用户权限，详细原因见日志。"
     },
     "clean": {
       "usage": "clean <records|trash [CONFIRM]>",
@@ -473,7 +483,7 @@
         "mailflow-notify-onebot": {
           "name": "QQ 通知（OneBot）",
           "description": "通过 OneBot v11 HTTP 服务器（NapCat、go-cqhttp）向 QQ 用户/群聊推送邮件提醒",
-          "readme": "# OneBot／QQ 通知与聊天连接\n\n组件标识为 `onebot`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n自动部署使用固定版本的 [XingYunStar/NapCatQQ 归档 v4.18.42](https://github.com/XingYunStar/NapCatQQ/releases/tag/v4.18.42)，并校验 SHA-256。Windows 安装 Shell ZIP，需要本机已安装 QQ；Linux 导入包含 QQ 和 NapCat 的 amd64／arm64 Docker 镜像，需要事先安装、启动 Docker Engine，并允许当前用户访问。容器使用主机网络，HTTP 仅监听本机；各实例独立保存配置、登录数据和二维码缓存。已有安装直接复用，不重复下载。 已配置的受管 QQ 渠道可选择**更多操作 → 重新安装并启动**，为原实例重新下载并安装程序，保留通知设置和已保存的登录数据。高级设置仍可填写 `napcat_package_url`（Windows Shell ZIP）或 `napcat_appimage_url`（Linux AppImage），也可连接自行部署的 OneBot v11 HTTP 服务。原上游已停止维护，此来源是固定历史归档，不会自动跟进其他分支。\n\n```toml\n[[notifiers]]\nnotifier_id = \"onebot-main\"\nprovider = \"onebot\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\nhttp_url = \"http://127.0.0.1:3000\"\naccess_token = \"${ONEBOT_ACCESS_TOKEN}\"\ntargets = [\"user:123456\"]\nadmins = [\"123456\"]\n```\n\n选择自动部署即可，无需填写安装包地址；也可复用已有受管安装，或连接自行部署的 OneBot v11 HTTP 服务。安装、启动、QQ 登录和投递就绪是不同步骤，按提示完成登录后再测试投递。\n\n`http_url` 必填，令牌需与网关一致。目标使用 `user:<ID>`／`group:<ID>`，管理员填写稳定平台用户标识；HTTP 200 但 retcode 失败仍算失败。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
+          "readme": "# OneBot／QQ 通知与聊天连接\n\n组件标识为 `onebot`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n自动部署使用固定版本的 [XingYunStar/NapCatQQ 归档 v4.18.42](https://github.com/XingYunStar/NapCatQQ/releases/tag/v4.18.42)，并校验 SHA-256。Windows 安装 Shell ZIP，需要本机已安装 QQ；Linux 导入包含 QQ 和 NapCat 的 amd64／arm64 Docker 镜像，Debian／Ubuntu（含基于 Debian 的 PVE 虚拟机）可在部署引导中确认安装、启动 Docker，并配置当前用户权限，必要时输入管理员密码；其他发行版需自行准备可用的 Docker Engine。退出 MailFlow 或取消部署不会卸载 Docker。容器使用主机网络，HTTP 仅监听本机；各实例独立保存配置、登录数据和二维码缓存。已有安装直接复用，不重复下载。 已配置的受管 QQ 渠道可选择**更多操作 → 重新安装并启动**，为原实例重新下载并安装程序，保留通知设置和已保存的登录数据。高级设置仍可填写 `napcat_package_url`（Windows Shell ZIP）或 `napcat_appimage_url`（Linux AppImage），也可连接自行部署的 OneBot v11 HTTP 服务。原上游已停止维护，此来源是固定历史归档，不会自动跟进其他分支。\n\n```toml\n[[notifiers]]\nnotifier_id = \"onebot-main\"\nprovider = \"onebot\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\nhttp_url = \"http://127.0.0.1:3000\"\naccess_token = \"${ONEBOT_ACCESS_TOKEN}\"\ntargets = [\"user:123456\"]\nadmins = [\"123456\"]\n```\n\n选择自动部署即可，无需填写安装包地址；也可复用已有受管安装，或连接自行部署的 OneBot v11 HTTP 服务。安装、启动、QQ 登录和投递就绪是不同步骤，按提示完成登录后再测试投递。\n\n`http_url` 必填，令牌需与网关一致。目标使用 `user:<ID>`／`group:<ID>`，管理员填写稳定平台用户标识；HTTP 200 但 retcode 失败仍算失败。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
         },
         "mailflow-notify-serverchan": {
           "name": "Server酱通知",
@@ -1494,7 +1504,10 @@
       "market_category_bot_exporter": "聊天框架导出",
       "market_category_storage_backend": "存储",
       "tab_console": "控制台",
-      "help_console": "打开控制台聊天标签页"
+      "help_console": "打开控制台聊天标签页",
+      "docker_setup_title": "为此网关配置 Docker",
+      "docker_setup_continue": "配置并继续",
+      "docker_setup_body": "将从系统软件源安装缺少的 Docker 软件包，启动 Docker 并设置开机自启，必要时授予当前用户 Docker 访问权限。Docker 访问权限等同系统管理员权限。已有容器保持运行；退出 MailFlow 或取消部署后，Docker 作为系统软件保留，只停止本次网关。是否继续？"
     },
     "update": {
       "applied_title": "已应用的更新",

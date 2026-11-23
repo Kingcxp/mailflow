@@ -64,6 +64,51 @@ async def test_cancelled_launch_reaps_process_created_after_cancellation() -> No
     assert process.terminated == 1
 
 
+async def test_command_password_uses_stdin_and_cancel_terminates_owned_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    launches: list[tuple[list[str], dict[str, Any]]] = []
+    received: list[bytes | None] = []
+    processes: list[Process] = []
+
+    class Command(Process):
+        def communicate(self, data: bytes | None = None) -> tuple[bytes, bytes]:
+            received.append(data)
+            if len(processes) == 2:
+                entered.set()
+                release.wait(timeout=2)
+            self.returncode = 0
+            return b"ready", b""
+
+    def launch(args: list[str], **kwargs: Any) -> Any:
+        launches.append((args, kwargs))
+        process = Command()
+        processes.append(process)
+        return process
+
+    def terminate(process: Any, **_: Any) -> None:
+        process.terminate()
+        release.set()
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    monkeypatch.setattr(resources, "terminate_process", terminate)
+    result = await resources.run_command(
+        ["fake-sudo", "fake-command"], timeout_seconds=3, input_text="private-password\n"
+    )
+    assert result.stdout == "ready" and result.returncode == 0
+    assert received == [b"private-password\n"]
+    assert launches[0][1]["stdin"] == subprocess.PIPE
+    assert "private-password" not in str(launches)
+    task = asyncio.create_task(resources.run_command(["fake-command"], timeout_seconds=3))
+    assert await asyncio.to_thread(entered.wait, 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert processes[-1].terminated == 1 and release.is_set()
+
+
 async def test_failed_setup_removes_new_directory_but_keeps_existing_credentials(
     tmp_path: Path,
 ) -> None:

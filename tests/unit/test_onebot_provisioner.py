@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import io
 import json
+import shlex
 import subprocess
 import tarfile
 import zipfile
@@ -127,6 +128,171 @@ def _available_command(name: str) -> str:
 
 def _missing_command(name: str) -> None:
     return None
+
+
+@pytest.mark.parametrize("host", ["root-minimal", "sudo-new", "sudo-stopped"])
+async def test_docker_setup_installs_or_starts_and_works_in_current_session(
+    host: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mailflow.gateway import GatewaySetupError, InstallProgress
+
+    uid = 0 if host == "root-minimal" else 1000
+    engine = client = host == "sudo-stopped"
+    running = member = False
+    approved: list[bool] = []
+    commands: list[list[str]] = []
+    passwords: list[str | None] = []
+    progress = InstallProgress()
+
+    async def confirm() -> bool:
+        approved.append(True)
+        return True
+
+    def which(name: str) -> str | None:
+        return None if name == "docker" and not client else f"/bin/{name}"
+
+    def ask_password() -> str:
+        return "private-sudo-password"
+
+    async def command(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal engine, client, running, member
+        commands.append(args)
+        passwords.append(kwargs.get("input_text"))
+        effective = shlex.split(args[-1]) if args[0] == "/bin/sg" else args
+        code, output = 0, ""
+        if effective[:2] == ["docker", "info"]:
+            code = 0 if running and (uid == 0 or args[0] == "/bin/sg") else 1
+            output = "linux" if code == 0 else ""
+        elif args == ["docker", "context", "show"]:
+            output = "default"
+        elif args == ["sudo", "-n", "true"]:
+            code = 1
+        elif "--property=LoadState" in args:
+            output = "loaded" if engine else "not-found"
+        elif "docker.io" in args:
+            engine = True
+            client = host != "root-minimal"
+        elif "docker-cli" in args:
+            client = True
+        elif "enable" in args:
+            running = True
+        elif "usermod" in args:
+            member = True
+        return subprocess.CompletedProcess(args, code, output, "")
+
+    monkeypatch.setattr(archive_mod.shutil, "which", which)
+    distribution = {
+        "root-minimal": {"ID": "debian"},
+        "sudo-new": {"ID": "ubuntu"},
+        "sudo-stopped": {"ID": "guest", "ID_LIKE": "debian"},
+    }[host]
+    monkeypatch.setattr(archive_mod.platform, "freedesktop_os_release", lambda: distribution)
+    monkeypatch.setattr(archive_mod, "_linux_user", lambda: (uid, "actual-login-user"))
+    monkeypatch.setattr(archive_mod, "_pending_group_access", lambda: member)
+    monkeypatch.setattr(archive_mod, "run_command", command)
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    with pytest.raises(GatewaySetupError):
+        await archive_mod.require_docker()  # Startup never installs system software.
+    options = {
+        "_confirm_docker_setup": confirm,
+        "_ask_sudo_password": ask_password,
+        "_progress": progress,
+    }
+    await archive_mod.require_docker(options)
+    assert approved == [True] and running and client
+    assert any("docker.io" in args for args in commands) == (host != "sudo-stopped")
+    assert any("docker-cli" in args for args in commands) == (host == "root-minimal")
+    if uid:
+        assert member and any(
+            args[-3:] == ["-aG", "docker", "actual-login-user"] for args in commands
+        )
+        assert "private-sudo-password\n" in passwords
+        original = ["docker", "load", "--input", "/tmp/path with spaces/archive.tar"]
+        assert shlex.split(archive_mod.docker_command(original)[-1]) == original
+    assert all("private-sudo-password" not in str(args) for args in commands)
+    assert all(not set(args).intersection({"remove", "restart", "stop"}) for args in commands)
+    assert progress.message.startswith("gateway.napcat_docker_")
+    before = len(commands)
+    await archive_mod.require_docker(options)
+    assert approved == [True] and len(commands) == before + 1
+
+
+async def test_docker_setup_decline_failure_and_cancel_do_not_start_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mailflow.gateway import GatewaySetupError
+
+    async def check(outcome: str) -> None:
+        with monkeypatch.context() as patch:
+            commands: list[list[str]] = []
+            entered = asyncio.Event()
+
+            async def confirm() -> bool:
+                return outcome != "decline"
+
+            async def command(args: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                commands.append(args)
+                if args[:2] == ["docker", "info"]:
+                    return subprocess.CompletedProcess(args, 1, "", "fake Docker unavailable")
+                if args == ["docker", "context", "show"]:
+                    return subprocess.CompletedProcess(args, 0, "remote-context", "")
+                if "apt-get" in args:
+                    if outcome == "cancel":
+                        entered.set()
+                        await asyncio.Event().wait()
+                    return subprocess.CompletedProcess(args, 1, "", "fake package failure")
+                return subprocess.CompletedProcess(args, 0, "not-found", "")
+
+            def which(name: str) -> str | None:
+                return None if name == "docker" and outcome != "saved-context" else f"/bin/{name}"
+
+            patch.setattr(archive_mod.shutil, "which", which)
+            patch.setattr(
+                archive_mod.platform,
+                "freedesktop_os_release",
+                lambda: {"ID": "fedora" if outcome == "unsupported" else "debian"},
+            )
+            patch.setattr(archive_mod, "_linux_user", lambda: (0, "root"))
+            patch.setattr(archive_mod, "run_command", command)
+            patch.setenv(
+                "DOCKER_HOST", "tcp://other-host" if outcome == "custom-connection" else ""
+            )
+            patch.delenv("DOCKER_CONTEXT", raising=False)
+            task = asyncio.create_task(
+                archive_mod.require_docker({"_confirm_docker_setup": confirm})
+            )
+            if outcome == "cancel":
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                task.cancel()
+            if outcome in {"decline", "cancel"}:
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                with pytest.raises(GatewaySetupError) as error:
+                    await task
+                expected = {
+                    "unsupported": "unsupported",
+                    "custom-connection": "context",
+                    "saved-context": "context",
+                    "install-failed": "installing_failed",
+                }[outcome]
+                assert error.value.code == f"gateway.napcat_docker_{expected}"
+            assert not any(
+                set(args).intersection({"enable", "usermod", "run"}) for args in commands
+            )
+            if outcome in {"decline", "unsupported", "custom-connection"}:
+                assert commands == []
+
+    for outcome in (
+        "decline",
+        "unsupported",
+        "custom-connection",
+        "saved-context",
+        "install-failed",
+        "cancel",
+    ):
+        await check(outcome)
 
 
 @pytest.mark.asyncio
