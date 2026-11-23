@@ -241,8 +241,8 @@ async def image_available(image: str) -> bool:
     return result.returncode == 0
 
 
-def _archive_image(archive: Path) -> str:
-    # Use the content ID, not the mutable tag imported by `docker load`.
+def _archive_references(archive: Path) -> list[str]:
+    """Read lookup references; Docker's store determines the runnable image ID."""
     with tarfile.open(archive) as image_archive:
         handle = image_archive.extractfile("manifest.json")
         if handle is None:
@@ -250,22 +250,43 @@ def _archive_image(archive: Path) -> str:
         with handle:
             manifest = json.load(handle)
         config = Path(manifest[0]["Config"]).name.removesuffix(".json")
-    if not re.fullmatch(r"[0-9a-f]{64}", config):
-        raise GatewaySetupError("gateway.napcat_archive_invalid")
-    return f"sha256:{config}"
+        if not re.fullmatch(r"[0-9a-f]{64}", config):
+            raise GatewaySetupError("gateway.napcat_archive_invalid")
+        references = list(cast("list[str]", manifest[0].get("RepoTags") or []))
+        # Classic stores use the config digest. Containerd may instead use
+        # a manifest/index digest, also present in Docker's OCI save layout.
+        with contextlib.suppress(KeyError):
+            index = image_archive.extractfile("index.json")
+            if index is not None:
+                with index:
+                    references.extend(str(item["digest"]) for item in json.load(index)["manifests"])
+        references.append(f"sha256:{config}")
+    return list(dict.fromkeys(references))
 
 
 async def load_image(archive: Path) -> str:
-    image = await asyncio.to_thread(_archive_image, archive)
+    references = await asyncio.to_thread(_archive_references, archive)
     result = await run_command(
         docker_command(["docker", "load", "--input", str(archive)]), timeout_seconds=300.0
     )
-    if result.returncode or not await image_available(image):
-        logger.error("NapCat image import failed: %s", result.stderr.strip())
-        raise GatewaySetupError(
-            "gateway.napcat_docker_load_failed", detail=(result.stderr or result.stdout).strip()
+    if result.returncode:
+        detail = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+        logger.error("NapCat image import failed: %s", detail)
+        raise GatewaySetupError("gateway.napcat_docker_load_failed", detail=detail)
+    failures: list[str] = []
+    for reference in references:
+        inspected = await run_command(
+            docker_command(["docker", "image", "inspect", "--format", "{{.Id}}", reference]),
+            timeout_seconds=20.0,
         )
-    return image
+        image = inspected.stdout.strip()
+        if inspected.returncode == 0 and re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+            # Persist and run the resolved content ID, never a mutable tag.
+            return image
+        failures.append(f"{reference}: {(inspected.stderr or inspected.stdout).strip()}")
+    detail = "\n\n".join(failures)
+    logger.error("NapCat imported image verification failed: %s", detail)
+    raise GatewaySetupError("gateway.napcat_docker_verify_failed", detail=detail)
 
 
 class DockerLaunch:

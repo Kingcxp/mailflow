@@ -35,7 +35,8 @@
       "napcat_docker_permissions_failed": "Docker 已安装，但未能配置当前用户的访问权限。请管理员授予 Docker 访问权限后，重新打开 MailFlow 再试。",
       "napcat_docker_access": "Docker 配置已完成，但当前会话仍无法访问。请重新打开 MailFlow 后重试；若仍失败，请检查 Docker 服务和用户权限。",
       "operation_failed": "网关操作未完成，请根据下面的原因处理后重试。",
-      "failure_details": "{message}\n\n安装程序或网关返回的具体原因：\n{detail}"
+      "failure_details": "{message}\n\n安装程序或网关返回的具体原因：\n{detail}",
+      "napcat_docker_verify_failed": "Docker 已报告 NapCat 镜像导入成功，但 MailFlow 未能确认可启动的镜像标识。请根据下面的核验错误处理后重试，无需重新安装 Docker。"
     },
     "clean": {
       "usage": "clean <records|trash [CONFIRM]>",

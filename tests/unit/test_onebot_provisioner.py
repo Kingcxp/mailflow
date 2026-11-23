@@ -319,9 +319,12 @@ async def test_docker_setup_decline_failure_and_cancel_do_not_start_gateway(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("host", ["windows", "x86_64", "aarch64"])
+@pytest.mark.parametrize(
+    "host,store",
+    [("windows", ""), ("x86_64", "classic"), ("x86_64", "containerd"), ("aarch64", "containerd")],
+)
 async def test_default_archive_installs_without_url_and_rejects_corruption(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, host: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, host: str, store: str
 ) -> None:
     from mailflow.gateway import GatewaySetupError
 
@@ -329,18 +332,29 @@ async def test_default_archive_installs_without_url_and_rejects_corruption(
     monkeypatch.setattr(gw_mod, "_IS_WINDOWS", host == "windows")
     monkeypatch.setattr(archive_mod.platform, "machine", lambda: host)
     monkeypatch.setattr(archive_mod.shutil, "which", _available_command)
-    image = "sha256:" + "a" * 64
+    config_id = "sha256:" + "a" * 64
+    image = "sha256:" + ("b" if store == "containerd" else "a") * 64
+    tag = "mlikiowa/napcat-docker:v4.18.42"
+    tagged = store == "containerd" and host == "x86_64"
     payload = io.BytesIO()
     if host == "windows":
         with zipfile.ZipFile(payload, "w") as shell:
             shell.writestr("napcat.mjs", "// fake Shell entry")
             shell.writestr("config/onebot11.json", "default gateway configuration")
     else:
-        manifest = json.dumps([{"Config": "blobs/sha256/" + "a" * 64}]).encode()
+        config_path = "a" * 64 + ".json" if store == "classic" else "blobs/sha256/" + "a" * 64
+        manifest = json.dumps(
+            [{"Config": config_path, "RepoTags": [tag] if tagged else []}]
+        ).encode()
         with tarfile.open(fileobj=payload, mode="w") as image_archive:
             member = tarfile.TarInfo("manifest.json")
             member.size = len(manifest)
             image_archive.addfile(member, io.BytesIO(manifest))
+            if store == "containerd":
+                index = json.dumps({"manifests": [{"digest": image}]}).encode()
+                member = tarfile.TarInfo("index.json")
+                member.size = len(index)
+                image_archive.addfile(member, io.BytesIO(index))
     contents = payload.getvalue()
     digest = hashlib.sha256(contents).hexdigest()
     monkeypatch.setattr(gw_mod, "SHELL_SHA256", digest)
@@ -352,8 +366,14 @@ async def test_default_archive_installs_without_url_and_rejects_corruption(
         nonlocal loaded
         if command[1] == "load":
             loaded = True
-        exists = command[1:3] != ["image", "inspect"] or loaded
-        return subprocess.CompletedProcess(command, 0 if exists else 1, "linux\n", "")
+            output = f"Loaded image: {tag}\n" if tagged else f"Loaded image ID: {image}\n"
+            return subprocess.CompletedProcess(command, 0, output, "")
+        if command[1:3] == ["image", "inspect"]:
+            reference = command[-1]
+            if loaded and reference in {tag, image}:
+                return subprocess.CompletedProcess(command, 0, image + "\n", "")
+            return subprocess.CompletedProcess(command, 1, "", f"Error: No such image: {reference}")
+        return subprocess.CompletedProcess(command, 0, "linux\n", "")
 
     def download(url: str, destination: Path, progress: Any = None, **kwargs: Any) -> None:
         downloads.append(url)
@@ -381,6 +401,8 @@ async def test_default_archive_installs_without_url_and_rejects_corruption(
             f"{archive_mod.DOWNLOAD_ROOT}/napcat-docker-v4.18.42-{architecture}.tar"
         ]
         assert archive_mod.docker_image(target) == image
+        if store == "containerd":
+            assert image != config_id
         assert (
             json.loads((target / "docker-image.json").read_text("utf-8"))["source"]
             == archive_mod.RELEASE_URL
@@ -427,6 +449,48 @@ async def test_default_archive_installs_without_url_and_rejects_corruption(
     assert not archive_mod.docker_image(bad_target) and not (bad_target / "napcat.mjs").exists()
     assert not list(bad_target.glob("*.part")) and not list(bad_target.glob("*.zip"))
     assert not list(bad_target.glob("*.tar"))
+
+
+async def test_image_import_failure_distinguishes_load_from_verification(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from mailflow.gateway import GatewaySetupError
+
+    archive = tmp_path / "NapCat archive.tar"
+    manifest = json.dumps(
+        [{"Config": "a" * 64 + ".json", "RepoTags": ["mlikiowa/napcat-docker:v4.18.42"]}]
+    ).encode()
+    with tarfile.open(archive, "w") as payload:
+        member = tarfile.TarInfo("manifest.json")
+        member.size = len(manifest)
+        payload.addfile(member, io.BytesIO(manifest))
+
+    async def check(failure: str) -> None:
+        async def docker(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            if command[1] == "load":
+                return subprocess.CompletedProcess(
+                    command,
+                    1 if failure == "load" else 0,
+                    "" if failure == "load" else "Loaded image: mlikiowa/napcat-docker:v4.18.42\n",
+                    "No space left on device" if failure == "load" else "",
+                )
+            return subprocess.CompletedProcess(command, 1, "", "permission denied accessing Docker")
+
+        monkeypatch.setattr(archive_mod, "run_command", docker)
+        with pytest.raises(GatewaySetupError) as failed:
+            await archive_mod.load_image(archive)
+        assert (
+            failed.value.code
+            == f"gateway.napcat_docker_{'load' if failure == 'load' else 'verify'}_failed"
+        )
+        assert (
+            "No space left on device" if failure == "load" else "permission denied accessing Docker"
+        ) in failed.value.detail
+        assert "Loaded image:" not in failed.value.detail
+
+    for failure in ("load", "verify"):
+        await check(failure)
 
 
 @pytest.mark.asyncio

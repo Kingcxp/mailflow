@@ -35,7 +35,8 @@
       "napcat_docker_permissions_failed": "Docker is installed, but user access could not be configured. Ask an administrator to grant Docker access, then reopen MailFlow and retry.",
       "napcat_docker_access": "Docker setup finished, but this session still cannot access it. Reopen MailFlow and retry. If it remains unavailable, check the Docker service and user permissions.",
       "operation_failed": "The gateway operation failed. Address the cause below, then retry.",
-      "failure_details": "{message}\n\nCause reported by the installer or gateway:\n{detail}"
+      "failure_details": "{message}\n\nCause reported by the installer or gateway:\n{detail}",
+      "napcat_docker_verify_failed": "Docker reported a successful NapCat image import, but MailFlow could not verify a runnable image ID. Check the verification error below and retry; reinstalling Docker is not required."
     },
     "clean": {
       "usage": "clean <records|trash [CONFIRM]>",

@@ -145,10 +145,13 @@ async def test_existing_gateway_menu_reuses_or_reinstalls_the_same_instance(
                 buttons = list(guide.query_one("#guide-actions").query(Button))
                 await until(
                     pilot,
-                    lambda buttons=buttons: all(
-                        guide.region.contains_region(button.region)
-                        and button.region.width >= cell_len(str(button.label)) + 2
-                        for button in buttons
+                    lambda buttons=buttons, width=width: (
+                        guide.region.width == width
+                        and all(
+                            guide.region.contains_region(button.region)
+                            and button.region.width >= cell_len(str(button.label)) + 2
+                            for button in buttons
+                        )
                     ),
                 )
                 assert all(button.region.height == 1 for button in buttons)
@@ -264,9 +267,12 @@ async def test_docker_setup_confirmation_password_and_qr_can_be_cancelled(
                 await pilot.resize_terminal(60, 24)
                 await until(
                     pilot,
-                    lambda: all(
-                        guide.region.contains_region(button.region)
-                        for button in guide.query_one("#guide-actions").query(Button)
+                    lambda: (
+                        guide.region.width == 60
+                        and all(
+                            guide.region.contains_region(button.region)
+                            for button in guide.query_one("#guide-actions").query(Button)
+                        )
                     ),
                 )
                 await pilot.click("#guide-view-qr")
