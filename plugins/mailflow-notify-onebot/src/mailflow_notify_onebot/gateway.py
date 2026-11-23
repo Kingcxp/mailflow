@@ -1,9 +1,4 @@
-"""Manage existing NapCat installations and explicitly supplied packages.
-
-The upstream project ended and removed its release assets. New installations
-require a user-supplied package URL; no unofficial mirror is selected silently.
-Existing installations and independently managed OneBot services remain usable.
-"""
+"""Manage NapCat installations using a pinned, checksum-verified release archive."""
 
 from __future__ import annotations
 
@@ -39,6 +34,21 @@ from mailflow.gateway_resources import (
 from mailflow.i18n import I18n
 from mailflow.lifecycle import OwnedListener
 from mailflow.notifications import check_result
+
+from mailflow_notify_onebot.napcat_archive import (
+    RELEASE_URL,
+    REPOSITORY,
+    SHELL_SHA256,
+    SHELL_URL,
+    VERSION,
+    DockerLaunch,
+    docker_image,
+    image_available,
+    linux_asset,
+    load_image,
+    require_docker,
+    verify_download,
+)
 
 logger = logging.getLogger("mailflow.gateway.napcat")
 
@@ -136,13 +146,11 @@ def _path_exists(path: Path) -> bool:
 def _installed_marker(target: Path) -> bool:
     """True when ``target`` holds a usable NapCat install for this host.
 
-    Windows: the Shell package entry point. Linux: any bundled AppImage
-    (the asset name changes with each QQ/NapCat release, so glob rather
-    than pin the exact filename).
+    Existing AppImages and Windows Shell layouts remain supported.
     """
 
     if not _IS_WINDOWS:
-        return any(p.is_file() for p in target.glob("*.AppImage"))
+        return bool(docker_image(target)) or any(p.is_file() for p in target.glob("*.AppImage"))
     return any((target / entry).is_file() for entry in _SHELL_ENTRY_NAMES)
 
 
@@ -690,6 +698,7 @@ class NapCatProvisioner(GatewayFiles):
     def __init__(self) -> None:
         super().__init__()
         self._processes: dict[str, subprocess.Popen[Any]] = {}
+        self._docker_runs: dict[str, DockerLaunch] = {}
         self._download_cleanups: set[asyncio.Task[None]] = set()
         self._webui_ports: dict[str, int] = {}
         self._bridges: dict[str, _OneBotEventBridge] = {}
@@ -970,7 +979,7 @@ class NapCatProvisioner(GatewayFiles):
     async def detect(self) -> str:
         installed = any(_installed_marker(p) for p in _data_root().glob("napcat-*"))
         if not installed:
-            return "gateway.napcat_retired"
+            return "gateway.napcat_archive"
         running = await self._any_running()
         parts = ["installed"]
         parts.append("running" if running else "not running")
@@ -999,34 +1008,55 @@ class NapCatProvisioner(GatewayFiles):
         if progress is not None:
             progress.update(1.0, "checking NapCat runtime requirements", "installing")
         target = _instance_dir(instance_id)
-        # installed means MailFlow's own copy (data/gateways) is in place:
-        # the Shell zip entry point on Windows, or a bundled AppImage on
-        # Linux. data/gateways is the source of truth so make clean-gateways
-        # forces a full reinstall.
+        # Never replace an existing installation or its saved login data.
         if await asyncio.to_thread(_installed_marker, target):
-            logger.info("napcat %s already installed at %s", instance_id, target)
-            return
-        package_key = "napcat_package_url" if _IS_WINDOWS else "napcat_appimage_url"
-        if not str(options.get(package_key) or "").strip():
-            raise GatewaySetupError("gateway.napcat_retired")
+            image = docker_image(target) if not _IS_WINDOWS else ""
+            if image:
+                await require_docker()
+            if not image or await image_available(image):
+                logger.info("napcat %s already installed at %s", instance_id, target)
+                return
         self.prepare_directory(instance_id, target)
-        if not _IS_WINDOWS:
-            # Linux headless: download the official AppImage (bundles
-            # QQ NT + NapCat); no QQ deb, no /opt/QQ mirroring
+        if _IS_WINDOWS:
+            await self._install_napcat_package(instance_id, options, target)
+        elif str(options.get("napcat_appimage_url") or "").strip():
             await self._install_linux_appimage(instance_id, options, target)
         else:
-            await self._install_napcat_package(instance_id, options, target)
+            await self._install_linux_archive(instance_id, options, target)
+
+    async def _install_linux_archive(
+        self, instance_id: str, options: dict[str, Any], target: Path
+    ) -> None:
+        await require_docker()
+        url, digest = linux_asset()
+        archive = target / "napcat-docker.tar"
+        progress = options.get("_progress")
+        logger.info("napcat %s: installing %s %s from %s", instance_id, REPOSITORY, VERSION, url)
+        if progress is not None:
+            progress.update(0.0, stage="downloading")
+        await self._download_payload(instance_id, url, archive, progress)
+        try:
+            await asyncio.to_thread(verify_download, archive, digest)
+            if progress is not None:
+                progress.update(85.0, "gateway.napcat_importing", "installing")
+            image = await load_image(archive)
+            (target / "docker-image.json").write_text(
+                json.dumps({"image": image, "version": VERSION, "source": RELEASE_URL}),
+                encoding="utf-8",
+            )
+        finally:
+            archive.unlink(missing_ok=True)
 
     async def _install_napcat_package(
         self, instance_id: str, options: dict[str, Any], target: Path
     ) -> None:
         """Download + unpack the NapCat.Shell package into ``target``."""
-        url = str(options.get("napcat_package_url") or "").strip()
-        if not url:
-            raise GatewaySetupError("gateway.napcat_retired")
+        url = str(options.get("napcat_package_url") or "").strip() or SHELL_URL
         archive = target / "napcat.zip"
         progress = options.get("_progress")
         logger.info("napcat %s: downloading %s", instance_id, url)
+        if progress is not None:
+            progress.update(0.0, stage="downloading")
         await self._download_payload(instance_id, url, archive, progress)
         if progress is not None:
             size_mb = archive.stat().st_size / (1024 * 1024) if archive.exists() else 0
@@ -1037,12 +1067,36 @@ class NapCatProvisioner(GatewayFiles):
             archive.stat().st_size if archive.exists() else 0,
         )
         try:
-            with zipfile.ZipFile(archive) as zf:
-                entries = zf.namelist()
-                zf.extractall(target)
+            cancelled = threading.Event()
+
+            def unpack() -> None:
+                if url == SHELL_URL:
+                    verify_download(archive, SHELL_SHA256)
+                if cancelled.is_set():
+                    return
+                with zipfile.ZipFile(archive) as zf:
+                    for member in zf.infolist():
+                        if cancelled.is_set():
+                            return
+                        if (
+                            member.filename.startswith("config/")
+                            and (target / member.filename).exists()
+                        ):
+                            continue
+                        zf.extract(member, target)
+
+            extraction = asyncio.create_task(asyncio.to_thread(unpack))
+            try:
+                await asyncio.shield(extraction)
+            except asyncio.CancelledError:
+                cancelled.set()
+                with contextlib.suppress(Exception):
+                    await extraction
+                raise
+            await asyncio.to_thread(self._find_entry, target, instance_id)
         finally:
             archive.unlink(missing_ok=True)
-        logger.info("napcat %s: installed %d files at %s", instance_id, len(entries), target)
+        logger.info("napcat %s: installed from %s at %s", instance_id, url, target)
 
     async def _install_linux_appimage(
         self, instance_id: str, options: dict[str, Any], target: Path
@@ -1099,6 +1153,7 @@ class NapCatProvisioner(GatewayFiles):
         if progress is not None:
             progress.update(90.0, "making the AppImage executable…", "installing")
         await asyncio.to_thread(appimage.chmod, 0o755)
+        (target / "docker-image.json").unlink(missing_ok=True)
         logger.info(
             "napcat %s: AppImage ready (%d MB)",
             instance_id,
@@ -1228,6 +1283,13 @@ class NapCatProvisioner(GatewayFiles):
         run_target = _instance_dir(instance_id)
         if not await asyncio.to_thread(_installed_marker, run_target):
             raise _missing_installation(run_target)
+        image = docker_image(run_target) if not _IS_WINDOWS else ""
+        if image:
+            await require_docker()
+            if not await image_available(image):
+                raise translated_error(
+                    GatewayNotInstalledError, I18n().t, "gateway.napcat_image_missing"
+                )
         qq: str | None = None
         if _IS_WINDOWS:
             qq = await asyncio.to_thread(_detect_qq)
@@ -1252,7 +1314,9 @@ class NapCatProvisioner(GatewayFiles):
         # the AppImage (Linux) and the Shell package (Windows) both live in
         # the instance dir; on Linux the AppImage holds QQ + NapCat and
         # writes its cache/QR next to itself
-        if not _IS_WINDOWS:
+        if image:
+            entry_path = run_target.resolve()
+        elif not _IS_WINDOWS:
             # the AppImage asset name changes with each release: glob it
             appimages = list(run_target.glob("*.AppImage"))
             if not appimages:
@@ -1344,18 +1408,29 @@ class NapCatProvisioner(GatewayFiles):
             }
         )
         log_file = data_dir / "napcat.log"
+        docker_launch: DockerLaunch | None = None
+        docker_command: list[str] = []
+        if image:
+            docker_launch = DockerLaunch(target)
+            docker_command = docker_launch.command(
+                image, self._uins.get(instance_id, ""), dict(options.get("env") or {})
+            )
+            self._docker_runs[instance_id] = docker_launch
 
         def _launch() -> subprocess.Popen[Any]:
             with open(log_file, "ab") as handle:
-                if _IS_WINDOWS:
+                if docker_launch is not None:
+                    command = docker_command
+                    cwd = str(target.resolve())
+                elif _IS_WINDOWS:
                     # Windows with a QQ client: inject like the official
                     # launcher.bat (NapCatWinBootMain.exe starts QQ with
                     # the hook), the only mode where NapCat's worker runs.
                     assert qq is not None
-                    boot_main = target / "NapCatWinBootMain.exe"
-                    hook = target / "NapCatWinBootHook.dll"
-                    env.setdefault("NAPCAT_PATCH_PACKAGE", str(target / "qqnt.json"))
-                    env.setdefault("NAPCAT_LOAD_PATH", str(target / "loadNapCat.js"))
+                    boot_main = target.resolve() / "NapCatWinBootMain.exe"
+                    hook = target.resolve() / "NapCatWinBootHook.dll"
+                    env.setdefault("NAPCAT_PATCH_PACKAGE", str(target.resolve() / "qqnt.json"))
+                    env.setdefault("NAPCAT_LOAD_PATH", str(target.resolve() / "loadNapCat.js"))
                     env.setdefault("NAPCAT_INJECT_PATH", str(hook))
                     env.setdefault("NAPCAT_LAUNCHER_PATH", str(boot_main))
                     env.setdefault("NAPCAT_MAIN_PATH", str(entry))
@@ -1391,7 +1466,7 @@ class NapCatProvisioner(GatewayFiles):
                 return subprocess.Popen(
                     command,
                     cwd=cwd,
-                    env={**os.environ, **env},
+                    env=dict(os.environ) if docker_launch is not None else {**os.environ, **env},
                     stdout=handle,
                     stderr=subprocess.STDOUT,
                     creationflags=creationflags,
@@ -1402,7 +1477,10 @@ class NapCatProvisioner(GatewayFiles):
         with contextlib.suppress(FileNotFoundError):
             qr_file.unlink()
         try:
-            process = await launch_owned(_launch, terminate=self._terminate_owned)
+            process = await launch_owned(
+                _launch,
+                terminate=(docker_launch.terminate if docker_launch else self._terminate_owned),
+            )
         except OSError as exc:
             raise RuntimeError(f"failed to launch napcat {instance_id}: {exc}") from exc
         self._processes[instance_id] = process
@@ -1468,9 +1546,12 @@ class NapCatProvisioner(GatewayFiles):
 
     def _terminate(self, instance_id: str) -> None:
         process = self._processes.get(instance_id)
-        if process is None:
-            return
-        self._terminate_owned(process)
+        docker_launch = self._docker_runs.get(instance_id)
+        if docker_launch is not None:
+            docker_launch.terminate(process)
+            self._docker_runs.pop(instance_id, None)
+        elif process is not None:
+            self._terminate_owned(process)
         if self._processes.get(instance_id) is process:
             self._processes.pop(instance_id, None)
 

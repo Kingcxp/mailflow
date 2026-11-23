@@ -1,13 +1,20 @@
-"""NapCat provisioner tests: AppImage entry resolution and launch."""
+"""NapCat deployment, existing installation compatibility and owned resources."""
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import io
+import json
 import subprocess
+import tarfile
+import zipfile
 from pathlib import Path
 from typing import Any, cast
 
 import httpx
 import mailflow_notify_onebot.gateway as gw_mod
+import mailflow_notify_onebot.napcat_archive as archive_mod
 import pytest
 from mailflow_notify_onebot.gateway import (
     NapCatProvisioner,
@@ -114,13 +121,209 @@ async def _async_false() -> bool:
     return False
 
 
+def _available_command(name: str) -> str:
+    return f"/bin/{name}"
+
+
+def _missing_command(name: str) -> None:
+    return None
+
+
 @pytest.mark.asyncio
-async def test_install_requires_an_explicit_source_and_keeps_existing_payload(
+@pytest.mark.parametrize("host", ["windows", "x86_64", "aarch64"])
+async def test_default_archive_installs_without_url_and_rejects_corruption(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, host: str
+) -> None:
+    from mailflow.gateway import GatewaySetupError
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gw_mod, "_IS_WINDOWS", host == "windows")
+    monkeypatch.setattr(archive_mod.platform, "machine", lambda: host)
+    monkeypatch.setattr(archive_mod.shutil, "which", _available_command)
+    image = "sha256:" + "a" * 64
+    payload = io.BytesIO()
+    if host == "windows":
+        with zipfile.ZipFile(payload, "w") as shell:
+            shell.writestr("napcat.mjs", "// fake Shell entry")
+            shell.writestr("config/onebot11.json", "default gateway configuration")
+    else:
+        manifest = json.dumps([{"Config": "blobs/sha256/" + "a" * 64}]).encode()
+        with tarfile.open(fileobj=payload, mode="w") as image_archive:
+            member = tarfile.TarInfo("manifest.json")
+            member.size = len(manifest)
+            image_archive.addfile(member, io.BytesIO(manifest))
+    contents = payload.getvalue()
+    digest = hashlib.sha256(contents).hexdigest()
+    monkeypatch.setattr(gw_mod, "SHELL_SHA256", digest)
+    monkeypatch.setattr(archive_mod, "_LINUX_ASSETS", {"amd64": digest, "arm64": digest})
+    downloads: list[str] = []
+    loaded = False
+
+    async def docker(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal loaded
+        if command[1] == "load":
+            loaded = True
+        exists = command[1:3] != ["image", "inspect"] or loaded
+        return subprocess.CompletedProcess(command, 0 if exists else 1, "linux\n", "")
+
+    def download(url: str, destination: Path, progress: Any = None, **kwargs: Any) -> None:
+        downloads.append(url)
+        destination.write_bytes(contents)
+
+    monkeypatch.setattr(archive_mod, "run_command", docker)
+    monkeypatch.setattr(NapCatProvisioner, "_download", staticmethod(download))
+    provisioner = NapCatProvisioner()
+    target = _instance_dir("archive")
+    config = target / "config" / "onebot11.json"
+    config.parent.mkdir(parents=True)
+    config.write_text("saved gateway configuration", encoding="utf-8")
+    login = target / "profile" / "saved-login"
+    login.parent.mkdir(parents=True)
+    login.write_text("keep", encoding="utf-8")
+    await provisioner.install("archive", {})
+    assert config.read_text("utf-8") == "saved gateway configuration"
+    assert login.read_text("utf-8") == "keep"
+    if host == "windows":
+        assert downloads == [archive_mod.SHELL_URL]
+        assert (target / "napcat.mjs").read_text("utf-8") == "// fake Shell entry"
+    else:
+        architecture = "amd64" if host == "x86_64" else "arm64"
+        assert downloads == [
+            f"{archive_mod.DOWNLOAD_ROOT}/napcat-docker-v4.18.42-{architecture}.tar"
+        ]
+        assert archive_mod.docker_image(target) == image
+        assert (
+            json.loads((target / "docker-image.json").read_text("utf-8"))["source"]
+            == archive_mod.RELEASE_URL
+        )
+
+    await provisioner.install("archive", {})
+    assert len(downloads) == 1 and login.read_text("utf-8") == "keep"
+    assert not list(target.glob("*.zip")) and not list(target.glob("*.tar"))
+
+    if host != "windows":
+        loaded = False  # A pruned Docker image is restored without deleting login data.
+        await provisioner.install("archive", {})
+        assert len(downloads) == 2 and login.read_text("utf-8") == "keep"
+        monkeypatch.setattr(archive_mod.shutil, "which", _missing_command)
+        with pytest.raises(GatewaySetupError) as missing:
+            await provisioner.install("no-docker", {})
+        assert missing.value.code == "gateway.napcat_docker_required"
+        assert len(downloads) == 2
+        monkeypatch.setattr(archive_mod.shutil, "which", _available_command)
+
+    contents = b"corrupt archive"
+    with pytest.raises(GatewaySetupError) as corrupt:
+        await provisioner.install("corrupt", {})
+    assert corrupt.value.code == "gateway.napcat_checksum"
+    bad_target = _instance_dir("corrupt")
+    assert not archive_mod.docker_image(bad_target) and not (bad_target / "napcat.mjs").exists()
+    assert not list(bad_target.glob("*.part")) and not list(bad_target.glob("*.zip"))
+    assert not list(bad_target.glob("*.tar"))
+
+
+@pytest.mark.asyncio
+async def test_archive_container_stop_and_cancel_keep_login_and_other_containers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Retired downloads fail immediately; caches and explicit URLs still work."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(archive_mod.shutil, "which", _available_command)
+    monkeypatch.setattr(gw_mod, "_available_memory_mb", lambda: 4096.0)
+    image = "sha256:" + "a" * 64
+    containers = {"unrelated-bot": "other-owner"}
+    commands: list[list[str]] = []
+    waiting = asyncio.Event()
+    cancel_boot = False
+
+    async def docker(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, "linux\n", "")
+
+    class Process:
+        pid = 4242
+        returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+    def launch(command: list[str], **kwargs: Any) -> Any:
+        commands.append(command)
+        name = command[command.index("--name") + 1]
+        owner = command[command.index("--label") + 1].split("=", 1)[1]
+        containers[name] = owner
+        assert kwargs["env"].get("HOME") != str(_instance_dir("normal") / "profile")
+        return Process()
+
+    def subprocess_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command[1] == "ps":
+            owner = command[-1].split("=", 2)[-1]
+            owned = "\n".join(name for name, token in containers.items() if token == owner)
+            return subprocess.CompletedProcess(command, 0, owned, "")
+        assert command[1:3] == ["rm", "--force"]
+        containers.pop(command[-1])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    def terminate(process: Process, **kwargs: Any) -> None:
+        process.returncode = 0
+
+    async def bridge(instance_id: str, options: dict[str, Any]) -> Any:
+        class Bridge:
+            url = "http://127.0.0.1:18321/onebot/event"
+
+        return Bridge()
+
+    async def port_ready(port: int, wait_seconds: float = 2.0) -> bool:
+        if port in {39999, 39998}:
+            return False
+        if cancel_boot:
+            waiting.set()
+            await asyncio.Event().wait()
+        return True
+
+    monkeypatch.setattr(archive_mod, "run_command", docker)
+    monkeypatch.setattr(archive_mod, "terminate_process", terminate)
+    monkeypatch.setattr(gw_mod.subprocess, "Popen", launch)
+    monkeypatch.setattr(gw_mod.subprocess, "run", subprocess_run)
+    provisioner = NapCatProvisioner()
+    monkeypatch.setattr(provisioner, "ensure_bridge", bridge)
+    monkeypatch.setattr(provisioner, "_wait_http_port", port_ready)
+    for index, instance_id in enumerate(("normal", "cancelled")):
+        target = _instance_dir(instance_id)
+        target.mkdir(parents=True)
+        (target / "docker-image.json").write_text(json.dumps({"image": image}), encoding="utf-8")
+        login = target / "profile" / ".config" / "QQ" / "saved-login"
+        login.parent.mkdir(parents=True)
+        login.write_text("keep", encoding="utf-8")
+        if instance_id == "normal":
+            result = await provisioner.start(instance_id, {"port": 39999 - index})
+            assert result.status == "starting"
+            await provisioner.stop(instance_id)
+            await provisioner.stop(instance_id)
+        else:
+            cancel_boot = True
+            task = asyncio.create_task(provisioner.start(instance_id, {"port": 39999 - index}))
+            await asyncio.wait_for(waiting.wait(), timeout=3)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert login.read_text("utf-8") == "keep"
+        config = json.loads((target / "config" / "onebot11.json").read_text("utf-8"))
+        assert config["network"]["httpServers"][0]["host"] == "127.0.0.1"
+        assert config["network"]["httpClients"][0]["url"].endswith(":18321/onebot/event")
+        assert containers == {"unrelated-bot": "other-owner"}
+    assert len(commands) == 2
+    for command in commands:
+        assert command[0:2] == ["docker", "run"] and command[-1] == image
+        assert "--network=host" in command and "--pull=never" in command
+        assert "NAPCAT_WORKDIR=/app/napcat" in command
+        assert any("dst=/app/.config/QQ" in arg for arg in command)
+
+
+@pytest.mark.asyncio
+async def test_explicit_source_and_existing_payload_remain_usable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Custom AppImages, older Shell layouts and saved login data still work."""
     from mailflow.errors import error_text
-    from mailflow.gateway import GatewaySetupError
     from mailflow.i18n import I18n
 
     monkeypatch.chdir(tmp_path)
@@ -133,13 +336,6 @@ async def test_install_requires_an_explicit_source_and_keeps_existing_payload(
 
     monkeypatch.setattr(NapCatProvisioner, "_download", staticmethod(fake_download))
     prov = NapCatProvisioner()
-    for windows in (True, False):
-        monkeypatch.setattr(gw_mod, "_IS_WINDOWS", windows)
-        with pytest.raises(GatewaySetupError) as failure:
-            await prov.install("A-Bot-NapCat-5baf4a", {"napcat_version": "latest"})
-        assert failure.value.code == "gateway.napcat_retired"
-        assert "OneBot" in error_text(failure.value, I18n("zh-CN").t)
-        assert not instance.exists() and not downloads
 
     # the runtime preflight checks xvfb-run/fusermount with shutil.which
     def _fake_which(name: str) -> str:

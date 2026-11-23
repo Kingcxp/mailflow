@@ -360,6 +360,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._log("INFO", self._t("tui.bots_guide_detecting"))
                 detected = await service.gateway_detect(provider)
                 detected_message = detected or self._t("tui.bots_guide_not_detected")
+                if detected_message.startswith("gateway."):
+                    detected_message = self._t(detected_message)
                 self._log("INFO", self._t("tui.bots_guide_detected", status=detected_message))
                 await asyncio.sleep(0.2)
                 self._set_phase("installing")
@@ -423,7 +425,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                     stage = "installing"
                 if stage != self._phase:
                     self._set_phase(stage)
-                self._update_progress(progress.percent, self._t(f"tui.gateway_phase_{stage}"))
+                label = (
+                    self._t(progress.message)
+                    if progress.message.startswith("gateway.")
+                    else self._t(f"tui.gateway_phase_{stage}")
+                )
+                self._update_progress(progress.percent, label)
 
         # the installer may need sudo (Linux apt under sudo -S): inject a
         # prompt callback so the password is asked in the guide UI at the

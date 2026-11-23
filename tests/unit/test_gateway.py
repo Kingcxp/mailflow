@@ -286,8 +286,8 @@ async def test_provision_install_failure_marks_error() -> None:
     assert instance is not None
     assert instance.status == "error"
     assert failure.value.code == "gateway.napcat_retired"
-    assert "OneBot" in error_text(failure.value, I18n("zh-CN").t)
-    assert "official downloads" in instance.error
+    assert error_text(failure.value, I18n("zh-CN").t) == I18n("zh-CN").t(failure.value.code)
+    assert I18n("en").t(failure.value.code) in instance.error
     assert provisioner.stopped == ["gw-1"]
 
     # Re-login reuses the same instance even when its installer is unavailable.

@@ -145,7 +145,7 @@ Attachment download is independent of OCR.
 | Channel | Setup and current limits |
 | --- | --- |
 | Console | Built in; no external bot installation. |
-| OneBot / QQ | Connect an existing OneBot v11 HTTP service. NapCat has ended and removed official downloads; existing installations or an explicitly supplied trusted package remain usable. MailFlow does not choose third-party mirrors. |
+| OneBot / QQ | Automatic deployment uses the SHA-256-verified [XingYunStar/NapCatQQ v4.18.42 archive](https://github.com/XingYunStar/NapCatQQ/releases/tag/v4.18.42): Windows Shell ZIP (local QQ required), or Linux amd64/arm64 Docker image (Docker Engine required). Existing installations and custom package URLs remain supported; an existing OneBot v11 HTTP service can also be connected. |
 | OpenWechat | Managed bridge requires Go 1.21+ and Go module downloads. WeChat must allow the account to log in through the web protocol. |
 | WeChatPadPro | Managed Docker project uses the self-hosted v2 API and a pinned linux/amd64 image with MySQL/Redis. The newer Cloud API is different. Image installation does not guarantee protocol login. |
 | Telegram | BotFather token; no local gateway runtime. Long polling requires the bot to have no active webhook in another application. |
@@ -402,7 +402,7 @@ for safe issue reports.
 | 渠道 | 安装方式与限制 |
 | --- | --- |
 | 控制台 | 内置，无需安装外部机器人。 |
-| OneBot／QQ | 连接已有 OneBot v11 HTTP 服务。NapCat 已结束维护并移除官方下载；可复用已有安装，或明确提供可信安装包。不会自动选择第三方镜像。 |
+| OneBot／QQ | 自动部署使用经过 SHA-256 校验的 [XingYunStar/NapCatQQ v4.18.42 归档](https://github.com/XingYunStar/NapCatQQ/releases/tag/v4.18.42)：Windows Shell ZIP（需要本机 QQ），或 Linux amd64／arm64 Docker 镜像（需要 Docker Engine）。已有安装、自定义安装包和自行部署的 OneBot v11 HTTP 服务继续可用。 |
 | OpenWechat | 受管桥接需要 Go 1.21 及更新版本，能下载 Go 模块；账户需被微信网页协议允许登录。 |
 | WeChatPadPro | Docker 部署使用自托管 v2 接口、固定的 linux/amd64 镜像及 MySQL／Redis。新版 Cloud 接口不同，安装成功不保证协议登录可用。 |
 | Telegram | 填写 BotFather 令牌，无需外部运行环境；轮询要求该机器人未被其他应用配置 webhook。 |
