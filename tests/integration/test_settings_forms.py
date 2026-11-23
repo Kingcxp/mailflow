@@ -388,16 +388,24 @@ async def test_settings_modals_cancel_by_keyboard_and_mouse_without_changes(
 ) -> None:
     from mailflow_tui.export import BotExportScreen
     from mailflow_tui.install import InstallScreen
+    from mailflow_tui.mail_workflows import DataManagementScreen
     from mailflow_tui.repos import ReposScreen
     from mailflow_tui.scaffold import PluginScaffoldScreen
 
+    screens = (
+        BotExportScreen,
+        InstallScreen,
+        ReposScreen,
+        PluginScaffoldScreen,
+        DataManagementScreen,
+    )
     service = await start_service_quiet(tmp_path)
     await service.set_setting("general.language", language)
     original = service.config.model_dump()
     app = MailFlowApp(cast(Any, service), queue_module.Queue())
     try:
         async with app.run_test(size=(80, 30)) as pilot:
-            for screen_type in (BotExportScreen, InstallScreen, ReposScreen, PluginScaffoldScreen):
+            for screen_type in screens:
                 results: list[Any] = []
                 modal = screen_type(service)
                 app.push_screen(modal, results.append)
@@ -408,13 +416,18 @@ async def test_settings_modals_cancel_by_keyboard_and_mouse_without_changes(
                 assert results == [None]
                 assert service.config.model_dump() == original
             await pilot.resize_terminal(60, 24)
-            for screen_type in (BotExportScreen, InstallScreen, ReposScreen, PluginScaffoldScreen):
+            for screen_type in screens:
                 modal = screen_type(service)
                 app.push_screen(modal)
                 await pilot.pause()
                 cancel = next(
-                    button for button in modal.query(Button) if str(button.id).endswith("-cancel")
+                    button
+                    for button in modal.query(Button)
+                    if str(button.id).endswith(("-cancel", "-close"))
                 )
+                for button in modal.query(".dialog-footer Button"):
+                    assert button.region.right <= app.size.width
+                    assert button.region.bottom <= app.size.height
                 assert await pilot.click(cancel)
                 await until(pilot, lambda modal=modal: app.screen is not modal)
                 assert service.config.model_dump() == original
@@ -423,9 +436,9 @@ async def test_settings_modals_cancel_by_keyboard_and_mouse_without_changes(
 
 
 async def test_entry_form_fields_scroll(tmp_path: Path) -> None:
-    """The LLM form is taller than its dialog: the fields container must be
-    scrollable (regression: a nested 1fr Vertical collapsed scrolling)."""
+    """A long form scrolls while its actions stay reachable on short terminals."""
     from mailflow_tui.settings import EntryFormScreen
+    from mailflow_tui.widgets import ContentDialog
 
     service = await start_service_quiet(tmp_path)
     CommandRouter(service)
@@ -437,18 +450,15 @@ async def test_entry_form_fields_scroll(tmp_path: Path) -> None:
                 cast(Any, EntryFormScreen(cast(Any, service), "llms")),
                 _result_collector([]),
             )
-            await pilot.pause(0.3)
+            await until(pilot, lambda: bool(app.screen.query(ContentDialog)))
 
-            fields = app.screen.query_one("#entry-form-fields")
-            assert fields.virtual_size.height > fields.size.height, (
-                "form content does not overflow: nothing to scroll"
-            )
-            fields.scroll_down()
-            await pilot.pause(0.1)
-            assert fields.scroll_y > 0
+            fields = app.screen.query_one(ContentDialog)
             for width in (80, 60):
                 await pilot.resize_terminal(width, 24)
                 await pilot.pause()
+                fields.focus()
+                await pilot.press("pagedown")
+                await until(pilot, lambda: fields.scroll_y > 0)
                 inputs = [
                     node
                     for node in app.screen.query("#entry-form-fields Input")
@@ -464,6 +474,7 @@ async def test_entry_form_fields_scroll(tmp_path: Path) -> None:
                 assert len({(node.region.x, node.region.width) for node in rows}) == 1
                 back = app.screen.query_one("#entry-form-back", Button)
                 assert back.region.right <= app.size.width
+                assert back.region.bottom <= fields.region.bottom <= app.size.height
             assert await pilot.click(back)
             await until(pilot, lambda: not isinstance(app.screen, EntryFormScreen))
     finally:

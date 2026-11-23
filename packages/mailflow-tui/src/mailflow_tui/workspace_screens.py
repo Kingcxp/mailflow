@@ -20,7 +20,7 @@ from textual.widgets import Button, Checkbox, Collapsible, Select, Static
 
 from mailflow_tui.mail_workflows import WorkflowScreen, save_attachment
 from mailflow_tui.pickers import AssistedInput
-from mailflow_tui.widgets import Input, SafeSelect, SelectionTable, TextArea
+from mailflow_tui.widgets import ContentDialog, Input, SafeSelect, SelectionTable, TextArea
 
 
 class SourceSyncScreen(WorkflowScreen):
@@ -734,22 +734,26 @@ class ActionFiltersScreen(WorkflowScreen):
         self.category, self.tag = category, tag
 
     def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Static(self.t("experience.action_filters"))
-            with ScrollableContainer():
+        with ContentDialog():
+            yield Static(self.t("experience.action_filters"), classes="dialog-header")
+            with Vertical(classes="dialog-body"):
                 for name, value, key in [
                     ("category", self.category, "category"),
                     ("tag", self.tag, "tags"),
                 ]:
-                    yield Static(self.t("recurrence." + key))
-                    yield Input(value, id="action-" + name)
-                    yield SafeSelect(
-                        [], id="action-choose-" + name, prompt=self.t("tui.entry_pick_first")
+                    with Vertical(classes="dialog-section"):
+                        yield Static(self.t("recurrence." + key))
+                        yield Input(value, id="action-" + name)
+                        yield SafeSelect(
+                            [], id="action-choose-" + name, prompt=self.t("tui.entry_pick_first")
+                        )
+            with Vertical(classes="dialog-footer"):
+                yield Static("", id="workflow-status", markup=False, classes="dialog-status")
+                with Horizontal():
+                    yield Button(
+                        self.t("tui.btn_apply"), id="action-filter-apply", variant="primary"
                     )
-            yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
-                yield Button(self.t("tui.btn_apply"), id="action-filter-apply", variant="primary")
-                yield Button(self.t("tui.btn_back"), id="action-filter-close")
+                    yield Button(self.t("tui.btn_back"), id="action-filter-close")
 
     async def load_data(self) -> None:
         items = await self.service.list_actions_all()
@@ -891,20 +895,22 @@ class SavedFiltersScreen(WorkflowScreen):
         self.busy = False
 
     def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Static(self.t("experience.saved_filters"))
+        with ContentDialog():
+            yield Static(self.t("experience.saved_filters"), classes="dialog-header")
             yield SafeSelect([], id="saved-filter", prompt=self.t("tui.entry_pick_first"))
-            yield Input(placeholder=self.t("experience.filter_name"), id="filter-name")
-            yield Static("", id="workflow-status", markup=False)
-            with Horizontal():
-                yield Button(
-                    self.t("tui.btn_apply"), id="filter-open", variant="primary", disabled=True
-                )
-                yield Button(self.t("tui.btn_save"), id="filter-save", variant="success")
-                yield Button(
-                    self.t("tui.btn_delete"), id="filter-delete", variant="error", disabled=True
-                )
-                yield Button(self.t("tui.btn_back"), id="filter-close")
+            with Vertical(classes="dialog-section"):
+                yield Input(placeholder=self.t("experience.filter_name"), id="filter-name")
+            with Vertical(classes="dialog-footer"):
+                yield Static("", id="workflow-status", markup=False, classes="dialog-status")
+                with Horizontal():
+                    yield Button(
+                        self.t("tui.btn_apply"), id="filter-open", variant="primary", disabled=True
+                    )
+                    yield Button(self.t("tui.btn_save"), id="filter-save", variant="success")
+                    yield Button(
+                        self.t("tui.btn_delete"), id="filter-delete", variant="error", disabled=True
+                    )
+                    yield Button(self.t("tui.btn_back"), id="filter-close")
 
     async def load_data(self) -> None:
         await self.reload_rows()

@@ -10,11 +10,11 @@ from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, DirectoryTree, Select, Static
 
-from mailflow_tui.widgets import Input, SafeSelect
+from mailflow_tui.widgets import ContentDialog, Input, SafeSelect
 
 
 class ChoicePicker(ModalScreen[str | None]):
@@ -161,11 +161,8 @@ class DatePicker(ModalScreen[str | None]):
     BINDINGS: ClassVar[list[Any]] = [("escape", "back", "Back")]
     DEFAULT_CSS = """
     DatePicker { align: center middle; }
-    DatePicker > Vertical { width: 64; max-width: 96%; height: 92%; max-height: 26; border: round $accent; background: $surface; padding: 0 1; }
-    DatePicker ScrollableContainer { height: 1fr; }
-    DatePicker Static { height: auto; }
+    DatePicker ContentDialog { width: 64; }
     DatePicker Select { height: 3; width: 1fr; }
-    DatePicker Horizontal { height: 3; }
     """
 
     def __init__(self, service: Any, value: str, *, with_time: bool = False) -> None:
@@ -178,12 +175,13 @@ class DatePicker(ModalScreen[str | None]):
             self.value = self.now.replace(hour=9, minute=0)
 
     def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Static(self.service.t("interface.choose_date"))
-            yield Static(
-                self.service.t("interface.timezone", zone=self.service.config.general.timezone)
-            )
-            with ScrollableContainer():
+        with ContentDialog():
+            yield Static(self.service.t("interface.choose_date"), classes="dialog-header")
+            with Vertical(classes="dialog-body"):
+                yield Static(
+                    self.service.t("interface.timezone", zone=self.service.config.general.timezone),
+                    classes="dialog-description",
+                )
                 for name, low, high, value in (
                     (
                         "year",
@@ -194,13 +192,14 @@ class DatePicker(ModalScreen[str | None]):
                     ("month", 1, 12, self.value.month),
                     ("day", 1, 31, self.value.day),
                 ):
-                    yield Static(self.service.t("interface." + name))
-                    yield SafeSelect(
-                        [(str(v), str(v)) for v in range(low, high + 1)],
-                        value=str(value),
-                        allow_blank=False,
-                        id="date-" + name,
-                    )
+                    with Vertical(classes="dialog-section"):
+                        yield Static(self.service.t("interface." + name))
+                        yield SafeSelect(
+                            [(str(v), str(v)) for v in range(low, high + 1)],
+                            value=str(value),
+                            allow_blank=False,
+                            id="date-" + name,
+                        )
                 if self.with_time:
                     yield Static(self.service.t("interface.time"))
                     with Horizontal():
@@ -216,13 +215,16 @@ class DatePicker(ModalScreen[str | None]):
                             allow_blank=False,
                             id="date-minute",
                         )
-            with Horizontal():
-                yield Button(self.service.t("interface.today"), id="date-today")
-                yield Button(self.service.t("interface.tomorrow"), id="date-tomorrow")
-                yield Button(self.service.t("interface.clear"), id="date-clear")
-            with Horizontal():
-                yield Button(self.service.t("tui.btn_apply"), id="date-apply", variant="primary")
-                yield Button(self.service.t("tui.btn_back"), id="date-back")
+            with Vertical(classes="dialog-footer"):
+                with Horizontal():
+                    yield Button(self.service.t("interface.today"), id="date-today")
+                    yield Button(self.service.t("interface.tomorrow"), id="date-tomorrow")
+                    yield Button(self.service.t("interface.clear"), id="date-clear")
+                with Horizontal(classes="dialog-section"):
+                    yield Button(
+                        self.service.t("tui.btn_apply"), id="date-apply", variant="primary"
+                    )
+                    yield Button(self.service.t("tui.btn_back"), id="date-back")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()

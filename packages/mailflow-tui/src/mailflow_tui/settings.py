@@ -75,6 +75,7 @@ from mailflow_tui.search import SearchMatcher, build_search_matcher
 from mailflow_tui.theme_select import ThemeSelect
 from mailflow_tui.view_state import TableView
 from mailflow_tui.widgets import (
+    ContentDialog,
     Input,
     SafeSelect,
     SearchToggle,
@@ -823,26 +824,35 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         group_label = self._t(f"tui.group_{self._group}")
         if group_label == f"tui.group_{self._group}":
             group_label = self._group
-        with Vertical(id="entry-form-dialog"):
-            yield Static(self._t(title_key, group=group_label), classes="dialog-title")
-            with ScrollableContainer(id="entry-form-fields"):
+        with ContentDialog(id="entry-form-dialog"):
+            yield Static(self._t(title_key, group=group_label), classes="dialog-header")
+            with Vertical(id="entry-form-fields", classes="dialog-body"):
                 for spec in self._specs:
                     yield from self._field_widgets(spec)
                 with Vertical(id="entry-form-extras"):
                     yield from self._render_extras()
-            yield Static("", id="entry-form-status")
-            with Horizontal(classes="dialog-actions"):
-                if self._group == "llms" or self._group == "accounts":
-                    yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
-                if self._group == "notifiers":
-                    # gateway-backed platforms continue into the guided
-                    # setup (Next); manual platforms test the connection
-                    yield Button(self._t("tui.btn_next"), id="entry-form-next", variant="primary")
-                    yield Button(self._t("tui.btn_test"), id="entry-form-test", variant="primary")
-                yield Button(
-                    self._t("tui.btn_save"), id="entry-form-save", variant="success", disabled=True
-                )
-                yield Button(self._t("tui.btn_back"), id="entry-form-back", variant="default")
+            with Vertical(classes="dialog-footer"):
+                yield Static("", id="entry-form-status", classes="dialog-status")
+                with Horizontal(classes="dialog-actions"):
+                    if self._group == "llms" or self._group == "accounts":
+                        yield Button(
+                            self._t("tui.btn_test"), id="entry-form-test", variant="primary"
+                        )
+                    if self._group == "notifiers":
+                        # Gateway-backed platforms continue into guided setup.
+                        yield Button(
+                            self._t("tui.btn_next"), id="entry-form-next", variant="primary"
+                        )
+                        yield Button(
+                            self._t("tui.btn_test"), id="entry-form-test", variant="primary"
+                        )
+                    yield Button(
+                        self._t("tui.btn_save"),
+                        id="entry-form-save",
+                        variant="success",
+                        disabled=True,
+                    )
+                    yield Button(self._t("tui.btn_back"), id="entry-form-back", variant="default")
 
     def _field_widgets(self, spec: OptionSpec) -> ComposeResult:
         widget_id = f"field-{_slug(spec.label)}"

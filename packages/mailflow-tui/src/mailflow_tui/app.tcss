@@ -183,6 +183,16 @@ Button:focus {
     text-style: bold underline;
 }
 
+ContentDialog .dialog-footer Button {
+    width: 1fr;
+    min-width: 0;
+    margin: 0 1 0 0;
+}
+
+ContentDialog AssistedInput > Button {
+    min-width: 8;
+}
+
 #mail-search-row {
     height: auto;
     align-vertical: middle;
@@ -1271,16 +1281,14 @@ ListEditScreen, EntryFormScreen {
 
 #entry-form-dialog {
     width: 88;
-    height: 85%;
+    height: auto;
     border: round $border-blurred;
     background: $surface;
     padding: 1 2;
 }
 
 #entry-form-fields {
-    height: 1fr;
-    border: round $border-blurred;
-    padding: 0 1;
+    height: auto;
 }
 
 #entry-form-status {

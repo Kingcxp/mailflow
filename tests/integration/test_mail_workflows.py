@@ -692,6 +692,7 @@ async def test_old_settings_import_previews_keeps_or_replaces_data_and_rolls_bac
     from mailflow.config import load_config, write_config
     from mailflow.permissions import PermissionContext, permission_scope
     from mailflow_tui.mail_workflows import ConfigImportScreen
+    from mailflow_tui.widgets import ContentDialog
     from textual.widgets import Checkbox, Static
 
     monkeypatch.setenv("MF_IMPORT_PASSWORD", "private-password")
@@ -750,10 +751,20 @@ async def test_old_settings_import_previews_keeps_or_replaces_data_and_rolls_bac
         cli_preview = await CommandRouter(service).execute(f'config import "{old_config}"')
         assert cli_preview.ok and service.config_path.read_bytes() == original_file
         app = App[None]()
-        async with app.run_test(size=(80, 24)) as pilot:
+        async with app.run_test(size=(120, 60)) as pilot:
             screen = ConfigImportScreen(cast(Any, adapter))
             await app.push_screen(screen)
             await until(pilot, lambda: bool(screen.query("#import-apply")))
+            await pilot.pause()
+            dialog = screen.query_one(ContentDialog)
+            assert dialog.region.height < app.size.height // 2
+            for width in (80, 60):
+                await pilot.resize_terminal(width, 24)
+                await pilot.pause()
+                close = screen.query_one("#import-close", Button)
+                assert close.region.bottom <= dialog.region.bottom <= app.size.height
+                assert dialog.max_scroll_y > 0
+            await pilot.resize_terminal(80, 24)
             screen.query_one("#import-config-path", Input).value = str(old_config)
             screen.query_one("#import-apply", Button).press()
             await until(

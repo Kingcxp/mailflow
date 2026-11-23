@@ -28,7 +28,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import ScrollableContainer, Vertical
+from textual.containers import ScrollableContainer, Vertical, VerticalScroll
 from textual.css.query import QueryError
 from textual.message import Message
 from textual.screen import ModalScreen
@@ -37,6 +37,35 @@ from textual.widgets import Input as TextualInput
 from textual.widgets import TextArea as TextualTextArea
 from textual.widgets._select import SelectCurrent, SelectOverlay
 from textual.widgets.input import Selection
+
+
+class ContentDialog(VerticalScroll):
+    """A content-sized modal frame with pinned title and action sections."""
+
+    DEFAULT_CSS = """
+    ContentDialog {
+        width: 88; max-width: 95%; height: auto; max-height: 90%;
+        background: $surface; border: round $accent; padding: 1 2;
+        overflow-x: hidden; scrollbar-size-vertical: 1;
+    }
+    ContentDialog > .dialog-header {
+        dock: top; height: auto; margin-bottom: 1;
+        color: $accent; text-style: bold;
+    }
+    ContentDialog > .dialog-footer {
+        dock: bottom; height: auto; padding-top: 1; background: $surface;
+    }
+    ContentDialog .dialog-body, ContentDialog .dialog-section { height: auto; }
+    ContentDialog .dialog-section { margin-top: 1; }
+    ContentDialog .dialog-description {
+        height: auto; color: $text-muted; margin-bottom: 1;
+    }
+    ContentDialog Static { height: auto; }
+    ContentDialog .dialog-status { height: auto; max-height: 4; overflow-y: auto; }
+    ContentDialog Horizontal { height: auto; align-vertical: middle; }
+    ContentDialog Input, ContentDialog Select { height: 3; }
+    ContentDialog Button { width: 1fr; min-width: 0; margin-right: 1; }
+    """
 
 
 def _label_ready(select: Select[object]) -> bool:
