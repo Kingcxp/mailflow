@@ -43,6 +43,7 @@ from mailflow_tui.remote import RemoteServiceAdapter
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.theme_preferences import load_theme_preferences
 from mailflow_tui.theme_select import ThemeSelect
+from mailflow_tui.theme_welcome import VSCODE_LIGHT_THEME
 from mailflow_tui.widgets import Input as EditingInput
 from mailflow_tui.widgets import PromptInput, SearchToggle, SelectionTable, ShortcutHelp
 from mailflow_tui.widgets import TextArea as EditingTextArea
@@ -164,7 +165,7 @@ async def test_theme_setting_applies_without_losing_input_or_restarting_connecti
         await settle(pilot)
         themes = builtin_themes()
         for name in themes:
-            resolved = "catppuccin-latte" if name == TERMINAL_THEME else name
+            resolved = VSCODE_LIGHT_THEME if name == TERMINAL_THEME else name
             scheme = themes[resolved]
             app.query_one("#value-general-theme", Select).value = name
             await pilot.pause()

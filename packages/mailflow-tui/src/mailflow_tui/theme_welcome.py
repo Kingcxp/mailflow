@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, ClassVar
 
-from mailflow.themes import DEFAULT_THEME, TERMINAL_THEME
+from mailflow.themes import TERMINAL_THEME, builtin_themes
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -14,9 +14,12 @@ from textual.dom import DOMNode
 from textual.screen import Screen
 from textual.widgets import Button, Static
 
+VSCODE_DARK_THEME = "vscode-dark-modern"
+VSCODE_LIGHT_THEME = "vscode-light-modern"
+
 _CHOICES: dict[str, str | None] = {
-    "theme-dark": DEFAULT_THEME,
-    "theme-light": "catppuccin-latte",
+    "theme-dark": VSCODE_DARK_THEME,
+    "theme-light": VSCODE_LIGHT_THEME,
     "theme-auto": TERMINAL_THEME,
     "theme-current": None,
 }
@@ -86,25 +89,32 @@ class ThemeWelcomeScreen(Screen[str | None]):
     """
 
     def __init__(
-        self, t: Callable[[str], str], *, on_preview: Callable[[str | None], None]
+        self,
+        t: Callable[[str], str],
+        *,
+        current_theme: str,
+        on_preview: Callable[[str | None], None],
     ) -> None:
         super().__init__()
         self._t = t
+        self._current_theme = current_theme
         self._on_preview = on_preview
 
     def compose(self) -> ComposeResult:
         dark_preview = Text()
-        dark_preview.append("● ", style="#f4dbd6")
-        dark_preview.append("● ", style="#8aadf4")
-        dark_preview.append("●", style="#a6da95")
+        dark_palette = builtin_themes()[VSCODE_DARK_THEME].palette()
+        dark_preview.append("● ", style=dark_palette["blue"])
+        dark_preview.append("● ", style=dark_palette["yellow"])
+        dark_preview.append("●", style=dark_palette["green"])
         light_preview = Text()
-        light_preview.append("● ", style="#d20f39")
-        light_preview.append("● ", style="#1e66f5")
-        light_preview.append("●", style="#40a02b")
+        light_palette = builtin_themes()[VSCODE_LIGHT_THEME].palette()
+        light_preview.append("● ", style=light_palette["blue"])
+        light_preview.append("● ", style=light_palette["red"])
+        light_preview.append("●", style=light_palette["green"])
         auto_preview = Text()
-        auto_preview.append("◐ ", style="#8aadf4")
-        auto_preview.append("◑ ", style="#eed49f")
-        auto_preview.append("◒", style="#a6da95")
+        auto_preview.append("◐ ", style=dark_palette["blue"])
+        auto_preview.append("◑ ", style=light_palette["blue"])
+        auto_preview.append("◒", style=light_palette["green"])
 
         with Vertical(id="theme-welcome"):
             yield Static(self._t("tui.theme_welcome_title"), id="theme-welcome-title")
@@ -141,6 +151,9 @@ class ThemeWelcomeScreen(Screen[str | None]):
     def _preview_node(self, node: DOMNode | None) -> None:
         while node is not None and node is not self:
             choice = (node.id or "").removesuffix("-row")
+            if choice == "theme-current":
+                self._on_preview(self._current_theme)
+                return
             if choice in _CHOICES:
                 self._on_preview(_CHOICES[choice])
                 return

@@ -91,7 +91,11 @@ from mailflow_tui.settings import ConnectionsPane, MailHistoryScreen, SettingsPa
 from mailflow_tui.smart_action_review import SmartActionReviewModal
 from mailflow_tui.terminal_theme import terminal_background_mode
 from mailflow_tui.theme_preferences import load_theme_preferences, save_theme_preferences
-from mailflow_tui.theme_welcome import ThemeWelcomeScreen
+from mailflow_tui.theme_welcome import (
+    VSCODE_DARK_THEME,
+    VSCODE_LIGHT_THEME,
+    ThemeWelcomeScreen,
+)
 from mailflow_tui.themes import apply_color_scheme, theme_catalog, urgency_style
 from mailflow_tui.todo_create import TodoCreateModal, TodoEditModal
 from mailflow_tui.view_state import TableRowEvent, TableView, update_table
@@ -5401,7 +5405,9 @@ class MailFlowApp(App[None]):
             and configured == DEFAULT_THEME
             and not preference
         ):
-            selected = "catppuccin-latte" if self._terminal_background == "light" else DEFAULT_THEME
+            selected = (
+                VSCODE_LIGHT_THEME if self._terminal_background == "light" else VSCODE_DARK_THEME
+            )
         scheme = schemes[selected]
         signature = (configured, selected, scheme.model_dump_json())
         if signature != self._theme_signature:
@@ -5657,7 +5663,11 @@ class MailFlowApp(App[None]):
                 self.show_startup_splash()
             else:
                 self.push_screen(
-                    ThemeWelcomeScreen(self._service.t, on_preview=self.preview_color_scheme),
+                    ThemeWelcomeScreen(
+                        self._service.t,
+                        current_theme=configured_theme,
+                        on_preview=self.preview_color_scheme,
+                    ),
                     self._theme_welcome_selected,
                 )
         else:

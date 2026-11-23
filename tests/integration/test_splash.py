@@ -8,7 +8,11 @@ import pytest
 from mailflow.themes import DEFAULT_THEME
 from mailflow_tui.splash import SplashScreen
 from mailflow_tui.theme_preferences import load_theme_preferences
-from mailflow_tui.theme_welcome import ThemeWelcomeScreen
+from mailflow_tui.theme_welcome import (
+    VSCODE_DARK_THEME,
+    VSCODE_LIGHT_THEME,
+    ThemeWelcomeScreen,
+)
 from textual.color import Color
 from textual.screen import Screen
 from textual.widgets import Static
@@ -122,22 +126,23 @@ async def test_first_use_theme_choice_is_saved_for_this_machine(
             await until(pilot, lambda: isinstance(app.screen, ThemeWelcomeScreen))
             assert isinstance(app.screen, ThemeWelcomeScreen)
             await until(pilot, lambda: app.focused is app.screen.query_one("#theme-dark"))
+            await until(pilot, lambda: app.theme == VSCODE_DARK_THEME)
             await pilot.hover("#theme-light-row .theme-choice-title")
-            await until(pilot, lambda: app.theme == "catppuccin-latte")
-            assert app.current_theme.background == "#eff1f5"
+            await until(pilot, lambda: app.theme == VSCODE_LIGHT_THEME)
+            assert app.current_theme.background == "#ffffff"
             assert service.config.general.theme == DEFAULT_THEME
             assert load_theme_preferences() == {}
             await pilot.hover("#theme-current")
             await until(pilot, lambda: app.theme == DEFAULT_THEME)
             # Hovering does not move keyboard focus from the first button.
             await pilot.press("tab")
-            await until(pilot, lambda: app.theme == "catppuccin-latte")
+            await until(pilot, lambda: app.theme == VSCODE_LIGHT_THEME)
             await pilot.press("enter" if confirm else "escape")
             await until(pilot, lambda: not isinstance(app.screen, ThemeWelcomeScreen))
             await until(pilot, lambda: bool(load_theme_preferences()))
-            assert app.theme == ("catppuccin-latte" if confirm else DEFAULT_THEME)
+            assert app.theme == (VSCODE_LIGHT_THEME if confirm else DEFAULT_THEME)
             assert load_theme_preferences() == (
-                {"theme_onboarding_complete": True, "theme": "catppuccin-latte"}
+                {"theme_onboarding_complete": True, "theme": VSCODE_LIGHT_THEME}
                 if confirm
                 else {"theme_onboarding_complete": True}
             )

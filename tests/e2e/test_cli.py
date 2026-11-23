@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 from mailflow.config import MailFlowConfig, load_config, write_config
+from mailflow_tui.theme_welcome import VSCODE_DARK_THEME
 
 
 @pytest.fixture
@@ -139,7 +140,7 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
 
     session_dir = cli_config.parent / "sessions"
     monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(session_dir))
-    config_before = await asyncio.to_thread(cli_config.read_bytes)
+    original_config = await asyncio.to_thread(cli_config.read_bytes)
     run_cli(cli_config, "tui", "--background", "--name", "inbox", columns=80)
     info = await find_instance("inbox")
 
@@ -172,11 +173,13 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
         attached.append(writer)
         send_frame(writer, {"event": "Resize", "size": [120, 40]})
         await output_until(reader, "Choose your color theme")
-        for key in ("tab", "tab", "tab", "enter"):
-            send_frame(writer, {"event": "Key", "key": key, "character": None})
+        send_frame(writer, {"event": "Key", "key": "enter", "character": None})
         await output_until(reader, "Press any key or click to skip")
         preferences = json.loads((session_dir / "theme-preferences.state").read_text("utf-8"))
-        assert preferences == {"theme_onboarding_complete": True}
+        assert preferences == {"theme_onboarding_complete": True, "theme": VSCODE_DARK_THEME}
+        assert load_config(cli_config).general.theme == VSCODE_DARK_THEME
+        config_after_theme_choice = await asyncio.to_thread(cli_config.read_bytes)
+        assert config_after_theme_choice != original_config
         send_frame(writer, {"event": "Key", "key": "escape", "character": None})
         await output_until(reader, "CLI account")
         assert (await request(info, "status"))["state"] == "attached"
@@ -226,7 +229,7 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
         # Stopping releases the database/name locks and preserves the real config.
         run_cli(cli_config, "tui", "--background", "--name", "inbox")
         assert (await find_instance("inbox")).pid != info.pid
-        assert await asyncio.to_thread(cli_config.read_bytes) == config_before
+        assert await asyncio.to_thread(cli_config.read_bytes) == config_after_theme_choice
 
         # An invalid host config exits visibly and never appears as a live instance.
         config.storage.path = str(cli_config.parent / "broken.db")
@@ -240,6 +243,19 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
         # The TUI's exit action shuts down the host, rather than leaving it detached.
         reader, writer, _ = await connect(second, "attach")
         attached.append(writer)
+        await output_until(reader, "Press any key or click to skip")
+        send_frame(writer, {"event": "Key", "key": "escape", "character": None})
+        await output_until(reader, "CLI account")
+        send_frame(writer, {"event": "Key", "key": "ctrl+q", "character": None})
+        await event_until(reader, "stopped")
+        assert {item.name for item, _state in await list_instances()} == {"inbox"}
+
+        # Restarting after a user exit must reopen with the persisted VS Code theme.
+        run_cli(second_config, "tui", "--background", "--name", "second")
+        restarted = await find_instance("second")
+        reader, writer, _ = await connect(restarted, "attach")
+        attached.append(writer)
+        send_frame(writer, {"event": "Resize", "size": [120, 40]})
         await output_until(reader, "Press any key or click to skip")
         send_frame(writer, {"event": "Key", "key": "escape", "character": None})
         await output_until(reader, "CLI account")
