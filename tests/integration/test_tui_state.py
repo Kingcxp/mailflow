@@ -180,6 +180,9 @@ async def test_theme_setting_applies_without_losing_input_or_restarting_connecti
             # actions and compact toggles; theme previews must update both colors.
             buttons = scheme.button_palette()
             for button in app.query(Button):
+                # Textual's default disabled opacity must not fade an already
+                # muted label again after the theme resolves its colors.
+                assert button.styles.text_opacity == 1
                 colors = buttons[cast(ButtonVariant, button.variant)]
                 states = ("disabled_",) if button.is_disabled else ("", "hover_", "active_")
                 pairs = {

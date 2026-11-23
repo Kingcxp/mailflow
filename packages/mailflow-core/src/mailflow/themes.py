@@ -372,26 +372,33 @@ class ColorScheme(BaseModel):
         for variant, accent in _BUTTON_ACCENTS.items():
             custom = self.buttons.get(variant, ButtonColors())
             background = custom.background or palette[accent]
-            foreground = custom.foreground or _button_text(background, palette)
+            foreground = _button_text(background, palette, custom.foreground or "")
             hover = custom.hover_background or (
                 palette["surface1"] if variant == "default" else _blend(background, "#ffffff", 0.12)
             )
             active = custom.active_background or (
                 palette["surface2"] if variant == "default" else _blend(background, "#000000", 0.12)
             )
-            disabled = custom.disabled_background or _blend(background, palette["base"], 0.72)
+            disabled = custom.disabled_background or _blend(background, palette["base"], 0.88)
             result[variant] = {
                 "background": background,
                 "foreground": foreground,
                 "hover_background": hover,
-                "hover_foreground": custom.hover_foreground
-                or _button_text(hover, palette, foreground),
+                "hover_foreground": _button_text(
+                    hover, palette, custom.hover_foreground or foreground
+                ),
                 "active_background": active,
-                "active_foreground": custom.active_foreground
-                or _button_text(active, palette, foreground),
+                "active_foreground": _button_text(
+                    active, palette, custom.active_foreground or foreground
+                ),
                 "disabled_background": disabled,
-                "disabled_foreground": custom.disabled_foreground
-                or _blend(palette["subtext0"], disabled, 0.25),
+                # Muted fills and normal-weight labels indicate unavailable
+                # actions; fading the text must not make their names unreadable.
+                "disabled_foreground": _button_text(
+                    disabled,
+                    palette,
+                    custom.disabled_foreground or _blend(palette["text"], disabled, 0.25),
+                ),
             }
         return result
 

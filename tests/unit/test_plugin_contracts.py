@@ -132,12 +132,28 @@ def test_builtin_theme_catalog_has_complete_palettes() -> None:
         assert scheme.is_dark is is_dark
         assert len(scheme.colors) == 26
         assert scheme.palette()["base"] == background
-    for scheme in themes.values():
+    # Plugin overrides can also choose foregrounds too close to their fills.
+    low_contrast = ColorScheme(
+        name="Low contrast plugin",
+        buttons={
+            "primary": ButtonColors(
+                background="#444444",
+                foreground="#444444",
+                hover_background="#666666",
+                hover_foreground="#666666",
+                active_background="#555555",
+                active_foreground="#555555",
+                disabled_background="#777777",
+                disabled_foreground="#777777",
+            )
+        },
+    )
+    for scheme in (*themes.values(), low_contrast):
         buttons = scheme.button_palette()
         assert len({colors["background"] for colors in buttons.values()}) == 5
         for colors in buttons.values():
             assert colors["disabled_background"] != colors["background"]
-            for state in ("", "hover_", "active_"):
+            for state in ("", "hover_", "active_", "disabled_"):
                 light, dark = sorted(
                     (
                         luminance(colors[state + "foreground"]),

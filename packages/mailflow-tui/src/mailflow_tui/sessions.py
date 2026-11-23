@@ -295,12 +295,10 @@ def _spawn(info: SessionInfo) -> subprocess.Popen[bytes]:
         "PYTHONUNBUFFERED": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
     }
-    if (
-        os.name == "nt"
-        and environment.get("TEXTUAL_COLOR_SYSTEM", "auto").strip().lower() == "auto"
-    ):
-        # This host renders through the session socket, so Rich sees the log
-        # file instead of Windows Terminal and otherwise downgrades RGB to 256 colors.
+    if environment.get("TEXTUAL_COLOR_SYSTEM", "auto").strip().lower() == "auto":
+        # The host renders through a socket, not the attached terminal. Inherited
+        # TERM values (notably tmux's screen-256color) can quantize different theme
+        # colors into the same color. Keep RGB unless a color limit is explicit.
         environment["TEXTUAL_COLOR_SYSTEM"] = "truecolor"
     _log_session(info, f"Launching host with {sys.executable} in {info.cwd}")
     with os.fdopen(os.open(info.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "ab") as log:

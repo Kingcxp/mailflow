@@ -140,16 +140,21 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
 
     session_dir = cli_config.parent / "sessions"
     monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(session_dir))
+    # A detached host must preserve the theme even when tmux only advertises 256 colors.
+    monkeypatch.setenv("TERM", "screen-256color")
+    monkeypatch.delenv("COLORTERM", raising=False)
+    monkeypatch.setenv("TEXTUAL_COLOR_SYSTEM", "auto")
     original_config = await asyncio.to_thread(cli_config.read_bytes)
     run_cli(cli_config, "tui", "--background", "--name", "inbox", columns=80)
     info = await find_instance("inbox")
 
-    async def output_until(reader: asyncio.StreamReader, expected: str) -> None:
+    async def output_until(reader: asyncio.StreamReader, expected: str) -> str:
         output = ""
         async with asyncio.timeout(8):
             while expected not in output:
                 frame = await read_frame(reader)
                 output += str(frame.get("data", ""))
+        return output
 
     async def event_until(reader: asyncio.StreamReader, expected: str) -> None:
         async with asyncio.timeout(8):
@@ -172,7 +177,8 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
         reader, writer, _ = await connect(info, "attach")
         attached.append(writer)
         send_frame(writer, {"event": "Resize", "size": [120, 40]})
-        await output_until(reader, "Choose your color theme")
+        output = await output_until(reader, "Choose your color theme")
+        assert "38;2;" in output and "48;2;" in output
         send_frame(writer, {"event": "Key", "key": "enter", "character": None})
         await output_until(reader, "Press any key or click to skip")
         preferences = json.loads((session_dir / "theme-preferences.state").read_text("utf-8"))
@@ -215,6 +221,8 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
         config = load_config(cli_config)
         config.storage.path = str(cli_config.parent / "second.db")
         write_config(config, second_config)
+        # An explicitly configured limit still works for older terminals.
+        monkeypatch.setenv("TEXTUAL_COLOR_SYSTEM", "256")
         run_cli(second_config, "tui", "--background", "--name", "second")
         second = await find_instance("second")
         assert second.pid != info.pid and second.port != info.port
@@ -243,7 +251,9 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
         # The TUI's exit action shuts down the host, rather than leaving it detached.
         reader, writer, _ = await connect(second, "attach")
         attached.append(writer)
-        await output_until(reader, "Press any key or click to skip")
+        output = await output_until(reader, "Press any key or click to skip")
+        assert "38;5;" in output and "48;5;" in output
+        assert "38;2;" not in output and "48;2;" not in output
         send_frame(writer, {"event": "Key", "key": "escape", "character": None})
         await output_until(reader, "CLI account")
         send_frame(writer, {"event": "Key", "key": "ctrl+q", "character": None})
