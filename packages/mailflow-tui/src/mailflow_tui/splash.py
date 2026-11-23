@@ -7,61 +7,19 @@ building up animation frames. No tasks or network requests belong here.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable
 from time import monotonic
 from typing import ClassVar, cast
 
-from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
-from textual.color import Color
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.timer import Timer
 from textual.widgets import Static
 
-from mailflow_tui.animation import mailroom_frame, theme_palette
-
-_LOGO_ART = {
-    "M": ("█   █", "██ ██", "█ █ █", "█   █", "█   █"),
-    "A": (" ███ ", "█   █", "█████", "█   █", "█   █"),
-    "I": ("█████", "  █  ", "  █  ", "  █  ", "█████"),
-    "L": ("█    ", "█    ", "█    ", "█    ", "█████"),
-    "F": ("█████", "█    ", "███  ", "█    ", "█    "),
-    "O": (" ███ ", "█   █", "█   █", "█   █", " ███ "),
-    "W": ("█   █", "█   █", "█ █ █", "██ ██", "█   █"),
-}
-_LOGO = "MAILFLOW"
-
-
-def _logo_text(elapsed: float, width: int, palette: dict[str, Color]) -> Text:
-    """Reveal the original wordmark, then send a soft highlight across it."""
-    if width < 48:
-        rows = [_LOGO]
-    else:
-        gap = "  " if width >= 60 else " "
-        rows = [gap.join(_LOGO_ART[letter][row] for letter in _LOGO) for row in range(5)]
-    columns = len(rows[0])
-    colors: list[str] = []
-    for x in range(columns):
-        position = x / max(1, columns - 1)
-        wave = (1 + math.sin(position * math.pi * 1.5 - elapsed)) / 2
-        color = palette["blue"].blend(palette["mauve"], wave)
-        color = color.blend(palette["teal"], position * 0.4)
-        reveal = min(1.0, max(0.0, elapsed * 2.8 - position * 0.8))
-        color = palette["surface1"].blend(color, 0.35 + reveal * 0.65)
-        shine = max(0.0, 1 - abs(position - (elapsed * 0.6 - 0.25)) / 0.14)
-        colors.append(color.blend(palette["text"], shine * 0.7).hex)
-    text = Text(no_wrap=True, overflow="crop", justify="center")
-    for row, line in enumerate(rows):
-        if row:
-            text.append("\n")
-        text.append(" " * max(0, (width - columns) // 2))
-        for x, char in enumerate(line):
-            text.append("#" if char == "█" else char, style=colors[x])
-    return text
+from mailflow_tui.animation import theme_palette, welcome_frame
 
 
 class SplashScreen(ModalScreen[None]):
@@ -86,6 +44,11 @@ class SplashScreen(ModalScreen[None]):
         width: 100%;
         height: auto;
         content-align: center middle;
+    }
+    #splash-title {
+        color: $ctp-text;
+        text-style: bold;
+        margin-top: 1;
     }
     #splash-tagline {
         color: $ctp-subtext0;
@@ -125,6 +88,7 @@ class SplashScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="splash-content"):
             yield Static("", id="splash-art")
+            yield Static("MailFlow", id="splash-title")
             yield Static(self._t("tui.splash_tagline"), id="splash-tagline")
             yield Static(self._version, id="splash-version", markup=False)
             yield Static(self._t("tui.splash_skip"), id="splash-skip")
@@ -149,15 +113,11 @@ class SplashScreen(ModalScreen[None]):
         if self._finished:
             return
         palette = theme_palette(self)
-        width = max(9, min(60, self.size.width - 4))
+        width = max(9, min(64, self.size.width - 4))
         compact = self.size.height < 22
         self.set_class(compact, "compact")
-        if compact:
-            width = min(width, 47)
-        elapsed = monotonic() - self._started if self._motion_enabled else 1.0
-        art = _logo_text(elapsed, width, palette)
-        art.append("\n\n")
-        art.append_text(mailroom_frame(elapsed, width, palette, "welcome", compact=compact))
+        elapsed = monotonic() - self._started if self._motion_enabled else self._duration
+        art = welcome_frame(elapsed, width, palette, duration=self._duration, compact=compact)
         shape = (width, compact)
         self.query_one("#splash-art", Static).update(art, layout=shape != self._art_size)
         self._art_size = shape
