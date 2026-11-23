@@ -285,12 +285,19 @@ async def test_docker_setup_confirmation_password_and_qr_can_be_cancelled(
         await check(decision)
 
 
-@pytest.mark.parametrize("failure", ["qr-timeout", "unreachable-endpoint"])
+@pytest.mark.parametrize("failure", ["setup-command", "qr-timeout", "unreachable-endpoint"])
 @pytest.mark.parametrize("language", ["en", "zh-CN"])
 async def test_failed_guide_cannot_save_and_can_be_cancelled(
     failure: str, language: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from mailflow.gateway import GatewaySetupError
     from mailflow_tui import gateway_guide
+
+    diagnostic = (
+        "E: Unable to locate package docker.io\n"
+        + "\n".join(f"package detail {index}" for index in range(25))
+        + "\n[red]literal output[/red] configured-secret draft-secret"
+    )
 
     class Clock:
         now = 0.0
@@ -321,11 +328,16 @@ async def test_failed_guide_cannot_save_and_can_be_cancelled(
             self.shutdowns: list[tuple[str, str]] = []
             self.gateways = self
             self.t = I18n(language).t
+            self.config = {"notifiers": [{"options": {"access_token": "configured-secret"}}]}
 
         async def gateway_detect(self, provider: str) -> str:
             return "ready"
 
         async def gateway_provision(self, *args: Any) -> Any:
+            if failure == "setup-command":
+                raise GatewaySetupError(
+                    "gateway.napcat_docker_installing_failed", detail=diagnostic
+                )
             return SimpleNamespace(endpoint="http://fake-endpoint")
 
         def progress(self, provider: str, instance_id: str) -> None:
@@ -342,16 +354,43 @@ async def test_failed_guide_cannot_save_and_can_be_cancelled(
             self.shutdowns.append((provider, instance_id))
 
     service = GuideService()
-    guide = gateway_guide.GatewayGuideModal(cast(Any, service), "wechatpadpro", "one", {})
+    guide = gateway_guide.GatewayGuideModal(
+        cast(Any, service), "wechatpadpro", "one", {"access_token": "draft-secret"}
+    )
     results: list[dict[str, Any] | None] = []
 
     class GuideApp(App[None]):
+        CSS_PATH = (
+            Path(__file__).resolve().parents[2] / "packages/mailflow-tui/src/mailflow_tui/app.tcss"
+        )
+
         def on_mount(self) -> None:
             self.push_screen(guide, results.append)
 
     app = GuideApp()
     async with app.run_test(size=(140, 50)) as pilot:
         await until(pilot, lambda: bool(service.shutdowns))
+        if failure == "setup-command":
+            await until(pilot, lambda: guide.query_one("#guide-error", Static).display)
+            await pilot.resize_terminal(60, 24)
+            panel = str(guide.query_one("#guide-error", Static).render())
+            assert service.t("gateway.napcat_docker_installing_failed") in panel
+            assert "Unable to locate package docker.io" in panel
+            assert "[red]literal output[/red]" in panel
+            assert "configured-secret" not in panel and "draft-secret" not in panel
+            assert guide.query_one("#guide-done", Button).disabled
+            await until(
+                pilot,
+                lambda: (
+                    guide.region.width == 60
+                    and guide.region.contains_region(
+                        guide.query_one("#guide-cancel", Button).region
+                    )
+                ),
+            )
+            await pilot.click("#guide-cancel")
+            await until(pilot, lambda: results == [None])
+            return
         key = (
             "tui.bots_guide_qr_timeout"
             if failure == "qr-timeout"

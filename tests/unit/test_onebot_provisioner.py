@@ -241,7 +241,18 @@ async def test_docker_setup_decline_failure_and_cancel_do_not_start_gateway(
                     if outcome == "cancel":
                         entered.set()
                         await asyncio.Event().wait()
-                    return subprocess.CompletedProcess(args, 1, "", "fake package failure")
+                    return subprocess.CompletedProcess(
+                        args,
+                        1 if outcome == "install-failed" else 0,
+                        "package dependency information",
+                        "fake package failure" if outcome == "install-failed" else "",
+                    )
+                if "systemctl" in args and "enable" in args:
+                    return subprocess.CompletedProcess(args, 1, "", "Docker service failed")
+                if "journalctl" in args:
+                    return subprocess.CompletedProcess(
+                        args, 0, "fake daemon cause: overlay filesystem unavailable", ""
+                    )
                 return subprocess.CompletedProcess(args, 0, "not-found", "")
 
             def which(name: str) -> str | None:
@@ -276,10 +287,21 @@ async def test_docker_setup_decline_failure_and_cancel_do_not_start_gateway(
                     "custom-connection": "context",
                     "saved-context": "context",
                     "install-failed": "installing_failed",
+                    "start-failed": "starting_failed",
                 }[outcome]
                 assert error.value.code == f"gateway.napcat_docker_{expected}"
+                if outcome == "install-failed":
+                    assert "fake package failure" in error.value.detail
+                    assert "package dependency information" in error.value.detail
+                if outcome == "start-failed":
+                    assert "overlay filesystem unavailable" in error.value.detail
             assert not any(
-                set(args).intersection({"enable", "usermod", "run"}) for args in commands
+                set(args).intersection(
+                    {"usermod", "run"}
+                    if outcome == "start-failed"
+                    else {"enable", "usermod", "run"}
+                )
+                for args in commands
             )
             if outcome in {"decline", "unsupported", "custom-connection"}:
                 assert commands == []
@@ -290,6 +312,7 @@ async def test_docker_setup_decline_failure_and_cancel_do_not_start_gateway(
         "custom-connection",
         "saved-context",
         "install-failed",
+        "start-failed",
         "cancel",
     ):
         await check(outcome)

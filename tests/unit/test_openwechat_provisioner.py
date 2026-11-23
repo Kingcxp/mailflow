@@ -82,6 +82,21 @@ async def test_install_builds_bridge(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert len(builds) == 3
     assert session.read_text(encoding="utf-8") == "saved login"
 
+    from mailflow.gateway import GatewaySetupError
+
+    async def failed_build(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args[0], 1, stdout="", stderr="fake Go module download denied"
+        )
+
+    monkeypatch.setattr(gateway, "run_command", failed_build)
+    source.write_bytes(b"source v3")
+    with pytest.raises(GatewaySetupError) as failure:
+        await prov.install("wx-1", {})
+    assert "Go module download denied" in failure.value.detail
+    assert bridge.read_bytes() == b"compiled source v2"
+    assert session.read_text(encoding="utf-8") == "saved login"
+
 
 @pytest.mark.asyncio
 async def test_start_requires_install() -> None:

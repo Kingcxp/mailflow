@@ -209,7 +209,9 @@ class WhatsappProvisioner(LocalProcessGateway, GatewayProvisioner):
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()[-400:]
             logger.error("whatsapp %s: npm install failed: %s", instance_id, detail)
-            raise GatewaySetupError("gateway.npm_failed")
+            raise GatewaySetupError(
+                "gateway.npm_failed", detail=(result.stderr or result.stdout).strip()
+            )
         if not _deps_installed(target):
             raise RuntimeError(
                 f"whatsapp {instance_id}: npm install finished but "

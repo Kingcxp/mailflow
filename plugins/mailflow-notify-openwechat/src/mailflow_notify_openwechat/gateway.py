@@ -121,7 +121,9 @@ class OpenWechatProvisioner(LocalProcessGateway, GatewayProvisioner):
         )
         if result.returncode != 0:
             logger.error("openwechat %s: bridge build failed: %s", instance_id, result.stderr)
-            raise GatewaySetupError("gateway.go_build_failed")
+            raise GatewaySetupError(
+                "gateway.go_build_failed", detail=(result.stderr or result.stdout).strip()
+            )
         await asyncio.to_thread(os.chmod, bridge, 0o755)
         await asyncio.to_thread(
             (target / "mailflow.json").write_text,

@@ -274,7 +274,7 @@ async def test_provision_install_failure_marks_error() -> None:
 
     class FailingInstall(FakeProvisioner):
         async def install(self, instance_id: str, options: dict[str, Any]) -> None:
-            raise GatewaySetupError("gateway.napcat_retired")
+            raise GatewaySetupError("gateway.napcat_retired", detail="fake installer cause")
 
     provisioner = FailingInstall()
     manager, _storage = _manager(provisioner)
@@ -286,6 +286,7 @@ async def test_provision_install_failure_marks_error() -> None:
     assert instance is not None
     assert instance.status == "error"
     assert failure.value.code == "gateway.napcat_retired"
+    assert failure.value.detail == "fake installer cause"
     assert error_text(failure.value, I18n("zh-CN").t) == I18n("zh-CN").t(failure.value.code)
     assert I18n("en").t(failure.value.code) in instance.error
     assert provisioner.stopped == ["gw-1"]

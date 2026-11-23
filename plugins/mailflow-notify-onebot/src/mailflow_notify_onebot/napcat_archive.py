@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -94,26 +95,27 @@ def docker_command(command: list[str]) -> list[str]:
     return command
 
 
-async def _docker_ready() -> bool:
+async def _docker_status() -> tuple[bool, str]:
     if shutil.which("docker") is None:
-        return False
+        return False, ""
     result = await run_command(
         docker_command(["docker", "info", "--format", "{{.OSType}}"]), timeout_seconds=20.0
     )
     if result.returncode or result.stdout.strip() != "linux":
         logger.debug("NapCat Docker unavailable: %s", result.stderr.strip())
-        return False
-    return True
+        return False, (result.stderr or result.stdout).strip()
+    return True, ""
 
 
 async def require_docker(options: dict[str, Any] | None = None) -> None:
-    if await _docker_ready():
+    ready, detail = await _docker_status()
+    if ready:
         return
     if options is None:
-        raise GatewaySetupError("gateway.napcat_docker_required")
+        raise GatewaySetupError("gateway.napcat_docker_required", detail=detail)
     confirm = cast(Callable[[], Awaitable[bool]] | None, options.get("_confirm_docker_setup"))
     if not callable(confirm) and not options.get("install_dependencies", False):
-        raise GatewaySetupError("gateway.napcat_docker_required")
+        raise GatewaySetupError("gateway.napcat_docker_required", detail=detail)
     try:
         distribution = platform.freedesktop_os_release()
     except OSError as exc:
@@ -133,12 +135,15 @@ async def require_docker(options: dict[str, Any] | None = None) -> None:
     if shutil.which("docker") is not None:
         context = await run_command(["docker", "context", "show"], timeout_seconds=10.0)
         if context.returncode or context.stdout.strip() != "default":
-            raise GatewaySetupError("gateway.napcat_docker_context")
+            raise GatewaySetupError(
+                "gateway.napcat_docker_context", detail=(context.stderr or detail).strip()
+            )
     if callable(confirm) and not await confirm():
         raise asyncio.CancelledError
     await _prepare_docker(options)
-    if not await _docker_ready():
-        raise GatewaySetupError("gateway.napcat_docker_access")
+    ready, detail = await _docker_status()
+    if not ready:
+        raise GatewaySetupError("gateway.napcat_docker_access", detail=detail)
 
 
 async def _prepare_docker(options: dict[str, Any]) -> None:
@@ -156,28 +161,41 @@ async def _prepare_docker(options: dict[str, Any]) -> None:
                     raise GatewaySetupError("gateway.napcat_docker_admin")
                 password = str(await asyncio.to_thread(ask))
 
-        async def step(command: list[str], key: str, percent: float, limit: float) -> None:
-            if progress is not None:
-                progress.update(percent, f"gateway.napcat_docker_{key}", "installing")
+        async def execute(command: list[str], limit: float) -> subprocess.CompletedProcess[str]:
             if uid != 0:
                 command = [
                     "sudo",
                     *(["-k", "-S", "-p", ""] if password is not None else ["-n"]),
                     *command,
                 ]
-            result = await run_command(
+            return await run_command(
                 command,
                 timeout_seconds=limit,
                 input_text=password + "\n" if password is not None else None,
             )
+
+        async def step(command: list[str], key: str, percent: float, limit: float) -> None:
+            if progress is not None:
+                progress.update(percent, f"gateway.napcat_docker_{key}", "installing")
+            result = await execute(command, limit)
             if result.returncode:
-                detail = (result.stderr or result.stdout).strip()
+                detail = "\n".join(
+                    part.strip() for part in (result.stdout, result.stderr) if part.strip()
+                )
+                if key == "starting":
+                    with contextlib.suppress(OSError, TimeoutError):
+                        journal = await execute(
+                            ["journalctl", "-u", "docker", "--no-pager", "-n", "30", "-o", "cat"],
+                            10.0,
+                        )
+                        if journal.returncode == 0 and journal.stdout.strip():
+                            detail += "\n\n" + journal.stdout.strip()
                 if password:
                     detail = detail.replace(password, "***")
                 logger.error("NapCat Docker %s failed: %s", key, detail)
                 if "incorrect password" in detail.lower() or "not in the sudoers" in detail.lower():
-                    raise GatewaySetupError("gateway.napcat_docker_admin")
-                raise GatewaySetupError(f"gateway.napcat_docker_{key}_failed")
+                    raise GatewaySetupError("gateway.napcat_docker_admin", detail=detail)
+                raise GatewaySetupError(f"gateway.napcat_docker_{key}_failed", detail=detail)
 
         service = await run_command(
             ["systemctl", "show", "--property=LoadState", "--value", "docker"],
@@ -244,7 +262,9 @@ async def load_image(archive: Path) -> str:
     )
     if result.returncode or not await image_available(image):
         logger.error("NapCat image import failed: %s", result.stderr.strip())
-        raise GatewaySetupError("gateway.napcat_docker_load_failed")
+        raise GatewaySetupError(
+            "gateway.napcat_docker_load_failed", detail=(result.stderr or result.stdout).strip()
+        )
     return image
 
 
@@ -313,7 +333,10 @@ class DockerLaunch:
             )
             if result.returncode:
                 logger.error("NapCat container lookup failed: %s", result.stderr.strip())
-                raise GatewaySetupError("gateway.napcat_docker_stop_failed")
+                raise GatewaySetupError(
+                    "gateway.napcat_docker_stop_failed",
+                    detail=(result.stderr or result.stdout).strip(),
+                )
             containers = result.stdout.split()
             if containers:
                 removed = subprocess.run(
@@ -324,4 +347,7 @@ class DockerLaunch:
                 )
                 if removed.returncode:
                     logger.error("NapCat container cleanup failed: %s", removed.stderr.strip())
-                    raise GatewaySetupError("gateway.napcat_docker_stop_failed")
+                    raise GatewaySetupError(
+                        "gateway.napcat_docker_stop_failed",
+                        detail=(removed.stderr or removed.stdout).strip(),
+                    )

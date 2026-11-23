@@ -45,9 +45,10 @@ class GatewayNotInstalledError(RuntimeError):
 class GatewaySetupError(RuntimeError):
     """An actionable setup failure, translated by the calling interface."""
 
-    def __init__(self, code: str, **params: Any) -> None:
+    def __init__(self, code: str, *, detail: str = "", **params: Any) -> None:
         self.code = code
         self.params = params
+        self.detail = detail
         super().__init__(I18n().t(code, **params))
 
 

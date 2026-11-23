@@ -249,11 +249,43 @@ def error_message(
     )
 
 
+def gateway_error_detail(
+    service: Any,
+    error: BaseException | str,
+    *,
+    extra_secrets: Iterable[str] = (),
+) -> str:
+    """Show gateway diagnostics with a translated explanation and redacted credentials."""
+    summary = str(service.t("gateway.operation_failed"))
+    if isinstance(error, BaseException):
+        summary = error_detail(service, error)
+        detail = str(getattr(error, "detail", "") or "")
+        if not detail and not getattr(error, "code", ""):
+            detail = str(error)
+            summary = str(service.t("gateway.operation_failed"))
+    else:
+        detail = error
+    message = (
+        str(service.t("gateway.failure_details", message=summary, detail=detail))
+        if detail
+        else summary
+    )
+    message = re.sub(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^/\s@]+@", r"\1***@", message)
+    message = re.sub(
+        r"(?i)(\b(?:access[_-]?token|token|api[_-]?key|client[_-]?secret|password|passwd)\s*[=:]\s*)([^\s,;&]+)",
+        r"\1***",
+        message,
+    )
+    message = re.sub(r"(?i)(\b(?:Bearer|Basic)\s+)\S+", r"\1***", message)
+    return error_detail(service, message, extra_secrets=extra_secrets)
+
+
 __all__ = [
     "analysis_status",
     "error_detail",
     "error_message",
     "form_choice_label",
+    "gateway_error_detail",
     "redact_operation_logs",
     "relabel_buttons",
     "secret_values",

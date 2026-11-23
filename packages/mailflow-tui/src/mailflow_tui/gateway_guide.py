@@ -32,7 +32,12 @@ from textual.widgets import (  # pyright: ignore[reportUnknownVariableType]
 )
 
 from mailflow_tui.confirm import ConfirmModal
-from mailflow_tui.labels import error_detail, redact_operation_logs, secret_values
+from mailflow_tui.labels import (
+    error_detail,
+    gateway_error_detail,
+    redact_operation_logs,
+    secret_values,
+)
 from mailflow_tui.mail_workflows import WorkflowScreen
 from mailflow_tui.widgets import Input
 
@@ -92,6 +97,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     #guide-content {
         height: 1fr;
         min-height: 0;
+    }
+    #guide-error {
+        display: none;
+        height: auto;
+        border-left: solid $error;
+        padding: 0 1;
+        margin-bottom: 1;
     }
     #guide-status {
         height: 1;
@@ -202,6 +214,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._manual_login = asyncio.Event()
         self._qr_text = ""
         self._qr_screen: QRScreen | None = None
+        self._endpoint_error = ""
         self._bindings.bind("escape", "dismiss_modal", self._t("tui.btn_cancel"))
 
     def _t(self, key: str, **params: Any) -> str:
@@ -217,6 +230,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             )
             # Keep actions reachable even when a QR is taller than the terminal.
             with ScrollableContainer(id="guide-content"):
+                yield Static("", id="guide-error", markup=False)
                 yield Static("", id="guide-qr")
                 with Vertical(id="guide-log-wrap"):
                     yield RichLog(
@@ -309,6 +323,22 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
     def _set_phase(self, phase: str) -> None:
         self._phase = phase
         self._set_status(self._t(f"tui.gateway_phase_{phase}"))
+
+    def _show_failure(self, message: str) -> None:
+        message = error_detail(self._service, message, extra_secrets=secret_values(self._options))
+        if self._qr_screen is not None and self._qr_screen.is_current:
+            self._qr_screen.dismiss(None)
+        self._set_qr("")
+        self._result = None
+        self._phase = "failed"
+        self.query_one("#guide-done", Button).disabled = True
+        self.query_one("#guide-logged-in", Button).disabled = True
+        node = self.query_one("#guide-error", Static)
+        node.update(message)
+        node.display = True
+        self.query_one("#guide-content", ScrollableContainer).scroll_home(animate=False)
+        self._log("ERROR", message)
+        self._set_status(message.splitlines()[0], "$ctp-red")
 
     def _set_qr(self, text: str) -> None:
         self._qr_text = text
@@ -427,11 +457,13 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             self._set_phase("cleanup")
             with contextlib.suppress(Exception):
                 await service.gateway_shutdown(provider, self._instance_id)
-            self._result = None
-            self._phase = "failed"
-            message = self._t("tui.bots_guide_failed", error=error_detail(self._service, exc))
-            self._log("ERROR", message)
-            self._set_status(message, "$ctp-red")
+            message = self._t(
+                "tui.bots_guide_failed",
+                error=gateway_error_detail(
+                    service, exc, extra_secrets=secret_values(self._options)
+                ),
+            )
+            self._show_failure(message)
             return
 
     async def _provision_with_progress(self, service: MailFlowService, provider: str) -> Any:
@@ -590,6 +622,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         # first AppImage launch is slow (extract + QQ boot): 5 minutes
         deadline = time.monotonic() + float(self._options.get("login_timeout_seconds", 300))
         last_qr = ""
+        last_error = ""
         self._logged_no_qr = False
         while time.monotonic() < deadline and not getattr(self, "_qr_done", False):
             qr = await service.gateway_qr(provider, self._instance_id)
@@ -600,7 +633,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 # created yet, log tail). The first launch of an AppImage
                 # is slow (extract + QQ boot), so keep waiting — only log
                 # it once and do not abort the loop.
-                message = self._t("common.error", message=self._t("errors.operation"))
+                message = gateway_error_detail(
+                    service,
+                    qr.removeprefix("ERROR:").strip(),
+                    extra_secrets=secret_values(self._options),
+                )
+                last_error = message
                 if message != getattr(self, "_last_qr_diag", None):
                     self._log("WARN", message)
                     self._last_qr_diag = message
@@ -613,6 +651,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._set_status(self._t("tui.bots_guide_logged_in"), "$ctp-green")
                 await self._finish_login(service, provider)
                 return
+            last_error = ""
             if qr and qr != last_qr:
                 last_qr = qr
                 self._set_qr(_ascii_qr(qr))
@@ -644,8 +683,10 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         if getattr(self, "_qr_done", False):
             await self._finish_login(service, provider)
         else:
-            self._log("ERROR", self._t("tui.bots_guide_qr_timeout"))
-            self._set_status(self._t("tui.bots_guide_qr_timeout"), "$ctp-red")
+            message = self._t("tui.bots_guide_qr_timeout")
+            if last_error:
+                message += "\n\n" + last_error
+            self._show_failure(message)
             await service.gateway_shutdown(provider, self._instance_id)
             self._result = None
 
@@ -663,13 +704,16 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             self._finish_ready()
             return
         endpoint = (self._result or {}).get("endpoint", "")
-        self._result = None
-        self._set_status(self._t("tui.bots_guide_endpoint_pending", endpoint=endpoint), "$ctp-red")
+        message = self._t("tui.bots_guide_endpoint_pending", endpoint=endpoint)
+        if self._endpoint_error:
+            message += "\n\n" + self._endpoint_error
+        self._show_failure(message)
         try:
             await service.gateway_shutdown(provider, self._instance_id)
         except Exception as exc:
             self._log(
-                "ERROR", self._t("tui.bots_guide_stop_failed", error=error_detail(service, exc))
+                "ERROR",
+                self._t("tui.bots_guide_stop_failed", error=gateway_error_detail(service, exc)),
             )
 
     async def _wait_for_endpoint(self) -> bool:
@@ -684,6 +728,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         while time.monotonic() < deadline:
             try:
                 state = await self._service.gateway_check(self._provider, self._instance_id)
+                if state.error:
+                    self._endpoint_error = gateway_error_detail(
+                        self._service,
+                        state.error,
+                        extra_secrets=secret_values(self._options),
+                    )
                 if (
                     state.status == "running"
                     and state.extra.get("logged_in") is not False
@@ -692,8 +742,10 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 ):
                     self._log("INFO", self._t("tui.bots_guide_endpoint_ready", endpoint=endpoint))
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                self._endpoint_error = gateway_error_detail(
+                    self._service, exc, extra_secrets=secret_values(self._options)
+                )
             await asyncio.sleep(2.0)
         self._log("WARN", self._t("tui.bots_guide_endpoint_pending", endpoint=endpoint))
         return False
@@ -746,18 +798,18 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             self._set_phase("cleanup")
             self._log("INFO", self._t("tui.bots_guide_stopped"))
         except Exception as exc:
-            self._log(
-                "ERROR",
+            self._show_failure(
                 self._t(
                     "tui.bots_guide_stop_failed",
-                    error=error_detail(self._service, exc),
+                    error=gateway_error_detail(
+                        self._service, exc, extra_secrets=secret_values(self._options)
+                    ),
                 ),
             )
             self._cancelling = False
             cancel = self.query_one_optional("#guide-cancel", Button)
             if cancel is not None:
                 cancel.disabled = False
-            self._set_phase("failed")
             return
         self._phase = "cancelled"
         if dismiss:

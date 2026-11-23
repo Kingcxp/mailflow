@@ -186,6 +186,20 @@ async def test_install_runs_npm_and_writes_the_bridge(
         "--no-fund",
     ]
 
+    from mailflow.gateway import GatewaySetupError
+
+    async def failed_install(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="fake npm registry unavailable"
+        )
+
+    monkeypatch.setattr(gw_mod, "run_command", failed_install)
+    (bridge.parent / "node_modules" / "pino" / "package.json").unlink()
+    with pytest.raises(GatewaySetupError) as failure:
+        await WhatsappProvisioner().install("wa-1", {})
+    assert "npm registry unavailable" in failure.value.detail
+    assert credentials.read_text(encoding="utf-8") == "saved login"
+
 
 @pytest.mark.asyncio
 async def test_start_refuses_an_unmanaged_http_service(monkeypatch: pytest.MonkeyPatch) -> None:
