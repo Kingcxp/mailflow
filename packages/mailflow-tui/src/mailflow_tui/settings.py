@@ -2120,7 +2120,7 @@ class SettingsPane(Vertical):
             await self._settings_operation("settings-import")
             return
         if button_id == "settings-more":
-            from mailflow_tui.pickers import ChoicePicker
+            from mailflow_tui.pickers import PopupMenu
 
             choices = [
                 (self._t("interface.save_section"), "settings-save-section"),
@@ -2137,9 +2137,7 @@ class SettingsPane(Vertical):
             ]
             if not getattr(self._service, "remote", False):
                 choices.append((self._t("ux.remote_connection"), "settings-connection"))
-            cast("Any", self).app.push_screen(
-                ChoicePicker(self._service, choices), self._settings_operation
-            )
+            PopupMenu(choices, anchor=event.button).open(self, self._settings_operation)
             return
         card = self._card_of(event.button)
         if card is None:

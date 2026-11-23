@@ -428,10 +428,22 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         app.query_one("#mail-urgency-filter", Select).value = "all"
         await settle(pilot)
         table.focus()
-        await pilot.press("ctrl+a", "m")
-        await until(pilot, lambda: isinstance(app.screen, MailMenu))
-        app.screen.query_one("#workflow-choice", Select).value = "star"
-        app.screen.query_one("#workflow-apply", Button).press()
+        await pilot.press("ctrl+a")
+        screen, region, selected = app.screen, table.region, set(table.checked_keys)
+        await pilot.click(table, offset=(2, 2), button=3)
+        await until(pilot, lambda: bool(app.query(MailMenu)))
+        assert app.screen is screen and table.region == region
+        await pilot.press("end")
+        assert app.query_one(MailMenu).highlighted == app.query_one(MailMenu).option_count - 1
+        await pilot.press("escape")
+        await settle(pilot)
+        assert table.checked_keys == selected and app.mouse_captured is None
+        assert app.focused is table
+        await pilot.press("m")
+        await until(pilot, lambda: bool(app.query(MailMenu)))
+        menu = app.query_one(MailMenu)
+        menu.highlighted = menu.get_option_index("star")
+        await pilot.press("enter")
         await settle(pilot)
         mail_rows = [await service.get_mail(key) for key in ("keep", "old-2")]
         assert all(record.starred for record in mail_rows)
@@ -455,9 +467,10 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         monkeypatch.setattr(view, "set_mail_state", slow_update)
         table.focus()
         await pilot.press("ctrl+a", "m")
-        await until(pilot, lambda: isinstance(app.screen, MailMenu))
-        app.screen.query_one("#workflow-choice", Select).value = "archive"
-        app.screen.query_one("#workflow-apply", Button).press()
+        await until(pilot, lambda: bool(app.query(MailMenu)))
+        menu = app.query_one(MailMenu)
+        menu.highlighted = menu.get_option_index("archive")
+        await pilot.press("enter")
         await until(pilot, started.is_set)
         try:
             stop = app.query_one("#btn-trash", Button)
@@ -481,9 +494,17 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         await pilot.press("ctrl+a", "escape", "space", "shift+down")
         await service.add_action_type("Work")
         await pilot.press("m")
-        await until(pilot, lambda: isinstance(app.screen, TaskMenu))
-        app.screen.query_one("#workflow-choice", Select).value = "change_type"
-        app.screen.query_one("#workflow-apply", Button).press()
+        await until(pilot, lambda: bool(app.query(TaskMenu)))
+        selected_tasks = set(todos.checked_keys)
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not todos.disabled and todos.checked_keys == selected_tasks
+        assert app.focused is todos
+        await pilot.press("m")
+        await until(pilot, lambda: bool(app.query(TaskMenu)))
+        task_menu = app.query_one(TaskMenu)
+        task_menu.highlighted = task_menu.get_option_index("change_type")
+        await pilot.press("enter")
         await until(pilot, lambda: isinstance(app.screen, ActionTypePicker))
         await pilot.pause()
         app.screen.query_one("#batch-action-type Select", Select).value = "Work"
@@ -496,9 +517,10 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         assert not todos.checked_keys
         todos.focus()
         await pilot.press("ctrl+a", "m")
-        await until(pilot, lambda: isinstance(app.screen, TaskMenu))
-        app.screen.query_one("#workflow-choice", Select).value = "mute_tasks"
-        app.screen.query_one("#workflow-apply", Button).press()
+        await until(pilot, lambda: bool(app.query(TaskMenu)))
+        task_menu = app.query_one(TaskMenu)
+        task_menu.highlighted = task_menu.get_option_index("mute_tasks")
+        await pilot.press("enter")
         await settle(pilot)
         assert not any(
             item.reminder_enabled
@@ -519,9 +541,10 @@ async def test_selected_batches_keep_scope_retry_failures_and_undo_mail(
         await settle(pilot)
         todos.focus()
         await pilot.press("m")
-        await until(pilot, lambda: isinstance(app.screen, TaskMenu))
-        app.screen.query_one("#workflow-choice", Select).value = "complete_tasks"
-        app.screen.query_one("#workflow-apply", Button).press()
+        await until(pilot, lambda: bool(app.query(TaskMenu)))
+        task_menu = app.query_one(TaskMenu)
+        task_menu.highlighted = task_menu.get_option_index("complete_tasks")
+        await pilot.press("enter")
         await until(
             pilot,
             lambda: isinstance(app.screen, ConfirmModal) and bool(app.screen.query("#confirm-run")),

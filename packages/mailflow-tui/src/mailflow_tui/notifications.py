@@ -36,7 +36,7 @@ from mailflow_tui.labels import (
     relabel_buttons,
     urgency_label,
 )
-from mailflow_tui.pickers import ChoicePicker
+from mailflow_tui.pickers import PopupMenu
 from mailflow_tui.view_state import TableView, update_table
 
 _URGENCY_ORDER = (Urgency.AD, Urgency.INFO, Urgency.IMPORTANT, Urgency.URGENT)
@@ -426,9 +426,6 @@ class NotificationsPane(Vertical):
             choices.append((self._service.t("tui.notifications_check"), "notif-check"))
         if index is not None:
             choices.append((self._service.t("tui.notifications_remove"), "notif-delete"))
-        title = self._service.t("tui.notifications_more")
-        if notifier_id:
-            title += " · " + notifier_id
 
         def chosen(action: str | None) -> None:
             if action is None or action not in {value for _, value in choices}:
@@ -454,7 +451,7 @@ class NotificationsPane(Vertical):
             else:
                 self._start_action(action, notifier_id)
 
-        self.app.push_screen(ChoicePicker(self._service, choices, title=title), chosen)
+        PopupMenu(choices, anchor=self.query_one("#notif-more", Button)).open(self, chosen)
 
     def _choose_urgency(self, notifier_id: str | None) -> None:
         index = self._selected_index(notifier_id)
@@ -466,15 +463,11 @@ class NotificationsPane(Vertical):
             if value is not None and value in {option for _, option in options}:
                 self._start_action("notif-urgency", notifier_id, value)
 
-        self.app.push_screen(
-            ChoicePicker(
-                self._service,
-                options,
-                self._service.config.notifiers[index].minimum_urgency.value,
-                title=self._service.t("tui.notifications_minimum"),
-            ),
-            chosen,
-        )
+        PopupMenu(
+            options,
+            self._service.config.notifiers[index].minimum_urgency.value,
+            anchor=self.query_one("#notif-more", Button),
+        ).open(self, chosen)
 
     def _start_action(
         self, action: str, notifier_id: str | None = None, urgency: str | None = None

@@ -4,17 +4,160 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
+from rich.cells import cell_len
+from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, DirectoryTree, Select, Static
+from textual.geometry import Offset, Size
+from textual.screen import ModalScreen, Screen
+from textual.signal import Signal
+from textual.widget import Widget
+from textual.widgets import Button, DataTable, DirectoryTree, OptionList, Select, Static
+from textual.widgets.option_list import Option
 
 from mailflow_tui.widgets import ContentDialog, Input, SafeSelect
+
+
+class PopupMenu(OptionList):
+    """A single-click action menu over the current page, without a new screen."""
+
+    BINDINGS: ClassVar[list[Any]] = [Binding("escape", "cancel", show=False)]
+    DEFAULT_CSS = """
+    PopupMenu {
+        overlay: screen; position: absolute; layer: overlay;
+        width: auto; height: auto; max-width: 100%; max-height: 100%;
+        constrain: inside;
+        border: round $ctp-surface1; padding: 0;
+        background: $ctp-mantle; color: $ctp-text;
+        scrollbar-size-vertical: 1;
+    }
+    PopupMenu:focus { border: round $ctp-blue; }
+    PopupMenu > .option-list--option-highlighted {
+        background: $ctp-surface0; color: $ctp-text; text-style: bold;
+    }
+    PopupMenu > .option-list--option-hover {
+        background: $ctp-surface1; color: $ctp-text;
+    }
+    """
+
+    def __init__(
+        self,
+        choices: list[tuple[str, str]],
+        value: str = "",
+        *,
+        anchor: Widget | None = None,
+        position: Offset | None = None,
+    ) -> None:
+        self.choices = choices
+        self._value, self._anchor, self._position = value, anchor, position
+        self._previous_focus: Widget | None = None
+        self._result: asyncio.Future[str | None] | None = None
+        self._callback: Callable[[str | None], Awaitable[None] | None] | None = None
+        self._viewport: Size | None = None
+        self._dismissed = False
+        super().__init__(*(Option(Text(label), id=value) for label, value in choices))
+
+    def open(
+        self,
+        owner: Widget,
+        callback: Callable[[str | None], Awaitable[None] | None] | None = None,
+    ) -> None:
+        for menu in owner.screen.query(PopupMenu):
+            menu.dismiss()
+        self._previous_focus = self._anchor or cast("Any", owner).app.focused
+        self._anchor = self._anchor or self._previous_focus or owner
+        self._callback = callback
+        self._result = asyncio.get_running_loop().create_future()
+        owner.screen.mount(self)
+
+    async def choose(self, owner: Widget) -> str | None:
+        self.open(owner)
+        assert self._result is not None
+        try:
+            return await self._result
+        finally:
+            self.dismiss()
+
+    def on_mount(self) -> None:
+        if self._dismissed:
+            self.remove()
+            return
+        self._place()
+        signal: Signal[Screen[Any]] = cast("Any", self.screen).screen_layout_refresh_signal
+        signal.subscribe(self, self._place)
+        self.highlighted = next(
+            (index for index, (_, value) in enumerate(self.choices) if value == self._value), 0
+        )
+        self.focus()
+        self.capture_mouse()
+
+    def _place(self, _screen: Screen[Any] | None = None) -> None:
+        size = self.screen.size
+        if size == self._viewport:
+            return
+        self._viewport = size
+        width = min(
+            max(22, max((cell_len(label) for label, _ in self.choices), default=0) + 4), size.width
+        )
+        height = min(len(self.choices) + 2, 16, size.height)
+        self.styles.width, self.styles.height = width, height
+        region = self._anchor.region if self._anchor is not None else self.screen.region
+        x, y = self._position or Offset(region.x, region.bottom)
+        if y + height > size.height:
+            y = max(0, region.y - height) if self._position is None else size.height - height
+        self.styles.offset = Offset(
+            max(0, min(x, size.width - width)), max(0, min(y, size.height - height))
+        )
+
+    def on_blur(self) -> None:
+        self.dismiss(restore_focus=False)
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        if not self.region.contains(*event.screen_offset):
+            event.prevent_default()
+            self.dismiss()
+        elif event.button != 1:
+            event.prevent_default()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list is self:
+            event.stop()
+            self.dismiss(event.option.id)
+
+    def action_cancel(self) -> None:
+        self.dismiss()
+
+    def dismiss(self, value: str | None = None, *, restore_focus: bool = True) -> None:
+        if self._dismissed:
+            return
+        self._dismissed = True
+        if self.is_mounted:
+            self.release_mouse()
+            self.remove()
+            if (
+                restore_focus
+                and self._previous_focus is not None
+                and self._previous_focus.is_attached
+            ):
+                self._previous_focus.focus()
+            if self._callback is not None:
+                cast("Any", self).app.call_later(self._callback, value)
+        if self._result is not None and not self._result.done():
+            self._result.set_result(value)
+
+    def on_unmount(self) -> None:
+        signal: Signal[Screen[Any]] = cast("Any", self.screen).screen_layout_refresh_signal
+        signal.unsubscribe(self)
+        self.dismiss(restore_focus=False)
 
 
 class ChoicePicker(ModalScreen[str | None]):

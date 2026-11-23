@@ -18,7 +18,7 @@ from mailflow_testkit.fakes import make_mail
 from mailflow_tui.action_types import ActionTypeField
 from mailflow_tui.animation import MailAnimation
 from mailflow_tui.app import MailFlowApp
-from mailflow_tui.pickers import ChoicePicker
+from mailflow_tui.pickers import PopupMenu
 from mailflow_tui.smart_action_review import SmartActionReviewModal, SmartOperationEditModal
 from mailflow_tui.widgets import PromptInput
 from rich.console import Console
@@ -60,13 +60,13 @@ async def _smart_review(
 
 
 async def _market_tool(pane: Any, pilot: Any, action: str) -> None:
+    screen = pane.app.screen
     pane.query_one("#market-tools", Button).press()
-    await until(pilot, lambda: isinstance(pane.app.screen, ChoicePicker))
-    menu = cast(ChoicePicker, pane.app.screen)
-    await until(pilot, lambda: bool(menu.matches))
-    row = next(index for index, (_, value) in enumerate(menu.matches) if value == action)
-    menu.query_one(DataTable).move_cursor(row=row)
-    menu.query_one("#picker-apply", Button).press()
+    await until(pilot, lambda: bool(screen.query(PopupMenu)))
+    menu = screen.query_one(PopupMenu)
+    assert pane.app.screen is screen
+    menu.highlighted = menu.get_option_index(action)
+    await pilot.press("enter")
     await pilot.pause()
 
 
@@ -1068,7 +1068,6 @@ async def test_market_detail_shows_author_and_updated(tmp_path: Path) -> None:
             app.query_one(TabbedContent).active = "tab-market"
             market_pane = app.query_one(MarketPane)
             await market_pane.refresh_market()
-            await cast(Any, app.workers).wait_for_complete()
             market_table = cast(DataTable[Any], app.query_one("#market-table", DataTable))
             await until(pilot, lambda: "mailflow-tui-test" in market_table.rows)
             # select the row -> full-screen detail modal
@@ -1389,27 +1388,19 @@ async def test_notifications_pane_lists_all_notifiers_and_toggles(
             qq = next(n for n in service.config.notifiers if n.notifier_id == "qq-1")
             assert qq.enabled is False
             # Change mail urgency through More, then choose a level.
+            screen = app.screen
             pane.query_one("#notif-more", Button).press()
-            await until(
-                pilot, lambda: isinstance(app.screen, ChoicePicker) and app.screen.is_mounted
-            )
-            menu = cast(ChoicePicker, app.screen)
-            menu.query_one(DataTable).move_cursor(
-                row=next(i for i, (_, value) in enumerate(menu.matches) if value == "notif-urgency")
-            )
+            await until(pilot, lambda: bool(screen.query(PopupMenu)))
+            menu = screen.query_one(PopupMenu)
+            menu.highlighted = menu.get_option_index("notif-urgency")
             await pilot.press("enter")
             await until(
                 pilot,
-                lambda: (
-                    app.screen is not menu
-                    and isinstance(app.screen, ChoicePicker)
-                    and app.screen.is_mounted
-                ),
+                lambda: not menu.is_attached and bool(screen.query(PopupMenu)),
             )
-            levels = cast(ChoicePicker, app.screen)
-            levels.query_one(DataTable).move_cursor(
-                row=next(i for i, (_, value) in enumerate(levels.matches) if value == "urgent")
-            )
+            assert app.screen is screen
+            levels = screen.query_one(PopupMenu)
+            levels.highlighted = levels.get_option_index("urgent")
             await pilot.press("enter")
             await pilot.pause(0.2)
             qq = next(n for n in service.config.notifiers if n.notifier_id == "qq-1")

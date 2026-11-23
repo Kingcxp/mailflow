@@ -30,6 +30,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import ScrollableContainer, Vertical, VerticalScroll
 from textual.css.query import QueryError
+from textual.geometry import Offset
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Select, Static
@@ -458,9 +459,10 @@ class SelectionTable(DataTable[Any]):
             self.table = table
 
     class MenuRequested(Message):
-        def __init__(self, table: SelectionTable) -> None:
+        def __init__(self, table: SelectionTable, position: Offset | None = None) -> None:
             super().__init__()
             self.table = table
+            self.position = position
 
     class DeleteRequested(Message):
         def __init__(self, table: SelectionTable) -> None:
@@ -502,7 +504,17 @@ class SelectionTable(DataTable[Any]):
         self.post_message(self.SelectionChanged(self))
 
     def action_context_menu(self) -> None:
-        self.post_message(self.MenuRequested(self))
+        position = None
+        if self.row_count:
+            row = self._get_row_region(self.cursor_row)
+            content = self.content_region
+            position = Offset(
+                content.x + 2,
+                max(
+                    content.y, min(content.bottom - 1, content.y + row.bottom - int(self.scroll_y))
+                ),
+            )
+        self.post_message(self.MenuRequested(self, position))
 
     def action_delete_selection(self) -> None:
         if self.explorer_selection and self.checked_keys:
@@ -666,7 +678,7 @@ class SelectionTable(DataTable[Any]):
                     self._select_current_row()
             else:
                 self.action_clear_checks()
-            self.action_context_menu()
+            self.post_message(self.MenuRequested(self, event.screen_offset))
         elif key is None:
             if row == -1:
                 return
@@ -699,7 +711,7 @@ class SelectionTable(DataTable[Any]):
             if isinstance(row, int) and row >= 0:
                 self.move_cursor(row=row)
             self.focus()
-            self.action_context_menu()
+            self.post_message(self.MenuRequested(self, event.screen_offset))
             event.stop()
             event.prevent_default()
             return

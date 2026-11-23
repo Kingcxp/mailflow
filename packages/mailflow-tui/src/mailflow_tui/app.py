@@ -41,9 +41,10 @@ from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.coordinate import Coordinate
 from textual.css.query import QueryError
+from textual.geometry import Offset
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widget import MountError
+from textual.widget import MountError, Widget
 from textual.widgets import (
     Button,
     Collapsible,
@@ -82,7 +83,7 @@ from mailflow_tui.mail_workflows import (
     TaskMenu,
 )
 from mailflow_tui.notifications import NotificationsPane
-from mailflow_tui.pickers import ChoicePicker
+from mailflow_tui.pickers import PopupMenu
 from mailflow_tui.profile import UserProfileModal
 from mailflow_tui.repos import ReposScreen
 from mailflow_tui.scaffold import PluginScaffoldScreen
@@ -1488,7 +1489,10 @@ class MailPane(Vertical):
         if event.table.id == "mail-table" and not self._trash_busy and not self._reparse_active():
             event.stop()
             self.run_worker(
-                self._mail_tools(), group="mail-tools", exclusive=True, exit_on_error=False
+                self._mail_tools(anchor=event.table, position=event.position),
+                group="mail-tools",
+                exclusive=True,
+                exit_on_error=False,
             )
 
     def on_selection_table_delete_requested(self, event: SelectionTable.DeleteRequested) -> None:
@@ -1926,7 +1930,10 @@ class MailPane(Vertical):
             return
         if button_id == "btn-more":
             self.run_worker(
-                self._mail_tools(), exclusive=True, group="mail-tools", exit_on_error=False
+                self._mail_tools(anchor=event.button),
+                exclusive=True,
+                group="mail-tools",
+                exit_on_error=False,
             )
             return
         if button_id == "btn-refresh":
@@ -1995,9 +2002,7 @@ class MailPane(Vertical):
                 )
 
     async def _pick_priority(self, targets: list[str]) -> None:
-        from mailflow_tui.pickers import ChoicePicker
-
-        value = await self._ask_screen(ChoicePicker(self._service, self._urgency_options()))
+        value = await PopupMenu(self._urgency_options()).choose(self)
         if value is not None and targets:
             urgency = None if value == "auto" else Urgency(value)
             self._start_trash(
@@ -2006,7 +2011,13 @@ class MailPane(Vertical):
                 )
             )
 
-    async def _mail_tools(self, choice: str | None = None) -> None:
+    async def _mail_tools(
+        self,
+        choice: str | None = None,
+        *,
+        anchor: Widget | None = None,
+        position: Offset | None = None,
+    ) -> None:
         from mailflow_tui.mail_workflows import TrashScreen
 
         if self._trash_busy or self._reparse_active():
@@ -2014,14 +2025,9 @@ class MailPane(Vertical):
         targets = self._mail_targets()
         selected_id = targets[0] if len(targets) == 1 else ""
         table = self._mail_table()
-        scope = self._service.t(
-            "tui.batch_scope",
-            count=len(targets),
-            hidden=len(set(targets) - set(table.visible_keys())) if table is not None else 0,
-        )
-        choice = choice or await self._ask_screen(
-            MailMenu(self._service, scope=scope, count=len(targets))
-        )
+        choice = choice or await MailMenu(
+            self._service, count=len(targets), anchor=anchor or table, position=position
+        ).choose(self)
         if not choice:
             return
         try:
@@ -2991,13 +2997,20 @@ class ActionsPane(Vertical):
         if event.table.id == "actions-table" and not self._delete_busy:
             event.stop()
             if not self._task_targets():
-                self.run_worker(self._more_actions(), group="actions-menu", exit_on_error=False)
+                self.run_worker(
+                    self._more_actions(anchor=event.table, position=event.position),
+                    group="actions-menu",
+                    exit_on_error=False,
+                )
                 return
             self._delete_busy = True
             self._delete_stop = False
             self._sync_action_controls()
             self.run_worker(
-                self._run_task_status(), group="actions-status", exclusive=True, exit_on_error=False
+                self._run_task_status(anchor=event.table, position=event.position),
+                group="actions-status",
+                exclusive=True,
+                exit_on_error=False,
             )
 
     async def on_selection_table_delete_requested(
@@ -3231,22 +3244,21 @@ class ActionsPane(Vertical):
             message = f"[$ctp-red]{escape(error_message(self._service, exc))}[/$ctp-red]"
             self.query_one("#actions-hint", Static).update(message)
 
-    async def _more_actions(self) -> None:
-        from mailflow_tui.pickers import ChoicePicker
-
-        choice = await cast(Any, self).app.push_screen_wait(
-            ChoicePicker(
-                self._service,
-                [
-                    (self._service.t(key), ident)
-                    for key, ident in (
-                        ("experience.action_filters", "actions-filters"),
-                        ("experience.plans", "actions-plans"),
-                        ("assistant.handoff", "actions-assistant"),
-                    )
-                ],
-            )
-        )
+    async def _more_actions(
+        self, *, anchor: Widget | None = None, position: Offset | None = None
+    ) -> None:
+        choice = await PopupMenu(
+            [
+                (self._service.t(key), ident)
+                for key, ident in (
+                    ("experience.action_filters", "actions-filters"),
+                    ("experience.plans", "actions-plans"),
+                    ("assistant.handoff", "actions-assistant"),
+                )
+            ],
+            anchor=anchor,
+            position=position,
+        ).choose(self)
         if choice is not None:
             try:
                 await self._handle_action(choice)
@@ -3281,7 +3293,10 @@ class ActionsPane(Vertical):
             return
         if button_id == "actions-more":
             self.run_worker(
-                self._more_actions(), group="actions-menu", exclusive=True, exit_on_error=False
+                self._more_actions(anchor=self.query_one("#actions-more", Button)),
+                group="actions-menu",
+                exclusive=True,
+                exit_on_error=False,
             )
             return
         if button_id in {"actions-filters", "actions-plans"}:
@@ -3363,9 +3378,11 @@ class ActionsPane(Vertical):
             exit_on_error=False,
         )
 
-    async def _run_task_status(self) -> None:
+    async def _run_task_status(
+        self, *, anchor: Widget | None = None, position: Offset | None = None
+    ) -> None:
         try:
-            await self._change_task_status()
+            await self._change_task_status(anchor=anchor, position=position)
         except Exception as exc:
             self._action_status = escape(error_message(self._service, exc))
         finally:
@@ -3419,7 +3436,9 @@ class ActionsPane(Vertical):
             )
         )
 
-    async def _change_task_status(self) -> None:
+    async def _change_task_status(
+        self, *, anchor: Widget | None = None, position: Offset | None = None
+    ) -> None:
         from datetime import timedelta
 
         table = self._actions_table()
@@ -3427,12 +3446,9 @@ class ActionsPane(Vertical):
         if not ids:
             return
         app = cast("Any", self).app
-        scope = self._service.t(
-            "tui.batch_scope",
-            count=len(ids),
-            hidden=len(set(ids) - set(table.visible_keys())) if table is not None else 0,
+        choice = await TaskMenu(self._service, anchor=anchor or table, position=position).choose(
+            self
         )
-        choice = await app.push_screen_wait(TaskMenu(self._service, scope=scope))
         if not choice:
             return
         values: dict[str, Any] = {}
@@ -5236,10 +5252,7 @@ class MarketPane(Vertical):
             else:
                 self._open_tool(action)
 
-        cast(Any, self).app.push_screen(
-            ChoicePicker(self._service, choices, title=self._service.t("tui.market_tools")),
-            chosen,
-        )
+        PopupMenu(choices, anchor=self.query_one("#market-tools", Button)).open(self, chosen)
 
     def _open_tool(self, button_id: str | None) -> None:
         if button_id == "market-create":

@@ -21,11 +21,13 @@ from mailflow.mail_query import MailQuery
 from mailflow.service import MailFlowService
 from textual.app import ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.geometry import Offset
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Button, Checkbox, DataTable, Select, Static
 
 from mailflow_tui.confirm import ConfirmModal
-from mailflow_tui.pickers import AssistedInput
+from mailflow_tui.pickers import AssistedInput, PopupMenu
 from mailflow_tui.view_state import TableView
 from mailflow_tui.widgets import ContentDialog, Input, SafeSelect, SelectionTable, TextArea
 
@@ -175,12 +177,20 @@ class TrashChoiceScreen(WorkflowScreen):
             self.dismiss(None)
 
 
-class MailMenu(WorkflowScreen):
+class MailMenu(PopupMenu):
     def __init__(
-        self, service: MailFlowService, *, scope: str = "", count: int | None = None
+        self,
+        service: MailFlowService,
+        *,
+        count: int | None = None,
+        anchor: Widget | None = None,
+        position: Offset | None = None,
     ) -> None:
-        super().__init__(service)
-        self.scope, self.count = scope, count
+        self.service, self.count = service, count
+        super().__init__(self._choices(), anchor=anchor, position=position)
+
+    def t(self, key: str, **params: Any) -> str:
+        return self.service.t(key, **params)
 
     def _choices(self) -> list[tuple[str, str]]:
         targets = {"read", "unread", "star", "unstar", "archive", "unarchive", "priority"}
@@ -236,24 +246,6 @@ class MailMenu(WorkflowScreen):
             if not getattr(self.service, "remote", False):
                 options.insert(8, (self.t("tui.btn_reparse"), "reparse_selected"))
         return options
-
-    def compose(self) -> ComposeResult:
-        with ContentDialog():
-            yield Static(self.t("ux.mail_tools"), classes="dialog-header")
-            if self.scope:
-                yield Static(self.scope, markup=False)
-            yield Static(self.t("ux.local_trash"), classes="dialog-description")
-            yield SafeSelect(self._choices(), id="workflow-choice", allow_blank=False)
-            with Horizontal(classes="dialog-footer"):
-                yield Button(self.t("tui.btn_apply"), id="workflow-apply", variant="primary")
-                yield Button(self.t("tui.btn_back"), id="workflow-close")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(
-            str(cast(Select[str], self.query_one("#workflow-choice", Select)).value)
-            if event.button.id == "workflow-apply"
-            else None
-        )
 
 
 class SyncScreen(WorkflowScreen):
@@ -947,32 +939,20 @@ class DraftsScreen(WorkflowScreen):
 
 
 class TaskMenu(MailMenu):
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Static(self.t("ux.task_operations"))
-            if self.scope:
-                yield Static(self.scope, markup=False)
-            yield SafeSelect(
-                [
-                    (self.t("ux." + key), key)
-                    for key in (
-                        "complete_tasks",
-                        "mute_tasks",
-                        "enable_tasks",
-                        "snooze_hour",
-                        "snooze_day",
-                    )
-                ]
-                + [
-                    (self.t("tui.batch_task_type"), "change_type"),
-                    (self.t("tui.btn_delete_todo"), "delete_tasks"),
-                ],
-                id="workflow-choice",
-                allow_blank=False,
+    def _choices(self) -> list[tuple[str, str]]:
+        return [
+            (self.t("ux." + key), key)
+            for key in (
+                "complete_tasks",
+                "mute_tasks",
+                "enable_tasks",
+                "snooze_hour",
+                "snooze_day",
             )
-            with Horizontal():
-                yield Button(self.t("tui.btn_apply"), id="workflow-apply", variant="primary")
-                yield Button(self.t("tui.btn_back"), id="workflow-close")
+        ] + [
+            (self.t("tui.batch_task_type"), "change_type"),
+            (self.t("tui.btn_delete_todo"), "delete_tasks"),
+        ]
 
 
 class SmartScopeScreen(WorkflowScreen):

@@ -21,7 +21,7 @@ from mailflow.gateway import InstallProgress
 from mailflow.registry import PluginRegistrar
 from mailflow_tui.gateway_guide import GatewayGuideModal
 from mailflow_tui.notifications import NotificationsPane
-from mailflow_tui.pickers import ChoicePicker
+from mailflow_tui.pickers import PopupMenu
 from mailflow_tui.remote import LoginScreen
 from mailflow_tui.settings import EntryFormScreen, ListEditScreen, LLMPane, SettingsPane
 from textual.app import ComposeResult
@@ -461,10 +461,8 @@ async def test_notifier_page_rename_and_delete_recover_from_save_errors(
         async def remove_channel() -> None:
             pane.query_one("#notif-more", Button).press()
             await settle(pilot)
-            menu = cast(ChoicePicker, pilot.app.screen)
-            menu.query_one(DataTable).move_cursor(
-                row=next(i for i, (_, value) in enumerate(menu.matches) if value == "notif-delete")
-            )
+            menu = pilot.app.screen.query_one(PopupMenu)
+            menu.highlighted = menu.get_option_index("notif-delete")
             await pilot.press("enter")
             await settle(pilot)
             pilot.app.screen.query_one("#confirm-run", Button).press()
@@ -657,6 +655,24 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         await settle(pilot)
         draft = pane.query_one("#value-general-workers", Input)
         draft.value = "7"
+        screen, region = pilot.app.screen, draft.region
+        more = pane.query_one("#settings-more", Button)
+        more.press()
+        await until(pilot, lambda: bool(screen.query(PopupMenu)))
+        assert pilot.app.screen is screen and draft.region == region
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not screen.query(PopupMenu) and draft.value == "7"
+        more.press()
+        await until(pilot, lambda: bool(screen.query(PopupMenu)))
+        await pilot.resize_terminal(60, 24)
+        await pilot.pause()
+        assert screen.query_one(PopupMenu).region in screen.region
+        await pilot.click(screen, offset=(0, 0))
+        await settle(pilot)
+        assert not screen.query(PopupMenu) and pilot.app.mouse_captured is None
+        assert draft.value == "7"
+        await pilot.resize_terminal(80, 24)
         service.i18n.set_language("zh-CN")
         await pane.relabel()
         await settle(pilot)
@@ -690,7 +706,10 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         assert (service.config.general.workers, service.config.general.queue_size) == (7, 65)
         draft.value = "9"
         await settle(pilot)
-        await pane._settings_operation("settings-discard-section")  # pyright: ignore[reportPrivateUsage]
+        more.press()
+        await until(pilot, lambda: bool(screen.query(PopupMenu)))
+        menu = screen.query_one(PopupMenu)
+        await pilot.click(menu, offset=(2, menu.get_option_index("settings-discard-section") + 1))
         await settle(pilot)
         draft = pane.query_one("#value-general-workers", Input)
         assert draft.value == "7" and service.config.general.workers == 7
