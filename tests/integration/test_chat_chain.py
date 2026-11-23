@@ -209,6 +209,79 @@ async def test_full_chat_command_chain_replies() -> None:
 
 
 @pytest.mark.asyncio
+async def test_onebot_mentions_reach_assistant_in_array_and_string_messages() -> None:
+    from unittest.mock import AsyncMock
+
+    from mailflow.bot_server import BotServer
+    from mailflow.domain import SmartActionResult
+
+    service = _service()
+    service.config.notifiers = [
+        NotifierConfig(
+            notifier_id="qq-assistant",
+            provider="onebot",
+            options={"admins": ["42"], "send_interval_seconds": 0},
+        )
+    ]
+    query = AsyncMock(return_value=SmartActionResult(final_text="Found your mail."))
+    service.smart_action = query
+    bot = BotServer(service)
+    onebot = _Recorder()
+    await bot.start()
+    await onebot.start()
+    bridge = _OneBotEventBridge("qq-assistant", 0, bot.url, onebot.url)
+    try:
+        event: dict[str, Any] = dict(
+            post_type="message", message_type="group", self_id=100, user_id=42, group_id=123
+        )
+        requests = [
+            {
+                "message": [
+                    {"type": "at", "data": {"qq": "100"}},
+                    {"type": "text", "data": {"text": " Find [invoice]"}},
+                    {"type": "face", "data": {"id": "1"}},
+                    {"type": "text", "data": {"text": " & receipt"}},
+                ],
+                "raw_message": "[CQ:reply,id=7][CQ:at,qq=100] Find &#91;invoice&#93; &amp; receipt",
+            },
+            {"message": "[CQ:at,qq=100] Find [invoice] &amp; receipt"},
+            {"raw_message": "[CQ:at,name=agent,qq=100] Find &#91;invoice&#93; &amp; receipt"},
+        ]
+        for number, message in enumerate(requests):
+            await bridge._dispatch(  # pyright: ignore[reportPrivateUsage]
+                {**event, **message, "message_id": number + 1}
+            )
+            assert query.await_count == number + 1
+            assert query.await_args is not None
+            assert query.await_args.args[0] == "Find [invoice] & receipt"
+            assert onebot.requests[-1][1] == {
+                "group_id": 123,
+                "message": "Found your mail.",
+            }
+        count = len(onebot.requests)
+        for number, text in enumerate(
+            [
+                "[CQ:at,qq=99] Find mail",
+                "[CQ:at,qq=all] Find mail",
+                "&#91;CQ:at,qq=100&#93; Find mail",
+            ]
+        ):
+            await bridge._dispatch(  # pyright: ignore[reportPrivateUsage]
+                {**event, "message": text, "message_id": f"unaddressed-{number}"}
+            )
+        assert query.await_count == 3 and len(onebot.requests) == count
+        await bridge._dispatch(  # pyright: ignore[reportPrivateUsage]
+            {**event, "user_id": 43, "message": requests[1]["message"], "message_id": 21}
+        )
+        assert query.await_count == 3
+        assert onebot.requests[-1][1]["message"] == service.t("permission.denied")
+    finally:
+        await bridge.stop()
+        await bot.stop()
+        await onebot.stop()
+
+
+@pytest.mark.asyncio
 async def test_bot_server_pages_long_unicode_reply_without_truncation() -> None:
     """A reply over any common chat limit stays complete and portable."""
     service = _service()

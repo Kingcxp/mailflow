@@ -334,6 +334,7 @@ class _OneBotEventBridge(OwnedListener):
         self._onebot_url = onebot_url
         self._token = token
         self._server: asyncio.AbstractServer | None = None
+        self._received_message = False
 
     @property
     def url(self) -> str:
@@ -348,6 +349,7 @@ class _OneBotEventBridge(OwnedListener):
 
     async def start(self) -> None:
         await self.start_listener(self._handle, "127.0.0.1", self.port)
+        logger.info("onebot bridge[%s]: receiving events at %s", self._instance_id, self.url)
 
     async def stop(self) -> None:
         await self.stop_listener()
@@ -449,23 +451,42 @@ class _OneBotEventBridge(OwnedListener):
                 writer.close()
 
     @staticmethod
-    def _extract_text(event: dict[str, Any]) -> str:
-        raw = event.get("raw_message")
-        if raw or not isinstance(event.get("message"), list):
-            return re.sub(
-                r"\[CQ:at,qq=[^\]]+\]", "", str(raw or event.get("message") or "")
-            ).strip()
-        parts: list[str] = []
-        message: list[Any] = event.get("message") or []
-        for seg in message:
-            if not isinstance(seg, dict):
-                continue
-            segment = cast("dict[str, Any]", seg)
-            if segment.get("type") != "text":
-                continue
-            data = cast("dict[str, Any]", segment.get("data") or {})
-            parts.append(str(data.get("text") or ""))
-        return "".join(parts)
+    def _message_segments(event: dict[str, Any]) -> list[dict[str, Any]]:
+        """Prefer structured events; decode legacy CQ strings before routing."""
+        message = event.get("message")
+        if isinstance(message, list):
+            parts = cast(list[Any], message)
+            if parts:
+                return [cast(dict[str, Any], part) for part in parts if isinstance(part, dict)]
+            message = None
+        raw = str(message or event.get("raw_message") or "")
+
+        def unescape(value: str) -> str:
+            return (
+                value.replace("&#91;", "[")
+                .replace("&#93;", "]")
+                .replace("&#44;", ",")
+                .replace("&amp;", "&")
+            )
+
+        segments: list[dict[str, Any]] = []
+        position = 0
+        for match in re.finditer(r"\[CQ:([^,\]]+)((?:,[^\]]*)?)\]", raw):
+            if match.start() > position:
+                segments.append(
+                    {"type": "text", "data": {"text": unescape(raw[position : match.start()])}}
+                )
+            params = (part.partition("=") for part in match[2].lstrip(",").split(",") if part)
+            segments.append(
+                {
+                    "type": match[1],
+                    "data": {key: unescape(value) for key, separator, value in params if separator},
+                }
+            )
+            position = match.end()
+        if position < len(raw):
+            segments.append({"type": "text", "data": {"text": unescape(raw[position:])}})
+        return segments
 
     async def _dispatch(self, event: dict[str, Any]) -> None:
         if event.get("notice_type") in {"group_upload", "offline_file"}:
@@ -479,28 +500,28 @@ class _OneBotEventBridge(OwnedListener):
             return
         user_id = event.get("user_id")
         group_id = event.get("group_id")
-        text = self._extract_text(event)
+        segments = self._message_segments(event)
+        text = "".join(
+            str(part.get("data", {}).get("text") or "")
+            for part in segments
+            if part.get("type") == "text"
+        ).strip()
         if user_id is None:
             return
+        if not self._received_message:
+            self._received_message = True
+            logger.info("onebot bridge[%s]: received first chat event", self._instance_id)
         chat_id = str(group_id) if message_type == "group" else str(user_id)
-        segments: list[Any] = (
-            cast(list[Any], event.get("message")) if isinstance(event.get("message"), list) else []
-        )
-        mentioned = any(
-            isinstance(segment, dict)
-            and cast(dict[str, Any], segment).get("type") == "at"
-            and str(cast(dict[str, Any], segment).get("data", {}).get("qq", ""))
-            == str(event.get("self_id", ""))
+        self_id = str(event.get("self_id") or "")
+        mentioned = bool(self_id) and any(
+            segment.get("type") == "at" and str(segment.get("data", {}).get("qq", "")) == self_id
             for segment in segments
-        ) or f"[CQ:at,qq={event.get('self_id')}]" in str(event.get("raw_message", ""))
+        )
         files: list[dict[str, str]] = []
         file_error = False
         from mailflow.chat_files import download_file, encoded_file
 
-        for segment in segments:
-            if not isinstance(segment, dict):
-                continue
-            part = cast(dict[str, Any], segment)
+        for part in segments:
             if part.get("type") not in {"file", "image"}:
                 continue
             data = cast(dict[str, Any], part.get("data") or {})

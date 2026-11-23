@@ -165,24 +165,3 @@ async def test_bridge_private_message_and_no_reply() -> None:
     await bridge.stop()
     await bot.stop()
     await onebot.stop()
-
-
-@pytest.mark.asyncio
-async def test_bridge_extracts_text_from_segments() -> None:
-    """When raw_message is absent, text segments are joined."""
-    event = {
-        "post_type": "message",
-        "message_type": "group",
-        "user_id": 1,
-        "group_id": 2,
-        "message": [
-            {"type": "text", "data": {"text": "/mailflow "}},
-            {"type": "face", "data": {"id": "1"}},
-            {"type": "text", "data": {"text": "help"}},
-        ],
-    }
-    extract = _OneBotEventBridge._extract_text  # pyright: ignore[reportPrivateUsage]
-    assert extract(event) == "/mailflow help"
-    # raw_message wins when present
-    event["raw_message"] = "/mailflow status"
-    assert extract(event) == "/mailflow status"
