@@ -5,6 +5,7 @@
     "gateway": {
       "telegram_no_install": "Telegram 无需安装本地网关。接入时会检查所配置的接口地址、机器人令牌及 webhook 冲突。",
       "napcat_retired": "NapCat 已结束维护，官方下载已不可用。请连接已有的 OneBot HTTP 服务、复用已安装实例，或在高级设置中填写你信任的安装包地址。MailFlow 不会自动选择第三方镜像。",
+      "napcat_missing": "未找到当前实例的 NapCat 程序。请恢复 {directory} 中的程序文件，或连接已有的 OneBot HTTP 服务。重新登录不会下载安装，也不会删除登录数据。",
       "napcat_package_hint": "可选：可信来源的 Windows Shell ZIP 地址。官方下载已移除；复用已安装实例时无需填写。",
       "napcat_appimage_hint": "可选：可信来源的 Linux AppImage 地址。官方下载已移除；复用已安装实例时无需填写。",
       "node_required": "请从 https://nodejs.org/en/download 安装 Node.js {version} 或更新版本，确保 node 已加入 PATH，然后重试。",
@@ -1013,6 +1014,7 @@
       "bots_guide_detecting": "正在检测本机运行时…",
       "bots_guide_detected": "运行时检测：{status}",
       "bots_guide_provisioning": "正在安装/启动网关（首次使用可能需要几分钟）…",
+      "bots_guide_reusing": "正在使用已安装的 {provider} 重新登录，不会下载或重新安装。",
       "bots_guide_running": "网关已运行：{endpoint}",
       "bots_guide_failed": "网关设置失败：{error}",
       "bots_guide_not_detected": "没有找到现有运行时；设置会自动安装。",

@@ -161,12 +161,15 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         provider: str,
         instance_id: str,
         options: dict[str, Any],
+        *,
+        relogin: bool = False,
     ) -> None:
         super().__init__()
         self._service = service
         self._provider = provider
         self._instance_id = instance_id
         self._options = options
+        self._relogin = relogin
         self._result: dict[str, Any] | None = None
         self._progress_bucket = -1
         self._last_progress_message = ""
@@ -347,21 +350,23 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         service = self._service
         provider = self._provider
         try:
-            # 1. detect
-            self._set_phase("detecting")
-            self._log("INFO", self._t("tui.bots_guide_detecting"))
-            detected = await service.gateway_detect(provider)
-            detected_message = detected or self._t("tui.bots_guide_not_detected")
-            self._log("INFO", self._t("tui.bots_guide_detected", status=detected_message))
-            await asyncio.sleep(0.2)
-            # 2. provision (install + start); while the provisioner works,
-            # poll the shared InstallProgress (injected into its options)
-            # to render a live download/install progress bar
-            self._set_phase("installing")
-            self._log("INFO", self._t("tui.bots_guide_provisioning"))
-            self._update_progress(
-                0.0, self._t("tui.bots_guide_downloading", provider=self._provider)
-            )
+            if self._relogin:
+                self._set_phase("starting")
+                message = self._t("tui.bots_guide_reusing", provider=provider)
+                self._log("INFO", message)
+                self._update_progress(0.0, message)
+            else:
+                self._set_phase("detecting")
+                self._log("INFO", self._t("tui.bots_guide_detecting"))
+                detected = await service.gateway_detect(provider)
+                detected_message = detected or self._t("tui.bots_guide_not_detected")
+                self._log("INFO", self._t("tui.bots_guide_detected", status=detected_message))
+                await asyncio.sleep(0.2)
+                self._set_phase("installing")
+                self._log("INFO", self._t("tui.bots_guide_provisioning"))
+                self._update_progress(
+                    0.0, self._t("tui.bots_guide_downloading", provider=self._provider)
+                )
             self._show_progress(True)
             try:
                 instance = await self._provision_with_progress(service, provider)
@@ -413,11 +418,9 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             ):
                 last_pct = progress.percent
                 self._last_progress_message = progress.message
-                stage = (
-                    progress.stage
-                    if progress.stage in {"downloading", "installing", "starting"}
-                    else "installing"
-                )
+                stage = "starting" if self._relogin else progress.stage
+                if stage not in {"downloading", "installing", "starting"}:
+                    stage = "installing"
                 if stage != self._phase:
                     self._set_phase(stage)
                 self._update_progress(progress.percent, self._t(f"tui.gateway_phase_{stage}"))
@@ -436,9 +439,12 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         install_options["_ask_sudo_password"] = _ask_sudo_password
 
         # keep the TUI live while the provisioner installs
-        task = asyncio.create_task(
-            service.gateway_provision(provider, self._instance_id, install_options)
+        operation = (
+            service.gateway_provision(provider, self._instance_id, install_options, install=False)
+            if self._relogin
+            else service.gateway_provision(provider, self._instance_id, install_options)
         )
+        task = asyncio.create_task(operation)
         try:
             while not task.done():
                 await asyncio.sleep(0.2)

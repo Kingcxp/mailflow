@@ -690,7 +690,13 @@ class RemoteServiceAdapter:
         raise self._unsupported("plugin_install_local")
 
     async def gateway_provision(
-        self, provider: str, instance_id: str, options: dict[str, Any], *, autostart: bool = True
+        self,
+        provider: str,
+        instance_id: str,
+        options: dict[str, Any],
+        *,
+        autostart: bool = True,
+        install: bool = True,
     ) -> Any:
         raise self._unsupported("gateway_provision")
 

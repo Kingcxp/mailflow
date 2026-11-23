@@ -5,6 +5,7 @@
     "gateway": {
       "telegram_no_install": "Telegram needs no local gateway installation. Setup checks the configured API address, bot token and webhook conflicts.",
       "napcat_retired": "NapCat has ended and its official downloads are unavailable. Connect an existing OneBot HTTP service, reuse an existing installation, or provide a package URL you trust in Advanced settings. MailFlow does not select unofficial mirrors.",
+      "napcat_missing": "This instance's NapCat program is missing. Restore the program files in {directory}, or connect an existing OneBot HTTP service. Re-login does not download packages or delete login data.",
       "napcat_package_hint": "Optional Windows Shell ZIP URL from a source you trust. Official downloads have been removed. Existing installations need no URL.",
       "napcat_appimage_hint": "Optional Linux AppImage URL from a source you trust. Official downloads have been removed. Existing installations need no URL.",
       "node_required": "Install Node.js {version} or newer from https://nodejs.org/en/download and add node to PATH, then retry.",
@@ -1013,6 +1014,7 @@
       "bots_guide_detecting": "Checking for a local runtime…",
       "bots_guide_detected": "Runtime check: {status}",
       "bots_guide_provisioning": "Installing / starting the gateway (first use may take a few minutes)…",
+      "bots_guide_reusing": "Signing in with the existing {provider} installation. Nothing will be downloaded or reinstalled.",
       "bots_guide_running": "Gateway running at {endpoint}",
       "bots_guide_failed": "Gateway setup failed: {error}",
       "bots_guide_not_detected": "No existing runtime found; setup will install one.",

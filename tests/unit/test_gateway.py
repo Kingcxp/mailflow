@@ -290,6 +290,14 @@ async def test_provision_install_failure_marks_error() -> None:
     assert "official downloads" in instance.error
     assert provisioner.stopped == ["gw-1"]
 
+    # Re-login reuses the same instance even when its installer is unavailable.
+    try:
+        reused = await manager.provision("fake-gw", "gw-1", {}, install=False)
+        assert reused.instance_id == "gw-1" and reused.status == "running"
+        assert provisioner.started == ["gw-1"]
+    finally:
+        await manager.stop()
+
 
 @pytest.mark.asyncio
 async def test_provision_start_failure_stops_partial_gateway() -> None:

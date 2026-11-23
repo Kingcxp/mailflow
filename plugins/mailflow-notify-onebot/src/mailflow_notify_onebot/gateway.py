@@ -27,6 +27,7 @@ from typing import Any, cast
 import httpx
 from mailflow.bot_server import command_replies
 from mailflow.contracts import GatewayInstance
+from mailflow.errors import translated_error
 from mailflow.gateway import GatewayNotInstalledError, GatewaySetupError
 from mailflow.gateway_resources import (
     GatewayFiles,
@@ -35,6 +36,7 @@ from mailflow.gateway_resources import (
     read_metadata,
     terminate_process,
 )
+from mailflow.i18n import I18n
 from mailflow.lifecycle import OwnedListener
 from mailflow.notifications import check_result
 
@@ -48,6 +50,13 @@ _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 _BASE_PORT = 3000
 _BRIDGE_BASE_PORT = 18000
 _READY_TIMEOUT = 30.0
+_SHELL_ENTRY_NAMES = (
+    "napcat.mjs",
+    "loadNapCat.js",
+    "main.js",
+    "NapCat.Shell/main.js",
+    "bin/main.js",
+)
 
 
 def _data_root() -> Path:
@@ -133,8 +142,17 @@ def _installed_marker(target: Path) -> bool:
     """
 
     if not _IS_WINDOWS:
-        return any(p.suffix == ".AppImage" for p in target.glob("*.AppImage"))
-    return _path_exists(target / "napcat.mjs") or _path_exists(target / "main")
+        return any(p.is_file() for p in target.glob("*.AppImage"))
+    return any((target / entry).is_file() for entry in _SHELL_ENTRY_NAMES)
+
+
+def _missing_installation(target: Path) -> GatewayNotInstalledError:
+    return translated_error(
+        GatewayNotInstalledError,
+        I18n().t,
+        "gateway.napcat_missing",
+        directory=str(target.resolve()),
+    )
 
 
 def _safe_token(instance_id: str) -> str:
@@ -1193,22 +1211,11 @@ class NapCatProvisioner(GatewayFiles):
         which would double the data/gateways prefix.
         """
         base = target.resolve()
-        candidates = [
-            base / "napcat.mjs",
-            base / "loadNapCat.js",
-            base / "main.js",
-            base / "NapCat.Shell" / "main.js",
-            base / "bin" / "main.js",
-        ]
-        for candidate in candidates:
-            if candidate.exists():
+        for name in _SHELL_ENTRY_NAMES:
+            candidate = base / name
+            if candidate.is_file():
                 return candidate
-        raise RuntimeError(
-            f"napcat {instance_id}: no entry point found under {target} — "
-            "the install is incomplete or the gateway directory was "
-            "partially removed; delete data/gateways/napcat-* and retry "
-            "the setup to reinstall"
-        )
+        raise _missing_installation(target)
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
         try:
@@ -1218,7 +1225,9 @@ class NapCatProvisioner(GatewayFiles):
             raise
 
     async def _start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
-
+        run_target = _instance_dir(instance_id)
+        if not await asyncio.to_thread(_installed_marker, run_target):
+            raise _missing_installation(run_target)
         qq: str | None = None
         if _IS_WINDOWS:
             qq = await asyncio.to_thread(_detect_qq)
@@ -1228,10 +1237,6 @@ class NapCatProvisioner(GatewayFiles):
                     "into QQ's process), but none was found on this machine. "
                     "Install QQ for your platform first."
                 )
-        elif not any(
-            p.suffix == ".AppImage" for p in _instance_dir(instance_id).glob("*.AppImage")
-        ):
-            raise GatewayNotInstalledError(str(GatewaySetupError("gateway.napcat_retired")))
         else:
             # NapCat launches the full QQ NT client (Electron): it needs
             # roughly 1.5-2 GB of RAM. Refuse to start on hosts without
@@ -1247,27 +1252,17 @@ class NapCatProvisioner(GatewayFiles):
         # the AppImage (Linux) and the Shell package (Windows) both live in
         # the instance dir; on Linux the AppImage holds QQ + NapCat and
         # writes its cache/QR next to itself
-        run_target = _instance_dir(instance_id)
         if not _IS_WINDOWS:
             # the AppImage asset name changes with each release: glob it
             appimages = list(run_target.glob("*.AppImage"))
             if not appimages:
-                raise GatewayNotInstalledError(
-                    f"napcat {instance_id} is not installed (no .AppImage "
-                    f"under {run_target}); run the setup again to install it"
-                )
+                raise _missing_installation(run_target)
             # absolute path: the child's cwd is the instance dir, so a
             # relative data/gateways/... path would double-prefix and
             # 'not found' at launch
             entry_path = appimages[0].resolve()
         else:
-            entry_path = run_target / "napcat.mjs"
-            if not _path_exists(entry_path):
-                raise GatewayNotInstalledError(
-                    f"napcat {instance_id} is not installed (missing "
-                    f"{entry_path}); run the setup again to install it"
-                )
-            entry_path = entry_path.resolve()
+            entry_path = await asyncio.to_thread(self._find_entry, run_target, instance_id)
         target = run_target
         port = int(options.get("port") or self._port_for(instance_id))
         # local chat-command bridge: NapCat posts message events here, we
@@ -1326,12 +1321,7 @@ class NapCatProvisioner(GatewayFiles):
         progress = options.get("_progress")
         if progress is not None:
             progress.update(92.0, "launching the gateway process…", "starting")
-        # Linux runs the bundled AppImage directly; only the Windows Shell
-        # package needs its node entry point located inside the tree
-        if not _IS_WINDOWS:
-            entry = entry_path
-        else:
-            entry = await asyncio.to_thread(self._find_entry, target, instance_id)
+        entry = entry_path
         # instance data dir: logs + the QR cache live here (on Linux this
         # differs from the QQ app dir where the package is mirrored)
         data_dir = _instance_dir(instance_id)

@@ -33,6 +33,61 @@ class _Status:
         pass
 
 
+async def test_relogin_reuses_installed_gateway_without_installing() -> None:
+    from mailflow.contracts import GatewayInstance
+    from mailflow.registry import PluginRegistrar
+    from mailflow_tui.gateway_guide import GatewayGuideModal
+
+    from mailflow_test_support.commands import commands_service
+
+    service = commands_service()
+    started: list[str] = []
+
+    class ExistingGateway:
+        backend_id = "napcat"
+
+        async def detect(self) -> str:
+            raise AssertionError("Re-login does not need an installation check")
+
+        async def install(self, instance_id: str, options: dict[str, Any]) -> None:
+            raise AssertionError("Re-login must not install or download")
+
+        async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
+            started.append(instance_id)
+            return await self.status(instance_id)
+
+        async def status(self, instance_id: str) -> GatewayInstance:
+            return GatewayInstance(
+                provider="napcat", instance_id=instance_id, status="running", endpoint="http://fake"
+            )
+
+        async def qr(self, instance_id: str) -> str:
+            return "__MAILFLOW_LOGGED_IN__"
+
+        async def stop(self, instance_id: str) -> None:
+            pass
+
+    PluginRegistrar(service.registry, service.config, "test").add_gateway_provisioner(
+        "napcat", ExistingGateway
+    )
+    guide = GatewayGuideModal(service, "napcat", "existing-qq", {}, relogin=True)
+    results: list[dict[str, Any] | None] = []
+
+    class Host(App[None]):
+        def on_mount(self) -> None:
+            self.push_screen(guide, results.append)
+
+    try:
+        async with Host().run_test(size=(100, 32)) as pilot:
+            await until(pilot, lambda: not guide.query_one("#guide-done", Button).disabled)
+            assert started == ["existing-qq"]
+            guide.query_one("#guide-done", Button).press()
+            await until(pilot, lambda: bool(results))
+            assert results[0] is not None and results[0]["instance_id"] == "existing-qq"
+    finally:
+        await service.gateways.stop()
+
+
 @pytest.mark.parametrize("failure", ["qr-timeout", "unreachable-endpoint"])
 @pytest.mark.parametrize("language", ["en", "zh-CN"])
 async def test_failed_guide_cannot_save_and_can_be_cancelled(

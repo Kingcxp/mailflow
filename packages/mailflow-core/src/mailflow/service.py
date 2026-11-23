@@ -3675,6 +3675,7 @@ Return every candidate in this batch."""
         options: dict[str, Any],
         *,
         autostart: bool = True,
+        install: bool = True,
     ) -> Any:
         """Install (if needed), start and supervise one gateway instance.
 
@@ -3687,7 +3688,9 @@ Return every candidate in this batch."""
         bot_url = getattr(self, "bot_server", None)
         if bot_url is not None:
             options = {**options, "bot_url": bot_url.url}
-        return await self.gateways.provision(provider, instance_id, options, autostart=autostart)
+        return await self.gateways.provision(
+            provider, instance_id, options, autostart=autostart, install=install
+        )
 
     @admin_operation
     async def gateway_qr(self, provider: str, instance_id: str) -> str:

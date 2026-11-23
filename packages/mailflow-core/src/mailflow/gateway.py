@@ -771,6 +771,7 @@ class GatewayManager:
         options: dict[str, Any],
         *,
         autostart: bool = True,
+        install: bool = True,
     ) -> GatewayInstance:
         key = self._key(provider, instance_id)
         generation = self._generation
@@ -790,7 +791,9 @@ class GatewayManager:
                 self._stop_event = asyncio.Event()
             self._running = True
             task = asyncio.create_task(
-                self._provision(provider, instance_id, options, autostart=autostart),
+                self._provision(
+                    provider, instance_id, options, autostart=autostart, install=install
+                ),
                 name=f"gateway-provision-{key}",
             )
             self._operations[key] = task
@@ -801,7 +804,13 @@ class GatewayManager:
                     self._operations.pop(key, None)
 
     async def _provision(
-        self, provider: str, instance_id: str, options: dict[str, Any], *, autostart: bool
+        self,
+        provider: str,
+        instance_id: str,
+        options: dict[str, Any],
+        *,
+        autostart: bool,
+        install: bool,
     ) -> GatewayInstance:
         """Install (if needed), start and supervise one instance.
 
@@ -846,18 +855,21 @@ class GatewayManager:
             )
         )
         self._instances[key] = instance
-        instance.status = "installing"
+        instance.status = "installing" if install else "starting"
         instance.error = ""
         await self._save_state(instance)
         progress = InstallProgress()
+        if not install:
+            progress.update(0.0, stage="starting")
         self._progress[key] = progress
         operation_options = {**self._start_options(options), "_progress": progress}
         try:
-            await bounded(
-                provisioner.install(instance_id, operation_options),
-                timeout_seconds=1800.0,
-                label=f"gateway {key} install",
-            )
+            if install:
+                await bounded(
+                    provisioner.install(instance_id, operation_options),
+                    timeout_seconds=1800.0,
+                    label=f"gateway {key} install",
+                )
             if self._stop_event.is_set():
                 raise asyncio.CancelledError
         except asyncio.CancelledError:
@@ -871,7 +883,7 @@ class GatewayManager:
             instance.status = "error"
             instance.error = f"install failed: {exc}{cleanup_error}"
             await self._save_state(instance)
-            if isinstance(exc, GatewaySetupError):
+            if isinstance(exc, (GatewaySetupError, GatewayNotInstalledError)):
                 raise
             raise RuntimeError(instance.error) from exc
         instance.status = "starting"
@@ -898,7 +910,7 @@ class GatewayManager:
             instance.status = "error"
             instance.error = f"start failed: {exc}{cleanup_error}"
             await self._save_state(instance)
-            if isinstance(exc, GatewaySetupError):
+            if isinstance(exc, (GatewaySetupError, GatewayNotInstalledError)):
                 raise
             raise RuntimeError(instance.error) from exc
         # start() returns a bare extra ({port, pid}); the persisted

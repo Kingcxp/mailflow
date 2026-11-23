@@ -167,6 +167,25 @@ async def test_install_requires_an_explicit_source_and_keeps_existing_payload(
     await prov.install("A-Bot-NapCat-5baf4a", {})
     assert len(downloads) == 1 and appimage.read_bytes() == b"#!fake-appimage"
 
+    # Older Windows Shell layouts are still usable; no new package is needed.
+    monkeypatch.setattr(gw_mod, "_IS_WINDOWS", True)
+    legacy_entry = instance / "main.js"
+    legacy_entry.write_text("// existing installation", encoding="utf-8")
+    await prov.install("A-Bot-NapCat-5baf4a", {})
+    assert len(downloads) == 1
+    assert prov._find_entry(instance, "A-Bot-NapCat-5baf4a") == legacy_entry.resolve()  # pyright: ignore[reportPrivateUsage]
+
+    from mailflow.gateway import GatewayNotInstalledError
+
+    with pytest.raises(GatewayNotInstalledError) as missing:
+        await prov.start("missing-installation", {})
+    for language in ("en", "zh-CN"):
+        translator = I18n(language)
+        assert error_text(missing.value, translator.t) == translator.t(
+            "gateway.napcat_missing", directory=str(_instance_dir("missing-installation").resolve())
+        )
+    assert len(downloads) == 1 and legacy_entry.read_text("utf-8") == "// existing installation"
+
 
 @pytest.mark.asyncio
 async def test_qr_fresh_keeps_waiting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

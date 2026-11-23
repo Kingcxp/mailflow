@@ -613,7 +613,7 @@ class NotificationsPane(Vertical):
         instance_id = entry.notifier_id
         options = dict(entry.options or {})
         self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-            GatewayGuideModal(self._service, gateway, instance_id, options),
+            GatewayGuideModal(self._service, gateway, instance_id, options, relogin=True),
             callback=lambda result, values={"notifier_id": instance_id, "provider": provider, "options": options}: (
                 self._after_guide(gateway, instance_id, result, values)
             ),
