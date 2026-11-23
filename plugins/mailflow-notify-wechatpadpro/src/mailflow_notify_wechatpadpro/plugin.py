@@ -15,9 +15,11 @@ Options:
 - ``targets``    — list of ``user:<wxid>`` / ``group:<chatroom_id>``
   entries; a bare ``wxid`` is treated as ``user:``
 
-Send contract: ``POST {base_url}/Msg/SendTxt`` with
-``{"Wxid": <bot wxid or "">, "ToWxid": <target>, "Content": <text>,
-"Type": 0}``; success is ``Code == 0`` in the response JSON. Delivery failures are raised to the runtime for accurate retry.
+The self-hosted v2 API uses ``POST /message/SendTextMessage`` with a
+``MsgItem`` array. An HTTP 404 falls back to the older ``/Msg/SendTxt``
+route; timeouts and business errors never trigger another send. Both
+``Code``/``Data`` and ``code``/``data`` responses are accepted, with success
+codes 0 and 200. Delivery failures reach the runtime for accurate retry.
 """
 
 from __future__ import annotations

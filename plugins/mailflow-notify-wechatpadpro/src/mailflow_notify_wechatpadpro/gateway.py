@@ -9,7 +9,7 @@ Install model:
   ``<data>/gateways/wechatpadpro-<instance>/`` (`compose.yml` plus
   `instance.json` with generated secrets and collision-free ports), then runs
   either ``docker compose`` (v2) or ``docker-compose`` (v1).
-- Login: ``POST /admin/GenAuthKey`` (admin key) → auth key;
+- Login: ``POST /admin/GenAuthKey1`` (admin key) → auth key;
   ``POST /login/GetLoginQrCodeNewX`` → QR PNG + uuid;
   ``GET /login/CheckLoginStatus`` → login state polling.
 - Incoming messages arrive as webhook POSTs. The compose project explicitly
