@@ -24,6 +24,7 @@ from urllib.request import Request, urlopen
 import httpx
 from mailflow.bot_server import command_replies
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
+from mailflow.gateway import GatewaySetupError
 from mailflow.lifecycle import cancel_tasks
 from mailflow.notifications import DeliveryError, check_http_response, check_result
 
@@ -117,6 +118,9 @@ class TelegramBridge:
                 return
             self._stopping = False
             await self._load_identity()
+            webhook = as_object((await self._request("getWebhookInfo")).get("result"))
+            if webhook.get("url"):
+                raise GatewaySetupError("gateway.telegram_webhook")
             self._task = asyncio.create_task(
                 self._poll_loop(), name=f"telegram-bridge-{self._instance_id}"
             )
@@ -339,14 +343,8 @@ class TelegramProvisioner(GatewayProvisioner):
             return new
 
     async def detect(self) -> str:
-        """Bot API reachability — nothing to install for Telegram."""
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                response = await client.get(f"{_API_ROOT}/")
-            reachable = response.status_code < 500
-        except Exception as exc:
-            return f"api.telegram.org unreachable ({type(exc).__name__})"
-        return "api.telegram.org reachable" if reachable else "api.telegram.org error"
+        """The configured API base and token are checked during setup."""
+        return "gateway.telegram_no_install"
 
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:
         """Validate the bot token; Telegram itself needs no local install."""

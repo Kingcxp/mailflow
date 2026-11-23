@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
-from mailflow.gateway import GatewayNotInstalledError
+from mailflow.gateway import GatewayNotInstalledError, GatewaySetupError
 from mailflow.gateway_resources import (
     LocalProcessGateway,
     instance_directory,
@@ -40,6 +40,7 @@ _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 _BASE_PORT = 8888
 _READY_TIMEOUT = 30.0
 _BRIDGE_GO = Path(__file__).parent / "gateway" / "openwechat-bridge.go"
+_BRIDGE_NAME = "openwechat-bridge.exe" if os.name == "nt" else "openwechat-bridge"
 
 
 def _data_root() -> Path:
@@ -68,15 +69,15 @@ class OpenWechatProvisioner(LocalProcessGateway, GatewayProvisioner):
         return _BASE_PORT + int(digest[:8], 16) % 97
 
     async def detect(self) -> str:
-        go = _find_go()
-        if go is None:
-            return "go toolchain not found (apt-get install golang-go)"
+        go = await asyncio.to_thread(_find_go)
         installed = any(
-            d.is_dir() and (d / "openwechat-bridge").exists()
+            d.is_dir() and any((d / name).exists() for name in {_BRIDGE_NAME, "openwechat-bridge"})
             for d in _data_root().glob("openwechat-*")
         )
+        if go is None and not installed:
+            return "gateway.go_required"
         running = await self._any_running()
-        parts = [f"go {go}"]
+        parts = [f"go {go}"] if go else []
         parts.append("installed" if installed else "not installed")
         parts.append("running" if running else "not running")
         return "; ".join(parts)
@@ -85,33 +86,33 @@ class OpenWechatProvisioner(LocalProcessGateway, GatewayProvisioner):
         return any(process.poll() is None for process in self._processes.values())
 
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:
-        go = _find_go()
-        if go is None:
-            raise RuntimeError(
-                "openwechat needs the Go toolchain to build its bridge — "
-                "install it first:\n  apt-get install -y golang-go\n"
-                "(or set PATH so `go` resolves; MailFlow never installs "
-                "system packages itself)"
-            )
         target = _instance_dir(instance_id)
         self.prepare_directory(instance_id, target)
-        bridge = target / "openwechat-bridge"
-        source_hash = hashlib.sha256(await asyncio.to_thread(_BRIDGE_GO.read_bytes)).hexdigest()
+        bridge = target / _BRIDGE_NAME
+        sources = [_BRIDGE_GO, _BRIDGE_GO.with_name("go.mod"), _BRIDGE_GO.with_name("go.sum")]
+        payload = await asyncio.to_thread(lambda: [source.read_bytes() for source in sources])
+        source_hash = hashlib.sha256(b"\0".join(payload)).hexdigest()
         metadata = read_metadata(target)
         if bridge.exists() and metadata.get("bridge_source_hash") == source_hash:
             logger.info("openwechat %s: bridge already built", instance_id)
             return
+        go = _find_go()
+        if go is None:
+            raise GatewaySetupError("gateway.go_required")
         progress = options.get("_progress")
         if progress is not None:
             progress.update(5.0, "building Go bridge (first run downloads Go modules)", "building")
         logger.info("openwechat %s: building bridge with %s", instance_id, go)
-        # build INSIDE the module dir: single-file mode ignores go.mod and
-        # fails with 'no required module provides package
-        # github.com/eatmoreapple/openwechat' (the user's deploy log)
+        # Installed package files may be read-only. Build a complete module
+        # in the instance directory; retain its credentials on rebuilds.
+        build_dir = target / "build"
+        build_dir.mkdir(exist_ok=True)
+        for source, data in zip(sources, payload, strict=True):
+            await asyncio.to_thread((build_dir / source.name).write_bytes, data)
         result = await run_command(
             [go, "build", "-o", str(bridge.resolve()), "."],
             timeout_seconds=300,
-            cwd=str(_BRIDGE_GO.parent.resolve()),
+            cwd=str(build_dir.resolve()),
             # CGO disabled: a cgo binary is dynamically linked against the
             # BUILD host's glibc and fails with a confusing
             # 'No such file or directory' (missing ELF interpreter) on
@@ -119,9 +120,8 @@ class OpenWechatProvisioner(LocalProcessGateway, GatewayProvisioner):
             env={**os.environ, "CGO_ENABLED": "0"},
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                f"openwechat {instance_id}: bridge build failed: {result.stderr.strip()[:400]}"
-            )
+            logger.error("openwechat %s: bridge build failed: %s", instance_id, result.stderr)
+            raise GatewaySetupError("gateway.go_build_failed")
         await asyncio.to_thread(os.chmod, bridge, 0o755)
         await asyncio.to_thread(
             (target / "mailflow.json").write_text,
@@ -131,7 +131,11 @@ class OpenWechatProvisioner(LocalProcessGateway, GatewayProvisioner):
         logger.info("openwechat %s: bridge ready", instance_id)
 
     async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
-        bridge = _instance_dir(instance_id) / "openwechat-bridge"
+        directory = _instance_dir(instance_id)
+        bridge = directory / _BRIDGE_NAME
+        legacy = directory / "openwechat-bridge"
+        if os.name == "nt" and not bridge.exists() and legacy.exists():
+            await asyncio.to_thread(shutil.copyfile, legacy, bridge)
         if not bridge.exists():
             raise GatewayNotInstalledError(
                 f"openwechat {instance_id} is not installed; run setup first"

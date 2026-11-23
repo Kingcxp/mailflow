@@ -24,6 +24,8 @@ from typing import Any, cast
 from mailflow.config import MailFlowConfig
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
 from mailflow.domain import ComponentKind
+from mailflow.errors import error_text
+from mailflow.i18n import I18n
 from mailflow.lifecycle import bounded, cancel_tasks
 from mailflow.registry import ComponentRegistry
 
@@ -38,6 +40,15 @@ class GatewayNotInstalledError(RuntimeError):
     """The gateway's payload is missing (e.g. its data directory was
     deleted while the app was stopped). Not transient: supervision must
     mark the instance and stop retrying instead of looping forever."""
+
+
+class GatewaySetupError(RuntimeError):
+    """An actionable setup failure, translated by the calling interface."""
+
+    def __init__(self, code: str, **params: Any) -> None:
+        self.code = code
+        self.params = params
+        super().__init__(I18n().t(code, **params))
 
 
 _STATUS_RUNNING = "running"
@@ -728,14 +739,16 @@ class GatewayManager:
 
     async def detect(self, provider: str) -> str:
         """Status line for the guide's first step."""
+        translate = I18n(self._config.general.language, self._config.i18n.extra_dirs).t
         try:
-            return await bounded(
+            status = await bounded(
                 self.provisioner(provider).detect(),
                 timeout_seconds=_PROBE_TIMEOUT_SECONDS,
                 label=f"gateway {provider} detect",
             )
+            return translate(status)
         except Exception as exc:
-            return f"error: {exc}"
+            return error_text(exc, translate)
 
     async def check(self, provider: str, instance_id: str) -> GatewayInstance:
         """Probe the platform session, rather than an arbitrary HTTP landing page."""
@@ -858,6 +871,8 @@ class GatewayManager:
             instance.status = "error"
             instance.error = f"install failed: {exc}{cleanup_error}"
             await self._save_state(instance)
+            if isinstance(exc, GatewaySetupError):
+                raise
             raise RuntimeError(instance.error) from exc
         instance.status = "starting"
         await self._save_state(instance)
@@ -883,6 +898,8 @@ class GatewayManager:
             instance.status = "error"
             instance.error = f"start failed: {exc}{cleanup_error}"
             await self._save_state(instance)
+            if isinstance(exc, GatewaySetupError):
+                raise
             raise RuntimeError(instance.error) from exc
         # start() returns a bare extra ({port, pid}); the persisted
         # options/autostart must survive the swap or the supervisor's next

@@ -117,6 +117,8 @@ def api(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             raise RuntimeError(str(state["fail"]))
         if method == "getMe":
             return {"ok": True, "result": dict(state["me"])}
+        if method == "getWebhookInfo":
+            return {"ok": True, "result": {"url": state.get("webhook", "")}}
         return {"ok": True, "result": []}
 
     monkeypatch.setattr(gateway_module, "_call", fake_call)
@@ -140,6 +142,12 @@ async def test_setup_checks_token_then_starts_reports_identity_and_stops(
     assert (await prov.status("tg-1")).status == "stopped"
     api["fail"] = None
     await prov.install("tg-1", {"bot_token": "123:abc"})
+    api["webhook"] = "https://another-app.test/callback"
+    with pytest.raises(RuntimeError, match="webhook"):
+        await prov.start("tg-1", {"bot_token": "123:abc"})
+    assert (await prov.status("tg-1")).status == "stopped"
+    assert not any(method == "deleteWebhook" for method, _ in api["calls"])
+    api["webhook"] = ""
     instance = await prov.start("tg-1", {"bot_token": "123:abc"})
     try:
         assert instance.status == "running" and instance.extra["username"] == "mf_bot"
@@ -173,13 +181,15 @@ async def test_changing_token_or_host_replaces_old_poller(api: dict[str, Any]) -
 
 
 @pytest.mark.asyncio
-async def test_detect_reports_api_reachability(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_detect_does_not_require_access_to_the_default_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import mailflow_notify_telegram.gateway as gateway_module
 
     _StubClient.payload = {"ok": True}
     monkeypatch.setattr(gateway_module.httpx, "AsyncClient", _client_factory)
     prov = TelegramProvisioner()
-    assert "reachable" in await prov.detect()
+    assert await prov.detect() == "gateway.telegram_no_install"
 
 
 @pytest.mark.asyncio

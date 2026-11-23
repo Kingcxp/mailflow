@@ -649,6 +649,8 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         if kind is None:
             return None
         fields = self._service.registry.form_fields(kind, provider)
+        if not fields and self._group == "notifiers":
+            fields = self._service.registry.form_fields(ComponentKind.GATEWAY_PROVISIONER, provider)
         if not fields and self._group == "accounts" and provider == "imap":
             from mailflow_mail_imap.plugin import account_form
 

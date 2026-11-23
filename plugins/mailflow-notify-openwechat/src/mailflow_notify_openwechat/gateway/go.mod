@@ -1,6 +1,6 @@
 module mailflow-openwechat-bridge
 
-go 1.27.0
+go 1.21
 
 require (
 	github.com/eatmoreapple/openwechat v1.4.10 // indirect

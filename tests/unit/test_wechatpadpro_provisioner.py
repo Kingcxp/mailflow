@@ -277,7 +277,22 @@ async def test_webhook_bridge_sends_every_bot_reply_page(
     )
     monkeypatch.setattr(gateway.httpx, "AsyncClient", _BridgeClient)
 
-    await bridge._forward(  # pyright: ignore[reportPrivateUsage]
+    async def webhook(payload: dict[str, Any]) -> None:
+        body = json.dumps(payload).encode()
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            b"POST /webhook?token=secret HTTP/1.1\r\nContent-Length: "
+            + str(len(body)).encode()
+            + b"\r\n\r\n"
+            + body
+        )
+        reader.feed_eof()
+        writer = _RecordingWriter()
+        await bridge._handle(reader, cast(Any, writer))  # pyright: ignore[reportPrivateUsage]
+        await asyncio.gather(*bridge._pending_forwards)  # pyright: ignore[reportPrivateUsage]
+        assert bytes(writer.payload).startswith(b"HTTP/1.1 200")
+
+    await webhook(
         {
             "Data": {
                 "FromUserName": "room@chatroom",
@@ -306,31 +321,46 @@ async def test_webhook_bridge_sends_every_bot_reply_page(
     )
     assert _BridgeClient.calls[1:] == [
         (
-            "http://gateway/Msg/SendTxt",
+            "http://gateway/message/SendTextMessage",
             {
                 "params": {"key": "managed-auth-key"},
                 "json": {
-                    "Wxid": "",
-                    "ToWxid": "room@chatroom",
-                    "Content": "first page",
-                    "Type": 0,
+                    "MsgItem": [
+                        {"ToUserName": "room@chatroom", "TextContent": "first page", "MsgType": 1}
+                    ],
                 },
             },
         ),
         (
-            "http://gateway/Msg/SendTxt",
+            "http://gateway/message/SendTextMessage",
             {
                 "params": {"key": "managed-auth-key"},
                 "json": {
-                    "Wxid": "",
-                    "ToWxid": "room@chatroom",
-                    "Content": "second page",
-                    "Type": 0,
+                    "MsgItem": [
+                        {"ToUserName": "room@chatroom", "TextContent": "second page", "MsgType": 1}
+                    ],
                 },
             },
         ),
     ]
     assert key_calls == 1
+    _BridgeClient.calls.clear()
+    await webhook(
+        {
+            "msgId": "callback-2",
+            "fromUser": "wxid-member",
+            "toUser": "wxid-bot",
+            "content": "/mailflow status",
+            "msgType": 1,
+        }
+    )
+    assert _BridgeClient.calls[0][1]["json"]["sender"] == "wxid-member"
+    assert _BridgeClient.calls[0][1]["json"]["request_id"] == "callback-2"
+    _BridgeClient.calls.clear()
+    await webhook(
+        {"fromUser": "wxid-bot", "content": "/mailflow status", "msgType": 1, "isSelfMsg": True}
+    )
+    assert not _BridgeClient.calls
 
 
 class _NotifierResponse:
@@ -390,18 +420,84 @@ async def test_auto_deployed_notifier_uses_managed_auth_key(
 
     assert _NotifierClient.calls == [
         (
-            "http://127.0.0.1:8101/Msg/SendTxt",
+            "http://127.0.0.1:8101/message/SendTextMessage",
             {
                 "params": {"key": "managed-auth-key"},
                 "json": {
-                    "Wxid": "",
-                    "ToWxid": "wxid-owner",
-                    "Content": "A new mail arrived",
-                    "Type": 0,
+                    "MsgItem": [
+                        {
+                            "ToUserName": "wxid-owner",
+                            "TextContent": "A new mail arrived",
+                            "MsgType": 1,
+                        }
+                    ],
                 },
             },
         )
     ]
+
+
+async def test_v2_delivery_accepts_native_results_and_only_falls_back_on_missing_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mailflow.notifications import DeliveryError
+
+    client_type = httpx.AsyncClient
+    for response_kind in ("v2", "legacy", "reject", "timeout"):
+        requests: list[httpx.Request] = []
+
+        def respond(
+            request: httpx.Request,
+            kind: str = response_kind,
+            captured: list[httpx.Request] = requests,
+        ) -> httpx.Response:
+            captured.append(request)
+            if request.url.path == "/admin/GenAuthKey1":
+                return httpx.Response(200, json={"Code": 200, "Data": ["generated-key"]})
+            if request.url.path == "/message/SendTextMessage":
+                if kind == "legacy":
+                    return httpx.Response(404)
+                if kind == "timeout":
+                    raise httpx.ReadTimeout("unknown result")
+                assert json.loads(request.content)["MsgItem"][0]["ToUserName"] == "wxid-owner"
+            else:
+                assert request.url.path == "/Msg/SendTxt"
+                assert json.loads(request.content)["ToWxid"] == "wxid-owner"
+            assert request.url.params["key"] == "generated-key"
+            return httpx.Response(200, json={"Code": -1 if kind == "reject" else 200, "Data": {}})
+
+        notifier = WechatPadProNotifier(
+            NotifierConfig(
+                notifier_id="test",
+                provider="wechatpadpro",
+                options={
+                    "base_url": "http://gateway",
+                    "admin_key": "secret",
+                    "targets": ["wxid-owner"],
+                },
+            )
+        )
+        client = client_type(transport=httpx.MockTransport(respond))
+
+        def client_factory(
+            instance: httpx.AsyncClient = client, **kwargs: Any
+        ) -> httpx.AsyncClient:
+            return instance
+
+        with monkeypatch.context() as transport:
+            transport.setattr(httpx, "AsyncClient", client_factory)
+            if response_kind == "reject":
+                with pytest.raises(DeliveryError):
+                    await notifier.push_text("mail arrived")
+            elif response_kind == "timeout":
+                with pytest.raises(httpx.ReadTimeout):
+                    await notifier.push_text("mail arrived")
+            else:
+                await notifier.push_text("mail arrived")
+        assert [request.url.path for request in requests] == [
+            "/admin/GenAuthKey1",
+            "/message/SendTextMessage",
+        ] + (["/Msg/SendTxt"] if response_kind == "legacy" else [])
 
 
 @pytest.mark.asyncio
@@ -437,7 +533,17 @@ async def test_install_avoids_a_taken_port_and_wires_linux_bridge(
     assert pulled[0][1].resolve() == (instance_dir / "compose.yml").resolve()
     compose_text = (instance_dir / "compose.yml").read_text(encoding="utf-8")
     assert "host.docker.internal:host-gateway" in compose_text
-    assert f'"{api_port}:1238"' in compose_text
+    assert f'"127.0.0.1:{api_port}:1238"' in compose_text
+    assert "platform: linux/amd64" in compose_text
+    assert "@sha256:" in compose_text
+    # A previous interrupted pull must retry without regenerating credentials.
+    metadata.pop("images_ready")
+    (instance_dir / "instance.json").write_text(json.dumps(metadata), encoding="utf-8")
+    await provisioner.install("wechat-1", {})
+    assert len(pulled) == 2
+    saved = json.loads((instance_dir / "instance.json").read_text(encoding="utf-8"))
+    assert saved == {**metadata, "images_ready": True}
+    assert (instance_dir / "compose.yml").read_text(encoding="utf-8") == compose_text
 
 
 @pytest.mark.asyncio

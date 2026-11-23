@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, cast
+from urllib.error import HTTPError
 from urllib.request import Request
 
 import httpx
@@ -131,7 +132,9 @@ def format_mail(record: MailRecord, translate: Callable[..., str] | None = None)
     return "\n".join(lines)
 
 
-def check_result(payload: Any) -> None:
+def check_result(
+    payload: Any, *, success_codes: tuple[int | str | None, ...] = (0, "0", None)
+) -> None:
     """Check the explicit rejection fields used by bundled adapters."""
     if not isinstance(payload, dict) or not payload:
         raise DeliveryError("rejected")
@@ -141,7 +144,7 @@ def check_result(payload: Any) -> None:
         or payload.get("Success") is False
         or payload.get("status") == "failed"
         or any(
-            payload.get(key, 0) not in (0, "0", None)
+            payload.get(key, 0) not in success_codes
             for key in ("retcode", "errcode", "code", "Code", "StatusCode")
         )
     ):
@@ -171,19 +174,30 @@ def check_http_response(response: httpx.Response) -> None:
 
 def post_webhook(request: Request, timeout: float, *, provider: str = "") -> None:
     """Consume and close responses; an HTTP success can still reject a message."""
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except HTTPError as exc:
+        if exc.code == 429:
+            check_http_response(
+                httpx.Response(429, content=exc.read(), headers=dict(exc.headers.items()))
+            )
+        raise
+    if provider == "slack":
+        if body.strip() != "ok":
+            raise DeliveryError("rejected")
+        return
     if not body.strip():
-        if provider in {"feishu", "dingtalk", "wecom", "serverchan"}:
+        if provider in {"feishu", "dingtalk", "wecom", "serverchan", "discord", "ntfy"}:
             raise DeliveryError("rejected")
         return
     try:
         result = json.loads(body)
     except ValueError:
-        if provider == "slack" and body.strip() != "ok":
-            raise DeliveryError("rejected") from None
-        if provider in {"feishu", "dingtalk", "wecom", "serverchan"}:
+        if provider in {"feishu", "dingtalk", "wecom", "serverchan", "discord", "ntfy"}:
             raise DeliveryError("rejected") from None
         return
     if isinstance(result, dict):
         check_result(cast("dict[str, Any]", result))
+    elif provider in {"feishu", "dingtalk", "wecom", "serverchan", "discord", "ntfy"}:
+        raise DeliveryError("rejected")

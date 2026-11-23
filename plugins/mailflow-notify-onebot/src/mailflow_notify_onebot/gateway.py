@@ -1,14 +1,8 @@
-"""NapCat gateway provisioner: auto-install, launch and supervise a NapCat
-QQ bot (OneBot v11 HTTP) for the Bots tab.
+"""Manage existing NapCat installations and explicitly supplied packages.
 
-Install model:
-- NapCat is a Node.js app distributed as a release zip (GitHub). We pin a
-  version, download the zip into ``<data>/gateways/napcat-<instance>/``,
-  unpack it, and run it with the system ``node``.
-- Each instance gets its own directory and its own HTTP port (base 3000 +
-  instance offset), so "Add" always starts an independent bot session.
-- The QR login is driven through the OneBot HTTP API (``get_qrcode`` +
-  ``get_login_info`` polling); the TUI renders the payload.
+The upstream project ended and removed its release assets. New installations
+require a user-supplied package URL; no unofficial mirror is selected silently.
+Existing installations and independently managed OneBot services remain usable.
 """
 
 from __future__ import annotations
@@ -33,7 +27,7 @@ from typing import Any, cast
 import httpx
 from mailflow.bot_server import command_replies
 from mailflow.contracts import GatewayInstance
-from mailflow.gateway import GatewayNotInstalledError
+from mailflow.gateway import GatewayNotInstalledError, GatewaySetupError
 from mailflow.gateway_resources import (
     GatewayFiles,
     allocate_port,
@@ -46,37 +40,14 @@ from mailflow.notifications import check_result
 
 logger = logging.getLogger("mailflow.gateway.napcat")
 
-# Default NapCat release: pinned to a known-good version so installs never
-# depend on the GitHub API (anonymous rate limit is 60 req/hr and can be
-# exhausted by retries/multiple sessions). Set options.napcat_version to a
-# specific tag, or to "latest" to resolve from the GitHub API at install
-# time.
 # module-level so tests can flip the host platform
 _IS_WINDOWS = os.name == "nt"
 
-_NAPCAT_VERSION = "4.18.19"
-_NAPCAT_ASSET = "NapCat.Shell.zip"
-_NAPCAT_API = "https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest"
-_NAPCAT_SIZE_MB = 29.5  # approximate; the log is informational
-# Linux headless: the official AppImage bundles QQ NT + NapCat in one
-# file (only xvfb + fuse needed at runtime), so no QQ deb install or
-# mirroring into /opt/QQ is required. The Shell zip stays the Windows
-# path. Override with options.napcat_appimage_url if it moves.
-_NAPCAT_APPIMAGE_API = "https://api.github.com/repos/NapNeko/NapCatAppImageBuild/releases/latest"
-_NAPCAT_APPIMAGE_ASSET = "QQ-50969_NapCat-v4.18.19-amd64.AppImage"
-_QQ_DEB_URL = "https://dldir1.qq.com/qqfile/qq/QQNT/Linux/QQ_3.2.15_240902_x86_64_01.deb"
-_QQ_INSTALL_DIR = Path("/opt/QQ")
 _WEBUI_PORT = 6099
 _QR_LOGGED_IN = "__MAILFLOW_LOGGED_IN__"
 _BASE_PORT = 3000
 _BRIDGE_BASE_PORT = 18000
 _READY_TIMEOUT = 30.0
-
-_latest_version: str | None = None
-
-
-def _release_url(version: str) -> str:
-    return f"https://github.com/NapNeko/NapCatQQ/releases/download/v{version}/{_NAPCAT_ASSET}"
 
 
 def _data_root() -> Path:
@@ -181,31 +152,6 @@ def _safe_token(instance_id: str) -> str:
     return f"{cleaned}-{digest}"
 
 
-def _latest_napcat_version() -> str:
-    """Latest NapCat release tag (cached per process); raises with a clear
-    message when the GitHub API is unreachable or rate-limited."""
-    global _latest_version
-    if _latest_version:
-        return _latest_version
-    request = urllib.request.Request(
-        _NAPCAT_API, headers={"User-Agent": "mailflow", "Accept": "application/vnd.github+json"}
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception as exc:
-        raise RuntimeError(
-            f"could not look up the latest NapCat release ({exc}); "
-            f"the default pinned version {_NAPCAT_VERSION} is used instead "
-            "— remove options.napcat_version or pin a specific tag"
-        ) from exc
-    tag = str(payload.get("tag_name", "")).lstrip("v")
-    if not tag:
-        raise RuntimeError("NapCat release lookup returned no version tag")
-    _latest_version = tag
-    return tag
-
-
 def _instance_dir(instance_id: str) -> Path:
     return _data_root() / f"napcat-{_safe_token(instance_id)}"
 
@@ -303,25 +249,6 @@ def _missing_qq_runtime_libs() -> list[str]:
     return list(dict.fromkeys(missing))
 
 
-def _find_node() -> str | None:
-    """Path to a usable ``node`` binary (NapCat needs Node >= 18)."""
-    node = shutil.which("node")
-    if node is None:
-        return None
-    try:
-        result = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=10)
-    except Exception:
-        return None
-    if result.returncode != 0:
-        return None
-    version = (result.stdout or "").strip().lstrip("v")
-    try:
-        major = int(version.split(".")[0])
-    except ValueError:
-        return None
-    return node if major >= 18 else None
-
-
 def _detect_qq() -> str | None:
     """Path to a local QQ client (NapCat injects into it).
 
@@ -329,7 +256,6 @@ def _detect_qq() -> str | None:
     the QQ process path. Linux: qq / linuxqq on PATH. None when no QQ
     client is found — NapCat cannot work without one.
     """
-    import shutil
 
     if _IS_WINDOWS:
         try:
@@ -1003,13 +929,11 @@ class NapCatProvisioner(GatewayFiles):
     # -- GatewayProvisioner ----------------------------------------------------
 
     async def detect(self) -> str:
-        node = await asyncio.to_thread(_find_node)
-        if node is None:
-            return "node not found (NapCat needs Node.js >= 18)"
         installed = any(_installed_marker(p) for p in _data_root().glob("napcat-*"))
+        if not installed:
+            return "gateway.napcat_retired"
         running = await self._any_running()
-        parts = [f"node {node}"]
-        parts.append("installed" if installed else "not installed")
+        parts = ["installed"]
         parts.append("running" if running else "not running")
         return "; ".join(parts)
 
@@ -1032,12 +956,6 @@ class NapCatProvisioner(GatewayFiles):
         return False
 
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:
-
-        node = await asyncio.to_thread(_find_node)
-        if node is None:
-            raise RuntimeError(
-                "NapCat needs Node.js >= 18; install Node first (or set options.node_path)"
-            )
         progress = options.get("_progress")
         if progress is not None:
             progress.update(1.0, "checking NapCat runtime requirements", "installing")
@@ -1049,6 +967,9 @@ class NapCatProvisioner(GatewayFiles):
         if await asyncio.to_thread(_installed_marker, target):
             logger.info("napcat %s already installed at %s", instance_id, target)
             return
+        package_key = "napcat_package_url" if _IS_WINDOWS else "napcat_appimage_url"
+        if not str(options.get(package_key) or "").strip():
+            raise GatewaySetupError("gateway.napcat_retired")
         self.prepare_directory(instance_id, target)
         if not _IS_WINDOWS:
             # Linux headless: download the official AppImage (bundles
@@ -1061,15 +982,12 @@ class NapCatProvisioner(GatewayFiles):
         self, instance_id: str, options: dict[str, Any], target: Path
     ) -> None:
         """Download + unpack the NapCat.Shell package into ``target``."""
-        requested = str(options.get("napcat_version") or "").strip()
-        if requested == "latest":
-            version = await asyncio.to_thread(_latest_napcat_version)
-        else:
-            version = requested or _NAPCAT_VERSION
-        url = _release_url(version)
+        url = str(options.get("napcat_package_url") or "").strip()
+        if not url:
+            raise GatewaySetupError("gateway.napcat_retired")
         archive = target / "napcat.zip"
         progress = options.get("_progress")
-        logger.info("napcat %s: downloading %s (%.1f MB)", instance_id, url, _NAPCAT_SIZE_MB)
+        logger.info("napcat %s: downloading %s", instance_id, url)
         await self._download_payload(instance_id, url, archive, progress)
         if progress is not None:
             size_mb = archive.stat().st_size / (1024 * 1024) if archive.exists() else 0
@@ -1090,12 +1008,15 @@ class NapCatProvisioner(GatewayFiles):
     async def _install_linux_appimage(
         self, instance_id: str, options: dict[str, Any], target: Path
     ) -> None:
-        """Download the official NapCat AppImage (bundles QQ NT + NapCat).
+        """Download a user-supplied AppImage (bundles QQ NT + NapCat).
 
         MailFlow never installs system packages itself: missing runtime
         pieces (xvfb, fuse) are reported with the exact install command
         so the operator can provision them.
         """
+        url = str(options.get("napcat_appimage_url") or "").strip()
+        if not url:
+            raise GatewaySetupError("gateway.napcat_retired")
         import shutil as _sh
 
         missing: list[str] = []
@@ -1129,47 +1050,11 @@ class NapCatProvisioner(GatewayFiles):
                 "in extract mode (no FUSE needed)",
                 instance_id,
             )
-        # resolve the latest amd64 AppImage asset name from the release
-        # API; when the API is unreachable we fall back to the pinned
-        # known release below
-        requested = str(options.get("napcat_appimage_url") or "").strip()
-        url = requested
-        asset = _NAPCAT_APPIMAGE_ASSET
-        if not url:
-            try:
-                import json as _json
-                import urllib.request as _ur
-
-                def _lookup() -> tuple[str, str]:
-                    req = _ur.Request(_NAPCAT_APPIMAGE_API, headers={"User-Agent": "mailflow"})
-                    with _ur.urlopen(req, timeout=30) as resp:
-                        data = _json.loads(resp.read().decode("utf-8"))
-                    for a in data.get("assets", []):
-                        name: str = a["name"]
-                        if "amd64" in name and name.endswith(".AppImage"):
-                            return str(a["browser_download_url"]), name
-                    return "", _NAPCAT_APPIMAGE_ASSET
-
-                resolved = await asyncio.to_thread(_lookup)
-                url, asset = resolved
-            except Exception as exc:
-                logger.warning("napcat %s: AppImage release lookup failed (%s)", instance_id, exc)
-        if not url:
-            # pinned fallback (same asset the API resolves for this tag);
-            # never hard-fail on a transient network/rate-limit issue
-            url = (
-                "https://github.com/NapNeko/NapCatAppImageBuild/releases/download/"
-                f"v{_NAPCAT_VERSION}/{_NAPCAT_APPIMAGE_ASSET}"
-            )
-            logger.warning(
-                "napcat %s: release API unreachable — falling back to the pinned AppImage %s",
-                instance_id,
-                _NAPCAT_APPIMAGE_ASSET,
-            )
+        asset = "NapCat.AppImage"
         appimage = target / asset
         progress = options.get("_progress")
         if progress is not None:
-            progress.update(0.0, f"downloading {asset} (~190 MB)", "downloading")
+            progress.update(0.0, f"downloading {asset}", "downloading")
         logger.info("napcat %s: downloading AppImage %s", instance_id, url)
         await self._download_payload(instance_id, url, appimage, progress)
         if progress is not None:
@@ -1186,17 +1071,20 @@ class NapCatProvisioner(GatewayFiles):
         self, instance_id: str, url: str, destination: Path, progress: Any
     ) -> None:
         cancelled = threading.Event()
+        partial = destination.with_suffix(destination.suffix + ".part")
         task = asyncio.create_task(
-            asyncio.to_thread(self._download, url, destination, progress, cancelled=cancelled)
+            asyncio.to_thread(self._download, url, partial, progress, cancelled=cancelled)
         )
         try:
             await asyncio.shield(task)
+            await asyncio.to_thread(partial.replace, destination)
         except asyncio.CancelledError:
             cancelled.set()
 
             async def clean_late() -> None:
                 with contextlib.suppress(Exception):
                     await task
+                partial.unlink(missing_ok=True)
                 with contextlib.suppress(Exception):
                     await self.cleanup_failed(instance_id)
 
@@ -1205,6 +1093,9 @@ class NapCatProvisioner(GatewayFiles):
             )
             self._download_cleanups.add(cleanup)
             cleanup.add_done_callback(self._download_cleanups.discard)
+            raise
+        except Exception:
+            partial.unlink(missing_ok=True)
             raise
 
     @staticmethod
@@ -1307,9 +1198,6 @@ class NapCatProvisioner(GatewayFiles):
 
     async def _start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
 
-        node = await asyncio.to_thread(_find_node)
-        if node is None:
-            raise RuntimeError("NapCat needs Node.js >= 18; install Node first")
         qq: str | None = None
         if _IS_WINDOWS:
             qq = await asyncio.to_thread(_detect_qq)
@@ -1322,11 +1210,7 @@ class NapCatProvisioner(GatewayFiles):
         elif not any(
             p.suffix == ".AppImage" for p in _instance_dir(instance_id).glob("*.AppImage")
         ):
-            raise GatewayNotInstalledError(
-                "NapCat is not installed on this Linux host: run the "
-                "auto-install first (it downloads the official NapCat "
-                "AppImage with QQ bundled)."
-            )
+            raise GatewayNotInstalledError(str(GatewaySetupError("gateway.napcat_retired")))
         else:
             # NapCat launches the full QQ NT client (Electron): it needs
             # roughly 1.5-2 GB of RAM. Refuse to start on hosts without
@@ -1772,4 +1656,4 @@ class NapCatProvisioner(GatewayFiles):
         return _b64.b64encode(raw).decode("ascii")
 
 
-__all__ = ["NapCatProvisioner", "_find_node"]
+__all__ = ["NapCatProvisioner"]

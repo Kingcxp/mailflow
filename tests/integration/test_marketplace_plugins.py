@@ -14,11 +14,159 @@ from urllib.request import Request
 
 import pytest
 from mailflow.config import NotifierConfig
-from mailflow.domain import ComponentKind, MailRecord, Urgency
+from mailflow.contracts import Notifier
+from mailflow.domain import ComponentKind, MailAnalysis, MailRecord, Urgency
+from mailflow.notifications import DeliveryError
 from mailflow.plugins import PluginManager
 from mailflow_testkit.fakes import make_mail
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+async def test_marketplace_delivery_uses_the_current_platform_protocols(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = ROOT.parent / "mailflow-repo/notifier"
+    if not root.is_dir():
+        pytest.skip("companion plugin checkout is unavailable")
+    sent: list[Request] = []
+    body = b""
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return body
+
+    def send(request: Request, timeout: float) -> Response:
+        sent.append(request)
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", send)
+    record = MailRecord(
+        record_id="test",
+        mail=make_mail(subject="notice"),
+        analysis=MailAnalysis(summary="x" * 2100, urgency=Urgency.INFO),
+    )
+    configurations: dict[str, dict[str, object]] = {
+        "discord": {"webhook_url": "https://fake.test/hook?thread_id=42"},
+        "slack": {"webhook_url": "https://fake.test/hook", "channel": "obsolete-override"},
+        "ntfy": {"base_url": "https://fake.test", "topic": "inbox", "token": "private"},
+        "serverchan": {"send_key": "sctp123tsecret"},
+        "wecom": {"webhook_url": "https://fake.test/hook"},
+        "webhook": {"url": "https://fake.test/hook"},
+    }
+    channels: dict[str, Notifier] = {}
+    for provider, options in configurations.items():
+        path = root / f"mailflow-notify-{provider}/src/mailflow_notify_{provider}/plugin.py"
+        spec = importlib.util.spec_from_file_location(f"protocol_{provider}", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        manager = PluginManager()
+        manager.register(module.plugin)
+        registry = manager.build_registry()
+        notifier = registry.notifier_factory(provider)(
+            NotifierConfig(notifier_id=provider, provider=provider, options=options)
+        )
+        channels[provider] = notifier
+        body = b"ok" if provider == "slack" else b'{"id":"message","code":0}'
+        await notifier.notify(record)
+        request = sent[-1]
+        assert isinstance(request.data, bytes)
+        payload = json.loads(request.data)
+        if provider == "discord":
+            assert parse_qs(urlparse(request.full_url).query) == {
+                "thread_id": ["42"],
+                "wait": ["true"],
+            }
+            assert len(payload["content"]) == 2000
+        elif provider == "slack":
+            assert "channel" not in payload
+        elif provider == "ntfy":
+            assert request.full_url == "https://fake.test/" and payload["topic"] == "inbox"
+            assert request.get_header("Authorization") == "Bearer private"
+        elif provider == "serverchan":
+            assert request.full_url == "https://123.push.ft07.com/send/sctp123tsecret.send"
+        body = b'{"code":123,"ok":false}'
+        with pytest.raises(DeliveryError):
+            await notifier.notify(record)
+
+    from email.message import Message
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    def limited(request: Request, timeout: float) -> Response:
+        raise HTTPError(
+            request.full_url,
+            429,
+            "limited",
+            Message(),
+            BytesIO(b'{"parameters":{"retry_after":3}}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", limited)
+    with pytest.raises(DeliveryError) as failure:
+        await channels["webhook"].notify(record)
+    assert failure.value.retry_after == 3
+
+
+async def test_marketplace_smtp_honors_encryption_choice_and_reports_rejections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = (
+        ROOT.parent
+        / "mailflow-repo/notifier/mailflow-notify-smtp/src/mailflow_notify_smtp/plugin.py"
+    )
+    if not path.is_file():
+        pytest.skip("companion plugin checkout is unavailable")
+    spec = importlib.util.spec_from_file_location("protocol_smtp", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sent: list[object] = []
+    refused: dict[str, object] = {}
+
+    class Server:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> Server:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def send_message(self, message: object) -> dict[str, object]:
+            sent.append(message)
+            return refused
+
+    monkeypatch.setattr(module.smtplib, "SMTP_SSL", Server)
+    manager = PluginManager()
+    manager.register(module.plugin)
+    notifier = manager.build_registry().notifier_factory("smtp")(
+        NotifierConfig(
+            notifier_id="smtp",
+            provider="smtp",
+            options={
+                "host": "smtp.test",
+                "port": 465,
+                "use_tls": "off",
+                "from_addr": "from@test",
+                "to": ["to@test"],
+            },
+        )
+    )
+    record = MailRecord(record_id="smtp", mail=make_mail(subject="notice"))
+    await notifier.notify(record)
+    assert len(sent) == 1
+    refused["to@test"] = (550, "rejected")
+    with pytest.raises(DeliveryError):
+        await notifier.notify(record)
 
 
 @pytest.fixture(params=["bundled", "marketplace"])

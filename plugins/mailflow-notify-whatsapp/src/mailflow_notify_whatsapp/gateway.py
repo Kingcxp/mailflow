@@ -5,7 +5,7 @@ multi-device protocol, renders the login QR to a PNG and serves it at
 ``GET /qr``; the TUI shows it inline. The Baileys multi-file auth state
 lives in the instance dir (``auth/``), so the login survives restarts.
 
-Requires a Node.js toolchain (>= 18) with npm to install the bridge
+Requires Node.js >= 20, npm and Git to install the bridge
 dependencies; MailFlow never installs system packages itself — when Node
 is missing the provisioner reports the exact install hint.
 
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from mailflow.contracts import GatewayInstance, GatewayProvisioner
-from mailflow.gateway import GatewayNotInstalledError
+from mailflow.gateway import GatewayNotInstalledError, GatewaySetupError
 from mailflow.gateway_resources import (
     LocalProcessGateway,
     instance_directory,
@@ -51,11 +51,11 @@ _BRIDGE_NAME = "whatsapp-bridge.mjs"
 _BAILEYS_VERSION = "6.7.24"
 
 _NODE_HINT = (
-    "install Node.js >= 18 (https://nodejs.org/en/download) and make sure "
+    "install Node.js >= 20 (https://nodejs.org/en/download) and make sure "
     "`node` resolves on PATH; MailFlow never installs system packages itself"
 )
 _NPM_HINT = (
-    "install Node.js >= 18 with npm (https://nodejs.org/en/download) and "
+    "install Node.js >= 20 with npm (https://nodejs.org/en/download) and "
     "make sure `npm` resolves on PATH; MailFlow never installs system "
     "packages itself"
 )
@@ -86,7 +86,7 @@ def _port_for(instance_id: str) -> int:
 
 
 def _find_node() -> str | None:
-    """Path to a usable ``node`` binary (Baileys needs Node >= 18)."""
+    """Path to a usable ``node`` binary (Baileys 6.7.24 needs Node >= 20)."""
     node = shutil.which("node")
     if node is None:
         return None
@@ -100,7 +100,7 @@ def _find_node() -> str | None:
         major = int((result.stdout or "").strip().lstrip("v").split(".")[0])
     except ValueError:
         return None
-    return node if major >= 18 else None
+    return node if major >= 20 else None
 
 
 def _find_npm() -> str | None:
@@ -109,7 +109,16 @@ def _find_npm() -> str | None:
 
 
 def _deps_installed(target: Path) -> bool:
-    return (target / "node_modules" / "@whiskeysockets" / "baileys").is_dir()
+    modules = target / "node_modules"
+    try:
+        baileys = json.loads(
+            (modules / "@whiskeysockets" / "baileys" / "package.json").read_text(encoding="utf-8")
+        )
+        return baileys.get("version") == _BAILEYS_VERSION and all(
+            (modules / package / "package.json").is_file() for package in ("pino", "qrcode")
+        )
+    except (OSError, ValueError):
+        return False
 
 
 def _write_payload(target: Path) -> None:
@@ -147,6 +156,7 @@ class WhatsappProvisioner(LocalProcessGateway, GatewayProvisioner):
         parts: list[str] = []
         parts.append(f"node {node}" if node else f"node toolchain not found ({_NODE_HINT})")
         parts.append(f"npm {npm}" if npm else f"npm not found ({_NPM_HINT})")
+        parts.append("git available" if shutil.which("git") else "git not found")
         installed = any(_deps_installed(d) for d in _data_root().glob("whatsapp-*") if d.is_dir())
         parts.append("installed" if installed else "not installed")
         parts.append("running" if await self._any_running() else "not running")
@@ -158,7 +168,7 @@ class WhatsappProvisioner(LocalProcessGateway, GatewayProvisioner):
     async def install(self, instance_id: str, options: dict[str, Any]) -> None:
         node = await asyncio.to_thread(_find_node)
         if node is None:
-            raise RuntimeError(f"whatsapp needs the Node.js toolchain: {_NODE_HINT}")
+            raise GatewaySetupError("gateway.node_required", version=20)
         target = _instance_dir(instance_id)
         self.prepare_directory(instance_id, target)
         progress = options.get("_progress")
@@ -172,7 +182,18 @@ class WhatsappProvisioner(LocalProcessGateway, GatewayProvisioner):
             return
         npm = _find_npm()
         if npm is None:
-            raise RuntimeError(f"whatsapp needs npm to install its bridge: {_NPM_HINT}")
+            raise GatewaySetupError("gateway.npm_required")
+        if shutil.which("git") is None:
+            raise GatewaySetupError("gateway.git_required")
+        command = [npm, "install", "--no-audit", "--no-fund"]
+        if Path(npm).suffix.lower() in {".cmd", ".bat"}:
+            # Launch npm's JavaScript directly on Windows, without a batch
+            # shell that can misinterpret spaces or metacharacters in paths.
+            npm_path = await asyncio.to_thread(Path(npm).resolve)
+            cli = npm_path.parent / "node_modules" / "npm" / "bin" / "npm-cli.js"
+            if not cli.is_file():
+                raise GatewaySetupError("gateway.npm_required")
+            command = [node, str(cli), *command[1:]]
         if progress is not None:
             progress.update(
                 20.0,
@@ -181,13 +202,14 @@ class WhatsappProvisioner(LocalProcessGateway, GatewayProvisioner):
             )
         logger.info("whatsapp %s: npm install in %s", instance_id, target)
         result = await run_command(
-            [npm, "install", "--no-audit", "--no-fund"],
+            command,
             timeout_seconds=_NPM_TIMEOUT,
             cwd=str(target),
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()[-400:]
-            raise RuntimeError(f"whatsapp {instance_id}: npm install failed: {detail}")
+            logger.error("whatsapp %s: npm install failed: %s", instance_id, detail)
+            raise GatewaySetupError("gateway.npm_failed")
         if not _deps_installed(target):
             raise RuntimeError(
                 f"whatsapp {instance_id}: npm install finished but "

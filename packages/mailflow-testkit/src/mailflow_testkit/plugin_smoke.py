@@ -170,7 +170,9 @@ def fake_io(stack: ExitStack) -> list[dict[str, Any]]:
     feed_reads: dict[str, int] = {}
 
     def url_reply(url: Any, *args: Any, **kwargs: Any) -> _URLReply:
-        address = str(url)
+        address = str(getattr(url, "full_url", url))
+        if address.startswith("https://hooks.slack.com/services/"):
+            return _URLReply(b"ok")
         if not address.endswith("feed.xml"):
             return _URLReply()
         count = feed_reads.get(address, 0)
@@ -501,12 +503,15 @@ async def validate(
         elif kind in (ComponentKind.MAIL_PROCESSOR, ComponentKind.LLM_ENHANCER):
             config = ProcessorConfig(processor_id="validation", provider=component_id)
         elif kind is ComponentKind.NOTIFIER:
+            notifier_options = dict(options)
+            if component_id == "openwechat":
+                notifier_options["targets"] = ["contact:validation"]
+            elif component_id == "slack":
+                notifier_options["webhook_url"] = "https://hooks.slack.com/services/validation"
             config = NotifierConfig(
                 notifier_id="validation",
                 provider=component_id,
-                options={**options, "targets": ["contact:validation"]}
-                if component_id == "openwechat"
-                else options,
+                options=notifier_options,
             )
         elif kind is ComponentKind.STORAGE:
             config = StorageConfig(provider=component_id, path=str(scratch / "mail.db"))

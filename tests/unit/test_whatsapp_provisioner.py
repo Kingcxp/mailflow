@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import http.server
 import importlib
+import json
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -25,7 +28,14 @@ def _port_for(instance_id: str) -> int:
 
 
 def _deps(target: Path) -> None:
-    (target / "node_modules" / "@whiskeysockets" / "baileys").mkdir(parents=True, exist_ok=True)
+    for name, version in (
+        ("@whiskeysockets/baileys", "6.7.24"),
+        ("pino", "9.6.0"),
+        ("qrcode", "1.5.4"),
+    ):
+        package = target / "node_modules" / name
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "package.json").write_text(json.dumps({"version": version}), encoding="utf-8")
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +80,25 @@ async def _never_ready(port: int, wait_seconds: float = 2.0) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_install_requires_node_and_npm(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_install_requires_node_npm_and_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_binary(name: str) -> str:
+        return "/fake/node"
+
+    with monkeypatch.context() as runtime:
+        runtime.setattr(shutil, "which", fake_binary)
+        for version in (18, 20):
+
+            def fake_node(
+                command: list[str], v: int = version, **kw: Any
+            ) -> subprocess.CompletedProcess[str]:
+                return subprocess.CompletedProcess(command, 0, stdout=f"v{v}.0.0")
+
+            runtime.setattr(
+                subprocess,
+                "run",
+                fake_node,
+            )
+            assert bool(gw_mod._find_node()) == (version >= 20)  # pyright: ignore[reportPrivateUsage]
     monkeypatch.setattr(gw_mod, "_find_node", lambda: None)
     monkeypatch.setattr(gw_mod, "_find_npm", lambda: None)
     provisioner = WhatsappProvisioner()
@@ -84,6 +112,14 @@ async def test_install_requires_node_and_npm(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(gw_mod, "_find_npm", lambda: None)
     with pytest.raises(RuntimeError, match="npm"):
         await WhatsappProvisioner().install("wa-1", {})
+    monkeypatch.setattr(gw_mod, "_find_npm", lambda: "/usr/bin/npm")
+
+    def missing_binary(name: str) -> None:
+        return None
+
+    monkeypatch.setattr(shutil, "which", missing_binary)
+    with pytest.raises(RuntimeError, match="Git"):
+        await WhatsappProvisioner().install("wa-1", {})
 
 
 @pytest.mark.asyncio
@@ -92,6 +128,11 @@ async def test_install_runs_npm_and_writes_the_bridge(
 ) -> None:
     monkeypatch.setattr(gw_mod, "_find_node", lambda: "/usr/bin/node")
     monkeypatch.setattr(gw_mod, "_find_npm", lambda: "/usr/bin/npm")
+
+    def git_binary(name: str) -> str:
+        return "/usr/bin/git"
+
+    monkeypatch.setattr(shutil, "which", git_binary)
     calls: list[tuple[list[str], str | None]] = []
 
     async def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -121,6 +162,29 @@ async def test_install_runs_npm_and_writes_the_bridge(
     assert len(calls) == 1
     assert bridge.read_bytes() == gw_mod._BRIDGE_SOURCE.read_bytes()  # pyright: ignore[reportPrivateUsage]
     assert credentials.read_text(encoding="utf-8") == "saved login"
+    # An interrupted npm install or a different Baileys version is repaired.
+    monkeypatch.setattr(gw_mod, "_find_npm", lambda: "/usr/bin/npm")
+    (bridge.parent / "node_modules" / "qrcode" / "package.json").unlink()
+    await WhatsappProvisioner().install("wa-1", {})
+    assert len(calls) == 2
+    (bridge.parent / "node_modules" / "@whiskeysockets" / "baileys" / "package.json").write_text(
+        '{"version":"7.0.0-rc.14"}', encoding="utf-8"
+    )
+    await WhatsappProvisioner().install("wa-1", {})
+    assert len(calls) == 3 and credentials.read_text(encoding="utf-8") == "saved login"
+    cli = Path("Node tools/node_modules/npm/bin/npm-cli.js")
+    cli.parent.mkdir(parents=True)
+    await asyncio.to_thread(cli.write_text, "// npm", encoding="utf-8")
+    monkeypatch.setattr(gw_mod, "_find_npm", lambda: "Node tools/npm.cmd")
+    (bridge.parent / "node_modules" / "pino" / "package.json").unlink()
+    await WhatsappProvisioner().install("wa-1", {})
+    assert calls[-1][0] == [
+        "/usr/bin/node",
+        str(await asyncio.to_thread(cli.resolve)),
+        "install",
+        "--no-audit",
+        "--no-fund",
+    ]
 
 
 @pytest.mark.asyncio

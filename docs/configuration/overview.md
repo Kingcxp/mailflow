@@ -140,6 +140,27 @@ Attachment download is independent of OCR.
 
 ## Tasks and notifications
 
+### Channel installation and availability
+
+| Channel | Setup and current limits |
+| --- | --- |
+| Console | Built in; no external bot installation. |
+| OneBot / QQ | Connect an existing OneBot v11 HTTP service. NapCat has ended and removed official downloads; existing installations or an explicitly supplied trusted package remain usable. MailFlow does not choose third-party mirrors. |
+| OpenWechat | Managed bridge requires Go 1.21+ and Go module downloads. WeChat must allow the account to log in through the web protocol. |
+| WeChatPadPro | Managed Docker project uses the self-hosted v2 API and a pinned linux/amd64 image with MySQL/Redis. The newer Cloud API is different. Image installation does not guarantee protocol login. |
+| Telegram | BotFather token; no local gateway runtime. Long polling requires the bot to have no active webhook in another application. |
+| WhatsApp | Managed Baileys 6.7.24 bridge requires Node.js 20+, npm and Git. Pair through Linked Devices; this is an unofficial protocol client. |
+| Marketplace push plugins | Discord, Slack, DingTalk, Feishu, WeCom, ntfy, ServerChan, SMTP and custom webhooks use existing endpoints/credentials. They do not install those services or provide incoming chat commands. |
+| NoneBot / AstrBot | Export adapters into an existing framework installation; platform adapters and login remain the framework's responsibility. |
+
+Check API readiness, login and delivery separately. A running process or an HTTP
+landing page is not proof that messages can be sent. Official references:
+[NapCat status](https://github.com/NapNeko/NapCatQQ),
+[OpenWechat](https://github.com/eatmoreapple/openwechat),
+[WeChatPadPro v2 API](https://github.com/WeChatPadPro/WeChatPadPro/blob/v2.01/static/swagger/swagger.json),
+[Telegram updates](https://core.telegram.org/bots/api#getting-updates),
+[Baileys](https://github.com/WhiskeySockets/Baileys).
+
 The **Console** tab (`Ctrl+9`) combines console notifications and chat commands.
 Use the configured prefix, for example `/mailflow help`. Plain messages do not
 call a model: start with `@MailFlow` or quote a message using its right-click /
@@ -377,6 +398,20 @@ for safe issue reports.
 `general.ocr_images` 或账户选项。已识别文字不因关闭功能而消失，附件下载与识别独立。
 
 ### 待办与通知
+
+| 渠道 | 安装方式与限制 |
+| --- | --- |
+| 控制台 | 内置，无需安装外部机器人。 |
+| OneBot／QQ | 连接已有 OneBot v11 HTTP 服务。NapCat 已结束维护并移除官方下载；可复用已有安装，或明确提供可信安装包。不会自动选择第三方镜像。 |
+| OpenWechat | 受管桥接需要 Go 1.21 及更新版本，能下载 Go 模块；账户需被微信网页协议允许登录。 |
+| WeChatPadPro | Docker 部署使用自托管 v2 接口、固定的 linux/amd64 镜像及 MySQL／Redis。新版 Cloud 接口不同，安装成功不保证协议登录可用。 |
+| Telegram | 填写 BotFather 令牌，无需外部运行环境；轮询要求该机器人未被其他应用配置 webhook。 |
+| WhatsApp | Baileys 6.7.24 受管桥接需要 Node.js 20 及更新版本、npm 和 Git，在“已关联设备”中配对；它使用非官方协议。 |
+| 市场推送插件 | Discord、Slack、钉钉、飞书、企业微信、ntfy、Server 酱、SMTP 和自定义 webhook 使用已有服务地址及凭据，不负责安装这些服务或接收聊天命令。 |
+| NoneBot／AstrBot | 导出到已安装的框架，平台适配器和登录由框架负责。 |
+
+请分别检查接口就绪、登录和投递。进程存在或网页能打开不代表能够发送消息。
+上方英文部分列出了各渠道的官方参考地址。
 
 **控制台**标签页（`Ctrl+9`）同时接收 console 通知和聊天命令。
 使用当前配置的命令前缀，例如 `/mailflow help`。普通消息不会调用模型；

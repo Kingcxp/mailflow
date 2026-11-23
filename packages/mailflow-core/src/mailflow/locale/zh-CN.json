@@ -2,6 +2,19 @@
   "locale": "zh-CN",
   "name": "简体中文",
   "messages": {
+    "gateway": {
+      "telegram_no_install": "Telegram 无需安装本地网关。接入时会检查所配置的接口地址、机器人令牌及 webhook 冲突。",
+      "napcat_retired": "NapCat 已结束维护，官方下载已不可用。请连接已有的 OneBot HTTP 服务、复用已安装实例，或在高级设置中填写你信任的安装包地址。MailFlow 不会自动选择第三方镜像。",
+      "napcat_package_hint": "可选：可信来源的 Windows Shell ZIP 地址。官方下载已移除；复用已安装实例时无需填写。",
+      "napcat_appimage_hint": "可选：可信来源的 Linux AppImage 地址。官方下载已移除；复用已安装实例时无需填写。",
+      "node_required": "请从 https://nodejs.org/en/download 安装 Node.js {version} 或更新版本，确保 node 已加入 PATH，然后重试。",
+      "npm_required": "请随 Node.js 安装 npm，确保 npm 已加入 PATH，然后重试。",
+      "git_required": "WhatsApp 的依赖需要 Git。请从 https://git-scm.com/downloads 安装 Git，确保 git 已加入 PATH，然后重试。",
+      "npm_failed": "WhatsApp 依赖安装失败。请检查 npm、GitHub 的网络连接，以及 npm 和 Git 是否可用。详细原因见日志；已保存的登录信息会保留。",
+      "go_required": "请从 https://go.dev/dl/ 安装 Go 1.21 或更新版本（Debian/Ubuntu：apt-get install -y golang-go），确保 go 已加入 PATH，然后重试。",
+      "go_build_failed": "微信桥接构建失败。请检查 Go 版本和模块下载网络后重试。详细原因见日志；已保存的登录信息会保留。",
+      "telegram_webhook": "这个 Telegram 机器人已配置 webhook，MailFlow 无法同时轮询接收命令。请先在原应用停用 webhook，或使用另一个机器人。MailFlow 没有移除它，也没有丢弃待处理消息。"
+    },
     "clean": {
       "usage": "clean <records|trash [CONFIRM]>",
       "records_done": "已将 {mails} 封邮件移入回收站，并移除 {actions} 条日程。执行 `clean trash CONFIRM` 可彻底清空回收站。",
@@ -450,7 +463,7 @@
         "mailflow-notify-onebot": {
           "name": "QQ 通知（OneBot）",
           "description": "通过 OneBot v11 HTTP 服务器（NapCat、go-cqhttp）向 QQ 用户/群聊推送邮件提醒",
-          "readme": "# OneBot／QQ 通知与聊天连接\n\n组件标识为 `onebot`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n```toml\n[[notifiers]]\nnotifier_id = \"onebot-main\"\nprovider = \"onebot\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\nhttp_url = \"http://127.0.0.1:3000\"\naccess_token = \"${ONEBOT_ACCESS_TOKEN}\"\ntargets = [\"user:123456\"]\nadmins = [\"123456\"]\n```\n\n可连接已有 OneBot v11 HTTP 服务，或使用对应受管网关。安装、启动、QQ 登录和投递就绪是不同步骤，按检测出的前置条件安装并完成登录。\n\n`http_url` 必填，令牌需与网关一致。目标使用 `user:<ID>`／`group:<ID>`，管理员填写稳定平台用户标识；HTTP 200 但 retcode 失败仍算失败。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
+          "readme": "# OneBot／QQ 通知与聊天连接\n\n组件标识为 `onebot`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\nNapCat 已结束维护，官方发布和安装器已移除，无法再自动下载安装。已有受管实例仍可复用；也可以连接自行部署的 OneBot v11 HTTP 服务。高级设置可填写可信的 `napcat_package_url`（Windows Shell ZIP）或 `napcat_appimage_url`（Linux）。MailFlow 不会自行选择第三方镜像。[上游状态](https://github.com/NapNeko/NapCatQQ)。\n\n```toml\n[[notifiers]]\nnotifier_id = \"onebot-main\"\nprovider = \"onebot\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\nhttp_url = \"http://127.0.0.1:3000\"\naccess_token = \"${ONEBOT_ACCESS_TOKEN}\"\ntargets = [\"user:123456\"]\nadmins = [\"123456\"]\n```\n\n可连接已有 OneBot v11 HTTP 服务，或复用已安装的受管网关。安装、启动、QQ 登录和投递就绪是不同步骤，按检测出的前置条件安装并完成登录。\n\n`http_url` 必填，令牌需与网关一致。目标使用 `user:<ID>`／`group:<ID>`，管理员填写稳定平台用户标识；HTTP 200 但 retcode 失败仍算失败。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
         },
         "mailflow-notify-serverchan": {
           "name": "Server酱通知",
@@ -467,7 +480,7 @@
         "mailflow-notify-telegram": {
           "name": "Telegram 通知",
           "description": "通过 Bot API 把邮件提醒推送到 Telegram 会话，并可在会话内运行 MailFlow 命令",
-          "readme": "# Telegram 通知与聊天连接\n\n组件标识为 `telegram`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n```toml\n[[notifiers]]\nnotifier_id = \"telegram-main\"\nprovider = \"telegram\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\nbot_token = \"${TELEGRAM_BOT_TOKEN}\"\nchat_id = \"123456789\"\nadmins = [\"123456789\"]\n```\n\n提供机器人令牌，通过进程内 Telegram 桥接收命令，无需额外网关进程。用户先与机器人私聊，或将其加入目标群并授予必要权限；长轮询需要能够访问配置的 API。\n\n令牌必填，`chat_id` 是可选固定目标，也可使用订阅或 `targets`。群聊使用稳定聊天标识，`api_base` 默认 `https://api.telegram.org`，管理员填写数字用户标识，不填显示名。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
+          "readme": "# Telegram 通知与聊天连接\n\n组件标识为 `telegram`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n轮询与 webhook 不能同时接收更新。接入时会检查 `getWebhookInfo`，发现冲突后说明处理方式，不会移除现有 webhook 或丢弃待处理消息。请在原应用停用 webhook，或使用另一个机器人。自定义 `api_base` 同样用于连接检查和轮询。[官方说明](https://core.telegram.org/bots/api#getting-updates)。\n\n```toml\n[[notifiers]]\nnotifier_id = \"telegram-main\"\nprovider = \"telegram\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\nbot_token = \"${TELEGRAM_BOT_TOKEN}\"\nchat_id = \"123456789\"\nadmins = [\"123456789\"]\n```\n\n提供机器人令牌，通过进程内 Telegram 桥接收命令，无需额外网关进程。用户先与机器人私聊，或将其加入目标群并授予必要权限；长轮询需要能够访问配置的 API。\n\n令牌必填，`chat_id` 是可选固定目标，也可使用订阅或 `targets`。群聊使用稳定聊天标识，`api_base` 默认 `https://api.telegram.org`，管理员填写数字用户标识，不填显示名。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
         },
         "mailflow-notify-webhook": {
           "name": "Webhook 通知",
@@ -480,7 +493,7 @@
         "mailflow-notify-whatsapp": {
           "name": "WhatsApp 通知",
           "description": "通过本地 Baileys 桥（扫码配对）把邮件提醒推送到 WhatsApp 会话",
-          "readme": "# WhatsApp 通知与聊天连接\n\n组件标识为 `whatsapp`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n```toml\n[[notifiers]]\nnotifier_id = \"whatsapp-main\"\nprovider = \"whatsapp\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\ngateway_url = \"http://127.0.0.1:3000\"\ntargets = [\"user:15550001111\"]\nadmins = [\"15550001111\"]\n```\n\n使用受管 Baileys 桥或兼容的现有桥。受管安装需要检测到的 Node/npm 环境并下载依赖；按提示在 WhatsApp 已关联设备中配对。保存的会话可重连，登录失效时仍需重新配对。\n\n桥地址必填，目标使用 `user:<号码或JID>`／`group:<群ID或JID>`，不依赖联系人显示名。管理员号码需与桥回调身份对应。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
+          "readme": "# WhatsApp 通知与聊天连接\n\n组件标识为 `whatsapp`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n受管安装需要 Node.js 20 或更新版本、npm 和 Git：固定的 Baileys 6.7.24 明确要求 Node 20，并通过 Git 获取一项依赖。Windows 直接通过 Node 运行 npm。依赖下载中断后可以重试，已保存的配对信息会保留。Baileys 使用非官方 WhatsApp 协议，安装成功不代表账户一定能够配对。[上游项目](https://github.com/WhiskeySockets/Baileys)。\n\n```toml\n[[notifiers]]\nnotifier_id = \"whatsapp-main\"\nprovider = \"whatsapp\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\ngateway_url = \"http://127.0.0.1:3000\"\ntargets = [\"user:15550001111\"]\nadmins = [\"15550001111\"]\n```\n\n使用受管 Baileys 桥或兼容的现有桥。受管安装需要检测到的 Node/npm 环境并下载依赖；按提示在 WhatsApp 已关联设备中配对。保存的会话可重连，登录失效时仍需重新配对。\n\n桥地址必填，目标使用 `user:<号码或JID>`／`group:<群ID或JID>`，不依赖联系人显示名。管理员号码需与桥回调身份对应。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
         },
         "mailflow-processor-archive": {
           "name": "自动归档",
@@ -505,13 +518,13 @@
         },
         "mailflow-notify-openwechat": {
           "name": "微信通知（OpenWechat）",
-          "description": "连接微信扫码登录网关，接收邮件通知并使用聊天命令。",
-          "readme": "# 微信通知（OpenWechat）\n\n在通知页添加 OpenWechat 渠道，通过连接向导安装网关并扫码登录。普通通知设置的修改不需要重新扫码。\n\n手动连接已有网关时，填写 `gateway_url`。联系人使用 `contact:<稳定标识>`，群聊使用 `room:<稳定标识>`；管理员填写平台账号标识，避免使用可能重复的显示名称。\n\n通知、图片和聊天操作取决于网关实际能力。发送失败会记录为失败，可在投递记录中重试；管理邮件、待办和配置仍遵守共享权限与确认规则。\n"
+          "description": "通过 OpenWechat 网页协议桥接收发微信通知和命令",
+          "readme": "# OpenWechat 接入\n\n受管安装需要 Go 1.21 或更新版本，并能下载 Go 模块。桥接使用上游 openwechat v1.4.10，在实例目录中构建；重新构建会保留已保存的登录信息。Windows 使用带 .exe 后缀的程序。\n\n启动后扫码登录，再测试投递。接口就绪、已经登录和能够投递分别显示。账户必须被微信协议服务允许登录，MailFlow 无法解除账户限制。也可以直接连接已有兼容桥接，不在本机构建。\n\n推送目标使用稳定的联系人或群组标识，管理员使用账号标识。[上游项目](https://github.com/eatmoreapple/openwechat)。\n"
         },
         "mailflow-notify-wechatpadpro": {
           "name": "微信通知（WeChatPadPro）",
-          "description": "通过 WeChatPadPro 网关发送微信通知并接收聊天命令。",
-          "readme": "# 微信通知（WeChatPadPro）\n\n在通知页添加此渠道，通过连接向导安装、启动并扫码登录，也可以连接已有网关。\n\n`base_url` 是网关地址；外部网关可提供 `auth_key`，或通过 `admin_key` 获取设备授权。由 MailFlow 管理的实例将授权保存在实例目录中，不会写回可编辑的通知配置。\n\n`targets` 使用 `user:<wxid>` 或 `group:<chatroom_id>`，管理员填写平台账号标识。连接地址能响应不代表已经登录或可以投递。缺少凭据、网络失败或平台拒绝会保留失败记录，修正配置后可重试。\n"
+          "description": "通过自托管 WeChatPadPro v2 服务发送微信通知并接收命令",
+          "readme": "# WeChatPadPro 接入\n\n适配自托管 v2 接口，不适配新版 Cloud 接口。新建 Docker 项目固定已核对的上游镜像摘要，明确使用 linux/amd64，并包含 MySQL 和 Redis；接口仅绑定本机。默认需要 Docker 已运行，安装系统依赖需明确开启。其他架构需连接兼容服务，或使用 Docker 已配置的 amd64 模拟能力。\n\n接入流程会写入官方使用的 .env 和 assets/webhook_config.json。镜像下载失败可再次安装，不更换已有数据库凭据或卷。文字发送使用 /message/SendTextMessage；只有 HTTP 404 才回退旧的 /Msg/SendTxt，超时或业务拒绝不会换路径重复发送。兼容 Code/Data 与 code/data 返回格式。\n\n网页能够打开不代表接口就绪或已登录。请分别完成启动、扫码、确认登录和投递测试。能否登录仍受上游服务和账户限制，镜像安装成功不代表微信一定可用。\n\n来源：[v2 接口](https://github.com/WeChatPadPro/WeChatPadPro/blob/v2.01/static/swagger/swagger.json)、[回调配置](https://github.com/WeChatPadPro/WeChatPadPro/blob/v2.01/WEBHOOK_CONFIG_DETAILED.md)。\n"
         },
         "mailflow-core": {
           "name": "邮件分析与规则",
@@ -1016,7 +1029,9 @@
       "bots_basics_next": "下一步",
       "bots_provider_pick": "选择要接入的平台：",
       "bots_provider_missing": "该平台没有可用的网关配置器",
-      "bots_provider_napcat": "QQ（NapCat 自动部署）",
+      "bots_provider_napcat": "QQ（NapCat：已有实例／自备安装包）",
+      "extras_napcat_package_url": "Windows 安装包地址",
+      "extras_napcat_appimage_url": "Linux AppImage 地址",
       "bots_guide_starting": "开始 {provider} 部署…",
       "notifier_test_no_url": "请先填写服务地址",
       "notifier_testing": "正在测试与 {url} 的连接…",

@@ -144,7 +144,7 @@ PLUGIN_INFO = PluginInfo(
     name="OneBot (QQ) Notifier",
     version="0.1.0",
     description=(
-        "Pushes mail alerts to QQ users/groups via an OneBot v11 HTTP server (NapCat, go-cqhttp)"
+        "Pushes mail alerts to QQ users/groups through an existing OneBot v11 HTTP service"
     ),
     kinds=[ComponentKind.NOTIFIER, ComponentKind.GATEWAY_PROVISIONER],
 )
@@ -169,6 +169,25 @@ class NotifierPlugin:
         from mailflow_notify_onebot.gateway import NapCatProvisioner
 
         registrar.add_gateway_provisioner("napcat", NapCatProvisioner)
+        registrar.add_form_fields(
+            ComponentKind.GATEWAY_PROVISIONER,
+            "napcat",
+            (
+                FormField("admins", kind="list", description_key="tui.extras_admins"),
+                FormField("targets", kind="list", description_key="tui.extras_targets"),
+                FormField("access_token", kind="password", secret=True),
+                FormField(
+                    "napcat_package_url",
+                    advanced=True,
+                    description_key="gateway.napcat_package_hint",
+                ),
+                FormField(
+                    "napcat_appimage_url",
+                    advanced=True,
+                    description_key="gateway.napcat_appimage_hint",
+                ),
+            ),
+        )
 
 
 plugin = NotifierPlugin()

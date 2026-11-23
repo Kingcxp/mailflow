@@ -13,7 +13,7 @@ from mailflow_notify_openwechat.gateway import OpenWechatProvisioner
 
 def _bridge_path(instance_id: str) -> Path:
     safe = "".join(c if c.isalnum() or c in "-_." else "-" for c in instance_id).strip("-")
-    return Path("data") / "gateways" / f"openwechat-{safe}" / "openwechat-bridge"
+    return Path("data") / "gateways" / f"openwechat-{safe}" / gateway._BRIDGE_NAME  # pyright: ignore[reportPrivateUsage]
 
 
 def _port_for(instance_id: str) -> int:
@@ -30,14 +30,14 @@ def _clean_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:  # pyr
 async def test_detect_reports_go_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("mailflow_notify_openwechat.gateway._find_go", lambda: None)
     prov = OpenWechatProvisioner()
-    assert "go toolchain not found" in await prov.detect()
+    assert await prov.detect() == "gateway.go_required"
 
 
 @pytest.mark.asyncio
 async def test_install_requires_go(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("mailflow_notify_openwechat.gateway._find_go", lambda: None)
     prov = OpenWechatProvisioner()
-    with pytest.raises(RuntimeError, match="apt-get install -y golang-go"):
+    with pytest.raises(RuntimeError, match=r"Go 1\.21"):
         await prov.install("wx-1", {})
 
 
@@ -46,11 +46,17 @@ async def test_install_builds_bridge(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setattr("mailflow_notify_openwechat.gateway._find_go", lambda: "/usr/bin/go")
     source = tmp_path / "bridge.go"
     source.write_bytes(b"source v1")
+    source.with_name("go.mod").write_bytes(b"module example\ngo 1.21\n")
+    source.with_name("go.sum").write_bytes(b"checksums")
     monkeypatch.setattr(gateway, "_BRIDGE_GO", source)
     builds: list[bytes] = []
 
     async def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         bridge = _bridge_path("wx-1")
+        build_dir = Path(kwargs["cwd"])
+        assert build_dir == (bridge.parent / "build").resolve()
+        assert (build_dir / "go.mod").read_bytes() == source.with_name("go.mod").read_bytes()
+        assert (build_dir / source.name).read_bytes() == source.read_bytes()
         bridge.parent.mkdir(parents=True, exist_ok=True)
         builds.append(source.read_bytes())
         bridge.write_bytes(b"compiled " + builds[-1])
@@ -63,11 +69,17 @@ async def test_install_builds_bridge(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert bridge.read_bytes() == b"compiled source v1"
     session = bridge.parent / "openwechat-session.json"
     session.write_text("saved login", encoding="utf-8")
+    monkeypatch.setattr(gateway, "_find_go", lambda: None)
     await prov.install("wx-1", {})
+    assert "installed" in await prov.detect()
     assert len(builds) == 1
+    monkeypatch.setattr(gateway, "_find_go", lambda: "/usr/bin/go")
     source.write_bytes(b"source v2")
     await prov.install("wx-1", {})
     assert bridge.read_bytes() == b"compiled source v2"
+    source.with_name("go.mod").write_bytes(b"module example\ngo 1.22\n")
+    await prov.install("wx-1", {})
+    assert len(builds) == 3
     assert session.read_text(encoding="utf-8") == "saved login"
 
 

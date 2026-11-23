@@ -29,10 +29,11 @@ import httpx
 from mailflow.config import NotifierConfig
 from mailflow.domain import ComponentKind, MailRecord
 from mailflow.forms import FormField
-from mailflow.notifications import DeliveryError, check_result, format_mail, targets_of
+from mailflow.notifications import DeliveryError, format_mail, targets_of
 from mailflow.plugins import PluginInfo
 from mailflow.registry import PluginRegistrar
 
+from .api import auth_key, result_object, send_text
 from .gateway import managed_notifier_auth_key
 
 logger = logging.getLogger("mailflow.notify.wechatpadpro")
@@ -73,16 +74,7 @@ class WechatPadProNotifier:
             json={"Count": 1, "Days": 3650},
         )
         response.raise_for_status()
-        raw: Any = response.json()
-        check_result(cast_dict(raw))
-        payload: dict[str, Any] = dict(cast_dict(raw))
-        data: Any = payload.get("data")
-        if isinstance(data, list) and data and isinstance(data[0], dict):
-            first = cast_dict(data[0])
-            self._auth_key = str(first.get("Key") or "")
-        elif isinstance(data, dict):
-            mapped = cast_dict(data)
-            self._auth_key = str(mapped.get("Key") or mapped.get("key") or "")
+        self._auth_key = auth_key(result_object(response.json()).get("data"))
         if not self._auth_key:
             logger.warning(
                 "wechatpadpro notifier: could not mint an auth key from the "
@@ -117,13 +109,7 @@ class WechatPadProNotifier:
             key = await self._key(client)
             if not key:
                 raise DeliveryError("configuration")
-            response = await client.post(
-                f"{self._url}/Msg/SendTxt",
-                params={"key": key},
-                json={"Wxid": "", "ToWxid": wxid, "Content": text, "Type": 0},
-            )
-            response.raise_for_status()
-            check_result(response.json())
+            await send_text(client, self._url, key, wxid, text)
 
     async def notify(self, record: MailRecord) -> None:
         await self.push_text(format_mail(record))

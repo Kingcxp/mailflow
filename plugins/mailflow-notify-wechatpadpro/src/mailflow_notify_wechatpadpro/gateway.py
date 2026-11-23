@@ -47,7 +47,9 @@ from mailflow.contracts import GatewayInstance
 from mailflow.gateway import GatewayNotInstalledError
 from mailflow.gateway_resources import GatewayFiles, instance_directory, reserved_ports, run_command
 from mailflow.lifecycle import OwnedListener, bounded, cancel_tasks
-from mailflow.notifications import check_result
+from mailflow.notifications import DeliveryError
+
+from .api import auth_key, result_object, send_text
 
 logger = logging.getLogger("mailflow.gateway.wechatpadpro")
 
@@ -509,17 +511,24 @@ def _configured_port(values: dict[str, Any] | None, name: str, fallback: int) ->
 _COMPOSE_TEMPLATE = """\
 services:
   wechatpadpro:
-    image: wechatpadpro/wechatpadpro:latest
+    image: wechatpadpro/wechatpadpro@sha256:436685d7d7f9ac690718caba8b8f95ace92ffe6edd2ccfa002459f364ca1282e
+    platform: linux/amd64
     container_name: mailflow-wpp-{safe}
     restart: unless-stopped
     ports:
-      - "{api_port}:1238"
+      - "127.0.0.1:{api_port}:1238"
+    volumes:
+      - ./.env:/app/.env
+      - ./webhook_config.json:/app/assets/webhook_config.json
     # Docker Desktop provides this name itself; Linux Engine needs the
     # explicit host-gateway mapping so the container can reach MailFlow's
     # loopback webhook bridge after an automatic deployment.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      - HOST=0.0.0.0
+      - PORT=1238
+      - API_VERSION=
       - DB_HOST=mysql
       - REDIS_HOST=redis
       - TZ=Asia/Shanghai
@@ -586,7 +595,7 @@ class _WebhookBridge(OwnedListener):
     The gateway only sends webhook events; unlike OneBot, it has no quick
     response payload. The bridge therefore ACKs the webhook first, dispatches
     in a tracked background task, and delivers each BotServer reply page with
-    ``/Msg/SendTxt``.
+    the gateway's text-message API.
     """
 
     def __init__(
@@ -672,9 +681,12 @@ class _WebhookBridge(OwnedListener):
         data = cast_dict(payload.get("Data") or payload)
         if not data:
             return
-        from_user = str(data.get("FromUserName") or "")
-        content = str(data.get("Content") or "")
-        push_type: Any = data.get("MsgType")
+        if data.get("isSelfMsg") or data.get("isHistory"):
+            return
+        from_user = str(data.get("FromUserName") or data.get("fromUser") or "")
+        content = str(data.get("Content") or data.get("content") or "")
+        push_type: Any = data.get("MsgType", data.get("msgType"))
+        original = content
         # Group messages arrive as "wxid:\ncontent" — strip the sender prefix.
         if ":@" in from_user or (from_user.endswith("@chatroom") and ":\n" in content):
             _, _, content = content.partition(":\n")
@@ -682,8 +694,7 @@ class _WebhookBridge(OwnedListener):
         if not has_file and (not content or push_type not in (None, 1, "1")):
             return
         chat_type = "group" if from_user.endswith("@chatroom") else "private"
-        sender = str(data.get("SenderUserName") or from_user)
-        original = str(data.get("Content") or "")
+        sender = str(data.get("SenderUserName") or data.get("sender") or from_user)
         if chat_type == "group" and ":\n" in original and not data.get("SenderUserName"):
             sender = original.partition(":\n")[0]
         files: list[dict[str, str]] = []
@@ -723,10 +734,18 @@ class _WebhookBridge(OwnedListener):
                 "chat_type": chat_type,
                 "provider": "wechatpadpro",
                 "instance_id": self.instance_id,
-                "request_id": str(data.get("MsgId") or data.get("NewMsgId") or ""),
-                "mentioned": bool(data.get("ToUserName"))
-                and str(data["ToUserName"])
-                in str(data.get("AtUserList") or data.get("MsgSource") or ""),
+                "request_id": str(
+                    data.get("MsgId") or data.get("NewMsgId") or data.get("msgId") or ""
+                ),
+                "mentioned": bool(data.get("ToUserName") or data.get("toUser"))
+                and str(data.get("ToUserName") or data.get("toUser"))
+                in str(
+                    data.get("AtUserList")
+                    or data.get("atUserList")
+                    or data.get("MsgSource")
+                    or data.get("msgSource")
+                    or ""
+                ),
             },
         ):
             if not pages:
@@ -759,13 +778,7 @@ class _WebhookBridge(OwnedListener):
         self, client: httpx.AsyncClient, to_wxid: str, text: str, key: str
     ) -> None:
         try:
-            response = await client.post(
-                f"{self._gateway_url}/Msg/SendTxt",
-                params={"key": key},
-                json={"Wxid": "", "ToWxid": to_wxid, "Content": text, "Type": 0},
-            )
-            response.raise_for_status()
-            check_result(response.json())
+            await send_text(client, self._gateway_url, key, to_wxid, text)
         except Exception as exc:
             logger.warning("wechatpadpro %s reply to %s failed: %s", self.instance_id, to_wxid, exc)
 
@@ -869,6 +882,10 @@ class WechatPadProProvisioner(GatewayFiles):
         compose_file = target / "compose.yml"
         if compose_file.exists():
             logger.info("wechatpadpro %s: compose project already present", instance_id)
+            meta = self._meta(instance_id) or {}
+            if not meta.get("images_ready"):
+                await self._pull_with_progress(compose, compose_file, options.get("_progress"))
+                self._save_meta(instance_id, {**meta, "images_ready": True})
             return
         safe = _compose_resource_slug(instance_id)
         admin_key = str(options.get("admin_key") or secrets.token_hex(16))
@@ -909,6 +926,7 @@ class WechatPadProProvisioner(GatewayFiles):
         if progress is not None:
             progress.update(10.0, "pulling wechatpadpro/mysql/redis images", "downloading")
         await self._pull_with_progress(compose, compose_file, progress)
+        self._save_meta(instance_id, {**(self._meta(instance_id) or {}), "images_ready": True})
 
     @staticmethod
     def _parse_pull_line(line: str) -> tuple[str, float, float] | None:
@@ -1037,12 +1055,44 @@ class WechatPadProProvisioner(GatewayFiles):
         if compose is None:
             raise GatewayNotInstalledError("docker compose disappeared since install")
         content = compose_file.read_text(encoding="utf-8")
+        environment = dict(re.findall(r"(?m)^      - ([A-Z_]+)=(.*)$", content))
+        environment.update(HOST="0.0.0.0", PORT="1238", API_VERSION="")
+        (target / ".env").write_text(
+            "\n".join(f"{name}={value}" for name, value in environment.items()) + "\n",
+            encoding="utf-8",
+        )
+        meta = self._meta(instance_id) or {}
+        (target / "webhook_config.json").write_text(
+            json.dumps(
+                {
+                    "url": self._webhook_url(instance_id),
+                    "secret": str(meta.get("webhook_secret") or ""),
+                    "enabled": True,
+                    "timeout": 10,
+                    "retryCount": 3,
+                    "messageTypes": ["*"],
+                    "includeSelfMessage": False,
+                    "useDirectStream": True,
+                    "useRedisSync": False,
+                    "independentMode": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        if "./webhook_config.json:" not in content:
+            content = content.replace(
+                "  wechatpadpro:\n",
+                "  wechatpadpro:\n    volumes:\n"
+                "      - ./.env:/app/.env\n"
+                "      - ./webhook_config.json:/app/assets/webhook_config.json\n",
+                1,
+            )
         updated = re.sub(
             r"(?m)(\s*- WEBHOOK_URL=).*",
             lambda match: match[1] + self._webhook_url(instance_id),
             content,
         )
-        webhook_changed = updated != content
+        webhook_changed = updated != compose_file.read_text(encoding="utf-8")
         if webhook_changed:
             compose_file.write_text(updated, encoding="utf-8")
         endpoint = self._endpoint(instance_id)
@@ -1136,8 +1186,12 @@ class WechatPadProProvisioner(GatewayFiles):
                         params={"key": meta["login_key"], "uuid": meta["uuid"]},
                     )
                     response.raise_for_status()
-                    payload = cast_dict(response.json())
-                    login = payload.get("code") in (200, "200")
+                    payload = response.json()
+                    code = cast_dict(payload).get("code", cast_dict(payload).get("Code"))
+                    result_object(payload)
+                    login = code in (200, "200")
+            except DeliveryError:
+                login = False
             except Exception:
                 failure = "login_check_failed"
         elif running:
@@ -1176,18 +1230,18 @@ class WechatPadProProvisioner(GatewayFiles):
                         json={"Check": False, "Proxy": ""},
                     )
                     response.raise_for_status()
-                    payload = cast_dict(response.json())
+                    payload = result_object(response.json())
                     data = cast_dict(payload.get("data") or {})
-                    uuid = str(data.get("uuid") or "")
+                    uuid = str(data.get("uuid") or data.get("Uuid") or data.get("UUID") or "")
                     if not uuid:
                         return f"ERROR: qr request rejected: {str(payload)[:120]}"
                     meta["login_key"] = key
                     meta["uuid"] = uuid
                     self._save_meta(instance_id, meta)
-                    qrcode = str(data.get("qrcode") or "")
+                    qrcode = str(data.get("qrcode") or data.get("QrCodeBase64") or "")
                     if qrcode.startswith("data:image"):
                         return qrcode.split(",", 1)[1]
-                    return str(data.get("qrcodeUrl") or "")
+                    return qrcode or str(data.get("qrcodeUrl") or data.get("QrUrl") or "")
                 # poll: CheckLoginStatus
                 response = await client.get(
                     f"{endpoint}/login/CheckLoginStatus",
@@ -1195,8 +1249,9 @@ class WechatPadProProvisioner(GatewayFiles):
                 )
                 response.raise_for_status()
                 payload = cast_dict(response.json())
-                code = payload.get("code")
-                if code == 200:
+                code = payload.get("code", payload.get("Code"))
+                if code in (200, "200"):
+                    result_object(payload)
                     # scanned and confirmed: login succeeded
                     self._save_meta(instance_id, {**meta, "logged_in": True})
                     return _QR_LOGGED_IN
@@ -1248,21 +1303,8 @@ class WechatPadProProvisioner(GatewayFiles):
                 json={"Count": 1, "Days": 3650},
             )
             response.raise_for_status()
-            payload = cast_dict(response.json())
-            if payload.get("Code", payload.get("code", 0)) not in (0, 200, "0", "200"):
-                return ""
-        raw_data = payload.get("data")
-        data = cast_dict(raw_data)
-        key = ""
-        entries: list[Any] = (
-            list(cast(list[Any], raw_data))
-            if isinstance(raw_data, list)
-            else list(data.get("list") or data.get("keys") or [])
-        )
-        if entries:
-            key = str(cast_dict(entries[0]).get("Key") or "")
-        elif data:
-            key = str(data.get("Key") or data.get("key") or "")
+            payload = result_object(response.json())
+        key = auth_key(payload.get("data"))
         if key:
             self._save_meta(instance_id, {**meta, "auth_api_key": key})
         return key
@@ -1344,8 +1386,9 @@ class WechatPadProProvisioner(GatewayFiles):
         while asyncio.get_running_loop().time() < deadline:
             try:
                 async with httpx.AsyncClient(timeout=2.0) as client:
-                    response = await client.get(endpoint)
-                if response.status_code < 500:
+                    response = await client.get(f"{endpoint}/login/GetLoginStatus")
+                payload = cast_dict(response.json())
+                if response.status_code < 500 and any(key in payload for key in ("Code", "code")):
                     return True
             except Exception:
                 pass

@@ -268,20 +268,26 @@ async def test_provision_installs_starts_and_persists() -> None:
 
 @pytest.mark.asyncio
 async def test_provision_install_failure_marks_error() -> None:
+    from mailflow.errors import error_text
+    from mailflow.gateway import GatewaySetupError
+    from mailflow.i18n import I18n
+
     class FailingInstall(FakeProvisioner):
         async def install(self, instance_id: str, options: dict[str, Any]) -> None:
-            raise RuntimeError("download failed")
+            raise GatewaySetupError("gateway.napcat_retired")
 
     provisioner = FailingInstall()
     manager, _storage = _manager(provisioner)
 
-    with pytest.raises(RuntimeError, match="install failed"):
+    with pytest.raises(GatewaySetupError) as failure:
         await manager.provision("fake-gw", "gw-1", {})
 
     instance = manager.instance("fake-gw", "gw-1")
     assert instance is not None
     assert instance.status == "error"
-    assert "download failed" in instance.error
+    assert failure.value.code == "gateway.napcat_retired"
+    assert "OneBot" in error_text(failure.value, I18n("zh-CN").t)
+    assert "official downloads" in instance.error
     assert provisioner.stopped == ["gw-1"]
 
 

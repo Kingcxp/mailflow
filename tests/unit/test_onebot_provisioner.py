@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import urllib.error
-import urllib.request as _ur
 from pathlib import Path
 from typing import Any, cast
 
@@ -87,7 +85,6 @@ async def test_linux_start_launches_appimage_with_absolute_path(
 
     prov = NapCatProvisioner()
     # fake a node runtime so the preflight passes
-    monkeypatch.setattr(gw_mod, "_find_node", lambda: "node")
     try:
         await prov.start("A-Bot-NapCat-5baf4a", {"port": "39999"})
     except RuntimeError as exc:
@@ -118,22 +115,16 @@ async def _async_false() -> bool:
 
 
 @pytest.mark.asyncio
-async def test_appimage_install_falls_back_when_api_unreachable(
+async def test_install_requires_an_explicit_source_and_keeps_existing_payload(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Release API failure must not abort the install: it falls back to
-    the pinned AppImage URL instead of raising."""
+    """Retired downloads fail immediately; caches and explicit URLs still work."""
+    from mailflow.errors import error_text
+    from mailflow.gateway import GatewaySetupError
+    from mailflow.i18n import I18n
+
     monkeypatch.chdir(tmp_path)
     instance = _instance_dir("A-Bot-NapCat-5baf4a")  # pyright: ignore[reportPrivateUsage]
-    instance.mkdir(parents=True, exist_ok=True)
-
-    # API lookup raises (network unreachable) and the fallback download
-    # writes the pinned asset
-    def boom(*args: Any, **kwargs: Any) -> Any:  # pyright: ignore[reportUnknownParameterType]
-        raise urllib.error.URLError("network unreachable")
-
-    monkeypatch.setattr(_ur, "urlopen", boom)
-
     downloads: dict[str, Path] = {}
 
     def fake_download(url: str, destination: Path, progress: Any = None, **kw: Any) -> None:
@@ -141,6 +132,14 @@ async def test_appimage_install_falls_back_when_api_unreachable(
         destination.write_bytes(b"#!fake-appimage")
 
     monkeypatch.setattr(NapCatProvisioner, "_download", staticmethod(fake_download))
+    prov = NapCatProvisioner()
+    for windows in (True, False):
+        monkeypatch.setattr(gw_mod, "_IS_WINDOWS", windows)
+        with pytest.raises(GatewaySetupError) as failure:
+            await prov.install("A-Bot-NapCat-5baf4a", {"napcat_version": "latest"})
+        assert failure.value.code == "gateway.napcat_retired"
+        assert "OneBot" in error_text(failure.value, I18n("zh-CN").t)
+        assert not instance.exists() and not downloads
 
     # the runtime preflight checks xvfb-run/fusermount with shutil.which
     def _fake_which(name: str) -> str:
@@ -148,21 +147,25 @@ async def test_appimage_install_falls_back_when_api_unreachable(
 
     monkeypatch.setattr(gw_mod.shutil, "which", _fake_which)
 
-    prov = NapCatProvisioner()
-    await prov._install_linux_appimage(  # pyright: ignore[reportPrivateUsage]
-        "A-Bot-NapCat-5baf4a", {}, instance
-    )
+    def interrupted(url: str, destination: Path, progress: Any = None, **kw: Any) -> None:
+        destination.write_bytes(b"incomplete")
+        raise ConnectionError("download interrupted")
 
-    # exactly one download, from the pinned release URL (no raise)
-    assert len(downloads) == 1
-    url = next(iter(downloads))
-    assert url.startswith(
-        "https://github.com/NapNeko/NapCatAppImageBuild/releases/download/v4.18.19/"
+    monkeypatch.setattr(NapCatProvisioner, "_download", staticmethod(interrupted))
+    with pytest.raises(ConnectionError):
+        await prov.install(
+            "A-Bot-NapCat-5baf4a", {"napcat_appimage_url": "https://example.test/napcat.AppImage"}
+        )
+    assert not list(instance.glob("*.AppImage")) and not list(instance.glob("*.part"))
+    monkeypatch.setattr(NapCatProvisioner, "_download", staticmethod(fake_download))
+    await prov.install(
+        "A-Bot-NapCat-5baf4a", {"napcat_appimage_url": "https://example.test/napcat.AppImage"}
     )
-    assert url.endswith(".AppImage")
-    # file written with the pinned asset name
-    appimage = instance / "QQ-50969_NapCat-v4.18.19-amd64.AppImage"
+    assert list(downloads) == ["https://example.test/napcat.AppImage"]
+    appimage = instance / "NapCat.AppImage"
     assert appimage.exists()
+    await prov.install("A-Bot-NapCat-5baf4a", {})
+    assert len(downloads) == 1 and appimage.read_bytes() == b"#!fake-appimage"
 
 
 @pytest.mark.asyncio
@@ -197,7 +200,6 @@ async def test_start_refuses_stale_process_on_port(
     instance.mkdir(parents=True, exist_ok=True)
     (instance / "QQ-50969_NapCat-v4.18.19-amd64.AppImage").write_bytes(b"x")
 
-    monkeypatch.setattr(gw_mod, "_find_node", lambda: "node")
     monkeypatch.setattr(gw_mod, "_available_memory_mb", lambda: 4096.0)
     # the port answers HTTP but no process is in _processes -> stale
     monkeypatch.setattr(
