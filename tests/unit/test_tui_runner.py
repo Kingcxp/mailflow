@@ -38,6 +38,8 @@ class TestRunTuiWiring:
         captured: dict[str, Any] = {}
 
         class StubApp:
+            return_code = 0
+
             def __init__(self, *_args: Any, **_kwargs: Any) -> None: ...
 
             async def run_async(self) -> None:

@@ -272,15 +272,29 @@ def _new_info(config_path: str | None, name: str | None, local: bool) -> Session
     )
 
 
+def _log_session(info: SessionInfo, message: str) -> None:
+    with os.fdopen(
+        os.open(info.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600),
+        "w",
+        encoding="utf-8",
+    ) as log:
+        log.write(f"{datetime.now(UTC).isoformat()} {message}\n")
+
+
 def _spawn(info: SessionInfo) -> subprocess.Popen[bytes]:
     if getattr(sys, "frozen", False) or "__compiled__" in globals():
         command = [sys.executable, "--_mailflow-tui-host", info.id]
     else:
-        command = [sys.executable, "-X", "utf8", "-B", "-m", "mailflow_tui.sessions", info.id]
+        command = [sys.executable, "-X", "utf8", "-u", "-B", "-m", "mailflow_tui.sessions", info.id]
     creationflags = 0
     if sys.platform == "win32":
         creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-    environment = {**os.environ, "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+    environment = {
+        **os.environ,
+        "PYTHONUTF8": "1",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
     if (
         os.name == "nt"
         and environment.get("TEXTUAL_COLOR_SYSTEM", "auto").strip().lower() == "auto"
@@ -288,6 +302,7 @@ def _spawn(info: SessionInfo) -> subprocess.Popen[bytes]:
         # This host renders through the session socket, so Rich sees the log
         # file instead of Windows Terminal and otherwise downgrades RGB to 256 colors.
         environment["TEXTUAL_COLOR_SYSTEM"] = "truecolor"
+    _log_session(info, f"Launching host with {sys.executable} in {info.cwd}")
     with os.fdopen(os.open(info.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "ab") as log:
         return subprocess.Popen(
             command,
@@ -307,21 +322,47 @@ async def _wait_ready(
     try:
         async with asyncio.timeout(60):
             while True:
-                current = _read_info(info.path)
+                if process is not None and process.poll() is not None:
+                    _log_session(
+                        info,
+                        f"Host exited before startup completed: exit code {process.returncode}",
+                    )
+                    raise SessionError(
+                        "sessions.start_exited",
+                        name=info.name,
+                        code=process.returncode,
+                        log=str(info.log),
+                    )
+                try:
+                    current = _read_info(info.path)
+                except FileNotFoundError:
+                    if process is None:
+                        raise
+                    # The host removes its state during exit, before Popen observes it.
+                    await asyncio.sleep(0.1)
+                    continue
                 if current.error:
                     raise SessionError(current.error, name=info.name, log=str(info.log))
-                if process is not None and process.poll() is not None:
-                    break
                 if current.port:
-                    status = await request(current, "status")
-                    if status["state"] in {"attached", "detached"}:
-                        return current
-                    if status["state"] == "stopping":
-                        raise SessionError("sessions.unavailable", name=info.name)
+                    try:
+                        status = await request(current, "status")
+                    except (OSError, EOFError, ValueError, TimeoutError) as exc:
+                        _log_session(
+                            info,
+                            f"Startup status check returned {type(exc).__name__}; waiting for initialization",
+                        )
+                    else:
+                        if status["state"] in {"attached", "detached"}:
+                            return current
+                        if status["state"] == "stopping":
+                            raise SessionError("sessions.unavailable", name=info.name)
                 await asyncio.sleep(0.1)
-    except (OSError, EOFError, ValueError, TimeoutError) as exc:
+    except TimeoutError as exc:
+        _log_session(info, "Host did not become ready within 60 seconds")
+        raise SessionError("sessions.start_timeout", name=info.name, log=str(info.log)) from exc
+    except (OSError, EOFError, ValueError) as exc:
+        _log_session(info, f"Could not read startup state: {type(exc).__name__}")
         raise SessionError("sessions.start_failed", name=info.name, log=str(info.log)) from exc
-    raise SessionError("sessions.start_failed", name=info.name, log=str(info.log))
 
 
 async def start_instance(
@@ -403,6 +444,7 @@ class SessionHost:
         app.driver_class = session_driver(self)
 
     def mark_ready(self) -> None:
+        _log_session(self.info, "TUI is ready for terminal attachment")
         self.ready = True
 
     async def start(self) -> None:
@@ -530,9 +572,11 @@ async def _serve(info: SessionInfo) -> None:
 
 def host_main(instance_id: str) -> None:
     info = _read_info(session_directory() / f"{instance_id}.json")
+    _log_session(info, f"Host process started: pid {os.getpid()}; initializing service and TUI")
     os.chdir(info.cwd)
     with contextlib.suppress(asyncio.CancelledError, KeyboardInterrupt):
         asyncio.run(_serve(info))
+    _log_session(info, "Host stopped after service cleanup")
 
 
 if __name__ == "__main__":

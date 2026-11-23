@@ -1793,6 +1793,8 @@
       "not_found": "No running instance matches {name}. Use mailflow tui list to see available instances.",
       "in_use": "Instance {name} or its mailbox data is already in use. Attach to that instance, or use a separate name, configuration and database.",
       "start_failed": "Could not start instance {name}. Details are in: {log}",
+      "start_exited": "Instance {name} exited before startup completed (exit code {code}). Details are in: {log}",
+      "start_timeout": "Instance {name} did not finish starting within 60 seconds. Details are in: {log}",
       "config_missing": "Configuration file {path} was not found. Copy configs/example.toml to this path for a new setup, or restore your configuration backup to keep your accounts.",
       "config_invalid": "Cannot read configuration {path}. Check its TOML syntax, referenced environment variables and file permissions, then retry.",
       "unavailable": "Cannot connect to instance {name}. Use mailflow tui list to check its state.",

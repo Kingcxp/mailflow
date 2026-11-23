@@ -1793,6 +1793,8 @@
       "not_found": "没有找到运行中的实例 {name}，请使用 mailflow tui list 查看。",
       "in_use": "实例 {name} 或其邮件数据库正在使用中。请连接已有实例，或使用独立的名称、配置和数据库。",
       "start_failed": "实例 {name} 启动失败，详情见：{log}",
+      "start_exited": "实例 {name} 在启动完成前退出（退出码 {code}）。详情见：{log}",
+      "start_timeout": "实例 {name} 未能在 60 秒内完成启动。详情见：{log}",
       "config_missing": "找不到配置文件 {path}。全新使用请将 configs/example.toml 复制到此路径；如需保留账户，请恢复配置备份。",
       "config_invalid": "无法读取配置文件 {path}。请检查 TOML 格式、引用的环境变量和文件权限后重试。",
       "unavailable": "暂时无法连接实例 {name}，请使用 mailflow tui list 检查状态。",

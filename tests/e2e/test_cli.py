@@ -270,7 +270,7 @@ async def test_tui_instances_preserve_screen_across_detach_reconnect_and_takeove
             await stop_instance(remaining)
 
 
-async def test_tui_exit_and_stop_finish_despite_lingering_sync_io(
+async def test_tui_lifecycle_handles_slow_start_shutdown_and_failed_start(
     cli_config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from mailflow_tui import sessions
@@ -278,14 +278,16 @@ async def test_tui_exit_and_stop_finish_despite_lingering_sync_io(
 
     monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(cli_config.parent / "sessions"))
     config_before = await asyncio.to_thread(cli_config.read_bytes)
-    # Run the real TUI and service. Simulate a synchronous network request
-    # which outlives coroutine cancellation, without contacting any service.
+    # Run the real TUI and service with slow initialization and a synchronous
+    # request which outlives coroutine cancellation, without contacting a service.
     host_code = """
 import asyncio, sys, time
 from mailflow_tui import runner, sessions
 original = runner.run_local_host
 async def run(*args, **kwargs):
     try:
+        # Imports and plugin initialization can briefly block the fresh host loop.
+        time.sleep(4)
         await original(*args, **kwargs)
     finally:
         asyncio.get_running_loop().run_in_executor(None, time.sleep, 15)
@@ -335,6 +337,25 @@ sessions.host_main(sys.argv[1])
             assert await sessions.list_instances() == []
             with pytest.raises(OSError):
                 await asyncio.open_connection("127.0.0.1", info.port)
+
+        host_code = """
+import sys
+from mailflow_tui.app import MailFlowApp
+from mailflow_tui.sessions import host_main
+def fail_mount(self):
+    raise RuntimeError("simulated UI initialization failure")
+MailFlowApp.on_mount = fail_mount
+host_main(sys.argv[1])
+"""
+        with pytest.raises(sessions.SessionError) as failure:
+            await sessions.start_instance(str(cli_config), name="shutdown")
+        await asyncio.to_thread(children[-1].wait, timeout=3)
+        assert children[-1].returncode != 0
+        diagnostic = await asyncio.to_thread(
+            Path(failure.value.params["log"]).read_text, encoding="utf-8"
+        )
+        assert "simulated UI initialization failure" in diagnostic
+        assert await sessions.list_instances() == []
         assert await asyncio.to_thread(cli_config.read_bytes) == config_before
     finally:
         for child in children:

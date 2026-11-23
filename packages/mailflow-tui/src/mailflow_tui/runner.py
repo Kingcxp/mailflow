@@ -144,6 +144,8 @@ async def run_local_host(
         )
         try:
             await app.run_async()
+            if app.return_code:
+                raise RuntimeError(f"TUI exited with error code {app.return_code}")
         finally:
             if session is not None:
                 session.stopping = True
