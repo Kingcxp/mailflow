@@ -1222,7 +1222,10 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             await until(
                 pilot,
                 lambda: any(
-                    c.message.id == formatted.id and c.is_mounted and bool(c.query(".console-body"))
+                    c.message.id == formatted.id
+                    and c.is_mounted
+                    and bool(c.query(".console-body"))
+                    and isinstance(c.query_one(".console-body", Static).content, RichText)
                     for c in pane.query(ConsoleCard)
                 ),
             )

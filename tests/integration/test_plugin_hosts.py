@@ -78,6 +78,8 @@ def test_hosts_discover_external_plugins(
         from mailflow_tui import runner
 
         class HeadlessApp:
+            return_code = 0
+
             def __init__(self, service: Any, *args: Any, **kwargs: Any) -> None:
                 seen.append(service.registry.has(ComponentKind.LLM_BACKEND, "fake-contract"))
 

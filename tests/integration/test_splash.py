@@ -105,9 +105,10 @@ async def test_splash_off_by_default(tmp_path: Path) -> None:
             await pilot.pause(0.2)
             assert not isinstance(app.screen, SplashScreen)
             await app.push_screen(SplashScreen(service.t))
-            artwork = app.screen.query_one("#splash-art", Static).render()
+            art = app.screen.query_one("#splash-art", Static)
+            artwork = art.render()
             await pilot.pause(0.1)
-            assert app.screen.query_one("#splash-art", Static).render() == artwork
+            assert art.render() == artwork
             await until(pilot, lambda: not isinstance(app.screen, SplashScreen))
     finally:
         await service.stop()
