@@ -1008,8 +1008,9 @@ class NapCatProvisioner(GatewayFiles):
         if progress is not None:
             progress.update(1.0, "checking NapCat runtime requirements", "installing")
         target = _instance_dir(instance_id)
-        # Never replace an existing installation or its saved login data.
-        if await asyncio.to_thread(_installed_marker, target):
+        # Routine setup reuses existing files; explicit repair downloads them again.
+        # Both paths retain configuration and saved login data.
+        if not options.get("_reinstall") and await asyncio.to_thread(_installed_marker, target):
             image = docker_image(target) if not _IS_WINDOWS else ""
             if image:
                 await require_docker()

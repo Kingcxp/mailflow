@@ -416,6 +416,8 @@ class NotificationsPane(Vertical):
             )
             if gateway in self._service.gateway_providers():
                 choices.append((self._service.t("tui.notif_relogin"), "notif-relogin"))
+                if gateway == "napcat":
+                    choices.append((self._service.t("tui.notif_reinstall"), "notif-reinstall"))
         choices.extend(
             [
                 (self._service.t("experience.notification_preferences"), "notif-preferences"),
@@ -434,14 +436,24 @@ class NotificationsPane(Vertical):
                 self._choose_urgency(notifier_id)
             elif action == "notif-console":
                 self.app.query_one(TabbedContent).active = "tab-console"
-            elif action == "notif-delete":
+            elif action in {"notif-delete", "notif-reinstall"}:
+                reinstall = action == "notif-reinstall"
                 self.app.push_screen(
                     ConfirmModal(
                         self._service,
-                        title=self._service.t("tui.notifications_remove"),
-                        body=self._service.t("tui.notifications_remove_confirm", name=notifier_id),
-                        confirm_label=self._service.t("tui.btn_remove"),
-                        variant="error",
+                        title=self._service.t(
+                            "tui.notif_reinstall" if reinstall else "tui.notifications_remove"
+                        ),
+                        body=self._service.t(
+                            "tui.notif_reinstall_confirm"
+                            if reinstall
+                            else "tui.notifications_remove_confirm",
+                            name=notifier_id,
+                        ),
+                        confirm_label=self._service.t(
+                            "tui.notif_reinstall" if reinstall else "tui.btn_remove"
+                        ),
+                        variant="primary" if reinstall else "error",
                         focus_confirm=False,
                     ),
                     callback=lambda confirmed: (
@@ -522,8 +534,8 @@ class NotificationsPane(Vertical):
         if button_id == "notif-edit":
             await self._edit_selected(notifier_id)
             return
-        if button_id == "notif-relogin":
-            await self._relogin_selected(notifier_id)
+        if button_id in {"notif-relogin", "notif-reinstall"}:
+            await self._relogin_selected(notifier_id, reinstall=button_id == "notif-reinstall")
             return
         if button_id == "notif-delete":
             await self._delete_selected(notifier_id)
@@ -587,10 +599,10 @@ class NotificationsPane(Vertical):
             escape(self._service.t("tui.settings_saved", option=entry.notifier_id + " · " + state))
         )
 
-    async def _relogin_selected(self, notifier_id: str | None = None) -> None:
-        """Re-run the guided setup for an existing gateway-backed notifier
-        (NapCat logged out / session expired): restarts the gateway
-        process and shows the QR again, then re-saves the endpoint."""
+    async def _relogin_selected(
+        self, notifier_id: str | None = None, *, reinstall: bool = False
+    ) -> None:
+        """Start the existing instance, optionally replacing its program files."""
         index = self._selected_index(notifier_id)
         if index is None:
             self.query_one("#notifications-status", Static).update(
@@ -613,7 +625,14 @@ class NotificationsPane(Vertical):
         instance_id = entry.notifier_id
         options = dict(entry.options or {})
         self.app.push_screen(  # pyright: ignore[reportUnknownMemberType]
-            GatewayGuideModal(self._service, gateway, instance_id, options, relogin=True),
+            GatewayGuideModal(
+                self._service,
+                gateway,
+                instance_id,
+                options,
+                relogin=not reinstall,
+                reinstall=reinstall,
+            ),
             callback=lambda result, values={"notifier_id": instance_id, "provider": provider, "options": options}: (
                 self._after_guide(gateway, instance_id, result, values)
             ),

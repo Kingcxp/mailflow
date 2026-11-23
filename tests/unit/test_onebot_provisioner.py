@@ -201,18 +201,36 @@ async def test_default_archive_installs_without_url_and_rejects_corruption(
     assert len(downloads) == 1 and login.read_text("utf-8") == "keep"
     assert not list(target.glob("*.zip")) and not list(target.glob("*.tar"))
 
+    if host == "windows":
+        (target / "napcat.mjs").write_text("broken entry", encoding="utf-8")
+    await provisioner.install("archive", {"_reinstall": True})
+    assert len(downloads) == 2
+    assert config.read_text("utf-8") == "saved gateway configuration"
+    assert login.read_text("utf-8") == "keep"
+    if host == "windows":
+        assert (target / "napcat.mjs").read_text("utf-8") == "// fake Shell entry"
+
     if host != "windows":
         loaded = False  # A pruned Docker image is restored without deleting login data.
         await provisioner.install("archive", {})
-        assert len(downloads) == 2 and login.read_text("utf-8") == "keep"
+        assert len(downloads) == 3 and login.read_text("utf-8") == "keep"
         monkeypatch.setattr(archive_mod.shutil, "which", _missing_command)
         with pytest.raises(GatewaySetupError) as missing:
             await provisioner.install("no-docker", {})
         assert missing.value.code == "gateway.napcat_docker_required"
-        assert len(downloads) == 2
+        assert len(downloads) == 3
         monkeypatch.setattr(archive_mod.shutil, "which", _available_command)
 
     contents = b"corrupt archive"
+    with pytest.raises(GatewaySetupError) as failed_repair:
+        await provisioner.install("archive", {"_reinstall": True})
+    assert failed_repair.value.code == "gateway.napcat_checksum"
+    assert config.read_text("utf-8") == "saved gateway configuration"
+    assert login.read_text("utf-8") == "keep"
+    if host == "windows":
+        assert (target / "napcat.mjs").read_text("utf-8") == "// fake Shell entry"
+    else:
+        assert archive_mod.docker_image(target) == image
     with pytest.raises(GatewaySetupError) as corrupt:
         await provisioner.install("corrupt", {})
     assert corrupt.value.code == "gateway.napcat_checksum"

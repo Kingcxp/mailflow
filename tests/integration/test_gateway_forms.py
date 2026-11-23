@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -33,24 +35,52 @@ class _Status:
         pass
 
 
-async def test_relogin_reuses_installed_gateway_without_installing() -> None:
+@pytest.mark.parametrize("reinstall", [False, True])
+async def test_existing_gateway_menu_reuses_or_reinstalls_the_same_instance(
+    reinstall: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mailflow.config import MailFlowConfig, NotifierConfig
     from mailflow.contracts import GatewayInstance
+    from mailflow.domain import Urgency
     from mailflow.registry import PluginRegistrar
+    from mailflow_tui.confirm import ConfirmModal
     from mailflow_tui.gateway_guide import GatewayGuideModal
+    from mailflow_tui.pickers import PopupMenu
+    from textual.app import ComposeResult
 
     from mailflow_test_support.commands import commands_service
 
-    service = commands_service()
+    entry = NotifierConfig(
+        notifier_id="existing-qq",
+        provider="onebot",
+        enabled=False,
+        minimum_urgency=Urgency.IMPORTANT,
+        options={
+            "gateway": "napcat",
+            "http_url": "http://fake",
+            "access_token": "saved-token",
+            "admins": ["owner"],
+            "targets": ["group:22"],
+        },
+    )
+    service = commands_service(
+        MailFlowConfig(notifiers=[entry]), config_path=str(tmp_path / "mailflow.toml")
+    )
+    monkeypatch.setattr(service, "reload_runtime", AsyncMock())
     started: list[str] = []
+    installed: list[str] = []
 
     class ExistingGateway:
         backend_id = "napcat"
 
         async def detect(self) -> str:
-            raise AssertionError("Re-login does not need an installation check")
+            assert reinstall, "Re-login does not need an installation check"
+            return "gateway.napcat_archive"
 
         async def install(self, instance_id: str, options: dict[str, Any]) -> None:
-            raise AssertionError("Re-login must not install or download")
+            assert reinstall, "Re-login must not install or download"
+            assert options["_reinstall"] is True
+            installed.append(instance_id)
 
         async def start(self, instance_id: str, options: dict[str, Any]) -> GatewayInstance:
             started.append(instance_id)
@@ -70,20 +100,51 @@ async def test_relogin_reuses_installed_gateway_without_installing() -> None:
     PluginRegistrar(service.registry, service.config, "test").add_gateway_provisioner(
         "napcat", ExistingGateway
     )
-    guide = GatewayGuideModal(service, "napcat", "existing-qq", {}, relogin=True)
-    results: list[dict[str, Any] | None] = []
+    pane = NotificationsPane(service)
 
     class Host(App[None]):
-        def on_mount(self) -> None:
-            self.push_screen(guide, results.append)
+        def compose(self) -> ComposeResult:
+            yield pane
 
     try:
-        async with Host().run_test(size=(100, 32)) as pilot:
+        async with Host().run_test(size=(120, 40)) as pilot:
+            action = "notif-reinstall" if reinstall else "notif-relogin"
+
+            async def choose_action() -> None:
+                pane.query_one("#notif-more", Button).press()
+                await until(pilot, lambda: bool(pilot.app.screen.query(PopupMenu)))
+                menu = pilot.app.screen.query_one(PopupMenu)
+                menu.highlighted = menu.get_option_index(action)
+                await pilot.press("enter")
+
+            await until(pilot, lambda: not pane.query_one("#notif-more", Button).disabled)
+            await choose_action()
+            if reinstall:
+                await until(pilot, lambda: isinstance(pilot.app.screen, ConfirmModal))
+                pilot.app.screen.query_one("#confirm-cancel", Button).press()
+                await until(pilot, lambda: not isinstance(pilot.app.screen, ConfirmModal))
+                assert started == [] and installed == []
+                await choose_action()
+                await until(pilot, lambda: isinstance(pilot.app.screen, ConfirmModal))
+                pilot.app.screen.query_one("#confirm-run", Button).press()
+            await until(pilot, lambda: isinstance(pilot.app.screen, GatewayGuideModal))
+            guide = cast(GatewayGuideModal, pilot.app.screen)
             await until(pilot, lambda: not guide.query_one("#guide-done", Button).disabled)
             assert started == ["existing-qq"]
+            assert installed == (["existing-qq"] if reinstall else [])
+            instance = service.gateways.instance("napcat", "existing-qq")
+            assert instance is not None and "_reinstall" not in instance.extra["options"]
             guide.query_one("#guide-done", Button).press()
-            await until(pilot, lambda: bool(results))
-            assert results[0] is not None and results[0]["instance_id"] == "existing-qq"
+            await until(
+                pilot,
+                lambda: (
+                    service.t("tui.notifications_configured_ok", instance="existing-qq")
+                    in str(pane.query_one("#notifications-status", Static).render())
+                ),
+            )
+            assert [notifier.model_dump() for notifier in service.config.notifiers] == [
+                entry.model_dump()
+            ]
     finally:
         await service.gateways.stop()
 

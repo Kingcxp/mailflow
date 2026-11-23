@@ -473,7 +473,7 @@
         "mailflow-notify-onebot": {
           "name": "QQ 通知（OneBot）",
           "description": "通过 OneBot v11 HTTP 服务器（NapCat、go-cqhttp）向 QQ 用户/群聊推送邮件提醒",
-          "readme": "# OneBot／QQ 通知与聊天连接\n\n组件标识为 `onebot`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n自动部署使用固定版本的 [XingYunStar/NapCatQQ 归档 v4.18.42](https://github.com/XingYunStar/NapCatQQ/releases/tag/v4.18.42)，并校验 SHA-256。Windows 安装 Shell ZIP，需要本机已安装 QQ；Linux 导入包含 QQ 和 NapCat 的 amd64／arm64 Docker 镜像，需要事先安装、启动 Docker Engine，并允许当前用户访问。容器使用主机网络，HTTP 仅监听本机；各实例独立保存配置、登录数据和二维码缓存。已有安装直接复用，不重复下载。高级设置仍可填写 `napcat_package_url`（Windows Shell ZIP）或 `napcat_appimage_url`（Linux AppImage），也可连接自行部署的 OneBot v11 HTTP 服务。原上游已停止维护，此来源是固定历史归档，不会自动跟进其他分支。\n\n```toml\n[[notifiers]]\nnotifier_id = \"onebot-main\"\nprovider = \"onebot\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\nhttp_url = \"http://127.0.0.1:3000\"\naccess_token = \"${ONEBOT_ACCESS_TOKEN}\"\ntargets = [\"user:123456\"]\nadmins = [\"123456\"]\n```\n\n选择自动部署即可，无需填写安装包地址；也可复用已有受管安装，或连接自行部署的 OneBot v11 HTTP 服务。安装、启动、QQ 登录和投递就绪是不同步骤，按提示完成登录后再测试投递。\n\n`http_url` 必填，令牌需与网关一致。目标使用 `user:<ID>`／`group:<ID>`，管理员填写稳定平台用户标识；HTTP 200 但 retcode 失败仍算失败。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
+          "readme": "# OneBot／QQ 通知与聊天连接\n\n组件标识为 `onebot`，支持邮件推送及共享文字提醒、命令；图片和受管文件由渠道能力\n提供，并受平台限制。\n\n自动部署使用固定版本的 [XingYunStar/NapCatQQ 归档 v4.18.42](https://github.com/XingYunStar/NapCatQQ/releases/tag/v4.18.42)，并校验 SHA-256。Windows 安装 Shell ZIP，需要本机已安装 QQ；Linux 导入包含 QQ 和 NapCat 的 amd64／arm64 Docker 镜像，需要事先安装、启动 Docker Engine，并允许当前用户访问。容器使用主机网络，HTTP 仅监听本机；各实例独立保存配置、登录数据和二维码缓存。已有安装直接复用，不重复下载。 已配置的受管 QQ 渠道可选择**更多操作 → 重新安装并启动**，为原实例重新下载并安装程序，保留通知设置和已保存的登录数据。高级设置仍可填写 `napcat_package_url`（Windows Shell ZIP）或 `napcat_appimage_url`（Linux AppImage），也可连接自行部署的 OneBot v11 HTTP 服务。原上游已停止维护，此来源是固定历史归档，不会自动跟进其他分支。\n\n```toml\n[[notifiers]]\nnotifier_id = \"onebot-main\"\nprovider = \"onebot\"\nminimum_urgency = \"important\"\n\n[notifiers.options]\nhttp_url = \"http://127.0.0.1:3000\"\naccess_token = \"${ONEBOT_ACCESS_TOKEN}\"\ntargets = [\"user:123456\"]\nadmins = [\"123456\"]\n```\n\n选择自动部署即可，无需填写安装包地址；也可复用已有受管安装，或连接自行部署的 OneBot v11 HTTP 服务。安装、启动、QQ 登录和投递就绪是不同步骤，按提示完成登录后再测试投递。\n\n`http_url` 必填，令牌需与网关一致。目标使用 `user:<ID>`／`group:<ID>`，管理员填写稳定平台用户标识；HTTP 200 但 retcode 失败仍算失败。\n\n管理员身份控制修改、发信、配置和插件操作，不必为了允许普通查询而将所有人设为管理员。\n自然语言管理使用共享助手并需要模型，修改和发信仍需确认。\n\n固定目标与聊天订阅不同，取消订阅会说明是否还存在独立固定推送。\n全局、渠道、聊天开关、重要程度及免打扰共同决定是否发送。\n`notification_images`、`summary_cards`、`send_interval_seconds` 使用共享通知设置，\n不支持的输出明确回退文字。\n\n配置、HTTP 或平台错误会报告投递失败，按目标保留凭据，重试不重复发送成功目标。\n登录后单独测试投递；进程存在并不代表可用。\n"
         },
         "mailflow-notify-serverchan": {
           "name": "Server酱通知",
@@ -1150,6 +1150,9 @@
       "smart_tool": "正在{tool}",
       "smart_batch_failed": "第 {batch}/{batches} 批失败，{count} 封邮件未能检查",
       "smart_batch_unreadable": "第 {batch}/{batches} 批回复无法解析，{count} 封邮件未能检查",
+      "notif_reinstall": "重新安装并启动",
+      "notif_reinstall_confirm": "将重新下载并安装“{name}”的 NapCat 程序，然后启动原实例。保留通知设置和已保存的登录数据，安装期间会停止此实例的连接。",
+      "bots_guide_reinstalling": "正在重新安装网关程序，保留通知设置和已保存的登录数据；若登录已失效，安装后按提示扫码即可。",
       "notif_relogin": "重新登录",
       "notif_relogin_manual": "所选通知不走网关，无需重新登录",
       "sudo_prompt_title": " 需要管理员密码 ",

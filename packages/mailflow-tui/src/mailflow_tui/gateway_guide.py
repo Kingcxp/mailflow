@@ -163,6 +163,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         options: dict[str, Any],
         *,
         relogin: bool = False,
+        reinstall: bool = False,
     ) -> None:
         super().__init__()
         self._service = service
@@ -170,6 +171,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
         self._instance_id = instance_id
         self._options = options
         self._relogin = relogin
+        self._reinstall = reinstall
         self._result: dict[str, Any] | None = None
         self._progress_bucket = -1
         self._last_progress_message = ""
@@ -356,6 +358,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
                 self._log("INFO", message)
                 self._update_progress(0.0, message)
             else:
+                if self._reinstall:
+                    self._log("INFO", self._t("tui.bots_guide_reinstalling"))
                 self._set_phase("detecting")
                 self._log("INFO", self._t("tui.bots_guide_detecting"))
                 detected = await service.gateway_detect(provider)
@@ -444,6 +448,8 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
             return future.result()
 
         install_options["_ask_sudo_password"] = _ask_sudo_password
+        if self._reinstall:
+            install_options["_reinstall"] = True
 
         # keep the TUI live while the provisioner installs
         operation = (
