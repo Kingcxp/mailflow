@@ -1743,6 +1743,8 @@ class SettingsPane(Vertical):
             )
             yield SearchToggle("regex", ident="settings-search-regex")
             yield SearchToggle("case", ident="settings-search-case")
+            yield Button(self._t("migration.import_title"), id="settings-import", variant="primary")
+            yield Button(self._t("interface.more"), id="settings-more")
         with Horizontal(id="settings-body"):
             with Vertical(id="settings-sidebar"):
                 yield Static(self._t("tui.settings_sections"), id="settings-sidebar-title")
@@ -1766,6 +1768,7 @@ class SettingsPane(Vertical):
         relabel_buttons(
             self,
             {
+                "settings-import": "migration.import_title",
                 "settings-more": "interface.more",
             },
         )
@@ -1986,9 +1989,10 @@ class SettingsPane(Vertical):
         for card in self.query(OptionCard):
             if card.is_attached:
                 card.refresh_dirty()
-        more = self.query_one_optional("#settings-more", Button)
-        if more is not None:
-            more.disabled = self._saving
+        for ident in ("settings-import", "settings-more"):
+            button = self.query_one_optional(f"#{ident}", Button)
+            if button is not None:
+                button.disabled = self._saving
 
     def action_save_section(self) -> None:
         if not self._saving and any(card.refresh_dirty() for card in self.query(OptionCard)):
@@ -2101,6 +2105,10 @@ class SettingsPane(Vertical):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
+        if button_id == "settings-import":
+            event.stop()
+            await self._settings_operation("settings-import")
+            return
         if button_id == "settings-more":
             from mailflow_tui.pickers import ChoicePicker
 
@@ -2108,7 +2116,6 @@ class SettingsPane(Vertical):
                 (self._t("interface.save_section"), "settings-save-section"),
                 (self._t("interface.discard_section"), "settings-discard-section"),
                 (self._t("ux.backup_title"), "settings-backup"),
-                (self._t("migration.import_title"), "settings-import"),
                 (
                     self._t(
                         "interface.hide_advanced"

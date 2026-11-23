@@ -642,7 +642,15 @@ async def test_settings_reload_keeps_other_unsaved_fields_and_failed_reset(
         def compose(self) -> ComposeResult:
             yield pane
 
-    async with Host().run_test() as pilot:
+    async with Host().run_test(size=(80, 24)) as pilot:
+        await settle(pilot)
+        from mailflow_tui.mail_workflows import ConfigImportScreen
+
+        import_button = pane.query_one("#settings-import", Button)
+        assert str(import_button.label) == service.t("migration.import_title")
+        import_button.press()
+        await until(pilot, lambda: isinstance(pilot.app.screen, ConfigImportScreen))
+        pilot.app.screen.query_one("#import-close", Button).press()
         await settle(pilot)
         query = pane.query_one("#settings-search", Input)
         query.value = "general."
