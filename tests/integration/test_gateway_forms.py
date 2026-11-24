@@ -261,7 +261,7 @@ async def test_docker_setup_confirmation_password_and_qr_can_be_cancelled(
                     assert not service.started and service.shutdowns >= 1
                     return
                 field.value = "private-password"
-                await pilot.click("#sudo-prompt-ok")
+                assert await pilot.click("#sudo-prompt-ok")
                 await until(pilot, lambda: not guide.query_one("#guide-view-qr", Button).disabled)
                 assert field.value == "" and service.started
                 await pilot.resize_terminal(60, 24)
@@ -275,9 +275,17 @@ async def test_docker_setup_confirmation_password_and_qr_can_be_cancelled(
                         )
                     ),
                 )
-                await pilot.click("#guide-view-qr")
-                await until(pilot, lambda: isinstance(app.screen, gateway_guide.QRScreen))
-                await pilot.click("#qr-close")
+                assert await pilot.click("#guide-view-qr")
+                # A screen can be current before its first layout; mouse coordinates
+                # are only usable once the button has a visible region.
+                await until(
+                    pilot,
+                    lambda: (
+                        isinstance(app.screen, gateway_guide.QRScreen)
+                        and app.screen.query_one("#qr-close", Button).region.area > 0
+                    ),
+                )
+                assert await pilot.click("#qr-close")
                 await until(pilot, lambda: app.screen is guide)
                 await pilot.pause()
                 assert await pilot.click("#guide-cancel"), [
