@@ -619,8 +619,11 @@ async def test_gateway_failure_redacts_unsaved_credentials_and_cleans_up() -> No
     async with app.run_test() as pilot:
         app.push_screen(guide)
         await settle(pilot)
-        assert secret not in rendered(guide, "#guide-status")
-        assert service.t("errors.storage") in rendered(guide, "#guide-status")
+        status = rendered(guide, "#guide-status")
+        detail = rendered(guide, "#guide-error")
+        assert secret not in status + detail
+        assert service.t("gateway.operation_failed") in status
+        assert "failed with ***" in detail
         assert guide.query_one("#guide-done", Button).disabled
         service.gateway_shutdown.assert_awaited_with("napcat", "chat")
 
