@@ -62,6 +62,29 @@ func commandFailed(msg *openwechat.Message, text string) {
 	}
 }
 
+func parseQuotedMessage(raw string) (string, map[string]string, string) {
+	if !strings.Contains(raw, "<refermsg") {
+		return "", nil, ""
+	}
+	var quoted struct {
+		AppMsg struct {
+			Title string `xml:"title"`
+			Refer struct {
+				MessageID string `xml:"svrid"`
+				Content   string `xml:"content"`
+				Sender    string `xml:"fromusr"`
+			} `xml:"refermsg"`
+		} `xml:"appmsg"`
+	}
+	if err := xml.Unmarshal([]byte(raw), &quoted); err != nil {
+		return "", nil, ""
+	}
+	return quoted.AppMsg.Title, map[string]string{
+		"message_id": quoted.AppMsg.Refer.MessageID,
+		"text":       strings.TrimSpace(quoted.AppMsg.Refer.Content),
+	}, quoted.AppMsg.Refer.Sender
+}
+
 // dispatchChatCommand forwards a text message to the MailFlow bot endpoint
 // and sends the reply back to the originating chat.
 func dispatchChatCommand(msg *openwechat.Message, text string) {
@@ -80,25 +103,16 @@ func dispatchChatCommand(msg *openwechat.Message, text string) {
 	if senderInGroup, err := msg.SenderInGroup(); err == nil && senderInGroup != nil {
 		sender = senderInGroup.UserName
 	}
-	if chatType == "group" && msg.HasFile() && !msg.IsAt() {
-		return
+	quotedText, quote, quotedSender := parseQuotedMessage(msg.RawContent)
+	if quote != nil {
+		text = quotedText
 	}
-	var quote map[string]string
-	if strings.Contains(msg.RawContent, "<refermsg") {
-		var quoted struct {
-			AppMsg struct {
-				Title string `xml:"title"`
-				Refer struct {
-					MessageID string `xml:"svrid"`
-					Content   string `xml:"content"`
-					Name      string `xml:"displayname"`
-				} `xml:"refermsg"`
-			} `xml:"appmsg"`
-		}
-		if err := xml.Unmarshal([]byte(msg.RawContent), &quoted); err == nil {
-			text = quoted.AppMsg.Title
-			quote = map[string]string{"message_id": quoted.AppMsg.Refer.MessageID, "text": strings.TrimSpace(quoted.AppMsg.Refer.Content)}
-		}
+	mentioned := msg.IsAt()
+	if owner := msg.Owner(); owner != nil && quotedSender != "" {
+		mentioned = mentioned || quotedSender == owner.UserName
+	}
+	if chatType == "group" && msg.HasFile() && !mentioned {
+		return
 	}
 	files := []map[string]string{}
 	fileError := false
@@ -129,7 +143,7 @@ func dispatchChatCommand(msg *openwechat.Message, text string) {
 		"sender":      sender,
 		"chat_id":     chatID,
 		"chat_type":   chatType,
-		"mentioned":   msg.IsAt(),
+		"mentioned":   mentioned,
 		"quote":       quote,
 		"plain_text":  true,
 		"provider":    os.Getenv("MAILFLOW_PROVIDER"),
