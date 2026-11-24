@@ -5,12 +5,33 @@ from mailflow.mail_body import (
     html_to_text,
     mail_body_markdown,
     mail_body_text,
+    markdown_to_text,
     readable_markdown,
 )
 from mailflow.ocr import searchable_mail_text
 from mailflow_testkit.fakes import make_mail
 from rich.console import Console
 from rich.markdown import Markdown
+
+
+def test_markdown_becomes_readable_chat_text() -> None:
+    source = (
+        "## 查询结果\n\n找到 **3 封邮件**，其中 *1 封* 较重要。\n\n"
+        "- 发件人：`Alice`\n- 主题：[查看发票](https://example.com/invoice)\n\n"
+        "> 请先确认附件。\n\n"
+        "| 日期 | 事项 |\n| --- | --- |\n| 今天 | 回复 |\n\n"
+        "保留 snake_case 和 `__init__`。\n```python\nprint('__init__')\n```"
+    )
+
+    plain = markdown_to_text(source)
+
+    assert plain == (
+        "查询结果\n\n找到 3 封邮件，其中 1 封 较重要。\n\n"
+        "• 发件人：Alice\n• 主题：查看发票 (https://example.com/invoice)\n\n"
+        "请先确认附件。\n\n日期：今天 · 事项：回复\n\n"
+        "保留 snake_case 和 __init__。\nprint('__init__')"
+    )
+    assert not any(marker in plain for marker in ("**", "##", "```", "| --- |", "[查看"))
 
 
 def test_html_body_keeps_reading_structure_links_and_literal_text() -> None:

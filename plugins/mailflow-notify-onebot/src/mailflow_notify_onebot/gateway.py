@@ -588,6 +588,7 @@ class _OneBotEventBridge(OwnedListener):
                 "instance_id": self._instance_id,
                 "request_id": str(event.get("message_id") or ""),
                 "mentioned": mentioned,
+                "plain_text": True,
             },
         ):
             if len(chunks) > 1 and await self._send_forward(chunks, message_type, chat_id, user_id):

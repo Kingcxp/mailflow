@@ -223,7 +223,14 @@ async def test_onebot_mentions_reach_assistant_in_array_and_string_messages() ->
             options={"admins": ["42"], "send_interval_seconds": 0},
         )
     ]
-    query = AsyncMock(return_value=SmartActionResult(final_text="Found your mail."))
+    query = AsyncMock(
+        return_value=SmartActionResult(
+            final_text=(
+                "## 找到邮件\n\n共有 **3 封**：\n"
+                "- [查看发票](https://example.com/invoice)\n- *按日期排序*"
+            )
+        )
+    )
     service.smart_action = query
     bot = BotServer(service)
     onebot = _Recorder()
@@ -256,7 +263,10 @@ async def test_onebot_mentions_reach_assistant_in_array_and_string_messages() ->
             assert query.await_args.args[0] == "Find [invoice] & receipt"
             assert onebot.requests[-1][1] == {
                 "group_id": 123,
-                "message": "Found your mail.",
+                "message": (
+                    "找到邮件\n\n共有 3 封：\n"
+                    "• 查看发票 (https://example.com/invoice)\n• 按日期排序"
+                ),
             }
         count = len(onebot.requests)
         for number, text in enumerate(

@@ -326,6 +326,86 @@ def readable_markdown(text: str, *, preserve_lines: bool = False) -> str:
     return text
 
 
+def markdown_to_text(text: str) -> str:
+    """Turn common Markdown formatting into readable plain text for chats."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\xa0", " ")
+    code: list[str] = []
+
+    def protect(value: str) -> str:
+        index = len(code)
+        code.append(value)
+        return f"\x00MAILFLOWCODE{index}\x00"
+
+    def code_block(match: re.Match[str]) -> str:
+        return protect(match.group("body").rstrip("\n"))
+
+    text = re.sub(
+        r"(?ms)^[ \t]{0,3}(?P<fence>`{3,}|~{3,})[^\n]*\n(?P<body>.*?)(?:^[ \t]{0,3}(?P=fence)[`~]*[ \t]*$|\Z)",
+        code_block,
+        text,
+    )
+    text = re.sub(r"(?<!`)`+([^`\n]+)`+", lambda match: protect(match.group(1)), text)
+
+    lines = text.split("\n")
+
+    def table_cells(line: str) -> list[str] | None:
+        if "|" not in line:
+            return None
+        row = line.strip().strip("|")
+        cells = [cell.strip() for cell in row.split("|")]
+        return cells if len(cells) > 1 else None
+
+    plain_lines: list[str] = []
+    index = 0
+    while index < len(lines):
+        headers = table_cells(lines[index])
+        separator = table_cells(lines[index + 1]) if index + 1 < len(lines) else None
+        if headers and separator and all(re.fullmatch(r":?-{3,}:?", cell) for cell in separator):
+            index += 2
+            while index < len(lines):
+                cells = table_cells(lines[index])
+                if not cells:
+                    break
+                fields = [
+                    f"{header}：{value}"
+                    for header, value in zip(headers, cells, strict=False)
+                    if header and value
+                ]
+                plain_lines.append(" · ".join(fields) if fields else " · ".join(cells))
+                index += 1
+            continue
+        plain_lines.append(lines[index])
+        index += 1
+    text = "\n".join(plain_lines)
+
+    def image_label(match: re.Match[str]) -> str:
+        return match.group(1).strip() or "图片"
+
+    def link_label(match: re.Match[str]) -> str:
+        label = match.group(1).strip()
+        destination = (match.group(2) or match.group(3) or "").strip()
+        if not destination or label.casefold() == destination.casefold():
+            return label or destination
+        return f"{label} ({destination})" if label else destination
+
+    text = re.sub(r"!\[([^\]]*)\]\(\s*(?:<([^>]+)>|([^\s)]+))[^)]*\)", image_label, text)
+    text = re.sub(r"\[([^\]]+)\]\(\s*(?:<([^>]+)>|([^\s)]+))[^)]*\)", link_label, text)
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"(?<!\w)__(.+?)__(?!\w)", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"~~(.*?)~~", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", text)
+    text = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", text)
+    text = re.sub(r"\\([\\`*_{}\[\]()#+.!|>~-])", r"\1", text)
+    text = re.sub(r"(?m)^[ \t]{0,3}#{1,6}[ \t]+", "", text)
+    text = re.sub(r"(?m)^([ \t]*)>[ \t]?", r"\1", text)
+    text = re.sub(r"(?m)^([ \t]*)[-*+][ \t]+", r"\1• ", text)
+    text = re.sub(r"(?m)^[ \t]*(?:(?:-{3,})|(?:\*{3,})|(?:_{3,}))[ \t]*$", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    for index, value in enumerate(code):
+        text = text.replace(f"\x00MAILFLOWCODE{index}\x00", value)
+    return text.strip()
+
+
 def mail_body_markdown(mail: MailMessage) -> str:
     """Use the original HTML formatting, falling back to the stored text body."""
     if mail.body_html:

@@ -24,6 +24,7 @@ import httpx
 
 from mailflow.i18n import I18n
 from mailflow.lifecycle import OwnedListener
+from mailflow.mail_body import markdown_to_text
 
 logger = logging.getLogger("mailflow.bot_server")
 
@@ -41,6 +42,16 @@ class BotServer(OwnedListener):
     def __init__(self, service: MailFlowService) -> None:
         super().__init__()
         self._service = service
+
+    def _reply_chunks(
+        self, reply: str | list[str] | None, *, plain_text: bool = False
+    ) -> str | list[str] | None:
+        if plain_text:
+            if isinstance(reply, list):
+                reply = [markdown_to_text(page) for page in reply]
+            elif reply is not None:
+                reply = markdown_to_text(reply)
+        return self._service.chat_reply_chunks(reply)
 
     async def start(self) -> None:
         if self.running:
@@ -158,7 +169,9 @@ class BotServer(OwnedListener):
                         mentioned=payload.get("mentioned") is True,
                         on_waiting=lambda: frame_state.update(progress=True),
                     ):
-                        chunks = self._service.chat_reply_chunks(reply)
+                        chunks = self._reply_chunks(
+                            reply, plain_text=payload.get("plain_text") is True
+                        )
                         for chunk in chunks if isinstance(chunks, list) else [chunks]:
                             if not chunk:
                                 continue
@@ -190,7 +203,9 @@ class BotServer(OwnedListener):
                 # Gateway bridges send every returned page in order. Do not
                 # truncate here: platform-specific clipping silently loses
                 # confirmation tokens and command details.
-                payload_reply: Any = self._service.chat_reply_chunks(reply)
+                payload_reply: Any = self._reply_chunks(
+                    reply, plain_text=payload.get("plain_text") is True
+                )
                 await self._respond(writer, 200, {"reply": payload_reply})
             else:
                 await self._respond(writer, 404, {"reply": ""})
