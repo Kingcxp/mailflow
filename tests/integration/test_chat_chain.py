@@ -26,9 +26,10 @@ from mailflow_notify_onebot.gateway import (  # pyright: ignore[reportPrivateUsa
 class _Recorder:
     """Minimal HTTP server recording requests and answering canned replies."""
 
-    def __init__(self, reply: str = "") -> None:
+    def __init__(self, reply: str = "", responses: dict[str, Any] | None = None) -> None:
         self.requests: list[tuple[str, dict[str, Any]]] = []
         self._reply = reply
+        self._responses = responses or {}
         self._server: asyncio.AbstractServer | None = None
         self.port = 0
 
@@ -43,7 +44,11 @@ class _Recorder:
             body = await reader.read(65536)
             payload: dict[str, Any] = json.loads(body.decode("utf-8", "replace") or "{}")
             self.requests.append((parts[1] if len(parts) > 1 else "", payload))
-            resp = json.dumps({"reply": self._reply} if self._reply else {"ok": True}).encode()
+            resp = json.dumps(
+                self._responses.get(
+                    parts[1], {"reply": self._reply} if self._reply else {"ok": True}
+                )
+            ).encode()
             writer.write(
                 b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                 + f"Content-Length: {len(resp)}\r\nConnection: close\r\n\r\n".encode()
@@ -147,6 +152,7 @@ async def test_full_chat_command_chain_replies() -> None:
             options={"admins": ["404291187"], "send_interval_seconds": 0},
         )
     ]
+    await service.subscriptions.add("napcat", "napcat-test", "565424593")
     service.bot_server = None  # type: ignore[attr-defined]
     from mailflow.bot_server import BotServer
 
@@ -223,6 +229,7 @@ async def test_onebot_mentions_reach_assistant_in_array_and_string_messages() ->
             options={"admins": ["42"], "send_interval_seconds": 0},
         )
     ]
+    await service.subscriptions.add("napcat", "qq-assistant", "123")
     query = AsyncMock(
         return_value=SmartActionResult(
             final_text=(
@@ -233,7 +240,18 @@ async def test_onebot_mentions_reach_assistant_in_array_and_string_messages() ->
     )
     service.smart_action = query
     bot = BotServer(service)
-    onebot = _Recorder()
+    onebot = _Recorder(
+        responses={
+            "/get_msg": {
+                "status": "ok",
+                "retcode": 0,
+                "data": {
+                    "sender": {"user_id": 100},
+                    "message": [{"type": "text", "data": {"text": "已收到 agenda.pdf"}}],
+                },
+            }
+        }
+    )
     await bot.start()
     await onebot.start()
     bridge = _OneBotEventBridge("qq-assistant", 0, bot.url, onebot.url)
@@ -241,6 +259,14 @@ async def test_onebot_mentions_reach_assistant_in_array_and_string_messages() ->
         event: dict[str, Any] = dict(
             post_type="message", message_type="group", self_id=100, user_id=42, group_id=123
         )
+        await bridge._dispatch(  # pyright: ignore[reportPrivateUsage]
+            {
+                **event,
+                "message_id": "unmentioned-file",
+                "message": [{"type": "image", "data": {"file": "unused.jpg"}}],
+            }
+        )
+        assert query.await_count == 0 and not onebot.requests
         requests = [
             {
                 "message": [
@@ -285,10 +311,171 @@ async def test_onebot_mentions_reach_assistant_in_array_and_string_messages() ->
         )
         assert query.await_count == 3
         assert onebot.requests[-1][1]["message"] == service.t("permission.denied")
+        await bridge._dispatch(  # pyright: ignore[reportPrivateUsage]
+            {
+                **event,
+                "message_id": "quoted",
+                "message": [
+                    {"type": "reply", "data": {"id": "77"}},
+                    {"type": "text", "data": {"text": "解释这个附件"}},
+                ],
+            }
+        )
+        assert query.await_count == 4 and query.await_args is not None
+        assert "agenda.pdf" in str(query.await_args.kwargs["conversation"])
     finally:
         await bridge.stop()
         await bot.stop()
         await onebot.stop()
+
+
+@pytest.mark.asyncio
+async def test_unsubscribed_group_is_silent_except_admin_subscribe() -> None:
+    from mailflow.config import NotifierConfig
+
+    service = _service()
+    service.config.notifiers = [
+        NotifierConfig(
+            notifier_id="bot-1",
+            provider="onebot",
+            options={
+                "admins": ["admin"],
+                "http_url": "http://localhost:5700",
+                "targets": ["group:group-1"],
+            },
+        )
+    ]
+    group: dict[str, Any] = dict(
+        provider="onebot", instance_id="bot-1", chat_id="group-1", chat_type="group"
+    )
+
+    assert (
+        await service.command_dispatch(
+            "#mailflow status", sender="reader", mentioned=False, **group
+        )
+        is None
+    )
+    assert not await service.chat_message_allowed(
+        text="#mailflow status", sender="reader", mentioned=False, **group
+    )
+    assert (
+        await service.command_dispatch("帮我查一下邮件", sender="admin", mentioned=True, **group)
+        is None
+    )
+    assert await service.chat_message_allowed(
+        text="#mailflow subscribe", sender="admin", mentioned=False, **group
+    )
+    subscribed = await service.command_dispatch(
+        "#mailflow subscribe", sender="admin", mentioned=False, **group
+    )
+    assert subscribed == service.t("chat.subscribed")
+    assert await service.subscriptions.subscribers("onebot", "bot-1") == ["group-1"]
+    assert not await service.chat_message_allowed(
+        text="", sender="reader", mentioned=False, has_files=True, **group
+    )
+    assert (
+        await service.command_dispatch(
+            "#mailflow status", sender="reader", mentioned=False, **group
+        )
+        is not None
+    )
+
+    await service.command_dispatch("#mailflow unsubscribe", sender="admin", **group)
+    assert await service.command_dispatch("#mailflow status", sender="admin", **group) is None
+    await service.storage.set_preference(
+        "gateway.sub.napcat.bot-1", json.dumps({"subscribers": ["group-1"]})
+    )
+    assert await service.subscriptions.subscribers("napcat", "bot-1") == []
+
+
+@pytest.mark.asyncio
+async def test_uploaded_file_ack_read_and_owner_scope() -> None:
+    from dataclasses import replace
+
+    from mailflow.chat_files import encoded_file, receive_files
+    from mailflow.permissions import permission_scope
+
+    service = _service()
+    service.config.notifiers = [
+        NotifierConfig(notifier_id="bot", provider="onebot", options={"admins": ["admin"]})
+    ]
+    identity: dict[str, Any] = dict(
+        sender="admin", provider="onebot", instance_id="bot", chat_id="room", chat_type="group"
+    )
+    content = "read this file\n" * 1500
+    payload = {
+        **identity,
+        "files": [encoded_file("agenda.txt", content.encode())],
+        "request_id": "upload",
+    }
+    assert await receive_files(service, payload) == []
+    await service.subscriptions.add("onebot", "bot", "room")
+    assert await receive_files(service, payload) == []
+    payload["mentioned"] = True
+    references = await receive_files(service, payload)
+    assert await receive_files(service, payload) == references
+    replies = [
+        reply
+        async for reply in service.chat_command_stream(
+            "",
+            **identity,
+            mentioned=True,
+            attachments=references,
+        )
+    ]
+
+    assert replies == [service.t("chat.attachments_received", files="agenda.txt")]
+    assert references[0]["file_id"] not in str(replies)
+    context = service.permission_context(
+        **{key: value for key, value in identity.items() if key != "chat_type"}
+    )
+    with permission_scope(context):
+        assert len(await service.workspace_call("files")) == 1
+        first, operation = await service.assistant_tool(
+            "read_attachment", {"file_id": references[0]["file_id"]}
+        )
+        page = json.loads(first)
+        assert operation is None and page["next_offset"] == 16000
+        rest, _ = await service.assistant_tool(
+            "read_attachment", {"file_id": references[0]["file_id"], "offset": page["next_offset"]}
+        )
+        assert page["text"] + json.loads(rest)["text"] == content.strip()
+    with permission_scope(replace(context, chat_id="another-room")), pytest.raises(ValueError):
+        await service.assistant_tool("read_attachment", {"file_id": references[0]["file_id"]})
+
+
+@pytest.mark.asyncio
+async def test_reply_quote_reaches_assistant_and_empty_quote_has_clear_fallback() -> None:
+    from unittest.mock import AsyncMock
+
+    from mailflow.domain import SmartActionResult
+
+    service = _service()
+    service.config.notifiers = [
+        NotifierConfig(notifier_id="bot-1", provider="onebot", options={"admins": ["admin"]})
+    ]
+    query = AsyncMock(return_value=SmartActionResult(final_text="找到了。"))
+    service.smart_action = query
+    identity: dict[str, Any] = dict(
+        sender="admin",
+        provider="onebot",
+        instance_id="bot-1",
+        chat_id="admin",
+        chat_type="private",
+    )
+
+    await service.command_dispatch(
+        "帮我继续处理",
+        quote={"message_id": "42", "text": "已收到附件：agenda.pdf"},
+        **identity,
+    )
+    assert query.await_args is not None
+    assert "agenda.pdf" in str(query.await_args.kwargs["conversation"])
+    query.reset_mock()
+    assert await service.command_dispatch(
+        "解释这条消息", quote={"message_id": "43", "text": ""}, **identity
+    ) == service.t("chat.quote_unavailable")
+    query.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -539,9 +726,14 @@ async def test_natural_chat_uses_admin_identity_and_one_owner_confirmation() -> 
             pending=[
                 PendingOperation(
                     tool="delete_mail",
-                    arguments={"record_ids": ["a"]},
+                    arguments={"record_ids": ["ads"]},
                     summary_key="assistant.done",
-                )
+                ),
+                PendingOperation(
+                    tool="delete_mail",
+                    arguments={"record_ids": ["github"]},
+                    summary_key="assistant.done",
+                ),
             ],
         )
     )
@@ -551,6 +743,8 @@ async def test_natural_chat_uses_admin_identity_and_one_owner_confirmation() -> 
     identity: dict[str, Any] = dict(
         provider="telegram", instance_id="one", chat_id="room", chat_type="group", sender="admin"
     )
+    await service.subscriptions.add("telegram", "one", "room")
+    await service.subscriptions.add("telegram", "one", "other")
     assert await service.command_dispatch("remove this", **identity) is None
     assert await service.command_dispatch("/anotherbot go", mentioned=True, **identity) is None
     denied = await service.command_dispatch(
@@ -558,7 +752,17 @@ async def test_natural_chat_uses_admin_identity_and_one_owner_confirmation() -> 
     )
     assert denied == service.t("permission.denied")
     query.assert_not_awaited()
-    await service.command_dispatch("remove this", mentioned=True, **identity)
+    response = await service.command_dispatch(
+        "帮我清理掉所有的广告邮件，以及所有来自github的邮件",
+        mentioned=True,
+        **identity,
+    )
+    assert (
+        isinstance(response, str)
+        and "confirm " in response.casefold()
+        and "cancel " in response.casefold()
+    )
+    assert "1. " in response and "2. " in response
     actor = service._chat_actor("telegram", "one", "room", "admin")  # pyright: ignore[reportPrivateUsage]
     token = service._assistant_confirmations[actor][0]  # pyright: ignore[reportPrivateUsage]
     wrong = await service.command_dispatch(
@@ -571,7 +775,10 @@ async def test_natural_chat_uses_admin_identity_and_one_owner_confirmation() -> 
     await service.command_dispatch(f"confirm {token}", mentioned=True, **identity)
     apply.assert_awaited_once()
     assert apply.await_args is not None and apply.await_args.args[0] == "plan"
-    assert apply.await_args.args[1][0].arguments == {"record_ids": ["a"]}
+    assert [operation.arguments for operation in apply.await_args.args[1]] == [
+        {"record_ids": ["ads"]},
+        {"record_ids": ["github"]},
+    ]
 
 
 async def test_console_plain_text_quote_confirmation_and_cancellation() -> None:

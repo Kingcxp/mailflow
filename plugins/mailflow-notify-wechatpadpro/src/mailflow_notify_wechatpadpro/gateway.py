@@ -40,6 +40,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
+from xml.etree import ElementTree
 
 import httpx
 from mailflow.bot_server import command_replies
@@ -690,16 +691,45 @@ class _WebhookBridge(OwnedListener):
         # Group messages arrive as "wxid:\ncontent" — strip the sender prefix.
         if ":@" in from_user or (from_user.endswith("@chatroom") and ":\n" in content):
             _, _, content = content.partition(":\n")
-        has_file = push_type in (3, "3", 49, "49")
-        if not has_file and (not content or push_type not in (None, 1, "1")):
+        app_message = None
+        if push_type in (49, "49") and content.lstrip().startswith("<"):
+            try:
+                root = ElementTree.fromstring(content)
+                app_message = root if root.tag == "appmsg" else root.find("appmsg")
+            except ElementTree.ParseError:
+                logger.debug("wechatpadpro %s received unreadable app message", self.instance_id)
+        quoted_message = app_message.find("refermsg") if app_message is not None else None
+        has_file = push_type in (3, "3") or (
+            push_type in (49, "49")
+            and (
+                (app_message is not None and app_message.findtext("type") == "6")
+                or bool(data.get("FileData") or data.get("FileUrl"))
+            )
+        )
+        if quoted_message is not None and app_message is not None:
+            content = app_message.findtext("title") or ""
+        if not has_file and (
+            not content or (push_type not in (None, 1, "1") and quoted_message is None)
+        ):
             return
         chat_type = "group" if from_user.endswith("@chatroom") else "private"
         sender = str(data.get("SenderUserName") or data.get("sender") or from_user)
         if chat_type == "group" and ":\n" in original and not data.get("SenderUserName"):
             sender = original.partition(":\n")[0]
+        mentioned = bool(data.get("ToUserName") or data.get("toUser")) and str(
+            data.get("ToUserName") or data.get("toUser")
+        ) in str(
+            data.get("AtUserList")
+            or data.get("atUserList")
+            or data.get("MsgSource")
+            or data.get("msgSource")
+            or ""
+        )
         files: list[dict[str, str]] = []
         file_error = False
         if has_file:
+            if chat_type == "group" and not mentioned:
+                return
             from mailflow.chat_files import download_file, encoded_file
 
             content = str(data.get("Caption") or "")
@@ -724,6 +754,35 @@ class _WebhookBridge(OwnedListener):
                     )
             except Exception:
                 file_error = True
+        quote_data: Any = (
+            data.get("Quote")
+            or data.get("quote")
+            or data.get("ReferMessage")
+            or data.get("referMessage")
+            or data.get("ContextInfo")
+            or data.get("contextInfo")
+        )
+        quote = None
+        if quoted_message is not None:
+            quote = {
+                "message_id": quoted_message.findtext("svrid") or "",
+                "text": quoted_message.findtext("content") or "",
+            }
+        elif isinstance(quote_data, dict):
+            quote_data = cast(dict[str, Any], quote_data)
+            quote = {
+                "message_id": str(
+                    quote_data.get("MsgId") or quote_data.get("msgId") or quote_data.get("id") or ""
+                ),
+                "text": str(
+                    quote_data.get("Content")
+                    or quote_data.get("content")
+                    or quote_data.get("Text")
+                    or quote_data.get("text")
+                    or ""
+                ),
+                "filename": str(quote_data.get("FileName") or quote_data.get("fileName") or ""),
+            }
         async for pages in command_replies(
             self.bot_url,
             {
@@ -737,15 +796,9 @@ class _WebhookBridge(OwnedListener):
                 "request_id": str(
                     data.get("MsgId") or data.get("NewMsgId") or data.get("msgId") or ""
                 ),
-                "mentioned": bool(data.get("ToUserName") or data.get("toUser"))
-                and str(data.get("ToUserName") or data.get("toUser"))
-                in str(
-                    data.get("AtUserList")
-                    or data.get("atUserList")
-                    or data.get("MsgSource")
-                    or data.get("msgSource")
-                    or ""
-                ),
+                "mentioned": mentioned,
+                "quote": quote,
+                "plain_text": True,
             },
         ):
             if not pages:

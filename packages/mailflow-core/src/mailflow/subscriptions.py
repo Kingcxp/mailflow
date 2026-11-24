@@ -14,6 +14,8 @@ import json
 import logging
 from typing import Any, Protocol
 
+from mailflow.permissions import normalize_provider
+
 logger = logging.getLogger("mailflow.subscriptions")
 
 _PREF_PREFIX = "gateway.sub."
@@ -32,18 +34,12 @@ class Subscriptions:
 
     @staticmethod
     def _key(provider: str, instance_id: str) -> str:
-        return f"{_PREF_PREFIX}{provider}.{instance_id}"
+        return f"{_PREF_PREFIX}{normalize_provider(provider)}.{instance_id}"
 
     async def subscribers(self, provider: str, instance_id: str) -> list[str]:
         """Chat ids currently subscribed to this instance."""
-        raw = await self._storage.get_preference(self._key(provider, instance_id))
-        if not raw:
-            return []
-        try:
-            data = json.loads(raw)
-            return [str(c) for c in data.get("subscribers", [])]
-        except (ValueError, AttributeError):
-            return []
+        data = await self.all(provider, instance_id)
+        return list(dict.fromkeys(str(c) for c in data.get("subscribers", [])))
 
     async def add(self, provider: str, instance_id: str, chat_id: str) -> bool:
         """Subscribe a chat; True when newly added."""
@@ -71,6 +67,19 @@ class Subscriptions:
 
     async def all(self, provider: str, instance_id: str) -> dict[str, Any]:
         raw = await self._storage.get_preference(self._key(provider, instance_id))
+        if raw is None and normalize_provider(provider) == "onebot":
+            # Read old bridge names until the first canonical write. An explicit
+            # unsubscribe writes the canonical list, so aliases cannot revive it.
+            subscribers: list[str] = []
+            for alias in ("napcat", "OneBot V11", "OneBot V12", "aiocqhttp"):
+                legacy = await self._storage.get_preference(f"{_PREF_PREFIX}{alias}.{instance_id}")
+                if not legacy:
+                    continue
+                try:
+                    subscribers.extend(str(c) for c in json.loads(legacy).get("subscribers", []))
+                except (ValueError, AttributeError):
+                    logger.warning("invalid legacy subscription list for %s", alias)
+            return {"subscribers": list(dict.fromkeys(subscribers))}
         if not raw:
             return {"subscribers": []}
         try:

@@ -225,6 +225,8 @@ async def test_dispatch_forwards_the_command_payload(
             "instance_id": "tg-1",
             "request_id": "5",
             "mentioned": False,
+            "quote": None,
+            "plain_text": True,
             "stream": True,
         }
     ]
@@ -263,6 +265,35 @@ async def test_dispatch_ignores_self_and_non_text_messages(
         }
     )
     assert _StubClient.posts == []
+    await bridge._handle_update(  # pyright: ignore[reportPrivateUsage]
+        {
+            "update_id": 4,
+            "message": {
+                "chat": {"id": 1, "type": "supergroup"},
+                "from": {"id": 9},
+                "document": {"file_id": "ignore-this-unmentioned-file"},
+            },
+        }
+    )
+    assert _StubClient.posts == []
+    await bridge._handle_update(  # pyright: ignore[reportPrivateUsage]
+        {
+            "update_id": 5,
+            "message": {
+                "text": "explain this",
+                "chat": {"id": 1, "type": "supergroup"},
+                "from": {"id": 9},
+                "reply_to_message": {
+                    "message_id": 42,
+                    "text": "Received agenda.pdf",
+                    "from": {"id": 7},
+                },
+            },
+        }
+    )
+    assert _StubClient.posts[-1]["text"] == "explain this"
+    assert _StubClient.posts[-1]["quote"]["text"] == "Received agenda.pdf"
+    assert _StubClient.posts[-1]["mentioned"] is True
 
 
 @pytest.mark.asyncio

@@ -314,6 +314,8 @@ async def test_webhook_bridge_sends_every_bot_reply_page(
                 "provider": "wechatpadpro",
                 "instance_id": "wechat-1",
                 "mentioned": False,
+                "quote": None,
+                "plain_text": True,
                 "stream": True,
                 "request_id": "",
             }
@@ -361,6 +363,26 @@ async def test_webhook_bridge_sends_every_bot_reply_page(
         {"fromUser": "wxid-bot", "content": "/mailflow status", "msgType": 1, "isSelfMsg": True}
     )
     assert not _BridgeClient.calls
+    await webhook({"Data": {"FromUserName": "room@chatroom", "MsgType": 3, "ImageUrl": "unused"}})
+    assert not _BridgeClient.calls
+    await webhook(
+        {
+            "Data": {
+                "FromUserName": "room@chatroom",
+                "SenderUserName": "wxid-member",
+                "ToUserName": "wxid-bot",
+                "AtUserList": "wxid-bot",
+                "MsgType": 49,
+                "Content": "<msg><appmsg><title>解释这个附件</title><type>57</type>"
+                "<refermsg><svrid>42</svrid><content>已收到 agenda.pdf</content></refermsg>"
+                "</appmsg></msg>",
+            }
+        }
+    )
+    forwarded = _BridgeClient.calls[0][1]["json"]
+    assert forwarded["text"] == "解释这个附件"
+    assert forwarded["quote"] == {"message_id": "42", "text": "已收到 agenda.pdf"}
+    assert "files" not in forwarded and forwarded["mentioned"] is True
 
 
 class _NotifierResponse:

@@ -207,7 +207,9 @@ class TelegramBridge:
         mentioned = False
         encoded = text.encode("utf-16-le")
         removals: list[tuple[int, int]] = []
-        for raw_entity in cast(list[Any], message.get("entities") or []):
+        for raw_entity in cast(
+            list[Any], message.get("entities") or message.get("caption_entities") or []
+        ):
             entity = as_object(raw_entity)
             start, length = int(entity.get("offset") or 0), int(entity.get("length") or 0)
             token = encoded[start * 2 : (start + length) * 2].decode("utf-16-le")
@@ -226,6 +228,20 @@ class TelegramBridge:
             and command_name.split("@", 1)[1].casefold()
             != as_text(self.identity.get("username")).casefold()
         ):
+            return
+        quoted = as_object(message.get("reply_to_message"))
+        quote = None
+        if quoted:
+            mentioned = mentioned or bool(
+                bot_id and as_text(as_object(quoted.get("from")).get("id")) == bot_id
+            )
+            quoted_text = as_text(quoted.get("text") or quoted.get("caption"))
+            quote = {
+                "message_id": as_text(quoted.get("message_id")),
+                "text": quoted_text,
+                "filename": as_text(as_object(quoted.get("document")).get("file_name")),
+            }
+        if chat_type == "group" and media and not mentioned:
             return
         files: list[dict[str, str]] = []
         file_error = False
@@ -258,6 +274,8 @@ class TelegramBridge:
                 "instance_id": self._instance_id,
                 "request_id": str(raw_id or ""),
                 "mentioned": mentioned,
+                "quote": quote,
+                "plain_text": True,
             },
         ):
             for page in reply:
@@ -286,7 +304,14 @@ class TelegramBridge:
                         type(exc).__name__,
                     )
 
-    async def _dispatch(self, text: str, sender: str, chat_id: str, chat_type: str) -> list[str]:
+    async def _dispatch(
+        self,
+        text: str,
+        sender: str,
+        chat_id: str,
+        chat_type: str,
+        quote: dict[str, str] | None = None,
+    ) -> list[str]:
         """POST one inbound message to the MailFlow command endpoint."""
         if not self._bot_url:
             return []
@@ -297,6 +322,8 @@ class TelegramBridge:
             "chat_type": chat_type,
             "provider": "telegram",
             "instance_id": self._instance_id,
+            "quote": quote,
+            "plain_text": True,
         }
         pages: list[str] = []
         async for reply in command_replies(self._bot_url, payload):

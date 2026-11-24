@@ -646,9 +646,7 @@ class ConsoleInbox:
                 role="user",
                 kind="file",
                 markdown=False,
-                text=self.service.t(
-                    "console.uploaded", name=reference["filename"], id=reference["file_id"]
-                ),
+                text=self.service.t("console.uploaded", name=reference["filename"]),
             )
         )
         return reference

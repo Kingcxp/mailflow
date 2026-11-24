@@ -793,9 +793,14 @@ async def test_mailflow_command_crash_returns_error_reply() -> None:
     a running instance with no visible trace — bot_server logged the
     failure at DEBUG) now yields a visible error reply and a logged
     traceback."""
-    from mailflow.config import MailFlowConfig
+    from mailflow.config import MailFlowConfig, NotifierConfig
 
     cfg = MailFlowConfig()
+    cfg.notifiers = [
+        NotifierConfig(
+            notifier_id="qq-bot-1", provider="onebot", options={"targets": ["group:888"]}
+        )
+    ]
     service = commands_service(cfg)
     service.config = cfg
     from mailflow.i18n import I18n as _I18n
@@ -803,7 +808,12 @@ async def test_mailflow_command_crash_returns_error_reply() -> None:
     service.i18n = _I18n()
 
     class BrokenSubscriptions(Subscriptions):
+        calls = 0
+
         async def subscribers(self, provider: str, instance_id: str) -> list[str]:
+            self.calls += 1
+            if self.calls == 1:
+                return ["888"]
             raise RuntimeError("subscription storage unavailable")
 
     service.subscriptions = BrokenSubscriptions(service.storage)
@@ -854,7 +864,7 @@ async def test_mailflow_hourly_toggle() -> None:
             return True
 
         async def subscribers(self, p: str, i: str) -> list[str]:
-            return []
+            return ["888"]
 
     service.subscriptions = FakeSubs()  # pyright: ignore[reportAttributeAccessIssue]
 
@@ -965,7 +975,7 @@ async def test_mailflow_subscribe_requires_admin() -> None:
         provider="napcat",
         instance_id="napcat-1",
     )
-    assert reply is not None and "administrator" in reply
+    assert reply is None
 
     # admin can subscribe; targets synced into the notifier config
     reply = await service.command_dispatch(

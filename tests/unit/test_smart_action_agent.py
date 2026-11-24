@@ -231,8 +231,10 @@ class TestReadLoop:
         ("删除匹配的邮件", True),
         ("把邮件删掉", True),
         ("把邮件移入回收站", True),
+        ("帮我清理掉所有的广告邮件，以及所有来自github的邮件", True),
         ("do not delete these messages", False),
         ("不要删除这些邮件", False),
+        ("不要清理掉这些邮件", False),
     ],
 )
 def test_explicit_delete_intent_uses_only_approved_terms(instruction: str, allowed: bool) -> None:
@@ -258,6 +260,37 @@ class TestStagedWrites:
         assert result.pending[0].summary_key
         assert await service.count_mails() == 2  # the model never deleted anything
         assert await service.list_actions_all() == []
+
+    async def test_chinese_multi_group_delete_request_stages_both_groups(self) -> None:
+        router = ScriptedRouter(
+            [
+                call("find_mail", {"contains": "Advertisement"}),
+                call("delete_mail", {"record_ids": ["ad-1"]}, call_id="c2"),
+                call("find_mail", {"contains": "GitHub"}, call_id="c3"),
+                call("delete_mail", {"record_ids": ["github-1"]}, call_id="c4"),
+                text("已找到两组邮件，等待确认。"),
+            ]
+        )
+        service = make_service(router)
+        await seed(service)
+        storage = cast(Any, service.storage)
+        for record_id, subject in (("ad-1", "Advertisement"), ("github-1", "GitHub CI")):
+            await storage.save_mail(
+                MailRecord(
+                    record_id=record_id,
+                    mail=_mail(record_id, subject=subject, body="Notification"),
+                    auto_urgency=Urgency.INFO,
+                )
+            )
+
+        result = await run_agent(
+            service,
+            cast(Any, router),
+            "帮我清理掉所有的广告邮件，以及所有来自github的邮件",
+        )
+
+        assert [pending.record_ids for pending in result.pending] == [["ad-1"], ["github-1"]]
+        assert await service.count_mails() == 4
 
     async def test_non_delete_instruction_cannot_stage_mail_deletion(self) -> None:
         router = ScriptedRouter(

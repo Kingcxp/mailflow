@@ -92,13 +92,12 @@ class Main(Star):
     async def mailflow(self, event: AstrMessageEvent):
         """Dispatch ``/mailflow <line>`` chat messages to the shared router."""
         if _router is None:
-            from mailflow.i18n import I18n
-
-            yield event.plain_result(I18n().t("chat.router_missing"))
             return
         line = (event.message_str or "").strip()
-        if line.startswith("/mailflow"):
-            line = line[len("/mailflow"):].strip()
+        prefix = _service.command_prefix()
+        word, _, tail = line.partition(" ")
+        if line.startswith(prefix) and word[len(prefix):].split("@", 1)[0].casefold() == "mailflow":
+            line = tail.strip()
         elif line.startswith("mailflow "):
             line = line[len("mailflow "):].strip()
         else:
@@ -107,14 +106,31 @@ class Main(Star):
         group_id = str(event.get_group_id() or "")
         mentioned = any(isinstance(part, At) and str(part.qq) == str(event.message_obj.self_id)
                         for part in event.get_messages())
-        if line is None and group_id and not mentioned:
-            return
-        from mailflow.chat_files import framework_files, receive_files, file_sender_scope, framework_send_file
+        from mailflow.chat_files import (
+            file_sender_scope,
+            framework_files,
+            framework_has_files,
+            framework_quote,
+            framework_send_file,
+            receive_files,
+        )
         from mailflow.errors import error_text
 
-        payload = {"text": event.message_str.strip(), "sender": sender, "provider": str(event.platform_meta.name), "instance_id": str(event.platform_meta.id), "chat_id": group_id or sender, "request_id": str(getattr(event.message_obj, "message_id", "") or "")}
+        quote = await framework_quote(event.get_messages())
+        mentioned = mentioned or bool(quote and quote.get("sender_id") == str(event.message_obj.self_id))
+        if line is None and group_id and not mentioned:
+            return
+
+        messages = event.get_messages()
+        if group_id and not mentioned and framework_has_files(messages):
+            return
+        payload = {"text": event.message_str.strip(), "sender": sender, "provider": str(event.platform_meta.name), "instance_id": str(event.platform_meta.id), "chat_id": group_id or sender, "chat_type": "group" if group_id else "private", "mentioned": mentioned, "request_id": str(getattr(event.message_obj, "message_id", "") or "")}
+        payload["text"] = prefix + "mailflow " + line if line is not None else payload["text"]
+        if not await _service.chat_message_allowed(text=payload["text"], sender=sender, provider=payload["provider"], instance_id=payload["instance_id"], chat_id=payload["chat_id"], chat_type=payload["chat_type"], mentioned=mentioned, has_files=framework_has_files(messages)):
+            return
         try:
-            payload["files"] = await framework_files(event.get_messages())
+            payload["quote"] = quote
+            payload["files"] = await framework_files(messages)
             await receive_files(_service, payload)
         except Exception as exc:
             yield event.plain_result(error_text(exc, _service.t))
@@ -123,7 +139,7 @@ class Main(Star):
             await framework_send_file(file, event=event)
         with file_sender_scope(send_managed):
             async for reply in _service.chat_command_stream(
-                _service.command_prefix() + "mailflow " + line if line is not None else payload["text"],
+                payload["text"],
                 sender=sender,
                 provider=str(event.platform_meta.name),
                 instance_id=str(event.platform_meta.id),
@@ -131,8 +147,10 @@ class Main(Star):
                 chat_type="group" if group_id else "private",
                 request_id=str(getattr(getattr(event, "message_obj", None), "message_id", "") or ""),
                 mentioned=mentioned,
+                quote=payload.get("quote"),
+                attachments=payload.get("attachment_refs"),
             ):
-                pages = _service.chat_reply_chunks(reply)
+                pages = _service.chat_reply_chunks(reply, plain_text=True)
                 for page in pages if isinstance(pages, list) else [pages]:
                     if page:
                         await _service.pace_bot(str(event.platform_meta.name), str(event.platform_meta.id))

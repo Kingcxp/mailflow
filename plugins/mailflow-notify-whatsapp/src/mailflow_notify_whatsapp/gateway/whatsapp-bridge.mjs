@@ -86,7 +86,7 @@ async function sendText(chatId, text) {
   await sock.sendMessage(chatId, { text })
 }
 
-async function dispatch(text, sender, chatId, chatType, requestId, mentioned = false, files = [], fileError = false) {
+async function dispatch(text, sender, chatId, chatType, requestId, mentioned = false, files = [], fileError = false, quote = null) {
   if (!BOT_URL) return
   try {
     const response = await fetch(BOT_URL, {
@@ -103,6 +103,8 @@ async function dispatch(text, sender, chatId, chatType, requestId, mentioned = f
         mentioned,
         files,
         file_error: fileError,
+        quote,
+        plain_text: true,
         stream: true,
       }),
     })
@@ -150,9 +152,17 @@ async function handleMessages(event) {
     if (!text && !media) continue
     const isGroup = chatId.endsWith('@g.us')
     const sender = isGroup ? (message.key && message.key.participant) || chatId : chatId
-    const context = message.message.extendedTextMessage?.contextInfo || {}
+    const context = inner.extendedTextMessage?.contextInfo || inner.imageMessage?.contextInfo || inner.documentMessage?.contextInfo || {}
     const ownId = (sock?.user?.id || '').replace(/:\d+@/, '@')
-    const mentioned = (context.mentionedJid || []).some(id => id.replace(/:\d+@/, '@') === ownId)
+    const mentioned = (context.mentionedJid || []).some(id => id.replace(/:\d+@/, '@') === ownId) || Boolean(ownId && context.participant?.replace(/:\d+@/, '@') === ownId)
+    if (isGroup && media && !mentioned) continue
+    const quotedMessage = context.quotedMessage ? unwrap(context.quotedMessage) : null
+    const quotedFile = quotedMessage?.documentMessage || quotedMessage?.imageMessage
+    const quote = context.stanzaId || quotedMessage ? {
+      message_id: context.stanzaId || '',
+      text: quotedMessage ? extractText(quotedMessage) : '',
+      filename: quotedFile?.fileName || '',
+    } : null
     const instruction = mentioned ? text.replace(/@\d+/g, '').trim() : text
     const files = []
     let fileError = false
@@ -169,7 +179,7 @@ async function handleMessages(event) {
         files.push({filename: media.fileName || 'image.jpg', content_type: media.mimetype || 'application/octet-stream', data: Buffer.concat(chunks).toString('base64')})
       } catch { fileError = true }
     }
-    dispatch(instruction, sender, chatId, isGroup ? 'group' : 'private', message.key && message.key.id, mentioned, files, fileError).catch((err) => {
+    dispatch(instruction, sender, chatId, isGroup ? 'group' : 'private', message.key && message.key.id, mentioned, files, fileError, quote).catch((err) => {
       log(`dispatch failed: ${err && err.message ? err.message : err}`)
     })
   }

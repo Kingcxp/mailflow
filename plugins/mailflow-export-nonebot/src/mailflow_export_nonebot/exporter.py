@@ -106,6 +106,8 @@ async def _handle_mailflow_file(bot: Bot, event: Event) -> None:
         return
     sender = str(getattr(event, "user_id", "") or "")
     group_id = str(getattr(event, "group_id", "") or "")
+    if group_id:
+        return
     context = _service.permission_context(sender=sender, provider=bot.adapter.get_name(), instance_id=str(bot.self_id), chat_id=group_id or sender)
     if not context.is_admin:
         return
@@ -114,13 +116,13 @@ async def _handle_mailflow_file(bot: Bot, event: Event) -> None:
     from mailflow.permissions import permission_scope
     file = getattr(event, "file", None)
     identity = str(file.get("id", "") if isinstance(file, dict) else getattr(file, "id", ""))
-    payload = {"text": "", "sender": sender, "provider": bot.adapter.get_name(), "instance_id": str(bot.self_id), "chat_id": group_id or sender, "request_id": identity}
+    payload = {"text": "", "sender": sender, "provider": bot.adapter.get_name(), "instance_id": str(bot.self_id), "chat_id": sender, "chat_type": "private", "request_id": identity}
     try:
         with permission_scope(context):
             payload["files"] = await framework_notice_files(event, bot)
             await receive_files(_service, payload)
-        async for reply in _service.chat_command_stream(payload["text"], sender=sender, provider=bot.adapter.get_name(), instance_id=str(bot.self_id), chat_id=group_id or sender, request_id=identity):
-            pages = _service.chat_reply_chunks(reply)
+        async for reply in _service.chat_command_stream(payload["text"], sender=sender, provider=bot.adapter.get_name(), instance_id=str(bot.self_id), chat_id=sender, chat_type="private", request_id=identity, attachments=payload.get("attachment_refs")):
+            pages = _service.chat_reply_chunks(reply, plain_text=True)
             for page in pages if isinstance(pages, list) else [pages]:
                 if page:
                     await _service.pace_bot(bot.adapter.get_name(), str(bot.self_id))
@@ -135,8 +137,10 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
     text = str(event.get_plaintext() or "").strip()
     if _router is None:
         return
-    if text.partition(" ")[0] == "/mailflow":
-        line = text[len("/mailflow"):].strip()
+    prefix = _service.command_prefix()
+    word, _, tail = text.partition(" ")
+    if text.startswith(prefix) and word[len(prefix):].split("@", 1)[0].casefold() == "mailflow":
+        line = tail.strip()
     elif text.startswith("mailflow "):
         line = text[len("mailflow "):].strip()
     else:
@@ -144,14 +148,30 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
     sender = str(event.get_user_id())
     group_id = str(getattr(event, "group_id", "") or "")
     mentioned = event.is_tome()
-    if line is None and group_id and not mentioned:
-        return
-    from mailflow.chat_files import framework_files, receive_files, file_sender_scope, framework_send_file
+    from mailflow.chat_files import (
+        file_sender_scope,
+        framework_files,
+        framework_has_files,
+        framework_quote,
+        framework_send_file,
+        receive_files,
+    )
     from mailflow.errors import error_text
 
-    payload = {"text": text, "sender": sender, "provider": bot.adapter.get_name(), "instance_id": str(bot.self_id), "chat_id": group_id or sender, "request_id": str(getattr(event, "message_id", "") or "")}
+    message = getattr(event, "get_message", lambda: [])()
+    quote = await framework_quote(message, bot)
+    mentioned = mentioned or bool(quote and quote.get("sender_id") == str(bot.self_id))
+    if line is None and group_id and not mentioned:
+        return
+    if group_id and not mentioned and framework_has_files(message):
+        return
+    payload = {"text": text, "sender": sender, "provider": bot.adapter.get_name(), "instance_id": str(bot.self_id), "chat_id": group_id or sender, "chat_type": "group" if group_id else "private", "mentioned": mentioned, "request_id": str(getattr(event, "message_id", "") or "")}
+    payload["text"] = prefix + "mailflow " + line if line is not None else text
+    if not await _service.chat_message_allowed(text=payload["text"], sender=sender, provider=payload["provider"], instance_id=payload["instance_id"], chat_id=payload["chat_id"], chat_type=payload["chat_type"], mentioned=mentioned, has_files=framework_has_files(message)):
+        return
     try:
-        payload["files"] = await framework_files(getattr(event, "get_message", lambda: [])(), bot)
+        payload["quote"] = quote
+        payload["files"] = await framework_files(message, bot)
         await receive_files(_service, payload)
     except Exception as exc:
         await _mailflow_matcher.send(error_text(exc, _service.t))
@@ -160,7 +180,7 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
         await framework_send_file(file, bot=bot, group_id=group_id, sender=sender)
     with file_sender_scope(send_managed):
         async for reply in _service.chat_command_stream(
-            _service.command_prefix() + "mailflow " + line if line is not None else payload["text"],
+            payload["text"],
             sender=sender,
             provider=bot.adapter.get_name(),
             instance_id=str(bot.self_id),
@@ -168,8 +188,10 @@ async def _handle_mailflow(bot: Bot, event: Event) -> None:
             chat_type="group" if group_id else "private",
             request_id=str(getattr(event, "message_id", "") or ""),
             mentioned=mentioned,
+            quote=payload.get("quote"),
+            attachments=payload.get("attachment_refs"),
         ):
-            pages = _service.chat_reply_chunks(reply)
+            pages = _service.chat_reply_chunks(reply, plain_text=True)
             for page in pages if isinstance(pages, list) else [pages]:
                 if page:
                     await _service.pace_bot(bot.adapter.get_name(), str(bot.self_id))

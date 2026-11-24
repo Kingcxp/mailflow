@@ -177,6 +177,7 @@ class TestNonebotExporter:
                     options={"admins": ["42"]},
                 )
             ]
+            await service.subscriptions.add("OneBot V11", "bot-1", "chat-1")
             bot = SimpleNamespace(
                 self_id="bot-1", adapter=SimpleNamespace(get_name=lambda: "OneBot V11")
             )
@@ -223,6 +224,7 @@ class TestNonebotExporter:
 
             bot.call_api = file_api
             event.group_id = "1"
+            await service.subscriptions.add("OneBot V11", "bot-1", "1")
             event.get_plaintext = lambda: "/mailflow files send " + uploaded["file_id"]
             await module.__dict__["_handle_mailflow"](bot, event)
             assert delivered and delivered[0]["group_id"] == 1, matcher.send.call_args_list
@@ -238,11 +240,27 @@ class TestNonebotExporter:
                 file={"id": "notice-file", "name": "uploaded.txt"},
             )
             await module.__dict__["_handle_mailflow_file"](bot, notice)
+            bot.call_api.assert_not_awaited()
             with permission_scope(context):
                 assert {r["filename"] for r in await service.workspace_call("files")} == {
                     "memo.txt",
-                    "uploaded.txt",
                 }
+            from mailflow.domain import SmartActionResult
+
+            query = AsyncMock(return_value=SmartActionResult(final_text="**File received**"))
+            service.smart_action = query
+            event.get_plaintext = lambda: "explain this file"
+            event.get_message = lambda: [SimpleNamespace(type="reply", data={"id": "77"})]
+            bot.call_api = AsyncMock(
+                return_value={
+                    "sender": {"user_id": "bot-1"},
+                    "message": [{"type": "text", "data": {"text": "Received memo.txt"}}],
+                }
+            )
+            await module.__dict__["_handle_mailflow"](bot, event)
+            assert query.await_args is not None
+            assert "memo.txt" in str(query.await_args.kwargs["conversation"])
+            assert matcher.send.call_args.args[0] == "File received"
         finally:
             await driver.shutdowns[0]()
         assert module.__dict__["_service"] is None
@@ -293,6 +311,7 @@ class TestAstrbotExporter:
                 options={"admins": ["42"]},
             )
         ]
+        await service.subscriptions.add("telegram", "bot-1", "chat-1")
         module.__dict__.update(_service=service, _router=CommandRouter(service))
         event = SimpleNamespace(
             message_str="/mailflow clean records",
@@ -358,3 +377,19 @@ class TestAstrbotExporter:
         event.message_str = "/mailflow files send " + uploaded["file_id"]
         assert [reply async for reply in handler(object(), event)]
         assert sent == [b"original attachment"]
+        from mailflow.domain import SmartActionResult
+
+        query = AsyncMock(return_value=SmartActionResult(final_text="**File received**"))
+        service.smart_action = query
+        event.message_str = "explain this file"
+        event.get_messages = lambda: [
+            SimpleNamespace(
+                type="Reply",
+                id="77",
+                sender_id="bot-1",
+                message_str="Received memo.txt",
+            )
+        ]
+        assert [reply async for reply in handler(object(), event)] == ["File received"]
+        assert query.await_args is not None
+        assert "memo.txt" in str(query.await_args.kwargs["conversation"])

@@ -516,6 +516,8 @@ class _OneBotEventBridge(OwnedListener):
 
     async def _dispatch(self, event: dict[str, Any]) -> None:
         if event.get("notice_type") in {"group_upload", "offline_file"}:
+            if event.get("group_id"):
+                return
             event = {
                 **event,
                 "message_type": "group" if event.get("group_id") else "private",
@@ -543,13 +545,59 @@ class _OneBotEventBridge(OwnedListener):
             segment.get("type") == "at" and str(segment.get("data", {}).get("qq", "")) == self_id
             for segment in segments
         )
+        media_parts = [part for part in segments if part.get("type") in {"file", "image"}]
+        quote: dict[str, str] | None = None
+        reply_part = next((part for part in segments if part.get("type") == "reply"), None)
+        if reply_part is not None:
+            reply_data = cast(dict[str, Any], reply_part.get("data") or {})
+            reply_id = str(reply_data.get("id") or "")
+            if reply_id:
+                quote = {"message_id": reply_id, "text": ""}
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        response = await client.post(
+                            self._onebot_url + "/get_msg",
+                            json={"message_id": int(reply_id)},
+                            headers={"Authorization": "Bearer " + self._token}
+                            if self._token
+                            else {},
+                        )
+                        response.raise_for_status()
+                        body = response.json()
+                        check_result(body)
+                        original = cast(dict[str, Any], body.get("data") or {})
+                        original_sender = cast(dict[str, Any], original.get("sender") or {})
+                        mentioned = mentioned or bool(
+                            self_id and str(original_sender.get("user_id") or "") == self_id
+                        )
+                        original_segments = self._message_segments(original)
+                        quote["text"] = "".join(
+                            str(item.get("data", {}).get("text") or "")
+                            for item in original_segments
+                            if item.get("type") == "text"
+                        ).strip()
+                        quote["filename"] = ", ".join(
+                            str(
+                                item.get("data", {}).get("name")
+                                or item.get("data", {}).get("file_name")
+                                or ""
+                            )
+                            for item in original_segments
+                            if item.get("type") in {"file", "image"}
+                        ).strip(", ")
+                except Exception:
+                    logger.debug(
+                        "onebot bridge[%s]: quoted message %s is unavailable",
+                        self._instance_id,
+                        reply_id,
+                    )
+        if message_type == "group" and media_parts and not mentioned:
+            return
         files: list[dict[str, str]] = []
         file_error = False
         from mailflow.chat_files import download_file, encoded_file
 
-        for part in segments:
-            if part.get("type") not in {"file", "image"}:
-                continue
+        for part in media_parts:
             data = cast(dict[str, Any], part.get("data") or {})
             try:
                 url = str(data.get("url") or "")
@@ -570,6 +618,7 @@ class _OneBotEventBridge(OwnedListener):
                     encoded_file(
                         str(data.get("name") or data.get("file_name") or "attachment"),
                         await download_file(url),
+                        str(data.get("content_type") or "application/octet-stream"),
                     )
                 )
             except Exception:
@@ -588,6 +637,7 @@ class _OneBotEventBridge(OwnedListener):
                 "instance_id": self._instance_id,
                 "request_id": str(event.get("message_id") or ""),
                 "mentioned": mentioned,
+                "quote": quote,
                 "plain_text": True,
             },
         ):

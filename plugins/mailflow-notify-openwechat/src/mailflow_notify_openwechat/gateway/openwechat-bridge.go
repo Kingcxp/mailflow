@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"log"
@@ -38,11 +39,11 @@ import (
 )
 
 type state struct {
-	mu       sync.RWMutex
-	lastQR   string
-	status   string // pending | scanning | logged_in | error
-	errMsg   string
-	started  time.Time
+	mu      sync.RWMutex
+	lastQR  string
+	status  string // pending | scanning | logged_in | error
+	errMsg  string
+	started time.Time
 }
 
 var st = &state{status: "pending", started: time.Now()}
@@ -79,30 +80,58 @@ func dispatchChatCommand(msg *openwechat.Message, text string) {
 	if senderInGroup, err := msg.SenderInGroup(); err == nil && senderInGroup != nil {
 		sender = senderInGroup.UserName
 	}
+	if chatType == "group" && msg.HasFile() && !msg.IsAt() {
+		return
+	}
+	var quote map[string]string
+	if strings.Contains(msg.RawContent, "<refermsg") {
+		var quoted struct {
+			AppMsg struct {
+				Title string `xml:"title"`
+				Refer struct {
+					MessageID string `xml:"svrid"`
+					Content   string `xml:"content"`
+					Name      string `xml:"displayname"`
+				} `xml:"refermsg"`
+			} `xml:"appmsg"`
+		}
+		if err := xml.Unmarshal([]byte(msg.RawContent), &quoted); err == nil {
+			text = quoted.AppMsg.Title
+			quote = map[string]string{"message_id": quoted.AppMsg.Refer.MessageID, "text": strings.TrimSpace(quoted.AppMsg.Refer.Content)}
+		}
+	}
 	files := []map[string]string{}
 	fileError := false
 	if msg.HasFile() {
 		response, err := msg.GetFile()
-		if err != nil { fileError = true } else {
+		if err != nil {
+			fileError = true
+		} else {
 			data, readErr := io.ReadAll(io.LimitReader(response.Body, 4000001))
 			response.Body.Close()
-			if readErr != nil || len(data) > 4000000 { fileError = true } else {
+			if readErr != nil || len(data) > 4000000 {
+				fileError = true
+			} else {
 				name := msg.FileName
-				if name == "" { name = "attachment" }
+				if name == "" {
+					name = "attachment"
+				}
 				files = append(files, map[string]string{"filename": name, "content_type": response.Header.Get("Content-Type"), "data": base64.StdEncoding.EncodeToString(data)})
 			}
 		}
 	}
 	payload, err := json.Marshal(map[string]any{
 		"text":        text,
-        "files": files,
-        "file_error": fileError,
+		"files":       files,
+		"file_error":  fileError,
 		"stream":      true,
 		"request_id":  fmt.Sprint(msg.MsgId),
 		"sender":      sender,
 		"chat_id":     chatID,
 		"chat_type":   chatType,
 		"mentioned":   msg.IsAt(),
+		"quote":       quote,
+		"plain_text":  true,
 		"provider":    os.Getenv("MAILFLOW_PROVIDER"),
 		"instance_id": os.Getenv("MAILFLOW_INSTANCE"),
 	})
@@ -181,12 +210,14 @@ func main() {
 		if msg.IsSendBySelf() {
 			return
 		}
-		if !msg.IsText() && !msg.HasFile() {
+		if !msg.IsText() && !msg.HasFile() && !strings.Contains(msg.RawContent, "<refermsg") {
 			return
 		}
 		text := ""
-        if msg.IsText() { text = msg.Content }
-        go dispatchChatCommand(msg, text)
+		if msg.IsText() {
+			text = msg.Content
+		}
+		go dispatchChatCommand(msg, text)
 	}
 
 	go func() {
@@ -309,9 +340,9 @@ func main() {
 				Type string `json:"type"`
 				Name string `json:"name"`
 			} `json:"to"`
-			Text string `json:"text"`
-			Image string `json:"image"`
-			File string `json:"file"`
+			Text     string `json:"text"`
+			Image    string `json:"image"`
+			File     string `json:"file"`
 			Filename string `json:"filename"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

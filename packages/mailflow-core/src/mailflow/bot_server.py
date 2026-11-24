@@ -144,6 +144,19 @@ class BotServer(OwnedListener):
                 from mailflow.chat_files import receive_files
                 from mailflow.errors import error_text
 
+                allowed = await self._service.chat_message_allowed(
+                    text=str(payload.get("text") or ""),
+                    sender=str(payload.get("sender") or ""),
+                    provider=str(payload.get("provider") or ""),
+                    instance_id=str(payload.get("instance_id") or ""),
+                    chat_id=str(payload.get("chat_id") or ""),
+                    chat_type=str(payload.get("chat_type") or ""),
+                    mentioned=payload.get("mentioned") is True,
+                    has_files=bool(payload.get("files") or payload.get("file_error")),
+                )
+                if not allowed:
+                    await self._respond(writer, 200, {"reply": ""})
+                    return
                 try:
                     await receive_files(self._service, payload)
                 except Exception as exc:
@@ -167,6 +180,12 @@ class BotServer(OwnedListener):
                         instance_id=instance,
                         request_id=str(payload.get("request_id") or ""),
                         mentioned=payload.get("mentioned") is True,
+                        quote=payload.get("quote")
+                        if isinstance(payload.get("quote"), dict)
+                        else None,
+                        attachments=payload.get("attachment_refs")
+                        if isinstance(payload.get("attachment_refs"), list)
+                        else None,
                         on_waiting=lambda: frame_state.update(progress=True),
                     ):
                         chunks = self._reply_chunks(
@@ -192,6 +211,10 @@ class BotServer(OwnedListener):
                     provider=str(payload.get("provider") or ""),
                     instance_id=instance,
                     mentioned=payload.get("mentioned") is True,
+                    quote=payload.get("quote") if isinstance(payload.get("quote"), dict) else None,
+                    attachments=payload.get("attachment_refs")
+                    if isinstance(payload.get("attachment_refs"), list)
+                    else None,
                 )
                 if reply:
                     logger.info(
