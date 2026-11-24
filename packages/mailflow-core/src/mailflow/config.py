@@ -279,8 +279,8 @@ class PluginRepositoryConfig(BaseModel):
 
 
 OFFICIAL_REPOSITORY = PluginRepositoryConfig(
-    name="waymark-mail-plugins",
-    url="https://raw.githubusercontent.com/Kingcxp/waymark-mail-plugins/main",
+    name="waymark-mail-repo",
+    url="https://raw.githubusercontent.com/Kingcxp/waymark-mail-repo/main",
 )
 """The official plugin marketplace, available out of the box."""
 

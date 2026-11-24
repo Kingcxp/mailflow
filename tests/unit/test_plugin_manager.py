@@ -49,8 +49,8 @@ class TestMarketplaceMetadataTolerance:
     def test_github_web_url_fetches_files_from_raw(self) -> None:
         file_base = PluginMarket._file_base  # pyright: ignore[reportPrivateUsage]
         assert (
-            file_base("https://github.com/Kingcxp/waymark-mail-plugins")
-            == "https://raw.githubusercontent.com/Kingcxp/waymark-mail-plugins/main"
+            file_base("https://github.com/Kingcxp/waymark-mail-repo")
+            == "https://raw.githubusercontent.com/Kingcxp/waymark-mail-repo/main"
         )
         assert (
             file_base("https://github.com/o/r/tree/dev")

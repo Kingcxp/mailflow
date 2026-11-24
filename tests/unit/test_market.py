@@ -170,31 +170,32 @@ class TestPluginMarket:
 
 class TestMarketCache:
     def test_renamed_official_repository_keeps_config_and_cached_plugins_usable(self) -> None:
-        old_url = "https://raw.githubusercontent.com/Kingcxp/mailflow-repo/main"
-        new_url = "https://raw.githubusercontent.com/Kingcxp/waymark-mail-plugins/main"
-        config = PluginRepositoryConfig(name="My plugins", url=old_url)
-        assert (config.name, config.url) == ("My plugins", new_url)
-        payload = {
-            "version": 1,
-            "entries": [
-                {
-                    "repository": {"name": "mailflow-repo", "url": old_url},
-                    "plugin": {
-                        **PLUGIN_A,
-                        "source": "git+https://github.com/Kingcxp/mailflow-repo.git@main#subdirectory=processor/mailflow-test-plugin",
-                    },
-                }
-            ],
-        }
-        cached = deserialize_market_cache(json.dumps(payload))
-        assert cached[0][0].url == new_url
-        assert cached[0][1].id == PLUGIN_A["id"]
-        assert (
-            cached[0][1].source
-            == "git+https://github.com/Kingcxp/waymark-mail-plugins.git@main#subdirectory=processor/mailflow-test-plugin"
-        )
-        report = MarketFetchReport([], [(Repository("waymark-mail-plugins", new_url), "offline")])
-        assert merge_market_cache(report, cached).entries == cached
+        new_url = "https://raw.githubusercontent.com/Kingcxp/waymark-mail-repo/main"
+        for old_name in ("mailflow-repo", "waymark-mail-plugins"):
+            old_url = f"https://raw.githubusercontent.com/Kingcxp/{old_name}/main"
+            config = PluginRepositoryConfig(name="My plugins", url=old_url)
+            assert (config.name, config.url) == ("My plugins", new_url)
+            payload = {
+                "version": 1,
+                "entries": [
+                    {
+                        "repository": {"name": old_name, "url": old_url},
+                        "plugin": {
+                            **PLUGIN_A,
+                            "source": f"git+https://github.com/Kingcxp/{old_name}.git@main#subdirectory=processor/mailflow-test-plugin",
+                        },
+                    }
+                ],
+            }
+            cached = deserialize_market_cache(json.dumps(payload))
+            assert cached[0][0].url == new_url
+            assert cached[0][1].id == PLUGIN_A["id"]
+            assert (
+                cached[0][1].source
+                == "git+https://github.com/Kingcxp/waymark-mail-repo.git@main#subdirectory=processor/mailflow-test-plugin"
+            )
+            report = MarketFetchReport([], [(Repository("waymark-mail-repo", new_url), "offline")])
+            assert merge_market_cache(report, cached).entries == cached
         custom = "https://github.com/someone/mailflow-repo.git"
         assert MarketPlugin(id="custom", source=custom).source == custom
 
