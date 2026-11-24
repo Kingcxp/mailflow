@@ -3578,7 +3578,7 @@ class RuntimePane(Vertical):
 
     async def on_mount(self) -> None:
         self.run_worker(
-            self.refresh_runtime(),
+            cast(Any, self.refresh_runtime),
             exclusive=True,
             group="runtime-refresh",
             exit_on_error=False,
@@ -5582,7 +5582,7 @@ class MailFlowApp(App[None]):
             for pane in self.query(RuntimePane):
                 if pane.is_mounted:
                     pane.run_worker(
-                        pane.refresh_runtime(),
+                        cast(Any, pane.refresh_runtime),
                         exclusive=True,
                         group="runtime-refresh",
                         exit_on_error=False,
