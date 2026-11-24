@@ -1,4 +1,4 @@
-"""MailFlow CLI host.
+"""Waymark Mail CLI host.
 
 All business behavior is delegated to the Core service facade and command
 router — callbacks contain no mail/reply/urgency logic of their own. Every
@@ -18,6 +18,7 @@ from typing import Any
 import typer
 from mailflow import __version__
 from mailflow.bot_export import available_frameworks, export_bot_plugin
+from mailflow.branding import PRODUCT_NAME
 from mailflow.commands import CommandRouter
 from mailflow.config import MailFlowConfig, load_config
 from mailflow.domain import ComponentKind
@@ -31,8 +32,8 @@ from rich.table import Table
 from rich.text import Text
 
 app = typer.Typer(
-    name="mailflow",
-    help="MailFlow: unified multi-account mail inbox with LLM analysis.",
+    name="waymark",
+    help=f"{PRODUCT_NAME}: unified multi-account mail inbox with LLM analysis.",
     no_args_is_help=True,
 )
 app.add_typer(tui_app, name="tui")
@@ -85,12 +86,12 @@ def run(
 
 @app.command()
 def command(
-    command_text: str = typer.Argument(..., help="One MailFlow command, e.g. 'mail list'"),
+    command_text: str = typer.Argument(..., help="One Waymark Mail command, e.g. 'mail list'"),
     config_path: str | None = typer.Option(
         None, "--config", "-c", help="Path to the TOML config file (defaults used when omitted)"
     ),
 ) -> None:
-    """Execute a single MailFlow command and print the result."""
+    """Execute a single Waymark Mail command and print the result."""
 
     async def _run() -> None:
         config = _load_config(config_path)
@@ -130,7 +131,7 @@ def shell(
         None, "--config", "-c", help="Path to the TOML config file (defaults used when omitted)"
     ),
 ) -> None:
-    """Start an interactive MailFlow command shell."""
+    """Start an interactive Waymark Mail command shell."""
 
     async def _run() -> None:
         config = _load_config(config_path)
@@ -294,7 +295,7 @@ def export(
         None, "--config", "-c", help="Path to the TOML config file (defaults used when omitted)"
     ),
 ) -> None:
-    """Export MailFlow as a plugin for a chatbot framework (via exporter plugins)."""
+    """Export Waymark Mail as a plugin for a chatbot framework (via exporter plugins)."""
     raise typer.Exit(run_export(config_path, framework, output))
 
 
@@ -303,7 +304,7 @@ def service_doctor(config: MailFlowConfig, manager: PluginManager, registry: Any
     enabled_plugins = manager.enabled_infos()
     components = registry.snapshots()
     text = Text()
-    text.append("MailFlow doctor\n", style="bold cyan")
+    text.append("Waymark Mail doctor\n", style="bold cyan")
     text.append(f"  plugins registered: {len(enabled_plugins)}\n")
     text.append(f"  components: {len(components)}\n")
     text.append(f"  accounts configured: {len(config.accounts)}\n")

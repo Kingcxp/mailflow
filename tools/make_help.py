@@ -1,4 +1,4 @@
-"""Render Make targets without importing MailFlow or installing dependencies."""
+"""Render Make targets without importing Waymark Mail or installing dependencies."""
 
 from __future__ import annotations
 

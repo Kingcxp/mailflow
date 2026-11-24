@@ -9,7 +9,7 @@ Options:
 - ``auth_key``   — per-device auth key (授权码) for an externally hosted
   gateway; when empty the notifier can mint one from ``admin_key``.
 - ``admin_key``  — external gateway ADMIN_KEY used only to mint an auth key.
-- ``gateway``    — ``wechatpadpro`` marks a MailFlow-managed instance. Its
+- ``gateway``    — ``wechatpadpro`` marks a Waymark Mail-managed instance. Its
   minted auth key stays in the per-instance state and is loaded automatically;
   it is never copied into the user-editable notifier configuration.
 - ``targets``    — list of ``user:<wxid>`` / ``group:<chatroom_id>``
@@ -124,7 +124,7 @@ class WechatPadProNotifier:
 
 def format_message(record: MailRecord) -> str:  # kept for parity with other notifiers
     sender = record.mail.sender.display or record.mail.sender.address
-    return f"[MailFlow] {record.effective_urgency.value.upper()} — {record.mail.subject}\nFrom: {sender}"
+    return f"[Waymark Mail] {record.effective_urgency.value.upper()} — {record.mail.subject}\nFrom: {sender}"
 
 
 def cast_dict(value: Any) -> dict[str, Any]:

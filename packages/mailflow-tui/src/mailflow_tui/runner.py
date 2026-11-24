@@ -105,7 +105,7 @@ def ensure_default_config(config_path: str | None) -> str | None:
     path.parent.mkdir(parents=True, exist_ok=True)
     example_content = example.read_text(encoding="utf-8")
     header = (
-        "# Bootstrapped from configs/example.toml by 'mailflow tui' —\n"
+        "# Bootstrapped from configs/example.toml by 'waymark tui' —\n"
         "# edit freely; this per-developer file is gitignored.\n"
     )
     path.write_text(header + example_content, encoding="utf-8")

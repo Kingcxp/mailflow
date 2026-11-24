@@ -9,7 +9,7 @@ Design constraints, in order:
 
 - **Never required.** The OCR engine is an optional dependency resolved at call
   time. Without it every function here degrades to "no text" and the rest of
-  MailFlow behaves exactly as before; nothing in the pipeline may fail because
+  Waymark Mail behaves exactly as before; nothing in the pipeline may fail because
   a poster could not be read.
 - **Never blocking on the mail path.** Recognition is CPU-bound and takes
   hundreds of milliseconds per image, so the pipeline decides *which* images are

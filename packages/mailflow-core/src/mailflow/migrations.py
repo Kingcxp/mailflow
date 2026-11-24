@@ -22,8 +22,8 @@ DATABASE_VERSION = 1
 class DataVersionError(ValueError):
     def __init__(self, kind: str, found: int, supported: int) -> None:
         super().__init__(
-            f"This {kind} uses data version {found}; this MailFlow supports version {supported}. "
-            "Use a newer MailFlow to open it. The original file has not been changed."
+            f"This {kind} uses data version {found}; this Waymark Mail supports version {supported}. "
+            "Use a newer Waymark Mail to open it. The original file has not been changed."
         )
         self.code = f"migration.{kind}_newer"
         self.params = {"found": found, "supported": supported}
@@ -170,7 +170,7 @@ def migrate_database(conn: sqlite3.Connection) -> int:
     previous = check_version(conn.execute("PRAGMA user_version").fetchone()[0], "database")
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if tables and "mails" not in tables:
-        raise ValueError("Not a MailFlow database")
+        raise ValueError("Not a Waymark Mail database")
     if previous == DATABASE_VERSION:
         return previous
     with conn:

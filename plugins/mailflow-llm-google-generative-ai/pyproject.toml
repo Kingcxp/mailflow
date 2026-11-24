@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-llm-google-generative-ai"
 version = "0.1.0"
-description = "Google Generative AI (Gemini API) backend for MailFlow"
+description = "Google Generative AI (Gemini API) backend for Waymark Mail"
 requires-python = ">=3.11"
 dependencies = ["mailflow-core", "httpx>=0.27"]
 

@@ -33,10 +33,10 @@ from mailflow.themes import builtin_themes
 
 CORE_SECTION = "general"
 LIVE_CONFIG_GROUPS = frozenset({"accounts", "llms", "processors", "notifiers", "general"})
-"""Section id holding the options that belong to MailFlow itself."""
+"""Section id holding the options that belong to Waymark Mail itself."""
 
 _CORE_GROUPS = ("general", "logging", "plugins", "storage", "i18n")
-"""Top-level config groups that are always MailFlow's own, never a plugin's."""
+"""Top-level config groups that are always Waymark Mail's own, never a plugin's."""
 
 _LIST_GROUPS = ("accounts", "llms", "processors", "notifiers")
 """Groups whose value is a list of entries, each editable as a form."""
@@ -112,11 +112,11 @@ class OptionSpec:
 
 @dataclass
 class SettingsSection:
-    """A sidebar entry: MailFlow itself or one plugin that owns options."""
+    """A sidebar entry: Waymark Mail itself or one plugin that owns options."""
 
     section_id: str
     title: str
-    plugin_id: str = ""  # "" for MailFlow's own sections
+    plugin_id: str = ""  # "" for Waymark Mail's own sections
     options: list[OptionSpec] = field(default_factory=lambda: [])
 
 
@@ -302,7 +302,7 @@ def build_sections(
     language_choices: tuple[str, ...] = (),
     theme_choices: tuple[str, ...] = (),
 ) -> list[SettingsSection]:
-    """Sidebar model: MailFlow's own sections first, then one per plugin.
+    """Sidebar model: Waymark Mail's own sections first, then one per plugin.
 
     ``processors`` and ``notifiers`` entries are grouped under the plugin
     that registered their ``provider`` component, so installing a plugin

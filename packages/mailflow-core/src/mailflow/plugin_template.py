@@ -1,4 +1,4 @@
-"""Plugin scaffolding: generate a complete, loadable MailFlow plugin.
+"""Plugin scaffolding: generate a complete, loadable Waymark Mail plugin.
 
 The generator emits the canonical marketplace layout for one plugin — a
 ``plugin.json`` metadata file, ``pyproject.toml`` with a ``mailflow.plugins``
@@ -16,7 +16,7 @@ Category templates (mirrors of the marketplace category folders):
 - ``notifier``     — Notifier: deliver analyses to a channel
 - ``storage``      — StorageBackend: durable persistence
 - ``bot_exporter`` — BotExporter: generate a chatbot-framework plugin from a
-  configured MailFlow instance (NoneBot, AstrBot, or any framework of yours)
+  configured Waymark Mail instance (NoneBot, AstrBot, or any framework of yours)
 - ``llm_enhancer`` — LLMEnhancer: bounded customization of the built-in LLM
   analysis (system prompt, extra messages, output post-processing)
 """
@@ -52,15 +52,15 @@ _CATEGORY_LABEL = {
 }
 
 _DESCRIPTION = {
-    "mail_source": "MailFlow mail source: streams normalized messages into the pipeline",
-    "processor": "MailFlow processor: one step of the ordered classification chain",
-    "llm_backend": "MailFlow LLM backend: chat-completions transport",
-    "notifier": "MailFlow notifier: delivers computed analyses to a channel",
-    "storage": "MailFlow storage backend: durable persistence for records and drafts",
-    "bot_exporter": "MailFlow bot exporter: turns a configured instance into a chatbot-framework plugin",
-    "llm_enhancer": "MailFlow LLM enhancer: bounded customization of the built-in LLM analysis",
-    "gateway": "MailFlow gateway provisioner: installs/start/supervises a chat-platform bot runtime",
-    "theme": "MailFlow color scheme: a shared palette for every terminal page",
+    "mail_source": "Waymark Mail mail source: streams normalized messages into the pipeline",
+    "processor": "Waymark Mail processor: one step of the ordered classification chain",
+    "llm_backend": "Waymark Mail LLM backend: chat-completions transport",
+    "notifier": "Waymark Mail notifier: delivers computed analyses to a channel",
+    "storage": "Waymark Mail storage backend: durable persistence for records and drafts",
+    "bot_exporter": "Waymark Mail bot exporter: turns a configured instance into a chatbot-framework plugin",
+    "llm_enhancer": "Waymark Mail LLM enhancer: bounded customization of the built-in LLM analysis",
+    "gateway": "Waymark Mail gateway provisioner: installs/start/supervises a chat-platform bot runtime",
+    "theme": "Waymark Mail color scheme: a shared palette for every terminal page",
 }
 
 # Usage guidance for a newly generated development scaffold.
@@ -68,7 +68,7 @@ _README_TEMPLATE = """# <<NAME>>
 
 <<DESCRIPTION>>
 
-A MailFlow <<LABEL>> development scaffold. Registration is provided, but the
+A Waymark Mail <<LABEL>> development scaffold. Registration is provided, but the
 generated component is not a finished integration. Implement its behavior and
 replace this guide with its actual options and limitations before publishing.
 
@@ -80,14 +80,14 @@ the component. Keep credentials in environment references, not examples.
 
 ## Localize and validate
 
-Add translations under `descriptions` / `readmes` in `plugin.json`; MailFlow
+Add translations under `descriptions` / `readmes` in `plugin.json`; Waymark Mail
 picks the translation matching the active app language automatically. Provide
 English and Chinese usage content together.
 
 - `descriptions`: locale code -> one-line summary (e.g. `"zh-CN"`)
 - `readmes`: locale code -> translated markdown readme
 
-Implement against `mailflow-core` contracts in the paired MailFlow development
+Implement against `mailflow-core` contracts in the paired Waymark Mail development
 environment. Put every runtime dependency and entry point in `pyproject.toml`.
 The main repository's plugin guide and the marketplace validation guide describe
 offline contract checks; do not connect real services in automated tests.
@@ -175,9 +175,9 @@ def _plugin_module(plugin_id: str, category: str, description: str) -> str:
     """The category-specific plugin.py stub, loadable and registrable."""
     component_id = _component_id(plugin_id)
     framework_id = component_id.removeprefix("export-")
-    common = f'''"""<<name>>: {_CATEGORY_LABEL[category].lower()} for MailFlow.
+    common = f'''"""<<name>>: {_CATEGORY_LABEL[category].lower()} for Waymark Mail.
 
-Scaffolded from the MailFlow plugin template — implement the TODO markers and
+Scaffolded from the Waymark Mail plugin template — implement the TODO markers and
 open a pull request against the plugin repository.
 """
 
@@ -384,7 +384,7 @@ class {Category}Storage:
 
 _BOT_EXPORTER_BODY = '''@PLUGIN.bot_exporter("{framework_id}")
 def export_plugin(context):
-    """Writes a chatbot-framework plugin for a configured MailFlow instance."""
+    """Writes a chatbot-framework plugin for a configured Waymark Mail instance."""
 
     # TODO: generate the framework plugin package under
     # context.output_dir. context carries the resolved config
@@ -397,7 +397,7 @@ def export_plugin(context):
     target.mkdir(parents=True, exist_ok=True)
     readme = target / "README.md"
     readme.write_text(
-        "# MailFlow for " + "{framework_id}" + "\\n", encoding="utf-8"
+        "# Waymark Mail for " + "{framework_id}" + "\\n", encoding="utf-8"
     )
     return BotExportResult(
         framework="{framework_id}",

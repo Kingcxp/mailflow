@@ -1,4 +1,4 @@
-"""MailFlow admin server package."""
+"""Waymark Mail admin server package."""
 
 from __future__ import annotations
 

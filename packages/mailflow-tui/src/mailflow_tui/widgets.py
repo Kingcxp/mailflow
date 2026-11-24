@@ -416,8 +416,8 @@ class ShortcutHelp(ModalScreen[None]):
                         (
                             "F8",
                             "Ctrl+Q",
-                            "mailflow tui list",
-                            "mailflow tui attach NAME",
+                            "waymark tui list",
+                            "waymark tui attach NAME",
                             "Ctrl+V",
                             "Shift+Insert",
                         ),

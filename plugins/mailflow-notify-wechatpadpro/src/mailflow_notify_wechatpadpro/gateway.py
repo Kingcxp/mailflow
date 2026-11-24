@@ -522,7 +522,7 @@ services:
       - ./.env:/app/.env
       - ./webhook_config.json:/app/assets/webhook_config.json
     # Docker Desktop provides this name itself; Linux Engine needs the
-    # explicit host-gateway mapping so the container can reach MailFlow's
+    # explicit host-gateway mapping so the container can reach Waymark Mail's
     # loopback webhook bridge after an automatic deployment.
     extra_hosts:
       - "host.docker.internal:host-gateway"

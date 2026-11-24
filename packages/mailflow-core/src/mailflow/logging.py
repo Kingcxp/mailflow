@@ -5,7 +5,7 @@ Design constraints:
 
 - Core never calls ``basicConfig()`` and never touches the root logger.
 - ``propagate=False`` is scoped to the ``mailflow`` logger; a host embedding
-  MailFlow keeps full control of its own logging configuration.
+  Waymark Mail keeps full control of its own logging configuration.
 - All records flow through a :class:`logging.handlers.QueueHandler` into a
   background :class:`logging.handlers.QueueListener`, so plugin/source code
   never blocks on slow sinks.

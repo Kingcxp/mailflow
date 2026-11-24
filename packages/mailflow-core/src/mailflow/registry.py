@@ -213,7 +213,7 @@ class PluginRegistrar:
         self._register(ComponentKind.STORAGE, component_id, factory)
 
     def add_bot_exporter(self, framework_id: str, factory: BotExporterFactory) -> None:
-        """Register a factory that exports a configured MailFlow instance as
+        """Register a factory that exports a configured Waymark Mail instance as
         a plugin for the chatbot framework ``framework_id`` (e.g. ``nonebot``)."""
         self._register(ComponentKind.BOT_EXPORTER, framework_id, factory)
 

@@ -37,8 +37,9 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.error import URLError
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from mailflow.branding import canonical_repository_url
 from mailflow.gateway_resources import run_command
 
 logger = logging.getLogger("mailflow.market")
@@ -71,6 +72,11 @@ class MarketPlugin(BaseModel):
     readmes: dict[str, str] = Field(default_factory=lambda: {})
     names: dict[str, str] = Field(default_factory=lambda: {})
 
+    @field_validator("source", "homepage")
+    @classmethod
+    def renamed_repository(cls, value: str) -> str:
+        return canonical_repository_url(value)
+
     def name_for(self, language: str) -> str:
         return self.names.get(language) or self.name or self.id
 
@@ -95,6 +101,9 @@ class Repository:
     # Cache-loaded repositories are known to be stale until refreshed. This
     # presentation hint is not part of configured repository identity.
     stale: bool = field(default=False, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "url", canonical_repository_url(self.url))
 
 
 @dataclass(frozen=True)
@@ -208,8 +217,7 @@ def merge_market_cache(
         if cached_plugin.id in seen_ids:
             continue
         failed_source = any(
-            repository.name == cached_repository.name and repository.url == cached_repository.url
-            for repository, _reason in report.failures
+            repository.url == cached_repository.url for repository, _reason in report.failures
         )
         unknown_source = (
             cached_repository.name == "cache"

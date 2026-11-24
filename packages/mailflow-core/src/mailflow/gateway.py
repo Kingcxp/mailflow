@@ -250,7 +250,7 @@ class GatewayManager:
             task = self._supervise_tasks.get(key)
             if task is not None and not task.done():
                 continue
-            # migrate states saved by older MailFlow whose extra lost the
+            # migrate states saved by older Waymark Mail whose extra lost the
             # options dict (the pre-merge status-poll bug): without
             # options.bot_url the bridge can never come back — heal the
             # persisted record from the current bot_url and re-save
@@ -483,7 +483,7 @@ class GatewayManager:
         """Give the provisioner a chance to recreate in-process bridges.
 
         Some gateways route chat events through a listener that lives in
-        the MailFlow process (the onebot httpClients bridge). After an app
+        the Waymark Mail process (the onebot httpClients bridge). After an app
         restart the gateway child may still be running — so ``status``
         reports RUNNING and ``start()`` is never called again — while the
         in-process listener is gone. Provisioners that implement an

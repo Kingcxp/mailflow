@@ -314,7 +314,7 @@ class TestIMAPMailSource:
 
 class TestIMAPInternalDate:
     """``received_at`` is the server's arrival time (INTERNALDATE), not the
-    moment MailFlow fetched the mail — otherwise backfilled history stamps
+    moment Waymark Mail fetched the mail — otherwise backfilled history stamps
     every message with the same import moment and the timeline collapses."""
 
     def test_parse_mime_uses_internal_date_when_given(self) -> None:

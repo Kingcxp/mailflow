@@ -6,11 +6,11 @@ multi-device protocol, renders the login QR to a PNG and serves it at
 lives in the instance dir (``auth/``), so the login survives restarts.
 
 Requires Node.js >= 20, npm and Git to install the bridge
-dependencies; MailFlow never installs system packages itself — when Node
+dependencies; Waymark Mail never installs system packages itself — when Node
 is missing the provisioner reports the exact install hint.
 
 This is a reference bridge: any service implementing the same three
-endpoints (``/health``, ``/qr``, ``/send``) works with MailFlow.
+endpoints (``/health``, ``/qr``, ``/send``) works with Waymark Mail.
 """
 
 from __future__ import annotations
@@ -52,11 +52,11 @@ _BAILEYS_VERSION = "6.7.24"
 
 _NODE_HINT = (
     "install Node.js >= 20 (https://nodejs.org/en/download) and make sure "
-    "`node` resolves on PATH; MailFlow never installs system packages itself"
+    "`node` resolves on PATH; Waymark Mail never installs system packages itself"
 )
 _NPM_HINT = (
     "install Node.js >= 20 with npm (https://nodejs.org/en/download) and "
-    "make sure `npm` resolves on PATH; MailFlow never installs system "
+    "make sure `npm` resolves on PATH; Waymark Mail never installs system "
     "packages itself"
 )
 

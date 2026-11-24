@@ -172,7 +172,7 @@ def create_app(service: MailFlowService) -> FastAPI:
             await asyncio.gather(*tasks, return_exceptions=True)
             jobs.clear()
 
-    app = FastAPI(title="MailFlow server", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Waymark Mail server", version="0.1.0", lifespan=lifespan)
     app.state.log_feed = feed
     username, password = require_credentials(service.config.server)
 

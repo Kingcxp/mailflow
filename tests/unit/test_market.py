@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+from mailflow.config import PluginRepositoryConfig
 from mailflow.plugin_market import (
     MarketFetchReport,
     MarketPlugin,
@@ -168,6 +169,35 @@ class TestPluginMarket:
 
 
 class TestMarketCache:
+    def test_renamed_official_repository_keeps_config_and_cached_plugins_usable(self) -> None:
+        old_url = "https://raw.githubusercontent.com/Kingcxp/mailflow-repo/main"
+        new_url = "https://raw.githubusercontent.com/Kingcxp/waymark-mail-plugins/main"
+        config = PluginRepositoryConfig(name="My plugins", url=old_url)
+        assert (config.name, config.url) == ("My plugins", new_url)
+        payload = {
+            "version": 1,
+            "entries": [
+                {
+                    "repository": {"name": "mailflow-repo", "url": old_url},
+                    "plugin": {
+                        **PLUGIN_A,
+                        "source": "git+https://github.com/Kingcxp/mailflow-repo.git@main#subdirectory=processor/mailflow-test-plugin",
+                    },
+                }
+            ],
+        }
+        cached = deserialize_market_cache(json.dumps(payload))
+        assert cached[0][0].url == new_url
+        assert cached[0][1].id == PLUGIN_A["id"]
+        assert (
+            cached[0][1].source
+            == "git+https://github.com/Kingcxp/waymark-mail-plugins.git@main#subdirectory=processor/mailflow-test-plugin"
+        )
+        report = MarketFetchReport([], [(Repository("waymark-mail-plugins", new_url), "offline")])
+        assert merge_market_cache(report, cached).entries == cached
+        custom = "https://github.com/someone/mailflow-repo.git"
+        assert MarketPlugin(id="custom", source=custom).source == custom
+
     def test_versioned_cache_preserves_source_and_skips_bad_entries(self) -> None:
         source = Repository("origin", "https://example.invalid/index")
         raw = serialize_market_cache([(source, MarketPlugin.model_validate(PLUGIN_A))])

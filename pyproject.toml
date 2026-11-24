@@ -1,7 +1,7 @@
 [project]
-name = "mailflow-workspace"
+name = "waymark-mail-workspace"
 version = "0.1.0"
-description = "MailFlow: unified multi-account mail inbox with plugin pipeline, LLM analysis and rich TUI"
+description = "Waymark Mail: unified multi-account mail inbox with plugin pipeline, LLM analysis and rich TUI"
 requires-python = ">=3.11"
 
 [tool.uv]
@@ -11,6 +11,7 @@ package = false
 members = ["packages/*", "plugins/*"]
 
 [tool.uv.sources]
+waymark-mail = { workspace = true }
 mailflow-core = { workspace = true }
 mailflow-testkit = { workspace = true }
 mailflow-bundled = { workspace = true }
@@ -94,6 +95,7 @@ warn_unused_configs = true
 # calls the un-cast form partially unknown — quiet mypy's side of that split
 warn_redundant_casts = false
 mypy_path = [
+  "packages/waymark-mail/src",
   "packages/mailflow-core/src",
   "packages/mailflow-testkit/src",
   "packages/mailflow-bundled/src",
@@ -123,6 +125,7 @@ typeCheckingMode = "strict"
 include = ["packages", "plugins", "tests", "tools"]
 exclude = [".venv", "dist", "build", "mailflow-generated"]
 extraPaths = [
+  "packages/waymark-mail/src",
   "tests",
   "packages/mailflow-core/src",
   "packages/mailflow-testkit/src",

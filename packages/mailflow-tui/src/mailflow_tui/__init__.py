@@ -1,1 +1,1 @@
-"""MailFlow TUI package."""
+"""Waymark Mail TUI package."""

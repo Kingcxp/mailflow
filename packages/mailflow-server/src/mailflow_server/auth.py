@@ -1,4 +1,4 @@
-"""HTTP Basic auth for the MailFlow server.
+"""HTTP Basic auth for the Waymark Mail server.
 
 Credentials come from the ``[server]`` config section; ``password_env``
 wins over a literal ``password`` so deployments can keep secrets out of
@@ -34,7 +34,7 @@ def require_credentials(server_config: Any) -> tuple[str, str]:
     if not username or not password:
         raise RuntimeError(
             "[server] must define username and (password or password_env) before "
-            "'mailflow serve' can run — refusing to expose an unauthenticated admin API"
+            "'waymark serve' can run — refusing to expose an unauthenticated admin API"
         )
     return username, password
 

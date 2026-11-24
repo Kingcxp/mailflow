@@ -1,4 +1,4 @@
-"""Unit tests for the MailFlow core domain contracts."""
+"""Unit tests for the Waymark Mail core domain contracts."""
 
 from __future__ import annotations
 

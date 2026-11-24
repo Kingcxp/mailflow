@@ -1,4 +1,4 @@
-"""Typed component contracts for MailFlow.
+"""Typed component contracts for Waymark Mail.
 
 Protocols define the seams every plugin implements. The LLM router is typed as
 a Protocol here so that ``registry`` (Stage 03) never imports the concrete

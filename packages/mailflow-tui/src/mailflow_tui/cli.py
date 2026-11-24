@@ -1,4 +1,4 @@
-"""Shared command surface for ``mailflow tui`` and ``mailflow-tui``."""
+"""Shared command surface for ``waymark tui`` and ``mailflow-tui``."""
 
 from __future__ import annotations
 
@@ -60,7 +60,9 @@ def launch(
     ),
     name: str | None = typer.Option(None, "--name", "-s", help="Name this TUI instance"),
     local: bool = typer.Option(False, "--local", help="Also start the admin REST+WS server"),
-    remote: str | None = typer.Option(None, "--remote", help="Connect to a remote MailFlow server"),
+    remote: str | None = typer.Option(
+        None, "--remote", help="Connect to a remote Waymark Mail server"
+    ),
 ) -> None:
     """Start a persistent TUI; F8 detaches and Ctrl+Q stops it."""
     ctx.obj = config_path

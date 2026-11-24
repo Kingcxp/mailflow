@@ -1,4 +1,4 @@
-"""Provider-independent domain types for MailFlow.
+"""Provider-independent domain types for Waymark Mail.
 
 Everything in this module is transport- and UI-neutral: no concrete mail
 provider, LLM client, storage backend or terminal is imported here. Runtime
@@ -218,7 +218,7 @@ class ProcessorNote(BaseModel):
 
 
 class ActionOrigin(StrEnum):
-    """How a calendar item entered MailFlow's reminder schedule."""
+    """How a calendar item entered Waymark Mail's reminder schedule."""
 
     ANALYSIS = "analysis"
     CUSTOM = "custom"
@@ -236,7 +236,7 @@ class RepeatSchedule(BaseModel):
 
 
 class ActionItem(BaseModel):
-    """A timed item in MailFlow's provider-neutral reminder schedule."""
+    """A timed item in Waymark Mail's provider-neutral reminder schedule."""
 
     item_id: str
     mail_id: str

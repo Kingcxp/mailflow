@@ -1,8 +1,8 @@
 name: release
 
-# Build per-platform installers on a version tag and publish a GitHub
-# release with them. The first release ships without notes (nothing has
-# been user-tested yet); later releases embed their CHANGELOG section.
+# Build wheels and platform executables on a version tag.
+# Use the matching CHANGELOG section when available; releases remain previews
+# until explicitly promoted after manual testing.
 
 on:
   push:
@@ -41,9 +41,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: mailflow-linux-x86_64
+            artifact: waymark-mail-linux-x86_64
           - os: windows-latest
-            artifact: mailflow-windows-x86_64.exe
+            artifact: waymark-mail-windows-x86_64.exe
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
@@ -58,12 +58,12 @@ jobs:
         run: uv run --no-sync --no-python-downloads python tools/build_exe.py --mode standalone --download-tools
       - name: Check standalone startup without external services
         run: |
-          python -c "import subprocess, sys; from pathlib import Path; binary = Path('dist/standalone/frozen_entry.dist') / ('mailflow.exe' if sys.platform == 'win32' else 'mailflow'); subprocess.run([str(binary), 'config-check', '-c', 'configs/example.toml'], check=True)"
+          python -c "import subprocess, sys; from pathlib import Path; binary = Path('dist/standalone/frozen_entry.dist') / ('waymark.exe' if sys.platform == 'win32' else 'waymark'); subprocess.run([str(binary), 'config-check', '-c', 'configs/example.toml'], check=True)"
       - name: Build frozen onefile executable
         run: uv run --no-sync --no-python-downloads python tools/build_exe.py --mode onefile --download-tools
       - name: Rename artifact
         run: |
-          python -c "import shutil, sys; from pathlib import Path; source = Path('dist/onefile') / ('mailflow.exe' if sys.platform == 'win32' else 'mailflow'); target = Path('dist/release/${{ matrix.artifact }}'); target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(source, target)"
+          python -c "import shutil, sys; from pathlib import Path; source = Path('dist/onefile') / ('waymark.exe' if sys.platform == 'win32' else 'waymark'); target = Path('dist/release/${{ matrix.artifact }}'); target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(source, target)"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -96,11 +96,9 @@ jobs:
             echo "notes found for $VERSION"
           else
             echo "no CHANGELOG section for $VERSION — using fallback note"
-            echo "MailFlow $VERSION. See CHANGELOG.md for the full history." > build/reports/release-notes.md
+            echo "Waymark Mail $VERSION. See CHANGELOG.md for the full history." > build/reports/release-notes.md
           fi
       - name: Publish pre-release
-        # every automated release is a pre-release until explicitly
-        # promoted: the project has not shipped a user-tested stable yet
         uses: softprops/action-gh-release@v2
         with:
           prerelease: true

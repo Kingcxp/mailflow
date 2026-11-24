@@ -14,7 +14,7 @@ PLUGIN_INFO = PluginInfo(
     plugin_id="mailflow-export-nonebot",
     name="NoneBot Exporter",
     version="0.1.0",
-    description="Exports a configured MailFlow instance as a NoneBot2 plugin",
+    description="Exports a configured Waymark Mail instance as a NoneBot2 plugin",
     kinds=[ComponentKind.BOT_EXPORTER],
 )
 

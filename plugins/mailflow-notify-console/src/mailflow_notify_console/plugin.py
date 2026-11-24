@@ -1,4 +1,4 @@
-"""Console notifications for MailFlow's temporary in-app conversation."""
+"""Console notifications for Waymark Mail's temporary in-app conversation."""
 
 from __future__ import annotations
 

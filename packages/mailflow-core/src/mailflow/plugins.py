@@ -64,7 +64,7 @@ class PluginInfo:
 
 
 class MailFlowHookSpecs:
-    """Hook specifications implemented by every MailFlow plugin."""
+    """Hook specifications implemented by every Waymark Mail plugin."""
 
     @hookspec
     def mailflow_plugin_info(self) -> PluginInfo:

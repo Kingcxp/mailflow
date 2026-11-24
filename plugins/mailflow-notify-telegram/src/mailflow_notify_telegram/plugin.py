@@ -3,7 +3,7 @@
 Registers the ``telegram`` notifier and the ``telegram`` gateway provisioner.
 Telegram needs no local bot process — the Bot API is the gateway — so the
 provisioner's job is to validate the bot token and run the in-process
-long-poll bridge that lets chats drive MailFlow commands (see ``gateway.py``).
+long-poll bridge that lets chats drive Waymark Mail commands (see ``gateway.py``).
 
 Requires ``bot_token`` and a configured or subscribed recipient. Delivery
 errors are reported to the runtime; mail processing remains independent.

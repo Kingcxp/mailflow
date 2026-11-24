@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from mailflow.branding import COMMAND_NAMES
 from mailflow.contracts import ConsoleNotifierBinding
 from mailflow.domain import CommandResponse, ComponentKind, SmartActionResult, StyleSpan, utcnow
 from mailflow.errors import error_text, translated_error
@@ -391,13 +392,13 @@ class ConsoleInbox:
         self._submitted[key] = message
         while len(self._submitted) > MESSAGE_LIMIT:
             self._submitted.popitem(last=False)
-        mention = re.match(r"^@mailflow(?:\s+|$)", text, re.IGNORECASE)
+        mention = re.match(r"^@(?:waymark|mailflow)(?:\s+|$)", text, re.IGNORECASE)
         instruction = text[mention.end() :].strip() if mention else text
         prefix = self.service.command_prefix()
         command = (
             text.startswith(prefix)
             and text[len(prefix) :].strip().partition(" ")[0].split("@", 1)[0].casefold()
-            == "mailflow"
+            in COMMAND_NAMES
         )
         if not command and not mention and quote is None:
             return message
@@ -561,7 +562,7 @@ class ConsoleInbox:
         else:
             with permission_scope(identity):
                 response = await self.service.command_dispatch(
-                    self.service.command_prefix() + "mailflow cancel",
+                    self.service.command_prefix() + "waymark cancel",
                     context=identity,
                     provider="console",
                     instance_id=channel,

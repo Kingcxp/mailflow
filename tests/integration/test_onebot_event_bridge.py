@@ -101,7 +101,7 @@ async def test_bridge_forwards_message_and_sends_reply() -> None:
             "message_type": "group",
             "user_id": 10001,
             "group_id": 20001,
-            "raw_message": "/mailflow subscribe",
+            "raw_message": "/waymark subscribe",
         },
     )
     # the bridge ACKs before dispatching: wait for the forward instead of
@@ -113,7 +113,7 @@ async def test_bridge_forwards_message_and_sends_reply() -> None:
     assert len(bot.requests) == 1
     path, payload = bot.requests[0]
     assert path == "/bot/message"
-    assert payload["text"] == "/mailflow subscribe"
+    assert payload["text"] == "/waymark subscribe"
     assert payload["sender"] == "10001"
     assert payload["chat_id"] == "20001"
     assert payload["chat_type"] == "group"

@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-notify-whatsapp"
 version = "0.1.0"
-description = "WhatsApp gateway for MailFlow (Baileys scan-to-login, no token)"
+description = "WhatsApp gateway for Waymark Mail (Baileys scan-to-login, no token)"
 requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 

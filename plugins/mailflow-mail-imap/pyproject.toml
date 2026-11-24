@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-mail-imap"
 version = "0.1.0"
-description = "MailFlow mail source: IMAP/SMTP with built-in presets for QQ, 163, Outlook, Gmail and generic hosts"
+description = "Waymark Mail mail source: IMAP/SMTP with built-in presets for QQ, 163, Outlook, Gmail and generic hosts"
 requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 

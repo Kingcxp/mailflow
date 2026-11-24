@@ -1,12 +1,12 @@
-// openwechat-bridge: WeChat gateway bridge for MailFlow based on the
+// openwechat-bridge: WeChat gateway bridge for Waymark Mail based on the
 // openwechat Go SDK (https://github.com/eatmoreapple/openwechat).
 //
-// Exposes the MailFlow gateway HTTP contract:
+// Exposes the Waymark Mail gateway HTTP contract:
 //   GET  /health -> {"logged_in": bool, "status": "pending"|"scanning"|"logged_in"|"error", "error": ...}
 //   GET  /qr     -> {"status": ..., "qrcode": "<base64 png>", "error": ...}
 //   POST /send   -> {"to": {"type": "contact"|"room", "name": ...}, "text": ...}
 //
-// Chat commands: incoming text messages are forwarded to the MailFlow bot
+// Chat commands: incoming text messages are forwarded to the Waymark Mail bot
 // endpoint (MAILFLOW_BOT_URL, the local mailflow.bot_server command
 // dispatcher); a non-empty reply is sent back to the same chat via the
 // SDK. Set MAILFLOW_PROVIDER / MAILFLOW_INSTANCE so the reply carries the
@@ -52,7 +52,7 @@ var httpClient = &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 
 
 func commandFailed(msg *openwechat.Message, text string) {
 	words := strings.Fields(strings.TrimLeft(text, "/#! "))
-	if len(words) == 0 || !strings.EqualFold(words[0], "mailflow") {
+	if len(words) == 0 || (!strings.EqualFold(words[0], "waymark") && !strings.EqualFold(words[0], "mailflow")) {
 		return
 	}
 	if message := os.Getenv("MAILFLOW_COMMAND_ERROR"); message != "" {
@@ -85,7 +85,7 @@ func parseQuotedMessage(raw string) (string, map[string]string, string) {
 	}, quoted.AppMsg.Refer.Sender
 }
 
-// dispatchChatCommand forwards a text message to the MailFlow bot endpoint
+// dispatchChatCommand forwards a text message to the Waymark Mail bot endpoint
 // and sends the reply back to the originating chat.
 func dispatchChatCommand(msg *openwechat.Message, text string) {
 	botURL := os.Getenv("MAILFLOW_BOT_URL")
@@ -217,7 +217,7 @@ func main() {
 		}
 	}
 
-	// Chat command flow: forward text messages to the MailFlow bot
+	// Chat command flow: forward text messages to the Waymark Mail bot
 	// endpoint; a non-empty reply is sent back to the same chat. Self
 	// messages and non-text segments are ignored.
 	bot.MessageHandler = func(msg *openwechat.Message) {

@@ -228,7 +228,7 @@ def _non_json_diagnosis(exc: Exception, response: Any) -> str:
     ``Expecting value: line 1 column 1 (char 0)`` is what a user sees today:
     it names neither the status, the content type nor the shape of the body,
     so an endpoint that started streaming (or that answered with an HTML error
-    page) looks like a bug in MailFlow. Say what actually arrived instead.
+    page) looks like a bug in Waymark Mail. Say what actually arrived instead.
     """
     body = ""
     status = ""

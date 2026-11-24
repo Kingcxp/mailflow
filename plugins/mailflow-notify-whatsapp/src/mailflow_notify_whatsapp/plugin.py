@@ -1,4 +1,4 @@
-"""MailFlow plugin: WhatsApp gateway (auto-deploy) based on Baileys.
+"""Waymark Mail plugin: WhatsApp gateway (auto-deploy) based on Baileys.
 
 Registers the ``whatsapp`` gateway provisioner (scan-to-login with no
 platform token: the bridge installs from npm and shows a QR) and the
@@ -9,7 +9,7 @@ See ``gateway.py`` for the provisioner contract and
 Options:
 - ``gateway_url`` — bridge base URL (e.g. ``http://127.0.0.1:8898``),
   written by the guided setup
-- ``gateway``     — ``whatsapp`` marks a MailFlow-managed instance
+- ``gateway``     — ``whatsapp`` marks a Waymark Mail-managed instance
 - ``targets``     — list of ``group:<jid>`` / ``user:<jid>`` entries
 - ``admins``      — WhatsApp numbers allowed to run chat commands
 
@@ -39,7 +39,7 @@ logger = logging.getLogger("mailflow.notify.whatsapp")
 def format_message(record: MailRecord) -> str:
     sender = record.mail.sender.display or record.mail.sender.address
     lines = [
-        f"[MailFlow] {record.effective_urgency.value.upper()} — {record.mail.subject}",
+        f"[Waymark Mail] {record.effective_urgency.value.upper()} — {record.mail.subject}",
         f"From: {sender}",
     ]
     summary = record.summary

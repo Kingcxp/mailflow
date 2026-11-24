@@ -5,7 +5,7 @@ Other built-ins follow the published Dracula, Nord, Gruvbox, Solarized, Tokyo
 Night, and Microsoft VS Code Modern palettes.
 Plugins return a ColorScheme from a zero-argument factory registered with
 ``registrar.add_theme`` or ``@PLUGIN.theme``. Overrides inherit a full palette
-so a small theme plugin can still style every MailFlow surface consistently.
+so a small theme plugin can still style every Waymark Mail surface consistently.
 """
 
 from __future__ import annotations

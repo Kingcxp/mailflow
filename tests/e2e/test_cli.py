@@ -94,7 +94,7 @@ def cli_config(tmp_path: Path) -> Path:
 
 
 def run_cli(
-    config: Path, *args: str, code: int = 0, columns: int = 160
+    config: Path, *args: str, code: int = 0, columns: int = 160, module: str = "waymark_mail"
 ) -> subprocess.CompletedProcess[str]:
     arguments = (
         ["tui", "--config", str(config), *args[1:]]
@@ -107,8 +107,8 @@ def run_cli(
             "-X",
             "utf8",
             "-B",
-            "-c",
-            "from mailflow_cli.app import main; main()",
+            "-m",
+            module,
             *arguments,
         ],
         cwd=config.parent,
@@ -396,6 +396,10 @@ def test_cli_restarts_preserve_account_scoped_mail_priority_and_actions(cli_conf
         "account-alpha",
         "account-beta",
     }
+    legacy_snapshot = json.loads(
+        run_cli(cli_config, "snapshot", "--json", module="mailflow_cli.app").stdout
+    )
+    assert legacy_snapshot["accounts"] == snapshot["accounts"]
 
 
 @pytest.mark.parametrize("framework", ["nonebot", "astrbot"])

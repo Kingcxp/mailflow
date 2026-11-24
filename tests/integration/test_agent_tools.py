@@ -73,7 +73,7 @@ class RankingRouter:
 
         system = str(messages[0].get("content") or "")
         if not system.startswith("You order an already-filtered") and not system.startswith(
-            "You are MailFlow's smart mail finder"
+            "You are Waymark Mail's smart mail finder"
         ):
             return LLMCompletion(text="ok")  # warm-up
         self.prompts.append(system)

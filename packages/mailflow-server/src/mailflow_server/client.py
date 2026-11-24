@@ -1,4 +1,4 @@
-"""HTTP + websocket client for a remote ``mailflow serve`` instance.
+"""HTTP + websocket client for a remote ``waymark serve`` instance.
 
 ``RemoteClient`` mirrors the slice of :class:`MailFlowService` that the
 TUI needs, so the app can run against a remote host. Methods that only

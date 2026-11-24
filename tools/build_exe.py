@@ -1,4 +1,4 @@
-"""Build a frozen MailFlow executable with Nuitka.
+"""Build a frozen Waymark Mail executable with Nuitka.
 
 Usage:
     python tools/build_exe.py --mode standalone   # test this first
@@ -23,6 +23,7 @@ from mailflow_bundled import BUNDLED_PLUGINS
 
 INCLUDE_PACKAGES = (
     "mailflow",
+    "waymark_mail",
     "mailflow_bundled",
     "mailflow_cli",
     "mailflow_server",
@@ -50,9 +51,7 @@ def main() -> None:
         "-m",
         "nuitka",
         f"--output-dir={ROOT / 'dist' / args.mode}",
-        "--output-filename=mailflow.exe"
-        if sys.platform == "win32"
-        else "--output-filename=mailflow",
+        "--output-filename=waymark.exe" if sys.platform == "win32" else "--output-filename=waymark",
         "--enable-plugin=no-qt",
         "--no-deployment-flag=self-execution",  # all resources bundled; no re-exec
     ]

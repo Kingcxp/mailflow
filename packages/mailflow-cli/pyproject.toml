@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-cli"
 version = "0.1.0"
-description = "MailFlow command-line host"
+description = "Waymark Mail command-line host"
 requires-python = ">=3.11"
 dependencies = [
   "mailflow-core",

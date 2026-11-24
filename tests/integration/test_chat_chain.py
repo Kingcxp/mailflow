@@ -191,7 +191,7 @@ async def test_full_chat_command_chain_replies() -> None:
         for _path, payload in onebot.requests:
             assert payload["group_id"] == 565424593
             parts.append(str(payload["message"]))
-        assert "mailflow" in "\n".join(parts).lower()
+        assert "#waymark mail list" in "\n".join(parts)
 
         # single-string replies take the repr() preview path in bot_server;
         # the invalid ".80r" f-string spec crashed exactly there
@@ -363,10 +363,10 @@ async def test_unsubscribed_group_is_silent_except_admin_subscribe() -> None:
         is None
     )
     assert await service.chat_message_allowed(
-        text="#mailflow subscribe", sender="admin", mentioned=False, **group
+        text="#waymark subscribe", sender="admin", mentioned=False, **group
     )
     subscribed = await service.command_dispatch(
-        "#mailflow subscribe", sender="admin", mentioned=False, **group
+        "#waymark subscribe", sender="admin", mentioned=False, **group
     )
     assert subscribed == service.t("chat.subscribed")
     assert await service.subscriptions.subscribers("onebot", "bot-1") == ["group-1"]
@@ -846,12 +846,12 @@ async def test_console_plain_text_quote_confirmation_and_cancellation() -> None:
                 row["role"] == "notification"
                 for row in (await service.console_messages())["messages"]
             )
-            await service.console_send("@MailFlow confirm " + token, request_id="other")
+            await service.console_send("@Waymark confirm " + token, request_id="other")
             await settled()
         apply.assert_not_awaited()
-        await service.console_send("@MailFlow confirm " + token, request_id="confirm")
+        await service.console_send("@Waymark confirm " + token, request_id="confirm")
         await settled()
-        await service.console_send("@MailFlow confirm " + token, request_id="confirm-again")
+        await service.console_send("@Waymark confirm " + token, request_id="confirm-again")
         await settled()
         apply.assert_awaited_once()
         assert await service.storage.get_preference("chat.request_results") is None
@@ -869,7 +869,7 @@ async def test_console_plain_text_quote_confirmation_and_cancellation() -> None:
             return SmartActionResult()
 
         service.smart_action = slow
-        await service.console_send("@MailFlow find mail", request_id="slow")
+        await service.console_send("@Waymark find mail", request_id="slow")
         await started.wait()
         await service.console_cancel()
         rows = await settled()

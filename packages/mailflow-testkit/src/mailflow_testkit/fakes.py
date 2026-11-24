@@ -29,7 +29,7 @@ def make_mail(
     *,
     message_id: str | None = None,
     account_id: str = "acct-1",
-    subject: str = "Hello from MailFlow",
+    subject: str = "Hello from Waymark Mail",
     sender: MailAddress | None = None,
     recipients: list[MailAddress] | None = None,
     body_text: str = "This is the original message body.",

@@ -1,4 +1,4 @@
-/* MailFlow TUI layout — readable at normal terminal sizes. */
+/* Waymark Mail TUI layout — readable at normal terminal sizes. */
 
 Screen {
     background: $ctp-base;

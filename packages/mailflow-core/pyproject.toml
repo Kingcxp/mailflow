@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-core"
 version = "0.1.0"
-description = "MailFlow core: provider-independent domain, plugin pipeline, service facade"
+description = "Waymark Mail core: provider-independent domain, plugin pipeline, service facade"
 requires-python = ">=3.11"
 dependencies = [
   "pydantic>=2.7",

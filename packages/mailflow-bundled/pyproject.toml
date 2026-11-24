@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-bundled"
 version = "0.1.0"
-description = "MailFlow composition package: the official built-in plugin set"
+description = "Waymark Mail composition package: the official built-in plugin set"
 requires-python = ">=3.11"
 dependencies = [
   "mailflow-core",

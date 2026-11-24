@@ -106,7 +106,7 @@ exe-onefile: ## Build the Nuitka onefile executable (only after a standalone smo
 
 ### Bot framework plugins
 
-bot-plugin: ## Export MailFlow as a chatbot-framework plugin (FRAMEWORK=<id> OUTPUT=<dir>)
+bot-plugin: ## Export Waymark Mail as a chatbot-framework plugin (FRAMEWORK=<id> OUTPUT=<dir>)
 	$(if $(and $(strip $(FRAMEWORK)),$(strip $(OUTPUT))),,$(error Usage / 用法: make bot-plugin FRAMEWORK=nonebot OUTPUT=dist/plugin))
 	$(CD) "$(ROOT)" && $(PY) -m mailflow_cli.app export --framework "$(FRAMEWORK)" --output "$(OUTPUT)" -c "$(CONFIG)"
 

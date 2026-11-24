@@ -1,6 +1,6 @@
 """The smart-action agent: the tools a model may call, and the loop that runs them.
 
-MailFlow hands the model the user's request in their own words plus a set of
+Waymark Mail hands the model the user's request in their own words plus a set of
 tools (``find_mail``, ``read_mail``, ``delete_mail``, ``list_actions``,
 ``add_action``, ``edit_action``, ``delete_action``) and
 lets it decide what to call, in what order, with which arguments. The loop in
@@ -117,7 +117,7 @@ class ToolService(Protocol):
     def t(self, key: str, **params: Any) -> str: ...
 
 
-AGENT_SYSTEM_PROMPT = """You help the user manage MailFlow: mail, tasks, installed plugins and existing settings.
+AGENT_SYSTEM_PROMPT = """You help the user manage Waymark Mail: mail, tasks, installed plugins and existing settings.
 Choose tools from the user's actual request; there is no fixed topic or workflow.
 
 - Use Current local time, Default timezone and Response language from the context.
@@ -261,7 +261,7 @@ def _arguments_text(arguments: dict[str, Any]) -> str:
 
 
 class ToolRegistry:
-    """Executes the tools offered to the model against one MailFlow service.
+    """Executes the tools offered to the model against one Waymark Mail service.
 
     Read-only tools answer immediately; mutating tools return a
     :class:`~mailflow.domain.PendingOperation` and touch nothing, so the only

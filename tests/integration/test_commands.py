@@ -735,7 +735,7 @@ async def test_chat_help_is_sectioned() -> None:
         "mail list",
         "reply confirm",
         "action add",
-        "mailflow subscribe",
+        "waymark subscribe",
         "token",
     ):
         assert expected in joined, expected
@@ -762,23 +762,24 @@ async def test_command_dispatch_prefix_filtering() -> None:
             return CommandResponse.plain(f"ok:{line}")
 
     service.commands = FakeRouter()
-    # bare commands no longer execute: everything lives in the mailflow
+    # Bare commands do not execute; both current and legacy namespaces work.
     # namespace, the reply teaches the corrected form instead
     bare = await service.command_dispatch("/mail list")
     assert bare is None
     assert await service.command_dispatch("/weather Shanghai") is None
     assert await service.command_dispatch("/mailflower help") is None
     hinted = await service.command_dispatch("mailflow unsubscribe")
-    assert hinted is not None and "mailflow help" in hinted
+    assert hinted is not None and "waymark help" in hinted
     assert await service.command_dispatch("hello") is None
     # only the namespace dispatches; non-subscription commands route
     # straight to the shared router (their own semantics apply)
-    assert await service.command_dispatch("/mailflow mail list") == "ok:mail list"
-    assert calls == ["mail list"]
+    for namespace in ("waymark", "mailflow"):
+        assert await service.command_dispatch(f"/{namespace} mail list") == "ok:mail list"
+    assert calls == ["mail list", "mail list"]
     # subscription commands without a chat get the context hint
-    hinted = await service.command_dispatch("/mailflow subscribe")
+    hinted = await service.command_dispatch("/waymark subscribe")
     assert hinted is not None and "group chat" in hinted
-    assert calls == ["mail list"]
+    assert calls == ["mail list", "mail list"]
 
     # custom prefix
     cfg.general.command_prefix = "!"
@@ -968,7 +969,7 @@ async def test_mailflow_subscribe_requires_admin() -> None:
 
     # non-admin cannot subscribe
     reply = await service.command_dispatch(
-        "/mailflow subscribe",
+        "/waymark subscribe",
         sender="99999",
         chat_id="group-1",
         chat_type="group",
@@ -979,7 +980,7 @@ async def test_mailflow_subscribe_requires_admin() -> None:
 
     # admin can subscribe; targets synced into the notifier config
     reply = await service.command_dispatch(
-        "/mailflow subscribe",
+        "/waymark subscribe",
         sender="10001",
         chat_id="group-1",
         chat_type="group",
@@ -1002,8 +1003,8 @@ async def test_mailflow_subscribe_requires_admin() -> None:
     )
     assert isinstance(help_chunks, list) and help_chunks
     joined = "\n".join(help_chunks)
-    assert "mailflow subscribe" in joined
-    assert "mailflow mail list" in joined
+    assert "waymark subscribe" in joined
+    assert "waymark mail list" in joined
     assert "reply confirm" in joined
 
 
@@ -1122,10 +1123,10 @@ async def test_unsubscribe_disables_equivalent_fixed_and_subscribed_targets(
     from mailflow.permissions import PermissionContext
 
     identity["context"] = PermissionContext("admin", provider, "bot", chat_id, True)
-    await service.command_dispatch("/mailflow subscribe", **identity)
+    await service.command_dispatch("/waymark subscribe", **identity)
     assert len(targets_of(service.config.notifiers[0])) == 1
     await service.command_dispatch("/mailflow unsubscribe", **identity)
     assert targets_of(service.config.notifiers[0]) == []
     assert service.config.notifiers[0].options["chat_id"] == chat_id
-    await service.command_dispatch("/mailflow subscribe", **identity)
+    await service.command_dispatch("/waymark subscribe", **identity)
     assert len(targets_of(service.config.notifiers[0])) == 1

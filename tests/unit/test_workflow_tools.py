@@ -401,6 +401,6 @@ def test_frozen_build_includes_every_runtime_package_once(
     assert len(included) == len(set(included))
     assert f"--{mode}" in command
     assert f"--output-dir={ROOT / 'dist' / mode}" in command
-    filename = "mailflow.exe" if platform == "win32" else "mailflow"
+    filename = "waymark.exe" if platform == "win32" else "waymark"
     assert f"--output-filename={filename}" in command
     assert "--assume-yes-for-downloads" not in command

@@ -338,7 +338,7 @@ def _detect_qq() -> str | None:
 class _OneBotEventBridge(OwnedListener):
     """Local HTTP endpoint NapCat posts OneBot v11 message events to.
 
-    Each incoming ``message`` event is translated to the MailFlow
+    Each incoming ``message`` event is translated to the Waymark Mail
     bot_server payload and POSTed to the injected ``bot_url`` (the local
     ``mailflow.bot_server`` command endpoint); a non-empty reply is sent
     back to the chat through the OneBot HTTP API. This is what makes the
@@ -409,7 +409,7 @@ class _OneBotEventBridge(OwnedListener):
         Content-Length: NapCat's client keeps the connection alive, so the
         read hung waiting for 64 KiB or EOF, the event never dispatched,
         and the eventual 500 showed up on NapCat's side as 'Unexpected
-        status code: 500' while the MailFlow log stayed silent — the exact
+        status code: 500' while the Waymark Mail log stayed silent — the exact
         'bridge receives nothing' symptom."""
         try:
             request_line = await asyncio.wait_for(reader.readline(), timeout=10.0)
@@ -693,7 +693,7 @@ class _OneBotEventBridge(OwnedListener):
                 node_name = node_title.strip("【】")
                 text = node_text.lstrip("\n")
             else:
-                node_name = "MailFlow"
+                node_name = "Waymark Mail"
                 text = chunk
             nodes.append(
                 {
@@ -803,7 +803,7 @@ class NapCatProvisioner(GatewayFiles):
 
         NapCat prefers ``onebot11_<uin>.json`` over the default
         ``onebot11.json`` once a QQ account is logged in. If that file was
-        created by an older MailFlow (without a matching httpClients
+        created by an older Waymark Mail (without a matching httpClients
         entry) the chat-command bridge never receives events, so after
         login and after every bridge (re)creation we rewrite it with the
         current bridge URL. The QQ number is probed from the live OneBot
@@ -1155,7 +1155,7 @@ class NapCatProvisioner(GatewayFiles):
     ) -> None:
         """Download a user-supplied AppImage (bundles QQ NT + NapCat).
 
-        MailFlow never installs system packages itself: missing runtime
+        Waymark Mail never installs system packages itself: missing runtime
         pieces (xvfb, fuse) are reported with the exact install command
         so the operator can provision them.
         """
@@ -1260,7 +1260,7 @@ class NapCatProvisioner(GatewayFiles):
         Content-Length header when available, otherwise the bar advances
         by bytes seen.
         """
-        request = urllib.request.Request(url, headers={"User-Agent": "mailflow"})
+        request = urllib.request.Request(url, headers={"User-Agent": "waymark-mail"})
         try:
             with (
                 urllib.request.urlopen(request, timeout=120) as response,
@@ -1633,7 +1633,7 @@ class NapCatProvisioner(GatewayFiles):
             extra: dict[str, Any] = {}
             # memory watchdog: a leaking QQ/Electron tree eventually eats
             # the host (weeks of uptime -> OS reboot). Flag the instance
-            # so the supervisor restarts it while MailFlow still runs.
+            # so the supervisor restarts it while Waymark Mail still runs.
             process = self._processes.get(instance_id)
             if process is not None and process.poll() is None:
                 rss = await asyncio.to_thread(_tree_rss_mb, process.pid)

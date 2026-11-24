@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-tui"
 version = "0.1.0"
-description = "MailFlow Textual terminal UI host"
+description = "Waymark Mail Textual terminal UI host"
 requires-python = ">=3.11"
 dependencies = [
   "mailflow-core",

@@ -37,11 +37,11 @@
     "command": {
       "unknown": "不明なコマンド：{command}",
       "help": {
-        "title": "MailFlow コマンド"
+        "title": "Waymark Mail コマンド"
       }
     },
     "tui": {
-      "title": "MailFlow",
+      "title": "Waymark Mail",
       "tab_mail": "メール",
       "tab_actions": "行動",
       "tab_runtime": "ランタイム",

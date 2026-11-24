@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-storage-sqlite"
 version = "0.1.0"
-description = "MailFlow sqlite storage backend with seven-day recovery trash"
+description = "Waymark Mail sqlite storage backend with seven-day recovery trash"
 requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 

@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-export-astrbot"
 version = "0.1.0"
-description = "MailFlow bot exporter: generates an AstrBot plugin from a configured instance"
+description = "Waymark Mail bot exporter: generates an AstrBot plugin from a configured instance"
 requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 

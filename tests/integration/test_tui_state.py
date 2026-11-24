@@ -1177,7 +1177,7 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             assert prompt.value == "a note without a model"
             await pilot.press("down", "down")
             assert prompt.value == ""
-            prompt.value = "@MailFlow check the inbox"
+            prompt.value = "@Waymark check the inbox"
             await pilot.press("enter")
             await until(pilot, entered.is_set)
             prompt.value = "my next request"
@@ -1331,7 +1331,7 @@ async def test_console_chat_keeps_work_and_input_across_tabs_and_language(host: 
             await pilot.press("up")
             assert prompt.value == "/mailflow mail show readable-mail"
             await pilot.press("up")
-            assert prompt.value == "@MailFlow check the inbox"
+            assert prompt.value == "@Waymark check the inbox"
             await pilot.press("up", "up")
             assert prompt.value == "a note without a model"
             await pilot.press("down", "down", "down")

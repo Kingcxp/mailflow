@@ -1,1 +1,1 @@
-"""MailFlow CLI package."""
+"""Waymark Mail CLI package."""

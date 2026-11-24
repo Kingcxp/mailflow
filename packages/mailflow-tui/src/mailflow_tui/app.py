@@ -1,4 +1,4 @@
-"""MailFlow Textual TUI: a client of the Core service, not another
+"""Waymark Mail Textual TUI: a client of the Core service, not another
 implementation. Every screen reads service snapshots/data and calls service
 methods; no business logic lives here."""
 
@@ -5353,7 +5353,7 @@ class MailFlowApp(App[None]):
         except Exception:
             pass
 
-    TITLE = "MailFlow"
+    TITLE = "Waymark Mail"
 
     def __init__(
         self,

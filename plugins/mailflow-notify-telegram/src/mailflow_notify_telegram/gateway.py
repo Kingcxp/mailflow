@@ -7,7 +7,7 @@ reads updates from ``getUpdates`` and forwards each text message to the local
 ``mailflow.bot_server`` command endpoint, sending the reply back through
 ``sendMessage``. The notifier half posts mail alerts the same way.
 
-Because the bridge lives in the MailFlow process, ``ensure_bridge`` recreates
+Because the bridge lives in the Waymark Mail process, ``ensure_bridge`` recreates
 it after an app restart when the instance is already marked running.
 """
 
@@ -80,7 +80,7 @@ async def _call(
 
 
 class TelegramBridge:
-    """In-process getUpdates long-poll that feeds the MailFlow command router."""
+    """In-process getUpdates long-poll that feeds the Waymark Mail command router."""
 
     def __init__(
         self, instance_id: str, token: str, bot_url: str, api_base: str = _API_ROOT
@@ -312,7 +312,7 @@ class TelegramBridge:
         chat_type: str,
         quote: dict[str, str] | None = None,
     ) -> list[str]:
-        """POST one inbound message to the MailFlow command endpoint."""
+        """POST one inbound message to the Waymark Mail command endpoint."""
         if not self._bot_url:
             return []
         payload = {

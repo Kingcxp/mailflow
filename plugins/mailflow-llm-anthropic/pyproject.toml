@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-llm-anthropic"
 version = "0.2.0"
-description = "MailFlow LLM backend: Anthropic Messages API (Claude)"
+description = "Waymark Mail LLM backend: Anthropic Messages API (Claude)"
 requires-python = ">=3.11"
 dependencies = ["mailflow-core", "httpx"]
 

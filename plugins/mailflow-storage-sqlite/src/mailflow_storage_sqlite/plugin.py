@@ -127,7 +127,7 @@ class SQLiteStorage:
             if not snapshot.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='mails'"
             ).fetchone():
-                raise ValueError("Not a MailFlow database")
+                raise ValueError("Not a Waymark Mail database")
             if snapshot.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ValueError("invalid database backup")
             migrate_database(snapshot)

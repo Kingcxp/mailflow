@@ -28,9 +28,7 @@ def test_notifier_labels_distinguish_onebot_transport_from_napcat_gateway() -> N
 
     for language in ("zh-CN", "en"):
         service.i18n.set_language(language)
-        onebot = notifier_provider_label(
-            service, "onebot", plugin_id="mailflow-notify-onebot"
-        )
+        onebot = notifier_provider_label(service, "onebot", plugin_id="mailflow-notify-onebot")
         napcat = notifier_provider_label(service, "onebot", {"gateway": "napcat"})
 
         assert "OneBot" in onebot

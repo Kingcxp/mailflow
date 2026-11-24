@@ -1,12 +1,12 @@
-// whatsapp-bridge: WhatsApp gateway bridge for MailFlow based on Baileys
+// whatsapp-bridge: WhatsApp gateway bridge for Waymark Mail based on Baileys
 // (https://github.com/WhiskeySockets/Baileys).
 //
-// Exposes the MailFlow gateway HTTP contract:
+// Exposes the Waymark Mail gateway HTTP contract:
 //   GET  /health -> {"logged_in": bool, "status": "pending"|"scanning"|"logged_in"|"error", "error": ...}
 //   GET  /qr     -> {"status": ..., "qrcode": "<base64 png>", "error": ...}
 //   POST /send   -> {"to": {"type": "contact"|"group", "name": ...}, "text": ...}
 //
-// Chat commands: incoming text messages are forwarded to the MailFlow bot
+// Chat commands: incoming text messages are forwarded to the Waymark Mail bot
 // endpoint (MAILFLOW_BOT_URL, the local mailflow.bot_server command
 // dispatcher); every reply page it returns is sent back to the same chat.
 // MAILFLOW_PROVIDER / MAILFLOW_INSTANCE carry the gateway identity so
@@ -108,7 +108,7 @@ async function dispatch(text, sender, chatId, chatType, requestId, mentioned = f
         stream: true,
       }),
     })
-    if (!response.ok) throw new Error(`MailFlow HTTP ${response.status}`)
+    if (!response.ok) throw new Error(`Waymark Mail HTTP ${response.status}`)
     const decoder = new TextDecoder()
     let pending = ''
     async function deliver(line) {
@@ -131,7 +131,7 @@ async function dispatch(text, sender, chatId, chatType, requestId, mentioned = f
     if (pending.trim()) await deliver(pending)
   } catch (err) {
     log(`command connection failed: ${err && err.message ? err.message : err}`)
-    if (/^[^\p{L}\p{N}_]*mailflow(?:\s|$)/iu.test(text) && process.env.MAILFLOW_COMMAND_ERROR) {
+    if (/^[^\p{L}\p{N}_]*(?:waymark|mailflow)(?:\s|$)/iu.test(text) && process.env.MAILFLOW_COMMAND_ERROR) {
       await sendText(chatId, process.env.MAILFLOW_COMMAND_ERROR).catch((error) =>
         log(`error reply failed: ${error && error.message ? error.message : error}`),
       )
@@ -244,7 +244,7 @@ async function connect() {
     sock = makeWASocket({
       auth: authState,
       printQRInTerminal: false,
-      browser: ['MailFlow', 'Desktop', '1.0'],
+      browser: ['Waymark Mail', 'Desktop', '1.0'],
       logger,
     })
     const current = sock

@@ -2071,7 +2071,7 @@ class MailFlowRuntime:
                 {
                     "role": "system",
                     "content": (
-                        "You write MailFlow's hourly mail briefing. Summarize only the "
+                        "You write Waymark Mail's hourly mail briefing. Summarize only the "
                         "supplied batch in Response language: one line per noteworthy "
                         "mail (sender, subject, why it matters); group trivial/ad mail "
                         "into a closing line. No greeting, sign-off or markdown headers. "

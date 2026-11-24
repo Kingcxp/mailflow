@@ -1096,7 +1096,7 @@ class TestMarketplaceService:
         await service.plugin_repo_add("offline", "https://example.invalid/repo")
         names_before = [repo.name for repo in service.config.plugins.repositories]
         with pytest.raises(ValueError, match="already configured"):
-            await service.plugin_repo_edit("offline", "mailflow-repo", "https://other.invalid")
+            await service.plugin_repo_edit("offline", names_before[0], "https://other.invalid")
         assert [repo.name for repo in service.config.plugins.repositories] == names_before
         await service.plugin_repo_edit("offline", "renamed", "file:///tmp/repo")
         assert any(

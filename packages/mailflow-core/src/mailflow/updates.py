@@ -1,12 +1,12 @@
-"""Version checking and updates for MailFlow itself and installed plugins.
+"""Version checking and updates for Waymark Mail itself and installed plugins.
 
-- MailFlow updates follow GitHub releases (urllib, no auth): the latest
+- Waymark Mail updates follow GitHub releases (urllib, no auth): the latest
   release tag is compared with ``mailflow.__version__``.
 - Plugin updates follow the marketplace ``plugin.json`` version for the
   plugin's recorded update source. Plugins without a remote source (local
   installs, or a repository that was removed) are never auto-updated.
 - Applying updates reuses :meth:`PluginMarket.install` (including declared
-  dependencies); MailFlow itself is upgraded through ``uv pip install
+  dependencies); Waymark Mail itself is upgraded through ``uv pip install
   --upgrade`` of the installed mailflow distributions.
 """
 
@@ -33,9 +33,11 @@ _GITHUB_RELEASE_API = "https://api.github.com/repos/{owner}/{repo}/releases/late
 _FETCH_TIMEOUT = 15.0
 
 _MAILFLOW_PACKAGES = (
+    "waymark-mail",
     "mailflow-core",
     "mailflow-bundled",
     "mailflow-cli",
+    "mailflow-server",
     "mailflow-tui",
     "mailflow-testkit",
 )
@@ -56,7 +58,7 @@ class UpdateReport:
 
 
 def _fetch_json(url: str, timeout: float = _FETCH_TIMEOUT) -> Any:
-    request = Request(url, headers={"Accept": "application/json", "User-Agent": "mailflow"})
+    request = Request(url, headers={"Accept": "application/json", "User-Agent": "waymark-mail"})
     with urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -85,7 +87,7 @@ def _version_newer(candidate: str, current: str) -> bool:
 
 
 def latest_mailflow_release(
-    current: str = __version__, owner: str = "Kingcxp", repo: str = "mailflow"
+    current: str = __version__, owner: str = "Kingcxp", repo: str = "waymark-mail"
 ) -> str:
     """The latest release tag, or ``current`` when the API is unreachable."""
     try:
@@ -137,7 +139,7 @@ def check_updates(
     sources: dict[str, str] | None = None,
     mailflow_current: str = __version__,
 ) -> UpdateReport:
-    """Full update check: MailFlow release tag plus marketplace plugin versions."""
+    """Full update check: Waymark Mail release tag plus marketplace plugin versions."""
     installed = installed_plugins or installed_plugin_versions()
     latest = latest_mailflow_release(mailflow_current)
     plugin_updates = check_plugin_updates(market, installed, sources or {})

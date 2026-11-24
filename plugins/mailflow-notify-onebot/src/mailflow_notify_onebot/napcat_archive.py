@@ -74,7 +74,7 @@ def _linux_user() -> tuple[int, str]:
 
 
 def _pending_group_access() -> bool:
-    """An approved group change can be used without restarting MailFlow."""
+    """An approved group change can be used without restarting Waymark Mail."""
     if sys.platform == "win32":
         return False
     import grp

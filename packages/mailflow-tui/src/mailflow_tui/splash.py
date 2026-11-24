@@ -11,6 +11,7 @@ from collections.abc import Callable
 from time import monotonic
 from typing import ClassVar, cast
 
+from mailflow.branding import PRODUCT_NAME
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
@@ -88,7 +89,7 @@ class SplashScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="splash-content"):
             yield Static("", id="splash-art")
-            yield Static("MailFlow", id="splash-title")
+            yield Static(PRODUCT_NAME, id="splash-title")
             yield Static(self._t("tui.splash_tagline"), id="splash-tagline")
             yield Static(self._version, id="splash-version", markup=False)
             yield Static(self._t("tui.splash_skip"), id="splash-skip")

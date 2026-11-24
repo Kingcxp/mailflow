@@ -2,7 +2,7 @@
 
 Every pane here is a thin client of ``mailflow.settings``:
 
-- :class:`SettingsPane` — sidebar of sections (MailFlow's own plus one per
+- :class:`SettingsPane` — sidebar of sections (Waymark Mail's own plus one per
   plugin that owns options), a search box, and one card per option showing
   its name, description and an inline editor with Save / Restore-default.
 - :class:`LLMPane` — the ordered LLM chain: the first entry is the default
@@ -627,7 +627,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
                 # the platform user ids allowed to run chat commands (QQ
                 # number / wxid), one per line; everything else
                 # (subscriptions, mail queries) happens via chat commands
-                # like <prefix>mailflow subscribe
+                # like <prefix>waymark subscribe
                 return (
                     _Extra("admins", kind="lines", description_key="tui.extras_admins"),
                     _Extra("targets", kind="lines"),

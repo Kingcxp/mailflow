@@ -1,4 +1,4 @@
-"""MailFlow plugin: openwechat-based WeChat gateway (auto-deploy).
+"""Waymark Mail plugin: openwechat-based WeChat gateway (auto-deploy).
 
 Registers the ``openwechat`` gateway provisioner (scan-to-login, no
 platform token) and the ``openwechat`` notifier, which posts to the

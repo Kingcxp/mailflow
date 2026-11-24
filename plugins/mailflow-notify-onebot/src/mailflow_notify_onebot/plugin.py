@@ -125,7 +125,7 @@ class OneBotNotifier(ImageNotifier):
 def format_message(record: MailRecord) -> str:
     sender = record.mail.sender.display or record.mail.sender.address
     lines = [
-        f"[MailFlow] {record.effective_urgency.value.upper()} — {record.mail.subject}",
+        f"[Waymark Mail] {record.effective_urgency.value.upper()} — {record.mail.subject}",
         f"From: {sender}",
     ]
     summary = record.summary

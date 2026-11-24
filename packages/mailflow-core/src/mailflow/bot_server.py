@@ -291,5 +291,9 @@ async def command_replies(url: str, payload: dict[str, Any]) -> AsyncIterator[Co
     except Exception:
         logger.exception("local bot command connection failed")
         word = str(payload.get("text") or "").strip().partition(" ")[0].casefold()
-        if "mailflow" in word or payload.get("mentioned") or payload.get("chat_type") == "private":
+        if (
+            any(name in word for name in ("waymark", "mailflow"))
+            or payload.get("mentioned")
+            or payload.get("chat_type") == "private"
+        ):
             yield CommandReply([I18n().t("chat.connection_lost")])

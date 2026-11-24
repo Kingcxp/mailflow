@@ -14,7 +14,7 @@ PLUGIN_INFO = PluginInfo(
     plugin_id="mailflow-export-astrbot",
     name="AstrBot Exporter",
     version="0.1.0",
-    description="Exports a configured MailFlow instance as an AstrBot plugin",
+    description="Exports a configured Waymark Mail instance as an AstrBot plugin",
     kinds=[ComponentKind.BOT_EXPORTER],
 )
 

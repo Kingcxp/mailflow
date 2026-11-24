@@ -5,12 +5,12 @@ web protocol directly, renders the login QR to a PNG and serves it at
 ``GET /qr``; the TUI shows it inline. Session hot-reload keeps the login
 across restarts (``openwechat-session.json`` in the instance dir).
 
-Requires a Go toolchain (>= 1.21) to build the bridge; MailFlow never
+Requires a Go toolchain (>= 1.21) to build the bridge; Waymark Mail never
 installs system packages itself — when Go is missing the provisioner
 reports the exact install command (``apt-get install golang-go``).
 
 This is a reference bridge: any service implementing the same three
-endpoints (``/health``, ``/qr``, ``/send``) works with MailFlow.
+endpoints (``/health``, ``/qr``, ``/send``) works with Waymark Mail.
 """
 
 from __future__ import annotations

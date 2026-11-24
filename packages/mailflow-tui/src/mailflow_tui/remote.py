@@ -1,6 +1,6 @@
 """Remote-mode support: session persistence, login screen and a service
 adapter that lets :class:`mailflow_tui.app.MailFlowApp` drive a remote
-``mailflow serve`` host over REST+WS."""
+``waymark serve`` host over REST+WS."""
 
 from __future__ import annotations
 

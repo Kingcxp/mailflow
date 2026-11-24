@@ -1,4 +1,4 @@
-"""Typed runtime configuration for MailFlow.
+"""Typed runtime configuration for Waymark Mail.
 
 All secrets (API tokens) may be supplied either inline or as a whole-string
 ``${ENV_VARIABLE}`` placeholder that is expanded at load time. Only whole-string
@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic.fields import FieldInfo
 
+from mailflow.branding import canonical_repository_url
 from mailflow.domain import Urgency
 from mailflow.migrations import CONFIG_VERSION, check_version, migrate_config, recovery_path
 from mailflow.themes import DEFAULT_THEME
@@ -102,8 +103,8 @@ class GeneralConfig(BaseModel):
         default="/",
         min_length=1,
         max_length=8,
-        description="Prefix that marks a chat-platform message as a MailFlow "
-        "command (e.g. '/mail list'); messages without it are ignored",
+        description="Prefix that marks a chat-platform message as a Waymark Mail "
+        "command (e.g. '/waymark mail list'); ordinary group messages are ignored",
     )
     timezone: str = Field(
         default="UTC", description="IANA timezone used for display, cleanup and reminders"
@@ -182,7 +183,7 @@ class GeneralConfig(BaseModel):
     )
     auto_update: bool = Field(
         default=False,
-        description="Opt in to daily checks and automatic installation of MailFlow and plugin updates",
+        description="Opt in to daily checks and automatic installation of Waymark Mail and plugin updates",
     )
     summary_language: str = Field(
         default="",
@@ -271,10 +272,15 @@ class PluginRepositoryConfig(BaseModel):
     name: str = Field(description="Repository display name")
     url: str = Field(description="Marketplace base URL (root index.json + category folders)")
 
+    @field_validator("url")
+    @classmethod
+    def renamed_repository(cls, value: str) -> str:
+        return canonical_repository_url(value)
+
 
 OFFICIAL_REPOSITORY = PluginRepositoryConfig(
-    name="mailflow-repo",
-    url="https://raw.githubusercontent.com/Kingcxp/mailflow-repo/main",
+    name="waymark-mail-plugins",
+    url="https://raw.githubusercontent.com/Kingcxp/waymark-mail-plugins/main",
 )
 """The official plugin marketplace, available out of the box."""
 
@@ -290,7 +296,7 @@ class PluginConfig(BaseModel):
     repositories: list[PluginRepositoryConfig] = Field(
         default_factory=lambda: [OFFICIAL_REPOSITORY],
         description="Plugin marketplaces: named URLs the market browses "
-        "(one plugin.json per plugin folder); the official mailflow-repo is "
+        "(one plugin.json per plugin folder); the official Waymark Mail catalog is "
         "included by default — configure the list explicitly to replace it",
     )
 
@@ -435,7 +441,7 @@ class NotifierConfig(BaseModel):
 
 
 class ServerConfig(BaseModel):
-    """REST+WS admin server (`mailflow serve`). password_env wins over the
+    """REST+WS admin server (`waymark serve`). password_env wins over the
     literal password so secrets stay out of TOML."""
 
     host: str = Field(default="127.0.0.1", description="Bind address for the admin server")
@@ -490,7 +496,7 @@ class MailFlowConfig(BaseModel):
         default_factory=lambda: [], description="Notification channels with urgency thresholds"
     )
     server: ServerConfig = Field(
-        default_factory=ServerConfig, description="Admin REST+WS server (`mailflow serve`)"
+        default_factory=ServerConfig, description="Admin REST+WS server (`waymark serve`)"
     )
     storage: StorageConfig = Field(
         default_factory=StorageConfig, description="Durable storage backend"

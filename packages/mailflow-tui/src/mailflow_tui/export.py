@@ -22,7 +22,7 @@ from mailflow_tui.widgets import Input, SafeSelect
 
 
 class BotExportScreen(ModalScreen[Path | None]):
-    """Directory-tree wizard that exports MailFlow as a chatbot framework plugin."""
+    """Directory-tree wizard that exports Waymark Mail as a chatbot framework plugin."""
 
     BINDINGS: ClassVar[list[Any]] = []
 

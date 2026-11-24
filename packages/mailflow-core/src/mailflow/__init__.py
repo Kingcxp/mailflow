@@ -1,4 +1,4 @@
-"""MailFlow core: provider-independent domain, plugin pipeline, service facade."""
+"""Waymark Mail core: provider-independent domain, plugin pipeline, service facade."""
 
 from mailflow.domain import (
     AccountSnapshot,

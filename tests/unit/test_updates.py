@@ -1,4 +1,4 @@
-"""Version checking and updates: MailFlow releases, plugin marketplace
+"""Version checking and updates: Waymark Mail releases, plugin marketplace
 versions, update-source tracking and the daily auto-update loop."""
 
 from __future__ import annotations

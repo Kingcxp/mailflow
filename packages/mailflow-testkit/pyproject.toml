@@ -1,7 +1,7 @@
 [project]
 name = "mailflow-testkit"
 version = "0.1.0"
-description = "MailFlow testkit: deterministic fake components for tests and demos"
+description = "Waymark Mail testkit: deterministic fake components for tests and demos"
 requires-python = ">=3.11"
 dependencies = ["mailflow-core"]
 

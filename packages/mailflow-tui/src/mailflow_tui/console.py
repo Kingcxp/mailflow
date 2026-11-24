@@ -892,7 +892,7 @@ class ConsolePane(Vertical):
             try:
                 with permission_scope(self._identity):
                     await self.service.console_send(
-                        self._prefix + "mailflow help",
+                        self._prefix + "waymark help",
                         channel=self._channel,
                         request_id=uuid4().hex,
                     )

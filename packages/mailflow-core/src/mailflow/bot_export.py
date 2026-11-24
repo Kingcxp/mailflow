@@ -1,4 +1,4 @@
-"""Bot-framework export: turn a configured MailFlow instance into a plugin
+"""Bot-framework export: turn a configured Waymark Mail instance into a plugin
 for a chatbot framework (NoneBot, AstrBot, ...).
 
 The exporters themselves are plugins: a plugin with kind ``bot_exporter``
@@ -35,7 +35,7 @@ class BotExportContext:
     output_dir: Path
     """Directory the exporter writes the framework plugin package into."""
     version: str = ""
-    """MailFlow version stamped into the generated metadata."""
+    """Waymark Mail version stamped into the generated metadata."""
     language: str = "en"
     """Active application language, for any generated text."""
 

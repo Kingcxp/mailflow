@@ -3,7 +3,7 @@ through installing and starting a chat-platform gateway (NapCat).
 
 The modal is a bordered dialog: a title, a live log pane (timestamped,
 level-tagged, scrollable) and a QR area inside the frame; the buttons
-live outside the frame like every other MailFlow dialog. Every network or
+live outside the frame like every other Waymark Mail dialog. Every network or
 process operation runs in a worker; the log pane streams each step.
 """
 
@@ -222,7 +222,7 @@ class GatewayGuideModal(ModalScreen[dict[str, Any] | None]):
 
     def compose(self) -> ComposeResult:
         # one single child (the dialog) so Textual's ModalScreen centers it
-        # like every other MailFlow dialog (entry-form etc.)
+        # like every other Waymark Mail dialog (entry-form etc.)
         with Vertical(id="guide-dialog"):
             yield Static(
                 self._t("tui.bots_guide_title", provider=self._provider),
