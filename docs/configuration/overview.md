@@ -34,23 +34,21 @@ reference for secrets. An unset referenced variable fails loading; embedded
 | Save a form | Save or Ctrl+S; Enter does not submit multi-field forms |
 | Edit settings | Save individual options or use Ctrl+S to save the section; search also finds advanced settings |
 | Change colors | Settings → General → Color scheme; save to apply immediately without reconnecting accounts or bots |
-| Read mail | The original split view shows the mail list and the selected message together |
+| Read mail | Select a row to read the message in the detail pane |
 | Send mail | Prepare displays recipients, body and attachments together; Edit returns to the draft, and changes invalidate the old confirmation |
-| Ask the assistant | Enter a request in the mail search field and click Smart action; click again to cancel; changes require confirmation |
+| Ask the assistant | Enter a request beside the mail or task list and choose Smart action; Cancel stops the task, and changes require confirmation |
 | Read logs | Combine source, level and keyword filters; scroll up to read older entries without following new ones; export defaults to the current filter |
 | Select values or files | Use Browse beside dates, times, timezones and paths; custom text remains editable |
 
-The tab order, panels, filters and button rows follow the main branch layout.
-Smart actions use the original mail-page entry point. Mouse hover does not open
-help overlays; use F1 for keyboard and selection help. Settings can be saved
-individually or together with Ctrl+S.
+Press F1 for keyboard and selection help. Hovering does not open help overlays.
 
-`general.theme` defaults to `catppuccin-macchiato`. The other built-ins are
-`catppuccin-latte` (light), `catppuccin-frappe` and `catppuccin-mocha` (dark).
-Enabled theme plugins appear in the same menu. Install them through the existing
-market or local installer. An unavailable theme falls back to Macchiato with a
-notice; the saved preference is retained. Remote terminals follow the server's
-selection, so a theme package is only needed on the server.
+On first launch, choose VS Code Dark, VS Code Light, terminal-adaptive colors or
+the current theme. Settings offers more built-in themes, including all four
+Catppuccin palettes. The configuration default for `general.theme` is
+`catppuccin-macchiato`. Enabled theme plugins appear in the same menu. If a theme
+is unavailable, the interface temporarily uses Macchiato and keeps your saved
+choice. Remote terminals use the server's selection, so install theme plugins
+on the server.
 
 ## Accounts and startup
 
@@ -113,7 +111,7 @@ falling back to the first entry when no default is marked; unspecified fallbacks
 are filled from the remaining list. The TUI model controls update these bindings.
 Without a usable model, rule processing remains available. The assistant needs
 a model supporting the requested tools. Optional request fields are documented
-by each backend in the [plugin repository](https://github.com/Kingcxp/waymark-mail-plugins/tree/dev/llm_backend).
+by each backend in the [plugin repository](https://github.com/Kingcxp/waymark-mail-repo/tree/dev/llm_backend).
 
 ```toml
 [[llms]]
@@ -145,7 +143,7 @@ Attachment download is independent of OCR.
 | Channel | Setup and current limits |
 | --- | --- |
 | Console | Built in; no external bot installation. |
-| OneBot / QQ | Automatic deployment uses the SHA-256-verified [XingYunStar/NapCatQQ v4.18.42 archive](https://github.com/XingYunStar/NapCatQQ/releases/tag/v4.18.42): Windows Shell ZIP (local QQ required), or Linux amd64/arm64 Docker image (Debian/Ubuntu can set up Docker after confirmation; other distributions need Docker Engine). Existing installations and custom package URLs remain supported; an existing OneBot v11 HTTP service can also be connected. |
+| OneBot / QQ | Deploy the archived NapCat package, reuse an installation or connect an existing OneBot v11 HTTP service. See requirements below. |
 | OpenWechat | Managed bridge requires Go 1.21+ and Go module downloads. WeChat must allow the account to log in through the web protocol. |
 | WeChatPadPro | Managed Docker project uses the self-hosted v2 API and a pinned linux/amd64 image with MySQL/Redis. The newer Cloud API is different. Image installation does not guarantee protocol login. |
 | Telegram | BotFather token; no local gateway runtime. Long polling requires the bot to have no active webhook in another application. |
@@ -153,13 +151,21 @@ Attachment download is independent of OCR.
 | Marketplace push plugins | Discord, Slack, DingTalk, Feishu, WeCom, ntfy, ServerChan, SMTP and custom webhooks use existing endpoints/credentials. They do not install those services or provide incoming chat commands. |
 | NoneBot / AstrBot | Export adapters into an existing framework installation; platform adapters and login remain the framework's responsibility. |
 
-Check API readiness, login and delivery separately. A running process or an HTTP
-landing page is not proof that messages can be sent. Official references:
+NapCat deployment uses the SHA-256-verified
+[XingYunStar/NapCatQQ v4.18.42 archive](https://github.com/XingYunStar/NapCatQQ/releases/tag/v4.18.42).
+Windows uses the Shell ZIP and needs QQ installed locally. Linux amd64/arm64 uses
+Docker; Debian/Ubuntu can set up Docker after confirmation, while other distributions
+need Docker Engine installed first. Custom package URLs are also supported.
+
+Check the connection, login and message delivery separately. A running process
+does not necessarily mean the bot is logged in. Platform references:
 [NapCat status](https://github.com/NapNeko/NapCatQQ),
 [OpenWechat](https://github.com/eatmoreapple/openwechat),
 [WeChatPadPro v2 API](https://github.com/WeChatPadPro/WeChatPadPro/blob/v2.01/static/swagger/swagger.json),
 [Telegram updates](https://core.telegram.org/bots/api#getting-updates),
 [Baileys](https://github.com/WhiskeySockets/Baileys).
+
+### Console
 
 The **Console** tab (`Ctrl+9`) combines console notifications and chat commands.
 Use the configured prefix, for example `/waymark help`. Plain messages do not
@@ -177,16 +183,21 @@ one conversation does not affect other viewers. Notifications are buffered even
 when the tab is closed; enable the console channel explicitly to receive them.
 Console delivery has no default two-second delay; external bots retain theirs.
 
+### Tasks and recurring plans
+
 Tasks may have no deadline. Overdue unfinished tasks remain available. Completing
 a task permanently removes that occurrence; it cannot be reopened from a
 completed-history view. Daily/weekly/monthly plans keep generating future
 occurrences unless paused or ended. Future terminal previews are not reminders.
-Snoozed, muted, deleted and completed items are excluded from applicable reminders.
+Snoozed tasks are omitted until their snooze ends. Tasks with reminders turned
+off, deleted tasks and completed tasks do not send reminders.
 The terminal previews the next 30 days. Monthly plans use month-end when their
 chosen day is absent. Resuming a plan creates only the current occurrence rather
 than every missed one, while existing unfinished occurrences remain available.
 
-Choose a notification preset in settings or adjust the existing switches:
+### Notification settings
+
+Choose a notification preset in settings or adjust the switches:
 
 | Scope | Settings |
 | --- | --- |
@@ -274,7 +285,7 @@ uncached source attachments still require mailbox access. A restore creates a
 recovery backup and rolls back on failure. Treat backup archives as secrets;
 bot backup export is only available to an administrator in a private chat.
 
-To reuse an existing `main` installation, open Settings → More → Import old
+To import an existing installation, open Settings → More → Import old
 settings and select its TOML file. Preview the account/model/notifier counts
 before confirming. By default, only settings are replaced; current mail, tasks
 and subscriptions stay in place. To replace these with the old installation's
@@ -339,19 +350,18 @@ for safe issue reports.
 | 保存表单 | 保存按钮或 Ctrl+S；多字段表单不会因 Enter 意外提交 |
 | 修改设置 | 逐项保存，或通过 Ctrl+S 保存本区修改；搜索也包含高级设置 |
 | 切换配色 | 设置 → 通用 → 配色方案，保存后立即生效，不重新连接邮箱或机器人 |
-| 阅读邮件 | 使用原有左右分栏，同时查看邮件列表与所选邮件详情 |
+| 阅读邮件 | 选中列表中的邮件，在详情区阅读 |
 | 发送邮件 | 准备后集中预览收件人、正文和附件；编辑可返回草稿，改动使旧确认失效 |
-| 使用助手 | 在邮件搜索框填写需求，点击智能操作执行；再次点击可取消；修改操作先确认 |
+| 使用助手 | 在邮件或待办搜索框填写需求，点击智能操作；面板中的取消按钮可停止任务，修改前会先确认 |
 | 阅读日志 | 来源、等级和关键词可以组合筛选；向上滚动可阅读旧内容并暂停跟随新日志；导出默认使用当前筛选 |
 | 选择填写内容 | 日期、时间、时区和路径旁提供选择入口，也可继续填写自定义值 |
 
-标签顺序、面板、筛选栏和按钮行恢复 main 分支布局，智能操作恢复邮件页原有入口。
 鼠标悬停不弹出提示，快捷键和多选说明通过 F1 查看。
-设置可逐项保存，也可通过 Ctrl+S 保存本区修改。
 
-`general.theme` 默认是 `catppuccin-macchiato`，另有浅色 `catppuccin-latte` 和深色
-`catppuccin-frappe`、`catppuccin-mocha`。通过现有市场或本地安装入口安装配色插件，
-启用后即可在同一个菜单选择。配色不可用时会提示并临时使用 Macchiato，保留原选择。
+首次启动可以选择 VS Code 深色、浅色、跟随终端或保留当前配色。
+设置中还有其他内置主题，包括 Catppuccin 四套配色；配置项 `general.theme` 默认是
+`catppuccin-macchiato`。配色插件安装启用后也会出现在同一个菜单中。
+配色不可用时会提示并临时使用 Macchiato，保留原选择。
 远程终端跟随服务端的配色，插件只需安装在服务端。
 
 ### 账户与启动
@@ -402,7 +412,7 @@ for safe issue reports.
 | 渠道 | 安装方式与限制 |
 | --- | --- |
 | 控制台 | 内置，无需安装外部机器人。 |
-| OneBot／QQ | 自动部署使用经过 SHA-256 校验的 [XingYunStar/NapCatQQ v4.18.42 归档](https://github.com/XingYunStar/NapCatQQ/releases/tag/v4.18.42)：Windows Shell ZIP（需要本机 QQ），或 Linux amd64／arm64 Docker 镜像（Debian／Ubuntu 可确认后自动配置 Docker，其他发行版需自行安装）。已有安装、自定义安装包和自行部署的 OneBot v11 HTTP 服务继续可用。 |
+| OneBot／QQ | 自动部署归档版 NapCat、复用已有安装，或连接自行部署的 OneBot v11 HTTP 服务。系统要求见下文。 |
 | OpenWechat | 受管桥接需要 Go 1.21 及更新版本，能下载 Go 模块；账户需被微信网页协议允许登录。 |
 | WeChatPadPro | Docker 部署使用自托管 v2 接口、固定的 linux/amd64 镜像及 MySQL／Redis。新版 Cloud 接口不同，安装成功不保证协议登录可用。 |
 | Telegram | 填写 BotFather 令牌，无需外部运行环境；轮询要求该机器人未被其他应用配置 webhook。 |
@@ -410,8 +420,15 @@ for safe issue reports.
 | 市场推送插件 | Discord、Slack、钉钉、飞书、企业微信、ntfy、Server 酱、SMTP 和自定义 webhook 使用已有服务地址及凭据，不负责安装这些服务或接收聊天命令。 |
 | NoneBot／AstrBot | 导出到已安装的框架，平台适配器和登录由框架负责。 |
 
-请分别检查接口就绪、登录和投递。进程存在或网页能打开不代表能够发送消息。
-上方英文部分列出了各渠道的官方参考地址。
+NapCat 自动部署使用经过 SHA-256 校验的
+[XingYunStar/NapCatQQ v4.18.42 归档](https://github.com/XingYunStar/NapCatQQ/releases/tag/v4.18.42)。
+Windows 使用 Shell ZIP，需要本机已安装 QQ；Linux amd64／arm64 使用 Docker 镜像。
+Debian／Ubuntu 可在确认后安装 Docker，其他发行版需先安装 Docker Engine，也可指定自定义安装包。
+
+连接、登录和测试发送是三个步骤，进程启动后还需检查是否已登录。
+各渠道的参考地址见[安装方式](#channel-installation-and-availability)。
+
+#### 控制台
 
 **控制台**标签页（`Ctrl+9`）同时接收 console 通知和聊天命令。
 使用当前配置的命令前缀，例如 `/waymark help`。普通消息不会调用模型；
@@ -425,13 +442,17 @@ for safe issue reports.
 未打开页面时通知仍进入缓存，需要接收通知时手动开启 console 渠道。
 console 默认不等待两秒，其他机器人仍沿用原有发送间隔。
 
+#### 待办和周期计划
+
 待办允许没有截止时间，逾期后仍保留。完成会永久删除当期，不提供完成历史或重新打开；
 周期计划继续运行，暂停和结束计划是独立操作。未来预览不进入提醒。
-已推迟、关闭提醒、删除或完成的事项遵守统一的提醒过滤规则。
+推迟期间不发送提醒；已关闭提醒、删除或完成的事项不再提醒。
 终端默认预览未来 30 天；月份没有指定日期时按月底处理。
 恢复计划只生成当前一期，不补出停用期间全部事项，已有未完成事项仍保留。
 
-通知预设复用现有开关，不改变凭据、管理员、订阅或网关。
+#### 通知设置
+
+通知预设会组合已有开关，不改变凭据、管理员、订阅或网关设置。
 全局、渠道及适用的聊天开关共同决定是否投递，每小时摘要需全局和渠道同时开启。
 免打扰默认关闭，预填 22:00—08:00，使用配置时区；结束后重新检查并合并仍有意义的内容，
 延后不算发送成功。部分目标失败只重试失败部分。
@@ -473,7 +494,7 @@ console 默认不等待两秒，其他机器人仍沿用原有发送间隔。
 备份包含配置、SQLite 数据和受管／已缓存文件，未下载附件仍需从原邮箱获取。
 恢复前生成保护备份，失败可回滚。备份包含敏感数据，机器人仅允许管理员私聊导出。
 
-复用 main 的设置：打开“设置 → 更多 → 导入旧配置”，选择原 TOML 文件并确认预览。
+导入已有设置时，打开“设置 → 更多 → 导入旧配置”，选择原 TOML 文件并确认预览。
 默认只替换设置，保留当前邮件、待办和订阅；勾选“一并导入旧数据库”才替换这些数据。
 数据库路径留空时，根据旧配置及其项目目录自动查找。原文件保持不变，当前数据库位置和
 远程服务登录设置继续保留；环境变量引用也保留，目标服务需设置相应变量。

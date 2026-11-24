@@ -2,9 +2,9 @@
 
 [Home](../../README.md) · [简体中文](#简体中文) · [Architecture](../architecture/overview.md)
 
-Use the same service entry point as the bundled hosts. Supply the bundled plugin
-manager when those components are needed, keep it on one event loop, and always
-await shutdown.
+Embed Waymark Mail through `start_service`, the same entry point used by its
+terminal and server. This example runs a command against local data and closes
+the service when it finishes:
 
 ```python
 import asyncio
@@ -114,23 +114,27 @@ See [architecture](../architecture/overview.md) for data rules and
 [返回首页](../../README.zh-CN.md) · [English](#embedding)
 
 通过 `start_service` 使用与内置入口相同的核心服务；需要内置组件时传入
-`create_plugin_manager(config)`，不要依赖界面或命令行私有实现。
+`create_plugin_manager(config)`。上面的示例演示了执行命令和关闭服务。
 上面的示例使用 `background=False`，只打开本地数据，不启动收件、提醒、备份或网关进程。
 长期运行的邮件宿主改用 `background=True`，并在同一事件循环上等待服务停止。
 有插件管理器时由它负责发现，不需要再次扫描。
+
+### 请求身份与文件
 
 外部请求必须显式提供 `PermissionContext`，包含平台、发起人、实例和会话身份，
 管理员状态由宿主可信配置决定。传给 `CommandRouter.execute`，或在直接调用服务时使用
 `permission_scope(context)`。不能让外部请求继承默认的本地管理员身份。
 
 邮件、待办、配置和草稿通过服务方法处理；写信、附件、助手历史、备份和来源操作可使用
-共享 `workspace_call`，不要绕过权限或直接修改存储。文件引用只属于原用户和会话，
-不能把模型生成的本地路径当成用户上传文件。提示使用翻译组件，异常走共享错误转换。
+共享 `workspace_call`。这些入口负责权限检查和状态更新。文件引用只属于原用户和会话，
+上传路径需来自用户选择的文件。提示使用翻译组件，异常走共享错误转换。
+
+### 事件与启停
 
 通过 `service.on` 订阅事件，不再使用时调用返回的取消订阅函数。
 日志处理器可在启动时传入，不要记录凭据、请求密钥或完整配置。
 服务拥有其启动的任务、存储、桥接和网关；重载只替换受影响组件，宿主退出前必须等待
 `service.stop()`，不要额外启动一份运行时或提前关闭服务仍在使用的资源。
 
-助手取消必须调用共享取消操作，不能只清空界面。重启仅恢复历史结果与引用，
+取消助手任务时调用共享取消操作，同时更新界面。重启仅恢复历史结果与引用，
 不恢复执行任务或旧确认令牌。

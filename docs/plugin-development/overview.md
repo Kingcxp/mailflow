@@ -1,14 +1,13 @@
 # Plugin development
 
 [Home](../../README.md) · [简体中文](#简体中文) ·
-[Marketplace guide](https://github.com/Kingcxp/waymark-mail-plugins/blob/dev/docs/00-getting-started.md)
+[Marketplace guide](https://github.com/Kingcxp/waymark-mail-repo/blob/dev/docs/00-getting-started.md)
 
 The authoritative interfaces are
 [contracts.py](../../packages/mailflow-core/src/mailflow/contracts.py), with
 [domain models](../../packages/mailflow-core/src/mailflow/domain.py) and
 [configuration models](../../packages/mailflow-core/src/mailflow/config.py).
-Implement the current core contract in both bundled and marketplace plugins;
-do not copy protocol definitions into separate guides.
+Bundled and marketplace plugins implement these same interfaces.
 
 ## Component types
 
@@ -149,16 +148,15 @@ User-visible form labels, progress and errors need English and Chinese resources
 ## Validation and publishing
 
 Use testkit fakes for source, model, notifier, HTTP and process boundaries.
-Validate signatures, actual parameter forwarding, result types and declared
-capabilities, including failure/cancellation paths; instantiation alone is not
-a contract test.
+Checks cover signatures, parameter forwarding, result types, declared
+capabilities, failures and cancellation.
 
 ```bash
 make validate-plugins
 ```
 
 Marketplace layout, metadata, README generation and the companion validator are
-documented in the [plugin repository](https://github.com/Kingcxp/waymark-mail-plugins).
+documented in the [plugin repository](https://github.com/Kingcxp/waymark-mail-repo).
 Its validator calls the same `mailflow-testkit` contract checks as this workspace.
 Keep live credentials and external services out of automated verification.
 
@@ -166,9 +164,11 @@ Keep live credentials and external services out of automated verification.
 
 [返回首页](../../README.zh-CN.md) · [English](#plugin-development)
 
-接口以核心的 `contracts.py`、领域模型和配置模型为唯一来源。两仓插件遵守同一契约，
-不要在说明中复制另一套接口定义。插件类型和职责见上表；完整示例演示通过
+插件接口定义在核心的 `contracts.py`、领域模型和配置模型中，内置插件和市场插件使用同一套接口。
+插件类型和职责见上表；示例演示通过
 `define_plugin` 注册文字通知器，并通过 `mailflow.plugins` 入口加载。
+
+### 配色插件
 
 配色插件选择 `theme` 分类，通过 `@PLUGIN.theme("唯一配色标识")` 或 `registrar.add_theme`
 注册无参数同步工厂，返回 `mailflow.themes.ColorScheme`。`name` 是显示名称，`base` 从
@@ -190,6 +190,8 @@ Keep live credentials and external services out of automated verification.
 状态划分参考 [Element Plus](https://element-plus.org/en-US/component/button.html)，
 颜色沿用所选主题，VS Code Modern 的主要按钮使用其官方按钮颜色。
 
+### 配置表单与依赖
+
 `FormField` 可选声明示例、分组、高级选项和选项翻译键（`placeholder_key`、`group_key`、
 `advanced`、`choice_label_keys`）。有限选项使用 `select`，值保持稳定，显示名称经过翻译；
 旧字段和已有自定义值继续兼容。各服务专属字段由插件声明，本地与远程复用同一契约。
@@ -198,7 +200,9 @@ Keep live credentials and external services out of automated verification.
 选择注册的组件标识。所有运行依赖写入 `pyproject.toml`，安装必须解析依赖，
 缺少导入或加载失败要报告具体插件和原因，不能静默跳过。
 
-邮件源按账户隔离身份，成功交给运行时后才推进游标；历史浏览不改变实时进度，
+### 各类组件的处理要求
+
+邮件源的标识包含账户范围，成功交给运行时后才推进游标；历史浏览不改变实时进度，
 批次失败不丢前面成功的邮件。附件保留字节到识别结束，支持取消并释放连接。
 完整写信、取附件、核对发送结果、原邮箱移动与恢复都是可选能力，不支持时明确禁用。
 移动后保留新位置，未知结果待核对，不能影响同文件夹内其他邮件。
@@ -213,6 +217,8 @@ Keep live credentials and external services out of automated verification.
 网关只管理本实例拥有的进程、端口、目录和桥接；取消、启动失败和退出要释放资源。
 导出宿主负责服务生命周期并传递可信身份，所有提示通过中英文翻译组件。
 
-使用 `make validate-plugins` 运行离线契约检查，验证真实参数、返回值、能力及失败路径，
-不以“能实例化”代替行为验证。不连接真实服务，共享插件修改后同步验证两个仓库。
+### 验证
+
+使用 `make validate-plugins` 运行离线检查，验证参数、返回值、能力和失败处理。
+检查使用模拟服务，共享插件修改后同步验证两个仓库。
 市场目录、元数据和 README 生成方式见插件仓库说明。

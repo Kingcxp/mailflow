@@ -18,7 +18,7 @@ permissions and confirmations.
 | `packages/mailflow-server` | Authenticated HTTP/WebSocket transport and remote model conversion |
 | `packages/mailflow-testkit` | Reusable fakes and offline contract verification |
 | `plugins` | Bundled sources, model backends, notifiers, storage and framework exporters |
-| [waymark-mail-plugins](https://github.com/Kingcxp/waymark-mail-plugins/tree/dev) | Marketplace metadata, additional plugins and generated usage pages |
+| [waymark-mail-repo](https://github.com/Kingcxp/waymark-mail-repo/tree/dev) | Marketplace metadata, additional plugins and generated usage pages |
 
 The authoritative interfaces are [contracts.py](../../packages/mailflow-core/src/mailflow/contracts.py).
 The service facade is [service.py](../../packages/mailflow-core/src/mailflow/service.py);
@@ -29,8 +29,8 @@ workspace operations for hosts. Neither transport nor UI owns a separate mail or
 
 A source hands a normalized message to the runtime. The original is stored and
 announced before analysis, then workers extract optional image text, run the
-processor chain and save eligible results. New arrivals, history imports,
-catch-up and reanalysis retain distinct notification semantics. Analysis tasks
+processor chain and save the results. New arrivals can send individual notifications;
+history imports and reanalysis are quiet by default, and catch-up can send a summary. Analysis tasks
 are temporary and cancelled on stop; their old queues are not resumed on launch.
 
 Identity includes source/account scope. Retrying within one account deduplicates
@@ -52,7 +52,7 @@ analysis is marked for reanalysis while the original remains accessible.
 
 ## Tasks, delivery and writing
 
-One effective-task view drives lists, search, reminders, digests and cleanup.
+Lists, search, reminders, digests and cleanup read the same filtered set of tasks.
 Completing an occurrence removes it permanently and retains only the suppression
 marker needed to prevent regeneration. Recurring plans continue independently;
 pause/skip and per-occurrence changes preserve identity. Legacy state remains
@@ -116,11 +116,13 @@ A detached persistent TUI remains alive until explicitly stopped.
 
 [返回首页](../../README.zh-CN.md) · [English](#architecture)
 
-Waymark Mail 由统一核心服务和多个入口组成。终端、命令行、远程服务及机器人共用模型、
+Waymark Mail 的终端、命令行、远程服务及机器人共用核心服务，使用相同的数据模型、
 权限、草稿、确认和业务方法；目录职责见上表，核心接口以 `contracts.py` 为准。
 
-邮件先保存并可读，再进入可取消的分析任务。新邮件、历史导入、补收和重析区分通知语义，
-退出后不恢复旧分析队列。身份包含账户范围，同账户重试去重、不同账户互不合并。
+### 邮件处理
+
+邮件先保存并显示，再进入可取消的分析任务。新邮件可以逐封通知，历史导入和重析默认静默，
+补收可以只发汇总。退出后不恢复旧分析队列。邮件标识包含账户范围，同账户重试去重，不同账户互不合并。
 来源只有在运行时接收成功后才能推进游标；历史浏览不推进实时游标。
 IMAP 补收需要主动开启且游标有效，不能把连接失败当成删除。
 
@@ -129,17 +131,24 @@ IMAP 补收需要主动开启且游标有效，不能把连接失败当成删除
 重析保留人工优先级、反馈、本地待办状态和上一次有效结果，不因轻微文案变化重复提醒。
 生成语言跟随界面，旧语言结果可重析，原文不受影响。
 
-所有待办入口使用统一有效视图。完成永久删除当期，仅留防重建标记；
-周期计划独立继续，暂停、跳过和本期延期保持身份。逾期未完成事项仍可查看。
-提醒遵守时区、免打扰和各层开关，延后不算成功，按目标保存投递凭据，重试重新检查内容。
+### 待办、提醒与写信
+
+列表、搜索、提醒、摘要和清理使用相同的待办过滤规则。
+完成后永久删除当期，只保留防止重新生成的标记；周期计划继续运行。
+暂停、跳过和本期延期不会重新建立相同事项，逾期未完成事项仍可查看。
+提醒使用配置时区，遵守免打扰和各层开关。发送结果按目标保存，失败时只重试失败目标。
 
 写信沿用草稿、预览和确认；编辑使旧确认失效，并发或重复确认不重复发信。
 发送失败保留内容，结果未知先核对；已发副本保存失败不再发送。
 助手确认绑定用户和会话，取消同时撤销服务端计划；历史保存结果与引用，不保存可恢复任务或令牌。
 
-默认删除仅进入本地回收站。原邮箱联动按账户开启，来源删除与恢复保存位置和操作进度；
+### 原邮箱同步与恢复
+
+默认删除仅进入本地回收站。原邮箱联动按账户开启，删除和恢复记录原邮箱位置及操作进度；
 重试前核对，未知状态不盲目执行。本地永久清除不影响原邮箱。
 备份包含可用本地数据与文件，恢复先生成保护副本，失败回滚；导出不会作为文件再次存入下一份备份。
 
-服务只拥有自己的任务、存储和网关资源。单次命令和交互命令行不启动自动循环，
+### 服务启停
+
+服务管理自己创建的任务、存储和网关资源。单次命令和交互命令行不启动后台收信等循环，
 普通通知设置不重启无关网关，重载和退出清理对应资源。分离终端后后台实例仍在运行。

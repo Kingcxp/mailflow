@@ -397,12 +397,12 @@
         "mailflow-export-astrbot": {
           "name": "AstrBot 导出",
           "description": "将配置好的 Waymark Mail 实例导出为 AstrBot 插件",
-          "readme": "# AstrBot 导出器\n\n导出器标识为 `astrbot`，按当前配置生成框架宿主；导出过程不启动邮件运行时。\n\n```bash\nuv run --no-sync waymark export --framework astrbot --output dist/astrbot_plugin_waymark -c configs/local.toml\n```\n\n按 AstrBot 插件流程安装并启用生成目录，按生成说明配置匹配通知器的管理员，框架管理员不会自动导入。\n生成的 README 说明目录和命令前缀。宿主随框架启动／停止核心服务，\n将发起人和会话传给共享层；管理员由唯一匹配平台、实例的启用通知器中 options.admins 决定，未匹配平台保留普通权限。\n\n支持的框架文件事件可上传受管文件，适配器支持时可发送选中文件；具体能力取决于实际平台。\n不能因为导出成功或代码能导入就声称真实文件收发已验证，修改和发信仍受权限与确认限制。\n\n导出配置是快照，环境变量引用会保留，直接填写的凭据可能仍在文件中。\n检查输出、在机器人宿主提供所需环境变量，配置变化后重新导出。\n通知仍由已配置通知器投递，导出适配器不代表自动向所有框架会话额外广播。\n"
+          "readme": "# AstrBot 导出器\n\n将当前 Waymark Mail 配置导出为 AstrBot 插件，导出器标识为 `astrbot`。\n\n```bash\nuv run --no-sync waymark export --framework astrbot --output dist/astrbot_plugin_mailflow -c configs/local.toml\n```\n\n## 安装\n\n在 AstrBot 插件管理中安装并启用生成目录。生成的 README 说明了文件和命令前缀。邮件服务随框架启动和停止，导出时不会启动服务。\n\n需要管理员操作时，在匹配平台和实例的启用通知器中，将平台账号加入 `options.admins`。框架自身的管理员设置单独管理；没有匹配通知器时，只能查询。\n\n## 消息与文件\n\n通知发送到 Waymark Mail 中配置的目标。平台适配器支持时，可以上传和发送文件。修改数据和发信仍需权限及确认。\n\n## 配置\n\n导出文件保存的是当时的配置。请在机器人所在机器上设置所需环境变量，分享前检查文件中是否含有凭据；修改设置后需要重新导出。\n"
         },
         "mailflow-export-nonebot": {
           "name": "NoneBot 导出",
           "description": "将配置好的 Waymark Mail 实例导出为 NoneBot2 插件",
-          "readme": "# NoneBot 导出器\n\n导出器标识为 `nonebot`，按当前配置生成框架宿主；导出过程不启动邮件运行时。\n\n```bash\nuv run --no-sync waymark export --framework nonebot --output dist/nonebot_plugin_waymark -c configs/local.toml\n```\n\n将生成目录安装到 NoneBot 使用的环境，再通过框架加载 `nonebot_plugin_mailflow`，按生成说明配置匹配通知器的管理员，框架管理员不会自动导入。\n生成的 README 说明目录和命令前缀。宿主随框架启动／停止核心服务，\n将发起人和会话传给共享层；管理员由唯一匹配平台、实例的启用通知器中 options.admins 决定，未匹配平台保留普通权限。\n\n支持的框架文件事件可上传受管文件，适配器支持时可发送选中文件；具体能力取决于实际平台。\n不能因为导出成功或代码能导入就声称真实文件收发已验证，修改和发信仍受权限与确认限制。\n\n导出配置是快照，环境变量引用会保留，直接填写的凭据可能仍在文件中。\n检查输出、在机器人宿主提供所需环境变量，配置变化后重新导出。\n通知仍由已配置通知器投递，导出适配器不代表自动向所有框架会话额外广播。\n"
+          "readme": "# NoneBot 导出器\n\n将当前 Waymark Mail 配置导出为 NoneBot 插件，导出器标识为 `nonebot`。\n\n```bash\nuv run --no-sync waymark export --framework nonebot --output dist/nonebot_plugin_mailflow -c configs/local.toml\n```\n\n## 安装\n\n将生成目录安装到 NoneBot 环境，再加载 `nonebot_plugin_mailflow`。生成的 README 说明了文件和命令前缀。邮件服务随框架启动和停止，导出时不会启动服务。\n\n需要管理员操作时，在匹配平台和实例的启用通知器中，将平台账号加入 `options.admins`。框架自身的管理员设置单独管理；没有匹配通知器时，只能查询。\n\n## 消息与文件\n\n通知发送到 Waymark Mail 中配置的目标。平台适配器支持时，可以上传和发送文件。修改数据和发信仍需权限及确认。\n\n## 配置\n\n导出文件保存的是当时的配置。请在机器人所在机器上设置所需环境变量，分享前检查文件中是否含有凭据；修改设置后需要重新导出。\n"
         },
         "mailflow-llm-anthropic": {
           "name": "Anthropic 模型",

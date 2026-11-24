@@ -1,48 +1,47 @@
-<h1 align="center">
+<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark-dark.svg">
-    <img src="assets/wordmark-light.svg" alt="Waymark Mail" width="800">
+    <img src="assets/wordmark-light.svg" alt="Waymark Mail" width="720">
   </picture>
-</h1>
+</p>
 
-<p align="center">Manage email, follow-up tasks and notifications from your terminal.</p>
+<p align="center">
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="docs/configuration/overview.md">User guide</a> ·
+  <a href="https://github.com/Kingcxp/waymark-mail-repo/tree/dev">Plugin repository</a> ·
+  <a href="https://github.com/Kingcxp/waymark-mail/issues">Issues</a>
+</p>
 
-[简体中文](README.zh-CN.md) · [Configuration](docs/configuration/overview.md) ·
-[Contributing](docs/development/setup.md#contributing) ·
-[Issues](https://github.com/Kingcxp/waymark-mail/issues)
+<p align="center">
+  <a href="https://github.com/Kingcxp/waymark-mail/actions/workflows/ci.yml?query=branch%3Adev"><img src="https://github.com/Kingcxp/waymark-mail/actions/workflows/ci.yml/badge.svg?branch=dev" alt="CI"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/Python-3.11%2B-4b72bd" alt="Python 3.11+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-147d83" alt="MIT License"></a>
+</p>
 
-[![CI](https://github.com/Kingcxp/waymark-mail/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/Kingcxp/waymark-mail/actions/workflows/ci.yml?query=branch%3Adev)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-4b72bd)](pyproject.toml)
-[![MIT License](https://img.shields.io/badge/License-MIT-147d83)](LICENSE)
-[![Plugins](https://img.shields.io/badge/Plugins-Catalog-7e66a8)](https://github.com/Kingcxp/waymark-mail-plugins/tree/dev)
+Waymark Mail is a terminal email client with tasks and bot notifications. It brings
+multiple accounts into a local inbox, where you can read, search, reply and keep
+track of what needs doing.
 
-Waymark Mail collects multiple accounts in a locally stored inbox. Read and organize
-mail, write replies, track recurring tasks and receive notifications through your
-existing chat platforms. Use the terminal interface, shared commands or a remote
-terminal connected to your own server. Models are optional: reading, ordinary
-search and rule processing work without one.
+Connect a model for summaries and natural-language requests such as “find this
+week’s invoices” or “make a task from this email”. Changes require your
+confirmation. Reading, ordinary search and manual operations work without a model.
 
 ## Features
 
-| Area | What you can do |
-| --- | --- |
-| Mail | Read full messages before analysis finishes; filter by account and date, save rolling filters, view conversations, star and archive mail |
-| Search and assistant | Search text, attachment names and extracted image text; use the mail page’s smart-action button for natural-language requests, progress and confirmed changes |
-| Writing | Compose, reply, reply all or forward with To/Cc/Bcc and attachments; keep drafts, preview and confirm before sending |
-| Tasks | Use optional deadlines, categories, tags and daily/weekly/monthly plans; postpone one occurrence, pause a plan or snooze its reminders |
-| Notifications | Connect bots or delivery plugins; use the Console tab for in-app notifications and chat commands; choose quiet hours and retry failed deliveries |
-| Files and recovery | Find and download attachments, exchange files on supported chat channels, restore trash and create portable or scheduled backups |
-| Access and extensions | Use local or remote TUI, CLI and existing bot integrations; extend sources, models, processing, delivery and storage through plugins |
+- **Mail:** saved filters, conversations, read status, stars, archives and a local trash.
+- **Writing:** compose, reply, reply all and forward, with drafts, To/Cc/Bcc and attachments.
+- **Tasks:** categories, tags, optional deadlines and daily, weekly or monthly plans. Postpone an occurrence or pause the plan.
+- **Notifications:** use the built-in Console or connect a chat platform. Choose notification presets, quiet hours and delivery targets.
+- **Files and backups:** find attachments across mailboxes, download in batches and back up configuration and local data.
 
-English and Simplified Chinese are built in. Generated summaries follow the
-selected interface language; older analysis in another language can be reanalyzed.
-The terminal includes all four [Catppuccin palettes](https://catppuccin.com/palette/),
-defaults to Macchiato, and lets you select installed theme plugins in Settings.
+The interface supports English and Simplified Chinese. Summaries follow your
+selected language. Color schemes include VS Code Dark, VS Code Light and the four
+Catppuccin palettes; more can be installed as plugins.
 
 ## Quickstart
 
-These instructions match the **`dev` branch**. Use Python 3.11+, Git and
-[uv](https://docs.astral.sh/uv/). Windows and Linux are covered by CI.
+These instructions use the **`dev` branch**. You need Python 3.11+, Git and
+[uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone --branch dev https://github.com/Kingcxp/waymark-mail.git
@@ -50,126 +49,99 @@ cd waymark-mail
 uv sync --locked --all-packages --group dev
 ```
 
-Copy the example configuration once, then launch Waymark Mail:
+Copy the example configuration once:
+
+| Shell | Command |
+| --- | --- |
+| Linux / macOS | `cp configs/example.toml configs/local.toml` |
+| Windows PowerShell | `Copy-Item configs/example.toml configs/local.toml` |
+
+Then start the terminal interface:
 
 ```bash
-# Linux / macOS
-cp configs/example.toml configs/local.toml
-```
-
-```powershell
-# Windows PowerShell
-Copy-Item configs/example.toml configs/local.toml
-```
-
-```bash
-uv run --no-sync waymark config-check -c configs/local.toml
 uv run --no-sync waymark tui -c configs/local.toml
 ```
 
-After the initial sync, use `--no-sync` for everyday commands so installed
-plugins and optional dependencies are preserved. `make help` and `make clean`
-do not install dependencies; run `make sync` explicitly when needed.
+Open **Mail & models** to add an account. Choose whether to receive only new
+mail or import history, then test receiving and sending. A model and external
+notification channels can be added later. To fetch messages missed while the
+service was stopped, enable the account’s catch-up option.
 
-In the interface, add an account, choose whether to receive only new mail or
-import history, and check receiving and sending separately. Add a model if you
-want summaries or the assistant; connect a notifier only if you want external
-delivery. The example has no account or model credentials. Keep your local
-configuration private and use environment variables for secrets.
+Enter a request beside the mail or task list and choose **Smart action**. The
+**Console** tab also accepts commands: try `/waymark help`, or address the
+assistant with `@Waymark`.
 
-Already using MailFlow? In Settings → More → Import old settings, select
-the old TOML file and confirm the preview. Current mail is kept by default;
-optionally include the old SQLite database. Versions are detected automatically,
-and a recovery backup is created before import. See [data compatibility](docs/configuration/overview.md#data-backup-and-cleanup).
+Keep `--no-sync` on everyday commands to preserve installed plugins. Run
+`make sync` when you want to synchronize dependencies; `make help` only shows help.
 
-To receive messages missed while Waymark Mail was stopped, enable the account's
-catch-up option. It uses a saved source cursor; it does not silently import the
-entire mailbox. See [account setup](docs/configuration/overview.md#accounts-and-startup).
+## Running in the background
 
-## Running modes
+**F8** detaches the terminal and keeps the instance running. **Ctrl+Q** stops it.
+You can also start, find and reconnect to a background instance:
 
-| Need | Command |
-| --- | --- |
-| Terminal interface | `uv run --no-sync waymark tui -c configs/local.toml` |
-| Background terminal instance | `uv run --no-sync waymark tui -c configs/local.toml --background --name inbox` |
-| List / reconnect | `uv run --no-sync waymark tui list` / `uv run --no-sync waymark tui attach inbox` |
-| Foreground service | `uv run --no-sync waymark run -c configs/local.toml` |
-| Authenticated server | `uv run --no-sync waymark serve -c configs/local.toml` |
-| Remote terminal | `uv run --no-sync waymark tui --remote http://127.0.0.1:8800` |
-| Interactive commands | `uv run --no-sync waymark shell -c configs/local.toml` |
-| One command | `uv run --no-sync waymark command "help" -c configs/local.toml` |
+```bash
+uv run --no-sync waymark tui -c configs/local.toml --background --name inbox
+uv run --no-sync waymark tui list
+uv run --no-sync waymark tui attach inbox
+uv run --no-sync waymark tui stop inbox
+```
 
-**F8 detaches** a persistent TUI and leaves it running; **Ctrl+Q stops** it.
-`waymark tui stop inbox` stops a background instance. Single commands and the
-command shell do not start automatic mail, reminder or backup loops.
+For a headless service, use `waymark run -c configs/local.toml`. For remote access,
+configure server credentials, start `waymark serve -c configs/local.toml`, then
+connect with `waymark tui --remote http://127.0.0.1:8800`. See
+[remote access](docs/configuration/overview.md#remote-access) for configuration.
 
-Save forms with their Save button or Ctrl+S. Enter text in the mail search
-field, then click Smart action to execute a natural-language request. See
-[terminal controls](docs/configuration/overview.md#terminal-controls).
+Press **F1** for terminal shortcuts, or run `waymark --help` for CLI commands.
+Single commands do not start background mail, reminder or backup loops.
 
-Set server credentials before remote use. The remote terminal operates on server
-data; files selected for upload come from the client. Local plugin installation
-and process management are not remote terminal operations.
+## Data and privacy
 
-## Data and operation rules
+Deleting mail moves it to the local trash, which keeps messages for 7 days by
+default. Changes to the source mailbox are opt-in per account. Completing a task
+permanently removes that occurrence; a recurring plan continues.
 
-| Operation | Behavior |
-| --- | --- |
-| Delete mail | Moves it to Waymark Mail trash by default; restore or permanently clear local trash from Mail → More |
-| Source mailbox changes | Off by default, enabled per account; supported read/star/archive changes synchronize, source trash/restore requires explicit confirmation, and source mail is never permanently purged |
-| Retention | Mail is kept indefinitely by default; trash expires after 7 days; automatic mail cleanup is opt-in and protects important/starred mail and unfinished tasks |
-| Complete a task | Removes that occurrence permanently; a recurring plan continues, with no completed-task history |
-| Import or reanalyze | Quiet by default; analysis is a cancellable task and is not resumed automatically after application exit |
-| Assistant changes | Require confirmation tied to the initiating user/session; history defaults to 30 days, while execution tasks and confirmation tokens are temporary |
-| Backups | Include configuration and available local data/files; automatic backups are off by default; bot exports of backups are private-chat only |
+When you enable a model or notification channel, the content needed for that
+operation is sent to the configured provider. Plugins run code in the host
+environment. Configuration files, backups and exported bot packages may contain
+credentials; keep them private.
 
-With a model enabled, the configured provider receives the content required for
-the requested analysis or assistant operation. Chat notifications send selected
-content to their configured platforms. Plugins run Python code in the host
-environment: install only code you trust. Backups and generated bot packages can
-contain credentials and should not be published.
+See [backup and cleanup](docs/configuration/overview.md#data-backup-and-cleanup)
+for retention settings, scheduled backups and restore instructions.
 
 ## Upgrading from MailFlow
 
-Waymark Mail is the new project name. Use `waymark` for new commands; `mailflow`
-and `/mailflow` chat commands remain compatible alongside `/waymark`.
-The Python imports (`mailflow.*`), component packages and plugin identifiers
-(`mailflow-*`) are intentionally stable so installed plugins keep working.
-Existing TOML files, SQLite data, backups, saved credentials and background
-session directories retain their formats and paths. No data reset is needed.
-Old official marketplace addresses are recognized automatically.
+Existing configuration, SQLite data, credentials and plugins remain usable.
+`mailflow` and `/mailflow` commands still work; new examples use `waymark`.
+Python imports and plugin IDs keep their existing `mailflow` names.
 
-The main repository is `Kingcxp/waymark-mail`; its companion is
-`Kingcxp/waymark-mail-plugins`. Update an existing checkout with:
+Update an existing checkout and add the new launcher without replacing its plugins:
 
 ```bash
 git remote set-url origin https://github.com/Kingcxp/waymark-mail.git
 uv pip install --no-deps -e packages/waymark-mail
 ```
 
-The second command adds the new launcher to an existing development environment
-and preserves installed plugins. Make targets keep using the compatible host
-module, so pulling the renamed source does not require rebuilding the environment.
+To import another installation, open **Settings → More → Import old settings**
+and select its TOML file. Review the preview before confirming; including its
+SQLite database is optional. Import creates a recovery backup first.
 
-## Documentation and support
+The plugin repository is now **[waymark-mail-repo](https://github.com/Kingcxp/waymark-mail-repo/tree/dev)**.
+Saved addresses using either previous name are recognized automatically.
 
-| Read | Covers |
+## Documentation and contributing
+
+| Guide | Contents |
 | --- | --- |
-| [Configuration and operation](docs/configuration/overview.md) | Accounts, language, models, notifications, remote access, backup and troubleshooting |
-| [Development and contributing](docs/development/setup.md) | Setup, checks, issue reports, pull requests and packaging |
-| [Architecture](docs/architecture/overview.md) | Shared data rules, processing and resource ownership |
-| [Service embedding](docs/development/embedding.md) | Using the service in another host |
-| [Plugin development](docs/plugin-development/overview.md) | Core contracts, optional capabilities and offline validation |
-| [Plugin repository](https://github.com/Kingcxp/waymark-mail-plugins/tree/dev) | Available plugins, per-plugin configuration and marketplace publishing |
-| [Changelog](CHANGELOG.md) / [Releases](https://github.com/Kingcxp/waymark-mail/releases) | Unreleased changes and published artifacts |
+| [User guide](docs/configuration/overview.md) | Accounts, models, notifications, remote access and troubleshooting |
+| [Development](docs/development/setup.md) | Setup, checks, contributing and releases |
+| [Architecture](docs/architecture/overview.md) | Processing, shared models and service lifecycle |
+| [Embedding](docs/development/embedding.md) | Using the service in another application |
+| [Plugin development](docs/plugin-development/overview.md) | Interfaces, capabilities and offline validation |
+| [Changelog](CHANGELOG.md) | Changes awaiting release |
 
-Report reproducible problems through [GitHub Issues](https://github.com/Kingcxp/waymark-mail/issues).
-Include the revision, OS, terminal, sanitized configuration and steps to reproduce.
-Do not attach credentials, private mail, databases or backups. Automated checks
-use simulated services; real platform login, file delivery and terminal behavior
-also need manual verification.
+Bug reports and contributions are welcome. Open an
+[issue](https://github.com/Kingcxp/waymark-mail/issues) with your revision, OS,
+terminal and steps to reproduce. Remove credentials and private mail from any
+logs. Pull requests target `dev`.
 
-## License
-
-Waymark Mail is licensed under the [MIT License](LICENSE). Third-party services,
-libraries and gateway runtimes retain their own licenses and usage requirements.
+Licensed under the [MIT License](LICENSE).

@@ -6,7 +6,7 @@
 
 Use Python 3.11+, Git and [uv](https://docs.astral.sh/uv/). Follow the
 [quickstart](../../README.md#quickstart) to clone `dev`; use the matching `dev`
-branch in the [plugin repository](https://github.com/Kingcxp/waymark-mail-plugins/tree/dev)
+branch in the [plugin repository](https://github.com/Kingcxp/waymark-mail-repo/tree/dev)
 when changing shared implementations.
 
 ```bash
@@ -86,12 +86,11 @@ to `tools/build_all.py`; it is not the default of `make build`.
 | `tests/integration` | Real component composition, SQLite, ASGI and headless terminal interactions |
 | `tests/e2e` | Actual supported CLI processes with temporary configuration and storage |
 
-Test observable behavior, such as selection surviving refresh, failed-target
-retry or confirmation preventing duplicate sends. Reuse fakes from
-`mailflow-testkit`. Do not assert private call order, incidental wording, widget
-existence or a fixed number of tests. A chain of fake components is not a real
-end-to-end test. Automated checks must not log into mailboxes/models, install
-marketplace packages or launch real chat runtimes.
+Test outcomes such as selection surviving refresh, retrying a failed target or
+preventing a duplicate send. `mailflow-testkit` provides reusable fakes for external
+services. Integration tests exercise real component combinations; end-to-end
+tests launch the actual CLI. Automated tests use temporary data and do not log
+into live mailboxes, models or chat platforms.
 
 ## Contributing
 
@@ -109,26 +108,24 @@ shared service/command logic for local, remote and bot entry points. Update
 English and Chinese messages and relevant existing documentation together.
 Preserve existing configuration, SQLite data and mail identities.
 
-If a plugin is shared with `waymark-mail-plugins`, update and validate both copies.
+If a plugin is shared with `waymark-mail-repo`, update and validate both copies.
 Marketplace README content is generated from `plugin.json`; see the
-[plugin contribution guide](https://github.com/Kingcxp/waymark-mail-plugins/blob/dev/docs/00-getting-started.md).
+[plugin contribution guide](https://github.com/Kingcxp/waymark-mail-repo/blob/dev/docs/00-getting-started.md).
 Do not commit virtual environments, reports, caches, private configurations or
 generated bot packages. Documentation-only changes need link, command/example
 and generated-content checks rather than new business tests.
 
 ## Packaging and releases
 
-For every formal release, review configuration/database compatibility in
-`mailflow.migrations` and add the required upgrade step and legacy-data behavior
-coverage before tagging. Application versions and data format versions are
-independent: keep data versions unchanged when a release needs no format
-change, and do not bump them for ordinary `dev` iterations. Once a format ships,
-retain its upgrade path; never rewrite old steps to match the newest model.
-Configuration/database version 1 is the first-release baseline. Upgrades must
-preserve identifiers, secrets references and user state, create recovery
-copies, reject newer formats and roll back on failure. Keep the SQLite plugin
-mirror in the plugin repository aligned with core; both use the same migration
-implementation rather than maintaining separate SQL upgrade scripts.
+Before tagging a release, review configuration and database compatibility in
+`mailflow.migrations`. Add migration steps and legacy-data tests when the format
+changes. Application and data versions are separate; ordinary `dev` changes do
+not need a data-version bump. Version 1 is the first-release format.
+
+Keep released migration steps available. Upgrades preserve IDs, credential
+references and user state, create recovery copies and roll back on failure.
+Newer unsupported formats are rejected. The SQLite plugin in both repositories
+uses the core migration implementation.
 
 Workspace packages have individual `pyproject.toml` files.
 [tools/build_all.py](../../tools/build_all.py) defines the wheel build list;
@@ -149,9 +146,9 @@ explicit bundled imports: extra Python plugins must be included at build time.
 Export a configured instance without starting its mail runtime:
 
 ```bash
-uv run --no-sync waymark export --framework nonebot --output dist/nonebot_plugin_waymark -c configs/local.toml
-uv run --no-sync waymark export --framework astrbot --output dist/astrbot_plugin_waymark -c configs/local.toml
-make bot-plugin FRAMEWORK=nonebot OUTPUT=dist/nonebot_plugin_waymark CONFIG=configs/local.toml
+uv run --no-sync waymark export --framework nonebot --output dist/nonebot_plugin_mailflow -c configs/local.toml
+uv run --no-sync waymark export --framework astrbot --output dist/astrbot_plugin_mailflow -c configs/local.toml
+make bot-plugin FRAMEWORK=nonebot OUTPUT=dist/nonebot_plugin_mailflow CONFIG=configs/local.toml
 ```
 
 The generated framework host owns startup/shutdown and permissions. Install it
@@ -163,13 +160,14 @@ configuration can contain credentials; keep the output private.
 The [release workflow](../../.github/workflows/release.yml) runs on `v*` tags,
 checks the tag against the core version and extracts notes from
 [CHANGELOG.md](../../CHANGELOG.md). It builds wheels and Windows/Linux executables
-and publishes a prerelease. A green CI run does not establish real platform
-login or delivery compatibility; record those manual checks separately in the
-pull request or release notes, not as generated report files in the repository.
+and publishes a prerelease. Describe any manual platform login and delivery
+checks in the pull request or release notes, alongside the automated results.
 
 ## 简体中文
 
 [返回首页](../../README.zh-CN.md) · [English](#development-and-contributing)
+
+### 开发环境
 
 使用 Python 3.11+、Git 和 uv，在 `dev` 分支运行
 `uv sync --locked --all-packages --group dev`。修改共享插件时，插件仓库也使用 `dev`。
@@ -189,33 +187,41 @@ README 使用 `configs/local.toml`；Make 的运行和导出目标使用
 `configs/development.toml`，需要事先从示例复制，也可传入 `CONFIG=configs/local.toml`，
 或改用带明确 `-c` 的命令。
 
+### 检查与测试
+
 先验证相关行为，再运行受影响的静态检查；共享接口与运行时修改执行完整检查。
 CI 覆盖 Windows/Linux 和 Python 3.11/3.12。测试分为组件隔离、真实组件组合、
 实际命令行进程三层，分别放在 unit、integration、e2e。
-复用测试工具包，不连接真实邮箱、模型、市场或聊天进程。
-测试应证明用户行为，不锁定私有调用顺序、文案、控件存在或测试数量。
+测试工具包提供邮件源等外部服务的模拟实现，测试使用临时数据。
+优先验证刷新后选择保留、失败重试、防止重复发送等实际结果。
+
+### 提交修改
 
 问题反馈包含版本、系统、终端、复现步骤、预期与实际结果及脱敏日志；不要附带邮件、
 密码或备份。较大需求先描述用户流程。安全问题优先私下报告，不公开凭据或利用细节。
 修改提交到 `dev`，每个提交保持独立，沿用 `fix(tui): ...` 等格式。
 说明行为变化、兼容性和验证结果，中英文提示及已有说明同步更新。
-本地、远程和机器人复用业务逻辑，不建立相互偏离的实现。
+本地、远程和机器人通过共享服务处理同一项操作。
 
 共享插件同时更新两个仓库，插件 README 修改元数据后统一生成。
-不要提交环境、缓存、报告、个人配置或含密钥的导出包。仅改文档时验证链接、命令、
-配置示例和生成结果，不为文档额外堆业务测试。
+环境、缓存、个人配置和含密钥的导出包留在本地。
+文档修改检查链接、命令、配置示例和生成结果即可。
+
+### 构建与发布
 
 构建命令见上表；冻结程序先构建并试运行 standalone，再构建 onefile。
 
-每个正式发布前都要复核配置与数据库兼容，必要时在 `mailflow.migrations` 补充升级步骤和
-旧数据行为验证。程序版本与数据格式版本分别管理：没有格式变化就沿用数据版本，
-普通 dev 开发不递增迁移版本。已发布的升级步骤保留，不随新模型改写。
-格式 1 是首个正式版基线；迁移保留标识、凭据引用和用户状态，先备份，失败回滚，
-拒绝修改更高版本数据。两个仓库的 SQLite 插件同步，统一调用核心迁移实现。
+正式发布前复核配置与数据库兼容。格式变化时，在 `mailflow.migrations` 增加升级步骤和
+旧数据测试；没有格式变化就沿用数据版本，普通 `dev` 修改不需要递增版本。
+格式 1 是首个正式版格式，已发布的升级步骤继续保留。
+升级保留标识、凭据引用和用户状态，先备份，失败回滚；遇到不支持的更高版本时拒绝修改。
+两个仓库的 SQLite 插件调用同一份核心迁移实现。
 额外插件需要纳入构建，工具下载需显式开启。NoneBot/AstrBot 导出不启动邮件运行时，
 导出内容可能包含凭据；管理员按导出说明配置匹配的 Waymark Mail 通知器，框架管理员不会自动导入。
 发布工作流由 `v*` 标签触发，检查核心版本并读取更新记录，
 生成安装产物后发布预览版本。真实登录、文件投递和终端效果仍需单独实测。
+
+### 清理开发产物
 
 `make clean` 保留用户数据；其他 `clean-*` 目标可能修改数据，不能当作开发检查运行。
 `clean-config` 会重置账户、凭据等本地设置，下次启动本地 TUI 时从示例生成空白配置；
