@@ -14,7 +14,11 @@ from mailflow_test_support.tui import TUIPlugin, build_config
 
 
 async def make_app(
-    db_path: Path, *, splash: bool = False, theme_welcome: bool = False
+    db_path: Path,
+    *,
+    splash: bool = False,
+    theme_welcome: bool = False,
+    config_path: Path | None = None,
 ) -> tuple[Any, Any]:
     from mailflow_notify_console.plugin import plugin as notify_plugin
     from mailflow_storage_sqlite.plugin import plugin as storage_plugin
@@ -25,6 +29,7 @@ async def make_app(
     manager.register(notify_plugin)
     service = await start_service(
         build_config(db_path / "db.sqlite"),
+        config_path=str(config_path) if config_path is not None else None,
         plugin_manager=manager,
         discover_plugins=False,
     )

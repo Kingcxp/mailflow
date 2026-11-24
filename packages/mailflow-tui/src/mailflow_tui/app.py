@@ -5368,6 +5368,7 @@ class MailFlowApp(App[None]):
     ) -> None:
         super().__init__()
         self._service = service
+        self._remote = remote
         self._theme_welcome = theme_welcome
         self._theme_preview: str | None = None
         self._theme_preference = load_theme_preferences() if theme_welcome else {}
@@ -5380,7 +5381,6 @@ class MailFlowApp(App[None]):
         self._missing_theme_notice = ""
         self._apply_color_scheme()
         self._log_queue = log_queue
-        self._remote = remote
         self._splash = splash
         self._session = session
         if session is not None:
@@ -5402,9 +5402,10 @@ class MailFlowApp(App[None]):
         configured = self._service.config.general.theme
         schemes = theme_catalog(self._service)
         preference = self._theme_preference.get("theme")
+        machine_theme = self._remote or getattr(self._service, "config_path", None) is None
         selected = (
             preference
-            if configured == DEFAULT_THEME and preference in schemes
+            if machine_theme and configured == DEFAULT_THEME and preference in schemes
             else configured
             if configured in schemes
             else DEFAULT_THEME

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from mailflow.themes import DEFAULT_THEME
 from mailflow_tui.splash import SplashScreen
-from mailflow_tui.theme_preferences import load_theme_preferences
+from mailflow_tui.theme_preferences import load_theme_preferences, save_theme_preferences
 from mailflow_tui.theme_welcome import (
     VSCODE_DARK_THEME,
     VSCODE_LIGHT_THEME,
@@ -19,6 +19,24 @@ from textual.widgets import Static
 
 from mailflow_test_support.app import make_app
 from mailflow_test_support.ui import until
+
+
+@pytest.mark.asyncio
+async def test_saved_local_config_theme_wins_over_stale_machine_preference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MAILFLOW_SESSION_DIR", str(tmp_path / "sessions"))
+    save_theme_preferences(VSCODE_DARK_THEME, completed=True)
+    app, service = await make_app(
+        tmp_path, theme_welcome=True, config_path=tmp_path / "config.toml"
+    )
+    try:
+        assert app.theme == DEFAULT_THEME
+        async with app.run_test() as pilot:
+            await until(pilot, lambda: app.theme == DEFAULT_THEME)
+            assert app.current_theme.background == "#24273a"
+    finally:
+        await service.stop()
 
 
 @pytest.mark.asyncio
