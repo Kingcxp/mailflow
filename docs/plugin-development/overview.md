@@ -1,7 +1,7 @@
 # Plugin development
 
 [Home](../../README.md) · [简体中文](#简体中文) ·
-[Marketplace guide](https://github.com/Kingcxp/mailflow-repo/blob/dev/docs/00-getting-started.md)
+[Marketplace guide](https://github.com/Kingcxp/waymark-mail-plugins/blob/dev/docs/00-getting-started.md)
 
 The authoritative interfaces are
 [contracts.py](../../packages/mailflow-core/src/mailflow/contracts.py), with
@@ -158,7 +158,7 @@ make validate-plugins
 ```
 
 Marketplace layout, metadata, README generation and the companion validator are
-documented in the [plugin repository](https://github.com/Kingcxp/mailflow-repo).
+documented in the [plugin repository](https://github.com/Kingcxp/waymark-mail-plugins).
 Its validator calls the same `mailflow-testkit` contract checks as this workspace.
 Keep live credentials and external services out of automated verification.
 

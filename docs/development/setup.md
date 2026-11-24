@@ -6,7 +6,7 @@
 
 Use Python 3.11+, Git and [uv](https://docs.astral.sh/uv/). Follow the
 [quickstart](../../README.md#quickstart) to clone `dev`; use the matching `dev`
-branch in the [plugin repository](https://github.com/Kingcxp/mailflow-repo/tree/dev)
+branch in the [plugin repository](https://github.com/Kingcxp/waymark-mail-plugins/tree/dev)
 when changing shared implementations.
 
 ```bash
@@ -23,7 +23,7 @@ Use `VENV=...` to select another environment, for example
 otherwise `.venv`; `PYTHON=...` selects the system Python for Make's helpers.
 Relative environment paths are resolved from the checkout, including when
 using `make -f /path/to/Makefile` from another directory. Quote paths containing
-spaces in your shell, for example `make test "VENV=C:/Python environments/mailflow"`.
+spaces in your shell, for example `make test "VENV=C:/Python environments/waymark"`.
 
 On Windows, the same Python commands work in PowerShell without Make.
 Use fake sources and temporary databases for development; connect actual
@@ -95,7 +95,7 @@ marketplace packages or launch real chat runtimes.
 
 ## Contributing
 
-Report bugs through [Issues](https://github.com/Kingcxp/mailflow/issues), including
+Report bugs through [Issues](https://github.com/Kingcxp/waymark-mail/issues), including
 the revision, OS/terminal, minimal reproduction, expected/actual behavior and
 sanitized diagnostics. For a larger feature, describe the user workflow before
 starting implementation. Never attach mail, passwords, tokens or backups.
@@ -109,9 +109,9 @@ shared service/command logic for local, remote and bot entry points. Update
 English and Chinese messages and relevant existing documentation together.
 Preserve existing configuration, SQLite data and mail identities.
 
-If a plugin is shared with `mailflow-repo`, update and validate both copies.
+If a plugin is shared with `waymark-mail-plugins`, update and validate both copies.
 Marketplace README content is generated from `plugin.json`; see the
-[plugin contribution guide](https://github.com/Kingcxp/mailflow-repo/blob/dev/docs/00-getting-started.md).
+[plugin contribution guide](https://github.com/Kingcxp/waymark-mail-plugins/blob/dev/docs/00-getting-started.md).
 Do not commit virtual environments, reports, caches, private configurations or
 generated bot packages. Documentation-only changes need link, command/example
 and generated-content checks rather than new business tests.
@@ -149,14 +149,14 @@ explicit bundled imports: extra Python plugins must be included at build time.
 Export a configured instance without starting its mail runtime:
 
 ```bash
-uv run --no-sync mailflow export --framework nonebot --output dist/nonebot_plugin_mailflow -c configs/local.toml
-uv run --no-sync mailflow export --framework astrbot --output dist/astrbot_plugin_mailflow -c configs/local.toml
-make bot-plugin FRAMEWORK=nonebot OUTPUT=dist/nonebot_plugin_mailflow CONFIG=configs/local.toml
+uv run --no-sync waymark export --framework nonebot --output dist/nonebot_plugin_waymark -c configs/local.toml
+uv run --no-sync waymark export --framework astrbot --output dist/astrbot_plugin_waymark -c configs/local.toml
+make bot-plugin FRAMEWORK=nonebot OUTPUT=dist/nonebot_plugin_waymark CONFIG=configs/local.toml
 ```
 
 The generated framework host owns startup/shutdown and permissions. Install it
 in that framework's environment. Configure administrators in the exported
-MailFlow notifier binding as described by its generated README; framework-wide
+Waymark Mail notifier binding as described by its generated README; framework-wide
 administrator flags are not imported automatically. Its copied
 configuration can contain credentials; keep the output private.
 
@@ -178,7 +178,7 @@ Make 是便捷入口，Windows 可直接用指定环境的 Python 执行上表�
 环境缺失时提示安装，不会擅自创建或重装。默认使用 `.venv`，也支持
 `UV_PROJECT_ENVIRONMENT` 或 `make test VENV=.venv312`；`PYTHON=...` 指定辅助脚本的系统 Python。
 相对环境路径始终以项目目录为准；路径含空格时，在终端为整个参数加引号，
-例如 `make test "VENV=C:/Python environments/mailflow"`。
+例如 `make test "VENV=C:/Python environments/waymark"`。
 `make help` 按用途分组展示命令和参数，`make help HELP_LANG=zh-CN` 显示中文。
 终端输出支持颜色和自动换行，重定向时使用纯文本；`NO_COLOR=1` 可关闭颜色。
 初次同步后，普通 uv 命令使用 `uv run --no-sync ...`，避免覆盖本地插件和可选依赖。
@@ -213,7 +213,7 @@ CI 覆盖 Windows/Linux 和 Python 3.11/3.12。测试分为组件隔离、真实
 格式 1 是首个正式版基线；迁移保留标识、凭据引用和用户状态，先备份，失败回滚，
 拒绝修改更高版本数据。两个仓库的 SQLite 插件同步，统一调用核心迁移实现。
 额外插件需要纳入构建，工具下载需显式开启。NoneBot/AstrBot 导出不启动邮件运行时，
-导出内容可能包含凭据；管理员按导出说明配置匹配的 MailFlow 通知器，框架管理员不会自动导入。
+导出内容可能包含凭据；管理员按导出说明配置匹配的 Waymark Mail 通知器，框架管理员不会自动导入。
 发布工作流由 `v*` 标签触发，检查核心版本并读取更新记录，
 生成安装产物后发布预览版本。真实登录、文件投递和终端效果仍需单独实测。
 

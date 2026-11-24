@@ -1,4 +1,4 @@
-# MailFlow example configuration.
+# Waymark Mail example configuration.
 #
 # Copy this file to configs/local.toml (gitignored) and fill in your tokens,
 # or export the referenced environment variables. Whole-string ${ENV_VAR}
@@ -6,7 +6,7 @@
 #
 # No accounts or LLMs are predefined: uncomment/add your own below.
 
-schema_version = 1              # managed by MailFlow; older files are upgraded with a backup
+schema_version = 1              # managed by Waymark Mail; older files are upgraded with a backup
 
 [general]
 language = "en"                 # default display language (en | zh-CN | custom packs)

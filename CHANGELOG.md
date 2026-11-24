@@ -1,7 +1,7 @@
 # Changelog
 
 Notable user-visible changes are recorded here. `Unreleased` describes the
-current `dev` branch, not a published release. See [GitHub Releases](https://github.com/Kingcxp/mailflow/releases)
+current `dev` branch, not a published release. See [GitHub Releases](https://github.com/Kingcxp/waymark-mail/releases)
 for artifacts and Git history for individual commits.
 
 ## [Unreleased]
@@ -23,6 +23,10 @@ for artifacts and Git history for individual commits.
   synchronization, including confirmed source trash/restore.
 
 ### Changed
+
+- Renamed the project to Waymark Mail, with the `waymark` command and
+  `waymark-mail` application package. Existing MailFlow commands, plugin IDs,
+  Python interfaces and stored data remain compatible.
 
 - Forms offer presets, date/file pickers and advanced settings with grouped saving.
   Terminal pages and smart-action controls use the main branch layout.

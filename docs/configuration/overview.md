@@ -9,8 +9,8 @@ saving settings needs a writable configuration path. Relative data paths use
 the process working directory, so launch from the same directory each time.
 
 ```bash
-uv run --no-sync mailflow config-check -c configs/local.toml
-uv run --no-sync mailflow tui -c configs/local.toml
+uv run --no-sync waymark config-check -c configs/local.toml
+uv run --no-sync waymark tui -c configs/local.toml
 ```
 
 Install dependencies once using the [quickstart](../../README.md#quickstart),
@@ -113,7 +113,7 @@ falling back to the first entry when no default is marked; unspecified fallbacks
 are filled from the remaining list. The TUI model controls update these bindings.
 Without a usable model, rule processing remains available. The assistant needs
 a model supporting the requested tools. Optional request fields are documented
-by each backend in the [plugin repository](https://github.com/Kingcxp/mailflow-repo/tree/dev/llm_backend).
+by each backend in the [plugin repository](https://github.com/Kingcxp/waymark-mail-plugins/tree/dev/llm_backend).
 
 ```toml
 [[llms]]
@@ -162,8 +162,8 @@ landing page is not proof that messages can be sent. Official references:
 [Baileys](https://github.com/WhiskeySockets/Baileys).
 
 The **Console** tab (`Ctrl+9`) combines console notifications and chat commands.
-Use the configured prefix, for example `/mailflow help`. Plain messages do not
-call a model: start with `@MailFlow` or quote a message using its right-click /
+Use the configured prefix, for example `/waymark help`. Plain messages do not
+call a model: start with `@Waymark` or quote a message using its right-click /
 `Shift+F10` menu. Changes require a text confirmation in the conversation. Enter
 sends; Shift+Enter adds a line. Stop cancels the current task, except a mail send
 already in progress, whose result must be checked before retrying.
@@ -230,8 +230,8 @@ password_env = "MAILFLOW_SERVER_PASSWORD"
 Set the referenced environment variable, then use:
 
 ```bash
-uv run --no-sync mailflow serve -c configs/local.toml
-uv run --no-sync mailflow tui --remote http://127.0.0.1:8800
+uv run --no-sync waymark serve -c configs/local.toml
+uv run --no-sync waymark tui --remote http://127.0.0.1:8800
 ```
 
 The login screen requests credentials; remembered passwords use the operating
@@ -287,8 +287,8 @@ available on the destination server. Remote TUI uploads files from the client.
 The equivalent local command previews without `CONFIRM`:
 
 ```bash
-uv run --no-sync mailflow command 'config import "OLD/configs/local.toml"' -c configs/local.toml
-uv run --no-sync mailflow command 'config import "OLD/configs/local.toml" --database auto CONFIRM' -c configs/local.toml
+uv run --no-sync waymark command 'config import "OLD/configs/local.toml"' -c configs/local.toml
+uv run --no-sync waymark command 'config import "OLD/configs/local.toml" --database auto CONFIRM' -c configs/local.toml
 ```
 
 Configuration `schema_version` and SQLite `PRAGMA user_version` identify data
@@ -299,7 +299,7 @@ configuration/database upgrades it once, retaining an adjacent
 include committed WAL data. Existing mail IDs, drafts, preferences and
 subscriptions are preserved. A newer unsupported format is refused before
 modification. Old format-1 ZIP backups remain readable. For a downgrade, use
-the pre-upgrade files or recovery archive with the matching older MailFlow.
+the pre-upgrade files or recovery archive with the matching older Waymark Mail.
 Recovery files contain private data; keep them outside version control.
 
 `make clean` removes development output, not mail. The separately named
@@ -317,8 +317,8 @@ Recovery files contain private data; keep them outside version control.
 | Setting save fails | Writable `-c` file and its error message; inputs are retained for correction |
 | Different data after restart | Same configuration path, working directory and storage path |
 
-Use `mailflow doctor -c configs/local.toml` for local registration/configuration
-information, not a live platform test. `mailflow --help` and the shared `help`
+Use `waymark doctor -c configs/local.toml` for local registration/configuration
+information, not a live platform test. `waymark --help` and the shared `help`
 command give current syntax. See [contributing](../development/setup.md#contributing)
 for safe issue reports.
 
@@ -414,8 +414,8 @@ for safe issue reports.
 上方英文部分列出了各渠道的官方参考地址。
 
 **控制台**标签页（`Ctrl+9`）同时接收 console 通知和聊天命令。
-使用当前配置的命令前缀，例如 `/mailflow help`。普通消息不会调用模型；
-输入 `@MailFlow` 加上需求，或通过消息右键／`Shift+F10` 菜单引用后提问。
+使用当前配置的命令前缀，例如 `/waymark help`。普通消息不会调用模型；
+输入 `@Waymark` 加上需求，或通过消息右键／`Shift+F10` 菜单引用后提问。
 修改操作通过聊天文字确认。Enter 发送，Shift+Enter 换行；停止按钮取消当前任务。
 已经开始发送的邮件需要先核对结果，避免重复发送。
 
@@ -498,5 +498,5 @@ console 默认不等待两秒，其他机器人仍沿用原有发送间隔。
 | 保存失败 | `-c` 文件是否可写；按提示修正，输入不会丢失 |
 | 重启后数据不同 | 配置路径、工作目录和数据库路径是否一致 |
 
-`doctor` 提供本地配置和注册信息，不是真实连接测试。完整参数以 `mailflow --help`
+`doctor` 提供本地配置和注册信息，不是真实连接测试。完整参数以 `waymark --help`
 和共享 `help` 输出为准，反馈问题前请脱敏。

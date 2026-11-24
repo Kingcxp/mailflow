@@ -1,15 +1,22 @@
-# MailFlow
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark-dark.svg">
+    <img src="assets/wordmark-light.svg" alt="Waymark Mail" width="800">
+  </picture>
+</h1>
 
-**A terminal inbox for mail, follow-up tasks and an optional AI assistant.**
+<p align="center">Manage email, follow-up tasks and notifications from your terminal.</p>
 
 [简体中文](README.zh-CN.md) · [Configuration](docs/configuration/overview.md) ·
 [Contributing](docs/development/setup.md#contributing) ·
-[Issues](https://github.com/Kingcxp/mailflow/issues)
+[Issues](https://github.com/Kingcxp/waymark-mail/issues)
 
-[![CI](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/Kingcxp/mailflow/actions/workflows/ci.yml?query=branch%3Adev)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+[![CI](https://github.com/Kingcxp/waymark-mail/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/Kingcxp/waymark-mail/actions/workflows/ci.yml?query=branch%3Adev)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-4b72bd)](pyproject.toml)
+[![MIT License](https://img.shields.io/badge/License-MIT-147d83)](LICENSE)
+[![Plugins](https://img.shields.io/badge/Plugins-Catalog-7e66a8)](https://github.com/Kingcxp/waymark-mail-plugins/tree/dev)
 
-MailFlow collects multiple accounts in a locally stored inbox. Read and organize
+Waymark Mail collects multiple accounts in a locally stored inbox. Read and organize
 mail, write replies, track recurring tasks and receive notifications through your
 existing chat platforms. Use the terminal interface, shared commands or a remote
 terminal connected to your own server. Models are optional: reading, ordinary
@@ -38,12 +45,12 @@ These instructions match the **`dev` branch**. Use Python 3.11+, Git and
 [uv](https://docs.astral.sh/uv/). Windows and Linux are covered by CI.
 
 ```bash
-git clone --branch dev https://github.com/Kingcxp/mailflow.git
-cd mailflow
+git clone --branch dev https://github.com/Kingcxp/waymark-mail.git
+cd waymark-mail
 uv sync --locked --all-packages --group dev
 ```
 
-Copy the example configuration once, then launch MailFlow:
+Copy the example configuration once, then launch Waymark Mail:
 
 ```bash
 # Linux / macOS
@@ -56,8 +63,8 @@ Copy-Item configs/example.toml configs/local.toml
 ```
 
 ```bash
-uv run --no-sync mailflow config-check -c configs/local.toml
-uv run --no-sync mailflow tui -c configs/local.toml
+uv run --no-sync waymark config-check -c configs/local.toml
+uv run --no-sync waymark tui -c configs/local.toml
 ```
 
 After the initial sync, use `--no-sync` for everyday commands so installed
@@ -70,12 +77,12 @@ want summaries or the assistant; connect a notifier only if you want external
 delivery. The example has no account or model credentials. Keep your local
 configuration private and use environment variables for secrets.
 
-Already configured on `main`? In Settings → More → Import old settings, select
+Already using MailFlow? In Settings → More → Import old settings, select
 the old TOML file and confirm the preview. Current mail is kept by default;
 optionally include the old SQLite database. Versions are detected automatically,
 and a recovery backup is created before import. See [data compatibility](docs/configuration/overview.md#data-backup-and-cleanup).
 
-To receive messages missed while MailFlow was stopped, enable the account's
+To receive messages missed while Waymark Mail was stopped, enable the account's
 catch-up option. It uses a saved source cursor; it does not silently import the
 entire mailbox. See [account setup](docs/configuration/overview.md#accounts-and-startup).
 
@@ -83,23 +90,21 @@ entire mailbox. See [account setup](docs/configuration/overview.md#accounts-and-
 
 | Need | Command |
 | --- | --- |
-| Terminal interface | `uv run --no-sync mailflow tui -c configs/local.toml` |
-| Background terminal instance | `uv run --no-sync mailflow tui -c configs/local.toml --background --name inbox` |
-| List / reconnect | `uv run --no-sync mailflow tui list` / `uv run --no-sync mailflow tui attach inbox` |
-| Foreground service | `uv run --no-sync mailflow run -c configs/local.toml` |
-| Authenticated server | `uv run --no-sync mailflow serve -c configs/local.toml` |
-| Remote terminal | `uv run --no-sync mailflow tui --remote http://127.0.0.1:8800` |
-| Interactive commands | `uv run --no-sync mailflow shell -c configs/local.toml` |
-| One command | `uv run --no-sync mailflow command "help" -c configs/local.toml` |
+| Terminal interface | `uv run --no-sync waymark tui -c configs/local.toml` |
+| Background terminal instance | `uv run --no-sync waymark tui -c configs/local.toml --background --name inbox` |
+| List / reconnect | `uv run --no-sync waymark tui list` / `uv run --no-sync waymark tui attach inbox` |
+| Foreground service | `uv run --no-sync waymark run -c configs/local.toml` |
+| Authenticated server | `uv run --no-sync waymark serve -c configs/local.toml` |
+| Remote terminal | `uv run --no-sync waymark tui --remote http://127.0.0.1:8800` |
+| Interactive commands | `uv run --no-sync waymark shell -c configs/local.toml` |
+| One command | `uv run --no-sync waymark command "help" -c configs/local.toml` |
 
 **F8 detaches** a persistent TUI and leaves it running; **Ctrl+Q stops** it.
-`mailflow tui stop inbox` stops a background instance. Single commands and the
+`waymark tui stop inbox` stops a background instance. Single commands and the
 command shell do not start automatic mail, reminder or backup loops.
 
-Save forms with their Save button or Ctrl+S. The terminal pages use the main
-branch layout: enter text in the mail search field, then click Smart action to
-execute a natural-language request. Analysis and cleanup use the original mail
-page buttons. See
+Save forms with their Save button or Ctrl+S. Enter text in the mail search
+field, then click Smart action to execute a natural-language request. See
 [terminal controls](docs/configuration/overview.md#terminal-controls).
 
 Set server credentials before remote use. The remote terminal operates on server
@@ -110,7 +115,7 @@ and process management are not remote terminal operations.
 
 | Operation | Behavior |
 | --- | --- |
-| Delete mail | Moves it to MailFlow trash by default; restore or permanently clear local trash from Mail → More |
+| Delete mail | Moves it to Waymark Mail trash by default; restore or permanently clear local trash from Mail → More |
 | Source mailbox changes | Off by default, enabled per account; supported read/star/archive changes synchronize, source trash/restore requires explicit confirmation, and source mail is never permanently purged |
 | Retention | Mail is kept indefinitely by default; trash expires after 7 days; automatic mail cleanup is opt-in and protects important/starred mail and unfinished tasks |
 | Complete a task | Removes that occurrence permanently; a recurring plan continues, with no completed-task history |
@@ -124,6 +129,28 @@ content to their configured platforms. Plugins run Python code in the host
 environment: install only code you trust. Backups and generated bot packages can
 contain credentials and should not be published.
 
+## Upgrading from MailFlow
+
+Waymark Mail is the new project name. Use `waymark` for new commands; `mailflow`
+and `/mailflow` chat commands remain compatible alongside `/waymark`.
+The Python imports (`mailflow.*`), component packages and plugin identifiers
+(`mailflow-*`) are intentionally stable so installed plugins keep working.
+Existing TOML files, SQLite data, backups, saved credentials and background
+session directories retain their formats and paths. No data reset is needed.
+Old official marketplace addresses are recognized automatically.
+
+The main repository is `Kingcxp/waymark-mail`; its companion is
+`Kingcxp/waymark-mail-plugins`. Update an existing checkout with:
+
+```bash
+git remote set-url origin https://github.com/Kingcxp/waymark-mail.git
+uv pip install --no-deps -e packages/waymark-mail
+```
+
+The second command adds the new launcher to an existing development environment
+and preserves installed plugins. Make targets keep using the compatible host
+module, so pulling the renamed source does not require rebuilding the environment.
+
 ## Documentation and support
 
 | Read | Covers |
@@ -133,10 +160,10 @@ contain credentials and should not be published.
 | [Architecture](docs/architecture/overview.md) | Shared data rules, processing and resource ownership |
 | [Service embedding](docs/development/embedding.md) | Using the service in another host |
 | [Plugin development](docs/plugin-development/overview.md) | Core contracts, optional capabilities and offline validation |
-| [Plugin repository](https://github.com/Kingcxp/mailflow-repo/tree/dev) | Available plugins, per-plugin configuration and marketplace publishing |
-| [Changelog](CHANGELOG.md) / [Releases](https://github.com/Kingcxp/mailflow/releases) | Unreleased changes and published artifacts |
+| [Plugin repository](https://github.com/Kingcxp/waymark-mail-plugins/tree/dev) | Available plugins, per-plugin configuration and marketplace publishing |
+| [Changelog](CHANGELOG.md) / [Releases](https://github.com/Kingcxp/waymark-mail/releases) | Unreleased changes and published artifacts |
 
-Report reproducible problems through [GitHub Issues](https://github.com/Kingcxp/mailflow/issues).
+Report reproducible problems through [GitHub Issues](https://github.com/Kingcxp/waymark-mail/issues).
 Include the revision, OS, terminal, sanitized configuration and steps to reproduce.
 Do not attach credentials, private mail, databases or backups. Automated checks
 use simulated services; real platform login, file delivery and terminal behavior
@@ -144,5 +171,5 @@ also need manual verification.
 
 ## License
 
-MailFlow is licensed under the [MIT License](LICENSE). Third-party services,
+Waymark Mail is licensed under the [MIT License](LICENSE). Third-party services,
 libraries and gateway runtimes retain their own licenses and usage requirements.

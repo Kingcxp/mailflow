@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="224" viewBox="0 0 960 224" role="img" aria-labelledby="title desc">
+  <title id="title">Waymark Mail</title>
+  <desc id="desc">Waymark Mail. Email, tasks and notifications in your terminal.</desc>
+  <rect width="960" height="224" rx="18" fill="#f3f6fb"/>
+  <g transform="translate(68 48)">
+    <path d="M26 42h55L64 61 45 45 27 61V42Z" fill="#4b72bd"/>
+    <path d="M26 45v48h76V52L83 71 64 54 45 73Z" fill="none" stroke="#23344d" stroke-width="6" stroke-linejoin="round"/>
+    <path d="m76 37 25-9-5 27-7-10-13-8Z" fill="#147d83"/>
+  </g>
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <text x="230" y="107" fill="#23344d" font-size="52" font-weight="650" letter-spacing="-1.2">Waymark Mail</text>
+    <text x="233" y="146" fill="#52617a" font-size="19">Email, tasks and notifications in your terminal.</text>
+  </g>
+  <path d="M804 80h32v32h32" fill="none" stroke="#147d83" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m860 104 9 8-9 8" fill="none" stroke="#147d83" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

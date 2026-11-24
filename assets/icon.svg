@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Waymark Mail</title>
+  <desc id="desc">An envelope whose folded flap forms a W and a direction arrow.</desc>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#24273a"/>
+  <path d="M26 42h55L64 61 45 45 27 61V42Z" fill="#8aadf4"/>
+  <path d="M26 45v48h76V52L83 71 64 54 45 73Z" fill="none" stroke="#cad3f5" stroke-width="6" stroke-linejoin="round"/>
+  <path d="m76 37 25-9-5 27-7-10-13-8Z" fill="#8bd5ca"/>
+</svg>

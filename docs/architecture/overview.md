@@ -2,7 +2,7 @@
 
 [Home](../../README.md) · [简体中文](#简体中文) · [Embedding](../development/embedding.md)
 
-MailFlow is one service with multiple hosts. The terminal, CLI, authenticated
+Waymark Mail is one service with multiple hosts. The terminal, CLI, authenticated
 REST/WebSocket server and bot integrations share data models, business methods,
 permissions and confirmations.
 
@@ -10,6 +10,7 @@ permissions and confirmations.
 
 | Location | Responsibility |
 | --- | --- |
+| `packages/waymark-mail` | Public application package and `waymark` entry point; the `mailflow` command remains an alias |
 | `packages/mailflow-core` | Models, configuration, contracts, processing, scheduling, commands and service lifecycle |
 | `packages/mailflow-bundled` | Explicit registration of shipped plugins |
 | `packages/mailflow-cli` | Process entry points and shared command output |
@@ -17,7 +18,7 @@ permissions and confirmations.
 | `packages/mailflow-server` | Authenticated HTTP/WebSocket transport and remote model conversion |
 | `packages/mailflow-testkit` | Reusable fakes and offline contract verification |
 | `plugins` | Bundled sources, model backends, notifiers, storage and framework exporters |
-| [mailflow-repo](https://github.com/Kingcxp/mailflow-repo/tree/dev) | Marketplace metadata, additional plugins and generated usage pages |
+| [waymark-mail-plugins](https://github.com/Kingcxp/waymark-mail-plugins/tree/dev) | Marketplace metadata, additional plugins and generated usage pages |
 
 The authoritative interfaces are [contracts.py](../../packages/mailflow-core/src/mailflow/contracts.py).
 The service facade is [service.py](../../packages/mailflow-core/src/mailflow/service.py);
@@ -115,7 +116,7 @@ A detached persistent TUI remains alive until explicitly stopped.
 
 [返回首页](../../README.zh-CN.md) · [English](#architecture)
 
-MailFlow 由统一核心服务和多个入口组成。终端、命令行、远程服务及机器人共用模型、
+Waymark Mail 由统一核心服务和多个入口组成。终端、命令行、远程服务及机器人共用模型、
 权限、草稿、确认和业务方法；目录职责见上表，核心接口以 `contracts.py` 为准。
 
 邮件先保存并可读，再进入可取消的分析任务。新邮件、历史导入、补收和重析区分通知语义，
