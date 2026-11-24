@@ -32,6 +32,7 @@ from mailflow_tui.gateway_guide import GatewayGuideModal
 from mailflow_tui.labels import (
     error_detail,
     error_message,
+    notifier_provider_label,
     redact_operation_logs,
     relabel_buttons,
     urgency_label,
@@ -245,15 +246,11 @@ class NotificationsPane(Vertical):
             )
             targets = ", ".join(str(t) for t in raw_targets) or "-"
             provider = str(entry["provider"])
-            plugin_id = providers.get(provider)
-            provider_key = f"tui.bots_provider_{provider}"
-            provider_label = self._service.t(provider_key)
-            if provider_label == provider_key:
-                provider_label = provider
-            provider_label = (
-                self._service.i18n.plugin_text(plugin_id, "name", provider_label)
-                if plugin_id
-                else provider_label
+            provider_label = notifier_provider_label(
+                self._service,
+                provider,
+                entry["options"],
+                plugin_id=providers.get(provider),
             )
             rows.append(
                 (

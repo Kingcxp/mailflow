@@ -45,6 +45,27 @@ def model_provider_label(service: Any, provider: str) -> str:
     return provider if label == key else label
 
 
+def notifier_provider_label(
+    service: Any,
+    provider: str,
+    options: Mapping[str, Any] | None = None,
+    *,
+    plugin_id: str | None = None,
+) -> str:
+    """Show a gateway-backed notifier by its actual platform name."""
+    gateway = str((options or {}).get("gateway") or "")
+    display_id = gateway or provider
+    key = f"tui.bots_provider_{display_id}"
+    label = str(service.t(key))
+    if label == key:
+        label = (
+            str(service.i18n.plugin_text(plugin_id, "name", display_id))
+            if plugin_id and display_id == provider
+            else display_id
+        )
+    return label
+
+
 def plugin_text(service: Any, plugin: Any, field: str, *, language: str | None = None) -> str:
     """Prefer publisher translations, with bundled text available offline."""
     language = language or str(service.i18n.language or "en")

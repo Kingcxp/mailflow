@@ -509,7 +509,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
             choices = set(NotificationsPane.IM_PROVIDERS)
             choices.update(service.registry.component_ids(ComponentKind.NOTIFIER))
             choices.update(service.gateway_providers())
-            # Order: console → QQ (onebot, napcat) → WeChat → Telegram →
+            # Order: console → OneBot / NapCat → WeChat → Telegram →
             # WhatsApp; ids outside this list still appear, sorted last
             _ORDER = (
                 "console",
@@ -564,8 +564,7 @@ class EntryFormScreen(ModalScreen[dict[str, Any] | None]):
         return selected or str(self._values.get("provider", "")) or self._default_provider
 
     def _choice_label(self, choice: Any) -> str:
-        """Localized provider label (e.g. 'QQ (OneBot)' vs
-        'QQ (NapCat auto-deploy)'); unknown ids stay raw."""
+        """Localized provider label; unknown ids stay raw."""
         value = str(choice)
         if self._group == "llms":
             return model_provider_label(self._service, value)

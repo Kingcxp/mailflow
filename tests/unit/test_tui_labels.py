@@ -6,7 +6,12 @@ from typing import Any
 
 from mailflow.config import LLMConfig, MailFlowConfig, NotifierConfig, ServerConfig
 from mailflow.i18n import I18n
-from mailflow_tui.labels import error_detail, error_message, gateway_error_detail
+from mailflow_tui.labels import (
+    error_detail,
+    error_message,
+    gateway_error_detail,
+    notifier_provider_label,
+)
 
 
 class _Service:
@@ -16,6 +21,21 @@ class _Service:
 
     def t(self, key: str, **params: Any) -> str:
         return self.i18n.t(key, **params)
+
+
+def test_notifier_labels_distinguish_onebot_transport_from_napcat_gateway() -> None:
+    service = _Service(MailFlowConfig())
+
+    for language in ("zh-CN", "en"):
+        service.i18n.set_language(language)
+        onebot = notifier_provider_label(
+            service, "onebot", plugin_id="mailflow-notify-onebot"
+        )
+        napcat = notifier_provider_label(service, "onebot", {"gateway": "napcat"})
+
+        assert "OneBot" in onebot
+        assert "NapCat" in napcat
+        assert "QQ" not in onebot and "QQ" not in napcat
 
 
 def test_error_presentation_localizes_and_redacts_configured_secrets() -> None:
