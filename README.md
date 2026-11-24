@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark-dark.svg">
-    <img src="assets/wordmark-light.svg" alt="Waymark Mail" width="720">
+    <img src="assets/wordmark-light.svg" alt="Waymark Mail" width="660">
   </picture>
 </p>
 

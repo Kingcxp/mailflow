@@ -1,16 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="224" viewBox="0 0 960 224" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="224" viewBox="0 0 660 224" role="img" aria-labelledby="title desc">
   <title id="title">Waymark Mail</title>
-  <desc id="desc">Waymark Mail. Email, tasks and notifications in your terminal.</desc>
-  <rect width="960" height="224" rx="18" fill="#24273a"/>
-  <g transform="translate(68 48)">
-    <path d="M26 42h55L64 61 45 45 27 61V42Z" fill="#8aadf4"/>
-    <path d="M26 45v48h76V52L83 71 64 54 45 73Z" fill="none" stroke="#cad3f5" stroke-width="6" stroke-linejoin="round"/>
-    <path d="m76 37 25-9-5 27-7-10-13-8Z" fill="#8bd5ca"/>
+  <desc id="desc">Waymark Mail, email and tasks in your terminal.</desc>
+  <rect width="660" height="224" rx="18" fill="#1e2030"/>
+  <g transform="translate(46 48)">
+    <rect x="4" y="4" width="120" height="120" rx="28" fill="#24273a"/>
+    <path d="M27 29h74a7 7 0 0 1 7 7v56a7 7 0 0 1-7 7H27a7 7 0 0 1-7-7V36a7 7 0 0 1 7-7Z" fill="none" stroke="#cad3f5" stroke-width="7" stroke-linejoin="round"/>
+    <path d="m23 36 41 28 41-28" fill="none" stroke="#cad3f5" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m31 75 15 15 18-15 18 15 15-15" fill="none" stroke="#8aadf4" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m97 66 9 9-9 9-9-9 9-9Z" fill="#8bd5ca" stroke="#24273a" stroke-width="2"/>
   </g>
-  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
-    <text x="230" y="107" fill="#cad3f5" font-size="52" font-weight="650" letter-spacing="-1.2">Waymark Mail</text>
-    <text x="233" y="146" fill="#b8c0e0" font-size="19">Email, tasks and notifications in your terminal.</text>
-  </g>
-  <path d="M804 80h32v32h32" fill="none" stroke="#8bd5ca" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="m860 104 9 8-9 8" fill="none" stroke="#8bd5ca" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="204" y="137" fill="#cad3f5" font-family="Segoe UI, Arial, sans-serif" font-size="54" font-weight="650" letter-spacing="-1.4">Waymark Mail</text>
 </svg>
